@@ -38,13 +38,12 @@
       "depends_on": [
         "pe-loader"
       ],
-      "evidence": "The first PE32 title is playable on FW 12.02 with exact host parity and bounded hardware evidence. The Wine host gate adds FS-relative operands, atomic LOCK/CMPXCHG and memory XCHG, byte accumulators, BT/BTS/BTR/BTC, CMOVcc, the tested SSE lane slice, BSF/BSR and 16-bit shifts. A generated PE32 application reaches its own entry point and exits cleanly after 598404 retired instructions and 2981 blocks with register residency disabled. The residency-enabled path has a deterministic, pinned cross-block entry-state defect and is not claimed as passing.",
+      "evidence": "The first PE32 title is playable on FW 12.02 with exact host parity and bounded hardware evidence. The Wine host gate adds FS-relative operands, atomic LOCK/CMPXCHG and memory XCHG, byte accumulators, BT/BTS/BTR/BTC, CMOVcc, the tested SSE lane slice, BSF/BSR and 16-bit shifts. A generated PE32 application reaches its own entry point and exits cleanly after exactly 598404 retired instructions and 2981 blocks in all four chaining/register-residency configurations. Resident byte aliases consume current host-register state, common 32-bit ALU operations execute directly on resident registers, and profitability filters avoid residency in tiny and helper-heavy blocks.",
       "exit_criteria": [
         "wine-ntdll-instruction-closure",
         "sse2",
         "indirect-branch-cache",
-        "multi-thread-code-cache",
-        "wine-residency-parity"
+        "multi-thread-code-cache"
       ]
     },
     {
@@ -71,11 +70,10 @@
         "unix-call-bridge",
         "nt-process-thread"
       ],
-      "evidence": "Wine revision 490f6d5d produces a manifest-validated i386 distribution containing ntdll, kernelbase, kernel32 and all 76 tracked NLS files. A bounded host gate publishes both dispatchers, maps runtime and application namespaces, builds the initial PEB/TEB/process parameters and CONTEXT, and services 32 NT call shapes. A generated PE32 executable plus two DLLs loads through Wine's own ntdll, reaches its transfer address, returns 1 and exits through NtTerminateThread after 598404 retired instructions and 2981 blocks with residency disabled. Loader-list identity and DllMain/TLS ordering are not yet independently validated, residency-on fails, the prefix is not persistent and no PS5 Wine launch is claimed.",
+      "evidence": "Wine revision 490f6d5d produces a manifest-validated i386 distribution containing ntdll, kernelbase, kernel32 and all 76 tracked NLS files. A bounded host gate publishes both dispatchers, maps runtime and application namespaces, builds the initial PEB/TEB/process parameters and CONTEXT, and services 32 NT call shapes. A generated PE32 executable plus two DLLs loads through Wine's own ntdll, reaches its transfer address, returns 1 and exits through NtTerminateThread after exactly 598404 retired instructions and 2981 blocks in all four chaining/register-residency configurations. Loader-list identity and DllMain/TLS ordering are not yet independently validated, the prefix is not persistent and no PS5 Wine launch is claimed.",
       "exit_criteria": [
         "loader-graph-validation",
         "dllmain-tls-order",
-        "wine-residency-parity",
         "persistent-prefix",
         "ps5-wine-process-startup",
         "wine-tests-smoke"

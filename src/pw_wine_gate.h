@@ -471,6 +471,10 @@ typedef struct PwWineGateReport {
     uint64_t retired;
     uint64_t translated_blocks;
     uint64_t translated_bytes;
+    uint64_t register_loads;
+    uint64_t register_stores;
+    uint64_t register_reconciliations;
+    uint64_t register_spills;
     uint64_t host_calls;            /* host Wine functions called: must be 0 */
     uint32_t cleanup_modules;
     uint32_t cleanup_mappings;

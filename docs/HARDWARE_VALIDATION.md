@@ -40,6 +40,11 @@ flags were tested both independently and as one stack. Exact private host
 traces finish with identical CPU state in eager and lazy modes at 461,087
 unchained steps and 1,609,088 chained steps.
 
+The public generated-Wine gate adds a four-mode chaining/residency parity
+matrix: every mode exits through `NtTerminateThread` after exactly 598,404
+guest instructions and 2,981 blocks. This is host-side DBT evidence; a native
+Wine process on PS5 remains a separate hardware milestone.
+
 The final bounded lazy-flags candidate used:
 
 - linked ELF SHA-256

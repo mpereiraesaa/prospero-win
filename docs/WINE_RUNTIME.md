@@ -22,11 +22,11 @@ bounded host gate, not a PS5 Wine-process launch.
 | Runtime distribution | Three i386 PE modules (`ntdll`, `kernelbase`, `kernel32`) built reproducibly from the pinned revision plus every NLS data file that revision tracks (its whole `nls/*.nls` - the locale tables, the sort keys, the case map, the normalization tables and one file per codepage), each recorded with its own hash and folded into the distribution digest `a70042324ceb268a714936501add18de2cd0a4a6f3fd16b7a758e7893c186bb5` |
 | Module graph | `kernelbase`'s 428 imports bind against `ntdll`'s exports with zero failures, by name, ordinal and forwarder |
 | PE32 TLS | Parsed and relocated for the generated application graph; one process thread, its TEB and TLS traversal are modelled. Loader-list and callback-order validation remain. |
-| ntdll control | Real `LdrInitializeThunk` executes through the IA-32 translator: 33,118 retired instructions, 7,065 dispatches, 961 translated blocks, 19 calls serviced, `host_calls=0`, and complete cleanup. |
+| ntdll control | Real `LdrInitializeThunk` executes through the IA-32 translator: 33,367 retired instructions, 7,148 dispatches, 962 translated blocks, 19 calls serviced, `host_calls=0`, and complete cleanup. |
 | Unix-call boundary | Both Wine dispatcher slots are published. The syscall table has all 256 pinned i386 entries and the Unix-call table has all eight pinned entries; both match Wine source. The complete handler ledger currently contains 32 serviced NT call shapes plus two classified termination stops. |
 | Platform services | Files (open/read/query/close, one gate-owned directory object), image sections (`NtCreateSection`/`NtQuerySection`/`NtMapViewOfSection`/`NtProtectVirtualMemory`), NLS data (`NtInitializeNlsFiles`, `NtGetNlsSectionPtr` and the three locale queries), registry (open/create/query/set against a host profile), token (`TokenUser`), threads (`NtGetNextThread`, `NtQueryInformationThread`), object namespace (`\KnownDlls` plus section lookups), system information (the Wine version class) and process information (the process image, from the module's own headers) |
-| Application checkpoint | A generated PE32 executable, two DLLs and their dependency diamond load through Wine's own ntdll. With residency disabled, the application reaches its transfer address, returns `1`, and exits through `NtTerminateThread` after 598,404 retired instructions and 2,981 blocks. |
-| Not claimed | The residency-enabled application path still ends in a deterministic DBT entry-contract fault. Wine's loader lists and DllMain/TLS ordering are not independently validated; the registry is run-local rather than a persistent prefix; no console or hardware Wine evidence exists. |
+| Application checkpoint | A generated PE32 executable, two DLLs and their dependency diamond load through Wine's own ntdll. All four chaining/residency configurations reach its transfer address, return `1`, and exit through `NtTerminateThread` after the same 598,404 retired instructions and 2,981 blocks. |
+| Not claimed | Wine's loader lists and DllMain/TLS ordering are not independently validated; the registry is run-local rather than a persistent prefix; no console or hardware Wine evidence exists. |
 
 Reproduce it:
 
@@ -1230,9 +1230,9 @@ Measured on the pinned runtime with the generated diamond:
 
 | configuration | stop | retired | blocks |
 | --- | --- | --- | --- |
-| control | returned-to-caller at 0 | 33 118 | 961 |
+| control | returned-to-caller at 0 | 33 367 | 962 |
 | residency off | `process-terminated`, `NtTerminateThread (0x0053)`, status `1` | 598 404 | 2 981 |
-| residency on | memory-bounds (engine defect, block `0x105c1aa7`) | 56 825 | 1 223 |
+| residency on | `process-terminated`, `NtTerminateThread (0x0053)`, status `1` | 598 404 | 2 981 |
 
 `NtContinue(context, TRUE)` installs the guest's integer/control state without
 applying the dispatcher's synthesized return. Wine's `RtlUserThreadStart` then
@@ -1243,7 +1243,6 @@ context validation, state installation and the termination path; the host gate
 pins the complete application result above.
 
 This does not close the Wine-process milestone. Before hardware staging, the
-Wine-owned loader graph must be read back and validated, DllMain/TLS callback
-ordering must become evidence, and the residency-on DBT fault must be repaired
-rather than bypassed. General thread/object/wait semantics and persistent
-prefix storage remain later roadmap items.
+Wine-owned loader graph must be read back and validated and DllMain/TLS callback
+ordering must become evidence. General thread/object/wait semantics and
+persistent prefix storage remain later roadmap items.

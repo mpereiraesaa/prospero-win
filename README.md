@@ -25,10 +25,10 @@ Pinball the first playable title:
 
 The DBT includes hashed block lookup, direct block chaining, cross-block guest
 register residency, dead-flag elimination and real lazy arithmetic flags.
-Exact eager/lazy host traces finish with identical guest CPU state. Bounded
-hardware runs also reach video, audio and input teardown cleanly. These results
-establish correctness and no observed regression; they do not yet establish a
-percentage performance gain.
+Resident ALU operations execute directly in `r8d`-`r10d`; tiny and helper-heavy
+blocks stay canonical when residency would only add transitions. Exact mode
+matrices finish with identical guest CPU state. Bounded hardware runs also
+reach video, audio and input teardown cleanly.
 
 The reusable Wine path now has an executable host checkpoint. A pinned i386
 Wine distribution contains `ntdll`, `kernelbase`, `kernel32` and the revision's
@@ -40,28 +40,18 @@ the initial PE32 process/thread state.
 A generated public PE32 executable with two DLLs and a dependency diamond now
 runs through Wine's own loader, reaches its own entry point under the DBT,
 returns `1`, and exits through `NtTerminateThread`. The accepted host run uses
-register residency disabled and retires 598,404 guest instructions over 2,981
-translated blocks. The optimized residency path still has a deterministic
-cross-block state-contract defect and is retained as a pinned negative
-frontier, not presented as a success.
+all four chaining/residency combinations and retires exactly 598,404 guest
+instructions over 2,981 translated blocks in each. Chaining cuts dispatcher
+returns from 120,931 to 15,787. With chaining and residency enabled, the
+measured resident-state path performs 12,656 canonical stores and 61,805
+reconciliation spills; both counters and emitted code size are pinned by the
+host gate so future allocator work is measurable.
 
 This is not yet a Wine boot on PS5 or broad Windows compatibility. Wine's
 loader lists and attach ordering still need independent validation, the prefix
 is not persistent, and general threads, objects and waits remain incomplete.
 Pinball still uses the hardware-validated direct bootstrap, PE64 application
 execution is incomplete, and Direct3D awaits DXVK over `ps5-vulkan`.
-
-## Isolation model
-
-Each native PS5 build runs inside the console's title process and title-owned
-filesystem boundary. That is a useful outer sandbox, but it is not an API for
-creating arbitrary nested jails: applications hosted by one prospero-win title
-would share that title boundary. The runtime therefore also validates guest
-memory, publishes translated code W^X, uses typed non-reissued handles,
-canonicalizes guest paths into explicit namespaces, and keeps deployment or
-debug services outside the guest capability surface. PE64 native execution
-will require an explicit trust model because it has less mediation than PE32
-DBT execution. See [Architecture](docs/ARCHITECTURE.md#isolation-boundaries).
 
 ## Build and test
 

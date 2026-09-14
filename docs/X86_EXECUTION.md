@@ -284,7 +284,10 @@ Each workload reports deterministic register and full-state checksums used as
 regression fingerprints. `tests/test_dynarec_bench.py` also executes the
 `reg_alu` workload independently as a native Linux i386 binary and compares its
 four live output registers. The other four workloads are deterministic DBT
-regressions, not native-oracle comparisons.
+regressions, not native-oracle comparisons. Each timing sample contains eight
+complete deterministic runs, keeping setup outside the timed intervals;
+`batch_runs`, retired instructions and dispatches make that denominator
+explicit in every record.
 
 ### Local dead-flag elimination
 
@@ -313,6 +316,19 @@ safepoints. Generation reset invalidates every link. Compatible blocks carry up
 to three deterministic guest GPRs in `r8d`-`r10d`; mismatched contracts spill
 through a reconciliation stub before entering the target's canonical entry.
 C helpers and fault boundaries preserve or spill resident values explicitly.
+Common 32-bit register ALU, compare and INC/DEC forms operate directly on those
+host registers. Blocks shorter than four instructions and blocks containing a
+helper boundary remain canonical because their measured spill/load overhead
+cannot amortize residency.
+
+The pinned generated-Wine application is also a differential performance
+fixture. Every chaining/residency mode in its four-case matrix retires 598,404
+instructions over 2,981 translated blocks with the same exit status. Chaining
+reduces dispatcher returns from 120,931 to 15,787. In the chained resident run,
+profitability filtering reduces resident canonical stores to 12,656 and
+reconciliation spills to 61,805 while emitted code is 1,759,312 bytes versus
+1,678,688 bytes without residency (4.8% larger). These counters are pinned
+regression data; host timing and PS5 timing are measured separately.
 
 Live arithmetic flags can cross a linked boundary as an eight-byte RAW
 descriptor (`raw_flags`, `known_mask`). Consumers merge only the required guest

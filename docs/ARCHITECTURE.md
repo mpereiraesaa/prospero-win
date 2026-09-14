@@ -56,12 +56,11 @@ wrappers. See [WINE_INTEGRATION.md](WINE_INTEGRATION.md).
 The real Wine gate is now an executable checkpoint rather than a loader-only
 claim. The syscall and Unix-call boundaries are both published. A generated
 PE32 application and two local DLLs load through the pinned i386 Wine runtime;
-with register residency disabled the application reaches its own entry point,
-returns `1`, and exits through `NtTerminateThread` after 598,404 retired guest
-instructions and 2,981 translated blocks. This is host evidence. The residency
-path still has a pinned DBT entry-contract defect, Wine's loader lists and
-attach ordering are not independently validated, and no Wine process boot on
-PS5 is claimed.
+all four chaining/residency configurations reach its own entry point, return
+`1`, and exit through `NtTerminateThread` after exactly 598,404 retired guest
+instructions and 2,981 translated blocks. This is host evidence. Wine's loader
+lists and attach ordering are not independently validated, and no Wine process
+boot on PS5 is claimed.
 
 ## Isolation boundaries
 

@@ -53,9 +53,12 @@ PINNED_RUN = {
     # Windows directory and the search path starts there. The loader reaches
     # the same stop through the same 19 calls and the same handler coverage
     # below, with the length of the search accounted for here.
-    "retired": "33118",
-    "dispatches": "7065",
-    "blocks": "961",
+    # Correct byte-register reads now consume the current resident value; the
+    # loader follows the same serviced-call path to the same classified stop,
+    # but executes one additional block on that valid path.
+    "retired": "33367",
+    "dispatches": "7148",
+    "blocks": "962",
     "host_calls": "0",
     "syscall": "0x00000019",
 }
@@ -137,74 +140,41 @@ def validate_transcript(text: str, expect_entry: str) -> str:
     return check.stdout.strip()
 
 
-# The application-root scenario: the same bounded gate with a generated PE32
-# application as the process image, reading the runtime's own DLLs. Its frontier
-# is pinned here for the same reason the control's is - so that "we got further"
-# and "we quietly got less far" are different outcomes - and because the two
-# configurations disagree: with register residency on, the run stops at the
-# engine defect recorded in the private report (a memory-bounds stop inside
-# dlls/ntdll's rb-tree fixup); with residency off it runs to the gate's own step
-# budget. Either number moving is a decision, not an accident.
+# The application-root scenario: a generated PE32 process using the staged Wine
+# runtime.  All four chaining/residency combinations must complete identically;
+# their separate performance counters make an optimization change measurable
+# without weakening that semantic contract.
 #
 # The fixture is generated, not committed: tools/make_test_pe.py writes the
 # application, its two DLLs and the dependency diamond into a temporary
 # directory the run is pointed at.
 APPLICATION_PINNED = {
-    # Moved deliberately in the commit that lets the loader's own start-up
-    # finish, and the four things that had to be right for it to get there are
-    # the reason the numbers moved:
-    #
-    # (1) Registry names outside ASCII. The stop recorded here before this
-    # commit was a *rejected* NtCreateKey - kernelbase keeps its locale cache
-    # in a subkey literally named the emoji sequence dlls/kernelbase/locale.c:54
-    # calls world_subkey, and a name this gate could not represent was a key
-    # the runtime could not create. The translation now encodes non-ASCII units
-    # as UTF-8 (surrogate pairs combined), so that call is served.
-    #
-    # (2) The view's permissions are declared per *page* now, from the image's
-    # own section table, and the same map protects the host mapping. Two things
-    # were wrong before: the coarse "the image is readable, plus the union of
-    # its writable sections" declared pages writable that the host had mapped
-    # read-only (a host fault, not a classified stop), and the old protection
-    # NtProtectVirtualMemory reported came from that coarse map. The declared
-    # region table therefore had to grow past the 64 entries that union needed
-    # (now 256, and the guard compares against it with a 32-bit immediate
-    # rather than the signed imm8 that would have made a 128-entry table
-    # negative).
-    #
-    # (3) The generated application's TLS callback *entries* are relocated.
-    # They are virtual addresses the loader calls; unrelocated, a run placed
-    # away from the preferred base took a.dll's own preferred-base address
-    # (0x10101010) as a function pointer and stopped as non-code.
-    #
-    # (4) The initialization entry's first argument is the register context the
-    # kernel builds at the top of the thread's stack, not the PEB - and the
-    # context itself is the one the unix side builds: Eip is ntdll's own
-    # RtlUserThreadStart, Eax is the process image's transfer address and Ebx
-    # is the PEB (dlls/ntdll/unix/signal_i386.c:2455-2506, called as
-    # signal_start_thread( main_image_info.TransferAddress, peb, teb ),
-    # dlls/ntdll/unix/server.c:1780). Passing the PEB made loader_init write
-    # the image's entry point into the middle of the PEB and made
-    # signal_start_thread clear 0xf000 bytes of stack below the PEB - memory
-    # nothing had mapped - which is the bounds fault this scenario stopped on
-    # before.
-    #
-    # With all four in place the application runs. NtContinue (0x0043) is
-    # served, so the loader's last call enters the thread at RtlUserThreadStart;
-    # kernel32's BaseThreadInitThunk calls the application's own entry point with
-    # the PEB as its argument (the transfer address the context named), the
-    # entry returns 1, RtlExitUserThread hands that value to NtTerminateThread
-    # (0x0053) and the run ends as a classified clean exit with the status the
-    # guest named. So the two pinned words below are the application's own exit
-    # code and the call that carried it. What still stops every run before this
-    # without register residency is the engine defect recorded in the private
-    # report; its fault address and block are unchanged (0x105c1aa7, 9
-    # instructions, resident mask 0x43).
-    "residency_on": {"stop": "memory-bounds", "fault": "0x61905fd0",
-                     "retired": "56825", "blocks": "1223"},
-    "residency_off": {"stop": "process-terminated", "retired": "598404",
-                      "blocks": "2981", "exit_status": "0x1",
-                      "exit_call": "0x00000053"},
+    "unchained_canonical": {
+        "modes": "0,0,1", "stop": "process-terminated", "retired": "598404",
+        "dispatches": "120931", "blocks": "2981", "bytes": "1678688",
+        "reg_loads": "0", "reg_stores": "0", "reg_reconciliations": "0",
+        "reg_spills": "0", "exit_status": "0x1", "exit_call": "0x00000053",
+    },
+    "unchained_resident": {
+        "modes": "0,1,1", "stop": "process-terminated", "retired": "598404",
+        "dispatches": "120931", "blocks": "2981", "bytes": "1759312",
+        "reg_loads": "222015", "reg_stores": "77013",
+        "reg_reconciliations": "0", "reg_spills": "0",
+        "exit_status": "0x1", "exit_call": "0x00000053",
+    },
+    "chained_canonical": {
+        "modes": "1,0,1", "stop": "process-terminated", "retired": "598404",
+        "dispatches": "15787", "blocks": "2981", "bytes": "1678688",
+        "reg_loads": "0", "reg_stores": "0", "reg_reconciliations": "0",
+        "reg_spills": "0", "exit_status": "0x1", "exit_call": "0x00000053",
+    },
+    "chained_resident": {
+        "modes": "1,1,1", "stop": "process-terminated", "retired": "598404",
+        "dispatches": "15787", "blocks": "2981", "bytes": "1759312",
+        "reg_loads": "215846", "reg_stores": "12656",
+        "reg_reconciliations": "82346", "reg_spills": "61805",
+        "exit_status": "0x1", "exit_call": "0x00000053",
+    },
 }
 
 
@@ -225,38 +195,40 @@ def run_application(modes: str) -> str:
 
 
 def check_application_frontier() -> None:
-    on = run_application("1,1,1")
-    off = run_application("0,0,1")
     problems = []
-    for label, text in (("residency_on", on), ("residency_off", off)):
-        expected = APPLICATION_PINNED[label]
+    semantics = None
+    for label, expected in APPLICATION_PINNED.items():
+        text = run_application(expected["modes"])
         stop = field(text, "run", "stop")
         if stop != expected["stop"]:
             problems.append(f"{label}: stop {stop} != {expected['stop']}")
-        for name in ("retired", "blocks"):
+        for name in ("retired", "dispatches", "blocks", "bytes", "reg_loads",
+                     "reg_stores", "reg_reconciliations", "reg_spills"):
             observed = field(text, "run", name)
             if observed != expected[name]:
                 problems.append(f"{label}: {name} {observed} != "
                                 f"{expected[name]}")
-        if "fault" in expected:
-            address = field(text, "fault", "address")
-            if address != expected["fault"]:
-                problems.append(f"{label}: fault address {address} != "
-                                f"{expected['fault']}")
         for name in ("exit_status", "exit_call"):
-            if name in expected:
-                observed = field(text, "verdict", name)
-                if observed != expected[name]:
-                    problems.append(f"{label}: {name} {observed} != "
-                                    f"{expected[name]}")
+            observed = field(text, "verdict", name)
+            if observed != expected[name]:
+                problems.append(f"{label}: {name} {observed} != "
+                                f"{expected[name]}")
+        current = (stop, field(text, "run", "retired"),
+                   field(text, "run", "blocks"),
+                   field(text, "verdict", "exit_status"),
+                   field(text, "verdict", "exit_call"))
+        if semantics is None:
+            semantics = current
+        elif current != semantics:
+            problems.append(f"{label}: semantic result {current} != {semantics}")
     if problems:
         raise SystemExit(
             "wine ntdll gate: the application-root frontier moved, and moving "
             "it must be a decision recorded in the same commit:\n  " +
             "\n  ".join(problems))
-    print("wine ntdll gate: application-root frontier confirmed "
-          f"(residency on {APPLICATION_PINNED['residency_on']['stop']}, "
-          f"residency off {APPLICATION_PINNED['residency_off']['stop']})")
+    print("wine ntdll gate: application-root parity confirmed "
+          f"({len(APPLICATION_PINNED)} configurations, {semantics[1]} retired, "
+          f"stop {semantics[0]}, status {semantics[3]})")
 
 
 def main() -> int:

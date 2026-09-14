@@ -106,13 +106,12 @@ next coverage set; Pinball is no longer the sole oracle. Per-thread TEB/FS and
 CPU state, SSE/SSE2, indirect-branch prediction, exception precision and
 thread-safe immutable translated-code reuse remain required.
 
-The pinned real-Wine control retires 33,118 guest instructions in 7,065
-dispatches and 961 translated blocks while servicing 19 NT calls. The generated
-application gate exercises 32 serviced NT call shapes and, with residency
-disabled, reaches its own entry point and exits cleanly after 598,404 retired
-instructions and 2,981 blocks. With residency enabled it instead reaches a
-pinned DBT state-contract fault. These bounded host gates expand the oracle
-beyond Pinball; they do not establish a PS5 Wine runtime boot.
+The pinned real-Wine control retires 33,367 guest instructions in 7,148
+dispatches and 962 translated blocks while servicing 19 NT calls. The generated
+application gate exercises 32 serviced NT call shapes and reaches its own entry
+point in all four chaining/residency configurations, exiting cleanly after the
+same 598,404 retired instructions and 2,981 blocks. These bounded host gates
+expand the oracle beyond Pinball; they do not establish a PS5 Wine runtime boot.
 
 ## Measured memory facts
 

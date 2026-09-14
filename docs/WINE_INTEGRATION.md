@@ -59,11 +59,10 @@ module graph, constructs the PE32 TLS and minimal process environment, and
 executes real `ntdll` initialization under the DBT. Both Wine dispatcher
 boundaries are now published and checked against the pinned source. A generated
 PE32 executable, two local DLLs and their dependency diamond load through that
-runtime; with register residency disabled, the application's own entry point
-returns `1` and the process exits through `NtTerminateThread` after 598,404
-retired instructions and 2,981 translated blocks. The residency-enabled path
-still exposes a deterministic DBT entry-contract defect, and loader-list plus
-attach-order validation remains. See [WINE_RUNTIME.md](WINE_RUNTIME.md).
+runtime. Every chaining/residency combination reaches the application's own
+entry point, returns `1` and exits through `NtTerminateThread` after the same
+598,404 retired instructions and 2,981 translated blocks. Loader-list and
+attach-order validation remain. See [WINE_RUNTIME.md](WINE_RUNTIME.md).
 Staging the runtime inside the title and booting a Wine process remain separate
 hardware acceptance gates.
 
@@ -121,7 +120,8 @@ The next performance work is driven by Wine plus application traces, not only
 Pinball:
 
 1. indirect-branch inline caches and return prediction;
-2. a real intermediate representation with wider register allocation;
+2. profile-guided contracts, direct resident emission and then an intermediate
+   representation with wider register allocation;
 3. SSE/SSE2 and remaining integer instruction families required by Wine PE32;
 4. trace/superblock formation with bounded safepoints;
 5. shared immutable translations and per-thread execution state;

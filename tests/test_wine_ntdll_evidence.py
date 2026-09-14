@@ -63,6 +63,8 @@ def base_records() -> dict[str, list[dict[str, str]]]:
         "run": [{"first_eip": hex(NTDLL_BASE + ENTRY_RVA),
                  "last_eip": hex(NTDLL_BASE + THUNK_RVA), "retired": "3",
                  "dispatches": "1", "blocks": "1", "bytes": "160",
+                 "reg_loads": "3", "reg_stores": "0",
+                 "reg_reconciliations": "0", "reg_spills": "0",
                  "stop_address": hex(NTDLL_BASE + THUNK_RVA),
                  "stop": VALIDATOR.ACCEPTED_STOP, "syscall": "0x0000000f",
                  "host_calls": "0"}],

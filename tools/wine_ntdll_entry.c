@@ -779,12 +779,18 @@ int main(int argc, char **argv)
            report.chaining, report.residency, report.lazy_flags);
     printf("kind=host-wine-run first_eip=0x%08x last_eip=0x%08x "
            "retired=%llu dispatches=%llu blocks=%llu bytes=%llu "
+           "reg_loads=%llu reg_stores=%llu reg_reconciliations=%llu "
+           "reg_spills=%llu "
            "stop_address=0x%08x stop=%s syscall=0x%08x host_calls=%llu\n",
            report.first_eip, report.last_eip,
            (unsigned long long)report.retired,
            (unsigned long long)report.dispatches,
            (unsigned long long)report.translated_blocks,
            (unsigned long long)report.translated_bytes,
+           (unsigned long long)report.register_loads,
+           (unsigned long long)report.register_stores,
+           (unsigned long long)report.register_reconciliations,
+           (unsigned long long)report.register_spills,
            report.stop_address, pw_wine_stop_name(report.stop),
            report.observed_syscall_id, (unsigned long long)report.host_calls);
     if (report.stop == PW_WINE_STOP_MEMORY_BOUNDS) {

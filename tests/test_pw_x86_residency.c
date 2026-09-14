@@ -170,7 +170,66 @@ static void test_partial_register_aliasing(void)
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
 }
 
-/* 4. ESP as operand, address base/index, and destination */
+/* 4. Byte ALU operands must observe dirty resident dwords, including AH..BH. */
+static void test_dirty_resident_byte_alu_aliasing(void)
+{
+    /*
+     *   mov eax, 0x11223344
+     *   add ah, al             (eax = 0x11227744)
+     *   mov ecx, 0x75
+     *   mov edx, 0x12345664
+     *   cmp dl, cl             (ZF = 0)
+     *   ret
+     *
+     * Each byte consumer follows a full-dword write in the same translated
+     * block.  Canonical state is therefore deliberately stale while residency
+     * is enabled; reading it instead of the resident host register changes
+     * both the high-byte result and the branch flags.
+     */
+    const uint8_t code[] = {
+        0xb8, 0x44, 0x33, 0x22, 0x11,
+        0x00, 0xc4,
+        0xb9, 0x75, 0x00, 0x00, 0x00,
+        0xba, 0x64, 0x56, 0x34, 0x12,
+        0x38, 0xca,
+        0xc3
+    };
+    TestSource src = {0x1000, (uint8_t *)code, sizeof(code)};
+    PwVmBackend vm;
+    PwX86Engine resident, canonical;
+    PwX86CacheEntry resident_entries[16], canonical_entries[16];
+    PwX86State resident_state = {
+        .eip = 0x1000, .stack_low = 0x03000000, .stack_high = 0x03010000
+    };
+    PwX86State canonical_state = resident_state;
+
+    resident_state.gpr[4] = canonical_state.gpr[4] = 0x0300ff00;
+    *(uint32_t *)(uintptr_t)0x0300ff00 = 0x99999999;
+    assert(pw_vm_posix_backend(&vm) == PW_OK);
+    assert(pw_x86_engine_init(&resident, &vm, resident_entries, 16, 65536, 1,
+                              test_source_view, &src) == PW_OK);
+    assert(pw_x86_engine_init(&canonical, &vm, canonical_entries, 16, 65536, 1,
+                              test_source_view, &src) == PW_OK);
+    assert(pw_x86_engine_set_residency(&resident, 1) == PW_OK);
+    assert(pw_x86_engine_set_residency(&canonical, 0) == PW_OK);
+
+    PwX86StepReport resident_step, canonical_step;
+    assert(pw_x86_engine_step(&resident, &resident_state, &resident_step) == PW_OK);
+    *(uint32_t *)(uintptr_t)0x0300ff00 = 0x99999999;
+    assert(pw_x86_engine_step(&canonical, &canonical_state, &canonical_step) == PW_OK);
+    assert(resident_state.gpr[0] == 0x11227744);
+    assert((resident_state.eflags & 0x40u) == 0u);
+    assert(memcmp(resident_state.gpr, canonical_state.gpr,
+                  sizeof(resident_state.gpr)) == 0);
+    assert((resident_state.eflags & 0x8d5u) ==
+           (canonical_state.eflags & 0x8d5u));
+    assert(resident_step.retired == canonical_step.retired);
+
+    assert(pw_x86_engine_destroy(&resident) == PW_OK);
+    assert(pw_x86_engine_destroy(&canonical) == PW_OK);
+}
+
+/* 5. ESP as operand, address base/index, and destination */
 static void test_esp_operand_base_index_dest(void)
 {
     /*
@@ -214,7 +273,7 @@ static void test_esp_operand_base_index_dest(void)
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
 }
 
-/* 5. Helper/import/fault/trap exits observing latest values */
+/* 6. Helper/import/fault/trap exits observing latest values */
 static void test_fault_observes_latest_values(void)
 {
     /*
@@ -251,7 +310,7 @@ static void test_fault_observes_latest_values(void)
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
 }
 
-/* 6. Different successor entry contracts forcing reconciliation spill/move */
+/* 7. Different successor entry contracts forcing reconciliation spill/move */
 static void test_reconciliation_mismatched_contracts(void)
 {
     /*
@@ -319,7 +378,7 @@ static void test_reconciliation_mismatched_contracts(void)
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
 }
 
-/* 7. Chain invalidation and fallback to canonical memory state */
+/* 8. Chain invalidation and fallback to canonical memory state */
 static void test_chain_invalidation_canonical_fallback(void)
 {
     /*
@@ -366,7 +425,7 @@ static void test_chain_invalidation_canonical_fallback(void)
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
 }
 
-/* 8. Deterministic allocation/output under identical input */
+/* 9. Deterministic allocation/output under identical input */
 static void test_deterministic_allocation_output(void)
 {
     uint8_t code[] = {
@@ -391,7 +450,7 @@ static void test_deterministic_allocation_output(void)
     assert(memcmp(out1, out2, b1.code_bytes) == 0);
 }
 
-/* 9. Parity with residency disabled through test/runtime switch */
+/* 10. Parity with residency disabled through test/runtime switch */
 static void test_parity_residency_switch(void)
 {
     /*
@@ -438,7 +497,7 @@ static void test_parity_residency_switch(void)
     assert(pw_x86_engine_destroy(&engine_no_res) == PW_OK);
 }
 
-/* 10. A condition helper must preserve a resident ESP before a push. */
+/* 11. A condition helper must preserve a resident ESP before a push. */
 static void test_setcc_helper_preserves_resident_stack(void)
 {
     /*
@@ -476,7 +535,7 @@ static void test_setcc_helper_preserves_resident_stack(void)
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
 }
 
-/* 11. A matching successor must eventually spill inherited dirty values. */
+/* 12. A matching successor must eventually spill inherited dirty values. */
 static void test_matching_chain_preserves_inherited_dirty_value(void)
 {
     uint8_t code[320];
@@ -523,7 +582,7 @@ static void test_matching_chain_preserves_inherited_dirty_value(void)
 }
 
 /*
- * 12. Base+index addressing with resident registers across a block boundary.
+ * 13. Base+index addressing with resident registers across a block boundary.
  *
  * This is the shape the loader's own rb-tree fixup runs - a load whose base is
  * one guest register and whose index is another, with the value that feeds the
@@ -532,11 +591,8 @@ static void test_matching_chain_preserves_inherited_dirty_value(void)
  * live. It is the pattern the application-root run reaches when ntdll inserts
  * the module it has just mapped.
  *
- * It passes, which is itself the finding: the shape is not what fails. The
- * same is true of test 13, the fixup's own block byte for byte, entered
- * canonically into a fresh engine. So the defect the application run hits is
- * not in how that block is translated; it is in the contract it is entered
- * with, which is where the next reproduction has to start.
+ * This remains the compact regression for values passed from one canonical
+ * block entry into a resident base/index consumer.
  */
 static void test_base_index_load_across_blocks(void)
 {
@@ -597,9 +653,10 @@ static void test_base_index_load_across_blocks(void)
 }
 
 /*
- * 13. The block ntdll's rb-insert fixup actually runs, byte for byte, entered
- * canonically into a fresh engine. It executes correctly, so the translation of
- * this block is not what the application run's fault is about. See test 12.
+ * 14. The block ntdll's rb-insert fixup actually runs, byte for byte, entered
+ * canonically into a fresh engine.  EAX deliberately starts with non-zero high
+ * bits: the guest XOR must clear the complete register before SETNE replaces
+ * AL, even when EAX is resident and canonical memory is temporarily stale.
  */
 static void test_rb_fixup_block_verbatim(void)
 {
@@ -638,6 +695,7 @@ static void test_rb_fixup_block_verbatim(void)
     state.gpr[6] = 0x0300f000;          /* esi: the "node" */
     state.gpr[3] = 0x11;                /* ebx: the key */
     state.gpr[2] = 0x12345678;          /* edx: the value stored */
+    state.gpr[0] = 0x10641580;          /* overwritten by xor eax, eax */
     *(uint32_t *)(uintptr_t)0x0300f004 = 0x11;
     *(uint32_t *)(uintptr_t)0x0300f000 = 0xaaaa0000;
 
@@ -663,6 +721,7 @@ int main(void)
     test_load_once_write_many();
     test_all_eight_gprs_and_pressure();
     test_partial_register_aliasing();
+    test_dirty_resident_byte_alu_aliasing();
     test_esp_operand_base_index_dest();
     test_fault_observes_latest_values();
     test_reconciliation_mismatched_contracts();
@@ -675,6 +734,6 @@ int main(void)
     test_rb_fixup_block_verbatim();
 
     assert(vm.release(vm.context, &stack_region) == PW_OK);
-    printf("all 13 register residency tests passed successfully\n");
+    printf("all 14 register residency tests passed successfully\n");
     return 0;
 }

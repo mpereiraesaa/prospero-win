@@ -40,10 +40,11 @@ not a promise of dates or a list of internal experiments.
   with validated guest spans and typed, monotonic handles.
 - A generated PE32 executable plus two DLLs loads from the application
   namespace through Wine's own `ntdll`, reaches its own entry point, returns
-  `1`, and exits cleanly through `NtTerminateThread`. With register residency
-  disabled, that host run retires 598,404 guest instructions over 2,981 blocks.
-- The smaller ntdll control remains independently pinned at 33,118 retired
-  instructions, 7,065 dispatches, 961 blocks and 19 serviced calls. Normal,
+  `1`, and exits cleanly through `NtTerminateThread`. All four chaining and
+  residency combinations retire the same 598,404 guest instructions over the
+  same 2,981 blocks and return the same status.
+- The smaller ntdll control remains independently pinned at 33,367 retired
+  instructions, 7,148 dispatches, 962 blocks and 19 serviced calls. Normal,
   sanitizer, pinned-source and cleanup gates pass.
 
 Those Wine results are bounded host checkpoints. They do not yet mean that a
@@ -52,30 +53,28 @@ the direct Win32 bootstrap.
 
 ## Current frontier
 
-The successful application checkpoint deliberately disables cross-block
-register residency. With residency enabled the same deterministic run stops in
-Wine's module-tree insertion with a classified bounds fault caused by an
-incorrect DBT entry-state contract. The loader graph and its load/memory/init
-lists also still need to be read back and validated, and DllMain/TLS attach
-ordering is not yet evidence. The current registry is run-local rather than a
-persistent Wine prefix.
+Cross-block residency is now a passing, measured path. Chaining reduces the
+application gate's dispatcher returns by 86.9%; the first direct resident-ALU
+emission and profitability filters reduce code and spill overhead, but the
+allocator still has only three fixed host registers and no trace-wide view.
+The loader graph and its load/memory/init lists still need read-back validation,
+DllMain/TLS attach ordering is not yet evidence, and the current registry is
+run-local rather than a persistent Wine prefix.
 
 ## Next compatibility release
 
-1. Repair the DBT residency entry contract and require the generated Wine
-   application to finish identically with optimization on and off.
-2. Validate Wine-owned `PEB_LDR_DATA`, all loader lists and module identity,
+1. Validate Wine-owned `PEB_LDR_DATA`, all loader lists and module identity,
    then prove dependency, DllMain and TLS attach/detach ordering.
-3. Expand native process, thread, object and wait services: thread creation and
+2. Expand native process, thread, object and wait services: thread creation and
    exit, events, mutexes, semaphores, wait-any/wait-all, timeouts and abandoned
    ownership.
-4. Complete the persistent prefix: `drive_c`, environment, registry views and
+3. Complete the persistent prefix: `drive_c`, environment, registry views and
    crash-safe storage, DOS-device/NT path normalization, sharing and directory
    enumeration; prove two runs and two isolated prefixes.
-5. Stage the pinned Wine distribution in the native title, boot the first Wine
+4. Stage the pinned Wine distribution in the native title, boot the first Wine
    process on hardware and require structured identity, lifecycle and cleanup
    evidence.
-6. Add a second independent PE32 application and selected Wine test subsets so
+5. Add a second independent PE32 application and selected Wine test subsets so
    application-specific assumptions cannot become runtime contracts.
 
 The exact dependency graph and exit criteria live in
@@ -87,6 +86,7 @@ Compatibility work and DBT performance advance together, but neither
 substitutes for correctness. Wine and multiple applications will drive:
 
 - indirect-branch inline caches and return prediction;
+- profile-guided resident allocation across compatible block contracts;
 - broader SSE/SSE2 and integer instruction coverage;
 - an intermediate representation with wider register allocation;
 - bounded traces or superblocks with precise safepoints;
@@ -94,21 +94,8 @@ substitutes for correctness. Wine and multiple applications will drive:
 - deterministic counters for dispatch, spills, exits, code size and frame
   pacing.
 
-No native-performance percentage is claimed without matched PS5 measurements
-and exact eager/control state parity.
-
-## Isolation direction
-
-The native package runs inside the PS5 title process and title-owned filesystem
-boundary. This is the outer sandbox, not an API for arbitrary nested containers.
-If one prospero-win title hosts several Windows applications, they share that
-outer boundary.
-
-The runtime therefore keeps an inner logical boundary: validated guest memory,
-W^X publication, typed non-reissued handles, canonical application/runtime/
-storage namespaces, quotas and capability-limited Unix-call services. PE32 is
-mediated by the DBT. Future PE64 code can execute directly in the title process
-and needs an explicit trust or stronger-containment policy before broad use.
+Host microbenchmarks and application gates guide optimization; PS5 performance
+percentages require matched hardware measurements with exact state parity.
 
 ## 3D applications
 

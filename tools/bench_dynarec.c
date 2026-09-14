@@ -16,6 +16,7 @@ enum {
     BENCH_MEM_BYTES = 65536,
     BENCH_STACK_BYTES = 65536,
     BENCH_SAMPLES = 21,
+    BENCH_BATCH_RUNS = 8,
 };
 
 typedef struct BenchWorkload {
@@ -378,34 +379,47 @@ int main(int argc, char **argv)
         PwX86State last_state = {0};
 
         for (int sample = 0; sample < BENCH_SAMPLES; sample++) {
-            /* Re-initialize state and memory before each sample */
-            memset(mem_region.write_base, 0x5a, mem_region.bytes);
-            memset(stack_region.write_base, 0x00, stack_region.bytes);
-
-            PwX86State s = {.eip = wl->entry_pc, .stack_low = stack_base, .stack_high = stack_base + BENCH_STACK_BYTES};
-            s.memory_count = 1;
-            s.memory[0] = (PwX86Memory){.low = mem_base, .high = mem_base + BENCH_MEM_BYTES,
-                                        .permissions = PW_X86_READ|PW_X86_WRITE};
-            wl->setup_state(&s, mem_base, stack_base);
-
             uint64_t sample_retired = 0, sample_dispatches = 0;
-            uint64_t t0 = bench_now_ns();
-            while (s.eip >= wl->entry_pc && s.eip < wl->entry_pc + wl->code_bytes) {
-                PwX86StepReport rep;
-                int status = pw_x86_engine_step(&engine, &s, &rep);
-                if (status != PW_OK) {
-                    fprintf(stderr, "warm step failed: %d\n", status);
-                    return 1;
+            uint64_t elapsed = 0;
+
+            /* A single synthetic run is sub-millisecond on current hosts and
+             * therefore dominated by scheduler/frequency noise.  Time a
+             * deterministic batch while keeping setup outside each timed
+             * interval; checksums still describe the final identical run. */
+            for (int batch = 0; batch < BENCH_BATCH_RUNS; ++batch) {
+                memset(mem_region.write_base, 0x5a, mem_region.bytes);
+                memset(stack_region.write_base, 0x00, stack_region.bytes);
+
+                PwX86State s = {
+                    .eip = wl->entry_pc, .stack_low = stack_base,
+                    .stack_high = stack_base + BENCH_STACK_BYTES
+                };
+                s.memory_count = 1;
+                s.memory[0] = (PwX86Memory){
+                    .low = mem_base, .high = mem_base + BENCH_MEM_BYTES,
+                    .permissions = PW_X86_READ|PW_X86_WRITE
+                };
+                wl->setup_state(&s, mem_base, stack_base);
+
+                uint64_t t0 = bench_now_ns();
+                while (s.eip >= wl->entry_pc &&
+                       s.eip < wl->entry_pc + wl->code_bytes) {
+                    PwX86StepReport rep;
+                    int status = pw_x86_engine_step(&engine, &s, &rep);
+                    if (status != PW_OK) {
+                        fprintf(stderr, "warm step failed: %d\n", status);
+                        return 1;
+                    }
+                    sample_retired += rep.retired;
+                    sample_dispatches++;
                 }
-                sample_retired += rep.retired;
-                sample_dispatches++;
+                elapsed += bench_now_ns() - t0;
+                checksum = compute_checksum(&s, mem_region.write_base, 2048);
+                last_state = s;
             }
-            uint64_t t1 = bench_now_ns();
-            warm_times[sample] = t1 - t0;
+            warm_times[sample] = elapsed;
             total_retired = sample_retired;
             total_dispatches = sample_dispatches;
-            checksum = compute_checksum(&s, mem_region.write_base, 2048);
-            last_state = s;
         }
 
         qsort(warm_times, BENCH_SAMPLES, sizeof(uint64_t), compare_u64);
@@ -419,7 +433,8 @@ int main(int argc, char **argv)
 
         printf("kind=bench-result workload=%s chaining=%u residency=%u lazy_flags=%u "
                "cold_median_ns=%llu code_bytes=%zu "
-               "compiles=%u retired=%llu dispatches=%llu warm_min_ns=%llu warm_med_ns=%llu "
+               "compiles=%u batch_runs=%u retired=%llu dispatches=%llu "
+               "warm_min_ns=%llu warm_med_ns=%llu "
                "warm_p95_ns=%llu warm_max_ns=%llu ns_per_inst=%.3f mips=%.1f "
                "eax=0x%08x ecx=0x%08x edx=0x%08x ebx=0x%08x checksum=0x%08x\n",
                wl->name,
@@ -427,6 +442,7 @@ int main(int argc, char **argv)
                (unsigned long long)cold_median_ns,
                total_emitted_bytes,
                total_compiled_blocks,
+               BENCH_BATCH_RUNS,
                (unsigned long long)total_retired,
                (unsigned long long)total_dispatches,
                (unsigned long long)warm_min_ns,

@@ -2129,6 +2129,10 @@ int pw_wine_gate_run(const PwWineGateConfig *config, PwWineGateReport *report)
     }
     report->translated_blocks = engine.cache.publishes;
     report->translated_bytes = engine.cache.cursor;
+    report->register_loads = engine.reg_loads;
+    report->register_stores = engine.reg_stores;
+    report->register_reconciliations = engine.reg_reconciliations;
+    report->register_spills = engine.reg_spills;
     /* No host Wine entry point is ever called: the gate only translates and
      * executes guest bytes it mapped itself. */
     report->host_calls = 0u;
