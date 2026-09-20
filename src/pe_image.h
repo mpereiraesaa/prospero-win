@@ -133,7 +133,7 @@ int pe_image_is_dll(const PeImage *image);
 /*
  * True when the machine can execute directly on the console's Zen 2 cores
  * in 64-bit long mode. An i386 image parses and maps but cannot run without
- * instruction translation; see docs/EXECUTION_MODEL.md.
+ * instruction translation; see docs/TECHNICAL_DETAILS.md.
  */
 int pe_image_machine_is_native(const PeImage *image);
 

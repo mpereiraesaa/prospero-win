@@ -33,7 +33,8 @@ deliberate choice about inbound compatibility:
 
 - Wine is LGPL-2.1-or-later, so its code and headers can be incorporated
   directly if that ever helps.
-- QEMU, which `EXECUTION_MODEL.md` names as the semantic reference for
+- QEMU, which the [technical details](docs/TECHNICAL_DETAILS.md) identify as
+  prior art for
   32-bit instruction behaviour, is GPL-2.0-**only** in large parts. LGPL-2.1
   code can be combined with GPL-2.0-only code (the result is GPL-2.0);
   LGPL-3.0 cannot be combined with it at all. Choosing 2.1 preserves that

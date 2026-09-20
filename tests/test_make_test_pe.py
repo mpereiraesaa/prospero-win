@@ -119,7 +119,7 @@ class SampleChainTest(unittest.TestCase):
         self.assertEqual(field(output, "machine"), "i386")
         self.assertEqual(field(output, "bits"), "32")
         self.assertEqual(field(output, "preferred_base"), "0x400000")
-        # The console runs 64-bit user code only; see docs/EXECUTION_MODEL.md.
+        # The console runs 64-bit user code only; see TECHNICAL_DETAILS.md.
         self.assertIn("native_execution=no", output)
         self.assertRegex(output, r"binkw32\.dll\s+named=2")
         self.assertEqual(field(output, "opens"), "1")

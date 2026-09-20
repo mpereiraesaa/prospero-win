@@ -3,13 +3,11 @@ dev.conf.example
 CONTRIBUTING.md
 docs/ARCHITECTURE.md
 docs/DEVELOPMENT.md
-docs/EXECUTION_MODEL.md
 docs/GUEST_ABI.md
 docs/HARDWARE_VALIDATION.md
 docs/GDI.md
 docs/WINE_INTEGRATION.md
 docs/WINE_FOUNDATION.json
-docs/X86_EXECUTION.md
 docs/PINBALL_TARGET.md
 docs/README.md
 docs/ROADMAP.md
