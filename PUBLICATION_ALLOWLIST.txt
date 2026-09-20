@@ -2,18 +2,14 @@ dev.conf.example
 .github/workflows/ci.yml
 CONTRIBUTING.md
 docs/ARCHITECTURE.md
-docs/COMPAT32_PHASE0A.md
 docs/DEVELOPMENT.md
 docs/EXECUTION_MODEL.md
-docs/IMPORT_PLAN.md
 docs/GUEST_ABI.md
 docs/HARDWARE_VALIDATION.md
 docs/GDI.md
-docs/WINE_REUSE_AUDIT.md
 docs/WINE_INTEGRATION.md
 docs/WINE_FOUNDATION.json
 docs/X86_EXECUTION.md
-docs/PE_MAPPING_PHASE0.md
 docs/PINBALL_TARGET.md
 docs/README.md
 docs/ROADMAP.md
@@ -187,7 +183,6 @@ tests/test_pw_time.c
 src/pe_resource.c
 src/pe_resource.h
 tests/test_pe_resource.c
-docs/STARTUP_ANALYSIS.md
 docs/PINBALL_SOURCE_ORACLE.json
 docs/PINBALL_X86_COVERAGE.json
 references/spacecadet_pinball.json

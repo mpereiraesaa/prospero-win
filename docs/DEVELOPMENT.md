@@ -80,20 +80,10 @@ resolves — the mapped graph with load order, per-module checksums and the
 page-protection outcome. It is the fastest way to size a title's Win32
 surface before implementing any of it.
 
-For Pinball, clone the public SpaceCadetPinball reference outside this
-repository and reproduce the checked identity/source/PDB crosswalk:
-
-```sh
-python3 tools/build_source_oracle.py \
-  --config references/spacecadet_pinball.json \
-  --reference-dir /external/SpaceCadetPinball \
-  --image /private/PINBALL.EXE \
-  --output docs/PINBALL_SOURCE_ORACLE.json
-```
-
-The command rejects an unpinned commit, mismatched image hash, PDB identity or
-public-symbol address. The Ghidra coverage command in `STARTUP_ANALYSIS.md`
-regenerates `PINBALL_X86_COVERAGE.json`; raw bytes/assembly remain transient.
+Binary-specific analysis, decompiler workspaces and chronological coverage
+notes stay outside the public repository. Checked-in synthetic fixtures and
+aggregate regression inputs must be reproducible by a documented tool, carry
+no proprietary bytes, and remain covered by the publication audit.
 
 To run a gate with no proprietary input at all:
 
