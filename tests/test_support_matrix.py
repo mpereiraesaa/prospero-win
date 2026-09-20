@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the public Wine foundation ledger and its dependency graph."""
+"""Validate the public support matrix and its dependency graph."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LEDGER = ROOT / "docs" / "WINE_FOUNDATION.json"
-VALID_STATUSES = {"validated", "implemented", "partial", "planned", "external-wip"}
+MATRIX = ROOT / "docs" / "SUPPORT_MATRIX.json"
+VALID_STATUSES = {"validated", "implemented", "partial", "unsupported", "external"}
 REQUIRED = {
     "pe-loader", "runtime-module-policy", "ia32-dbt", "pe64-abi",
     "wine-pe-runtime", "unix-call-bridge", "nt-process-thread",
@@ -19,8 +19,8 @@ REQUIRED = {
 }
 
 
-data = json.loads(LEDGER.read_text(encoding="utf-8"))
-assert data["schema"] == "prospero-win-wine-foundation/1"
+data = json.loads(MATRIX.read_text(encoding="utf-8"))
+assert data["schema"] == "prospero-win-support-matrix/1"
 assert len(data["wine_reference"]) == 40
 assert data["architecture"] == {
     "pe32_cpu": "prospero-win-dbt",
@@ -39,8 +39,7 @@ assert set(by_id) == REQUIRED, "foundation component inventory drift"
 for component in components:
     assert component["status"] in VALID_STATUSES
     assert component["evidence"].strip()
-    assert component["exit_criteria"]
-    assert len(component["exit_criteria"]) == len(set(component["exit_criteria"]))
+    assert "exit_criteria" not in component, "internal planning leaked"
     for dependency in component["depends_on"]:
         assert dependency in by_id, f"unknown dependency {dependency}"
         assert dependency != component["id"], "self dependency"
@@ -68,6 +67,6 @@ assert by_id["dxvk"]["depends_on"] == [
 ]
 assert by_id["runtime-module-policy"]["status"] == "implemented"
 assert by_id["wine-pe-runtime"]["status"] == "partial"
-assert by_id["ps5-vulkan"]["status"] == "external-wip"
+assert by_id["ps5-vulkan"]["status"] == "external"
 
-print(f"Wine foundation ledger passed: {len(components)} components")
+print(f"public support matrix passed: {len(components)} components")

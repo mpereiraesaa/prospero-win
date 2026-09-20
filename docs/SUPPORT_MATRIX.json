@@ -1,0 +1,151 @@
+{
+  "schema": "prospero-win-support-matrix/1",
+  "wine_reference": "490f6d5dcbb2a5047345b8af88d114bbcaad69a8",
+  "architecture": {
+    "pe32_cpu": "prospero-win-dbt",
+    "pe64_cpu": "native-x86-64-with-abi-bridge",
+    "windows_subsystem": "wine",
+    "direct3d": "dxvk",
+    "vulkan": "ps5-vulkan",
+    "native_gpu": "agc-gfx1013"
+  },
+  "components": [
+    {
+      "id": "pe-loader",
+      "status": "partial",
+      "depends_on": [],
+      "evidence": "PE32/PE32+ mapping, relocations and normal imports are tested. Exports, name/ordinal lookup, forwarded exports with bounded depth and cycle detection, runtime-to-runtime import binding, and the PE32 TLS directory plus a process/thread TLS owner with callback plans are implemented and host-tested; delay imports remain."
+    },
+    {
+      "id": "runtime-module-policy",
+      "status": "implemented",
+      "depends_on": [
+        "pe-loader"
+      ],
+      "evidence": "Wine modules have an explicit runtime origin; POSIX and PS5 providers keep independently configured application/runtime roots, covered by host tests."
+    },
+    {
+      "id": "ia32-dbt",
+      "status": "validated",
+      "depends_on": [
+        "pe-loader"
+      ],
+      "evidence": "The first PE32 title is playable on FW 12.02 with exact host parity and bounded hardware evidence. The Wine host gate adds FS-relative operands, atomic LOCK/CMPXCHG and memory XCHG, byte accumulators, BT/BTS/BTR/BTC, CMOVcc, the tested SSE lane slice, BSF/BSR and 16-bit shifts. A generated PE32 application reaches its own entry point and exits cleanly after exactly 598404 retired instructions and 2981 blocks in all four chaining/register-residency configurations. Resident byte aliases consume current host-register state, common 32-bit ALU operations execute directly on resident registers, and profitability filters avoid residency in tiny and helper-heavy blocks."
+    },
+    {
+      "id": "pe64-abi",
+      "status": "partial",
+      "depends_on": [
+        "pe-loader"
+      ],
+      "evidence": "Synthetic integer call bridge exists; imports, callbacks, FP/vector arguments and exception transitions remain."
+    },
+    {
+      "id": "wine-pe-runtime",
+      "status": "partial",
+      "depends_on": [
+        "runtime-module-policy",
+        "ia32-dbt",
+        "unix-call-bridge",
+        "nt-process-thread"
+      ],
+      "evidence": "Wine revision 490f6d5d produces a manifest-validated i386 distribution containing ntdll, kernelbase, kernel32 and all 76 tracked NLS files. A bounded host gate publishes both dispatchers, maps runtime and application namespaces, builds the initial PEB/TEB/process parameters and CONTEXT, and services 32 NT call shapes. A generated PE32 executable plus two DLLs loads through Wine's own ntdll, reaches its transfer address, returns 1 and exits through NtTerminateThread after exactly 598404 retired instructions and 2981 blocks in all four chaining/register-residency configurations. Loader-list identity and DllMain/TLS ordering are not yet independently validated, the prefix is not persistent and no PS5 Wine launch is claimed."
+    },
+    {
+      "id": "unix-call-bridge",
+      "status": "partial",
+      "depends_on": [
+        "ia32-dbt",
+        "nt-process-thread"
+      ],
+      "evidence": "Both dispatcher slots are found in the built image and published through the TEB. The 256-entry i386 syscall table and eight-entry ntdll Unix-call table match the pinned Wine source, including frame layout and the debug-write parameter ABI. The handler ledger contains 32 serviced NT call shapes plus classified process/thread termination stops. Implemented families include virtual memory, files and identity, image sections and protections, registry open/create/query/set, object namespace, process/thread queries, NtContinue, NLS mappings and locale queries. Guest spans are preflighted and ownership is gate-local; refusals return explicit NTSTATUS instead of fabricated success."
+    },
+    {
+      "id": "nt-process-thread",
+      "status": "partial",
+      "depends_on": [
+        "virtual-memory"
+      ],
+      "evidence": "One Wine guest thread has isolated CPU/FP/FS state, a populated TEB/PEB/process-parameter page, image-sized stack, activation-context stack, client identity and initial I386_CONTEXT. NtGetNextThread, NtQueryInformationThread and NtContinue are host-tested; the generated application's first thread reaches its entry point and exits through NtTerminateThread. Wine owns PEB_LDR_DATA, but its lists and DllMain/TLS callback ordering still need read-back validation. Native multi-thread scheduling and general wait objects remain."
+    },
+    {
+      "id": "nt-objects-waits",
+      "status": "partial",
+      "depends_on": [
+        "nt-process-thread"
+      ],
+      "evidence": "The Wine gate has a typed monotonic handle table plus bounded file, registry, directory-object and section-object profiles. General Wine-compatible events, mutexes, semaphores and waits are not yet implemented."
+    },
+    {
+      "id": "virtual-memory",
+      "status": "partial",
+      "depends_on": [],
+      "evidence": "Low-address reserve/commit/protect/release and W^X DBT publication are validated for the current profile."
+    },
+    {
+      "id": "exceptions-seh",
+      "status": "unsupported",
+      "depends_on": [
+        "nt-process-thread",
+        "ia32-dbt"
+      ],
+      "evidence": "Precise DBT faults exist, but PE32 SEH dispatch/unwind and Wine context delivery do not."
+    },
+    {
+      "id": "filesystem-paths",
+      "status": "partial",
+      "depends_on": [
+        "nt-objects-waits"
+      ],
+      "evidence": "Title-confined read/seek and INI access exist. The Wine host gate separates runtime and application namespaces, canonicalizes DOS/NT names, rejects traversal and alternate streams, and services bounded open/read/query/close plus stable file identity. SEC_IMAGE sections can be described, mapped from file bytes and protected with one page-granular permission map shared by the host backend and guest guard. The portable core reaches storage only through injected services. Persistent drive_c storage, full DOS-device mapping, sharing, directory enumeration and overlapped I/O remain."
+    },
+    {
+      "id": "registry-environment-nls",
+      "status": "partial",
+      "depends_on": [
+        "nt-process-thread",
+        "filesystem-paths"
+      ],
+      "evidence": "The direct bootstrap has a bounded persistent registry and CP1252 support. The Wine distribution stages and hashes all 76 NLS files from the pinned revision; the gate maps locale/codepage data below 4 GiB, publishes a UTF-16 process environment and supports UTF-8 canonical registry names including surrogate pairs. Its create/query/set registry store is currently run-local. Crash-safe prefix persistence, registry views and two-run/two-prefix isolation remain."
+    },
+    {
+      "id": "audio-input",
+      "status": "partial",
+      "depends_on": [
+        "nt-objects-waits"
+      ],
+      "evidence": "WinMM PCM and DualSense-to-message adapters are hardware validated for one title."
+    },
+    {
+      "id": "networking",
+      "status": "unsupported",
+      "depends_on": [
+        "nt-objects-waits",
+        "filesystem-paths"
+      ],
+      "evidence": "No Winsock compatibility surface is claimed."
+    },
+    {
+      "id": "dxvk",
+      "status": "unsupported",
+      "depends_on": [
+        "wine-pe-runtime",
+        "nt-objects-waits",
+        "ps5-vulkan"
+      ],
+      "evidence": "DXVK is the selected D3D8/9/10/11 path; it has not started on PS5."
+    },
+    {
+      "id": "ps5-vulkan",
+      "status": "external",
+      "depends_on": [],
+      "evidence": "The companion project renders and computes on gfx1013 but does not yet satisfy its pinned DXVK consumer profile."
+    },
+    {
+      "id": "observability-lifecycle",
+      "status": "validated",
+      "depends_on": [],
+      "evidence": "ps5log/1 identity, runtime counters and ordered close/relaunch are hardware validated."
+    }
+  ]
+}

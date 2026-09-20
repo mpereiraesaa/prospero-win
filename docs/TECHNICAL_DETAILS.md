@@ -132,4 +132,6 @@ replace them.
 The repository does not contain Windows executables, vendor DLLs, proprietary
 shaders, SDK material, raw captures or decompiler output. See
 [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and
-[DEVELOPMENT.md](DEVELOPMENT.md) for the reproducible gates.
+[DEVELOPMENT.md](DEVELOPMENT.md) for the reproducible gates. The
+[support matrix](SUPPORT_MATRIX.json) is the machine-readable summary of the
+current component-level claims.

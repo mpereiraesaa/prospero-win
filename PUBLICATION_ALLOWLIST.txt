@@ -7,7 +7,7 @@ docs/DEVELOPMENT.md
 docs/HARDWARE_VALIDATION.md
 docs/GDI.md
 docs/WINE_INTEGRATION.md
-docs/WINE_FOUNDATION.json
+docs/SUPPORT_MATRIX.json
 docs/README.md
 docs/ROADMAP.md
 docs/TECHNICAL_DETAILS.md
@@ -115,7 +115,7 @@ tests/test_pw_file_posix.c
 tests/test_pw_file_ps5.c
 tests/test_win32_catalog.py
 tests/test_status_vocabulary.py
-tests/test_wine_foundation.py
+tests/test_support_matrix.py
 tests/test_classify_x86.py
 tests/test_startup_x87_contract.py
 tests/test_pw_import_bind.c

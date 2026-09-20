@@ -141,7 +141,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/inspect_pe $(BUILD)/trace_x86_ent
 	python3 tests/test_audit_wine_imports.py
 	python3 tests/test_win32_catalog.py
 	python3 tests/test_status_vocabulary.py
-	python3 tests/test_wine_foundation.py
+	python3 tests/test_support_matrix.py
 	python3 tests/test_classify_x86.py
 	python3 tests/test_startup_x87_contract.py
 	python3 tests/test_build_source_oracle.py

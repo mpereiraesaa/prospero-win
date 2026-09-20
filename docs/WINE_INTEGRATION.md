@@ -173,20 +173,13 @@ native threads. Shared translated code is immutable after W^X publication;
 cache metadata and invalidation need explicit synchronization before it can be
 shared across engines.
 
-The next performance work is driven by Wine plus application traces, not only
-Pinball:
-
-1. indirect-branch inline caches and return prediction;
-2. profile-guided contracts, direct resident emission and then an intermediate
-   representation with wider register allocation;
-3. SSE/SSE2 and remaining integer instruction families required by Wine PE32;
-4. trace/superblock formation with bounded safepoints;
-5. shared immutable translations and per-thread execution state;
-6. deterministic PS5-side counters for dispatch, spills, exits, code size and
-   frame pacing.
-
-No native-performance percentage is claimed without an exact eager/control
-comparison on PS5.
+Performance changes are driven by Wine and independent application traces,
+not by title-specific shortcuts. The runtime keeps translated code immutable
+after publication, maintains per-thread execution state, and records dispatch,
+cache, publication and frame-pacing counters. Instruction-family expansion,
+branch prediction and wider register allocation must preserve precise
+safepoints and the existing differential CPU-state tests. No native-performance
+percentage is claimed without an exact control comparison on PS5.
 
 ## Graphics boundary
 
@@ -209,7 +202,7 @@ LGPL-2.1-or-later with original notices and per-file provenance. Generated Wine
 PE binaries, DXVK binaries and private Windows applications are build inputs or
 artifacts; they are not committed here.
 
-The machine-readable foundation ledger is
-[WINE_FOUNDATION.json](WINE_FOUNDATION.json). Its status vocabulary is
-conservative: `validated`, `implemented`, `partial`, `planned` and
-`external-wip` describe evidence, not aspiration.
+The machine-readable [support matrix](SUPPORT_MATRIX.json) reports the current
+state of each runtime layer as `validated`, `implemented`, `partial`,
+`unsupported` or `external`. It deliberately contains no internal exit
+criteria or delivery schedule.

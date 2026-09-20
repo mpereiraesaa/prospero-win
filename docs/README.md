@@ -19,8 +19,8 @@ planning stay outside the standalone repository.
 - [Pinball case study](CASE_STUDY_PINBALL.md): the first playable PE32 target
   and the reusable contracts it validates.
 
-`WINE_FOUNDATION.json` is a machine-readable support ledger. It describes
-current evidence and dependencies; it is not a release schedule.
+`SUPPORT_MATRIX.json` is a machine-readable view of current component support
+and dependencies. It contains evidence, not an internal delivery plan.
 
 Historical phase plans and day-to-day compatibility notebooks are deliberately
 not part of the public documentation surface.
