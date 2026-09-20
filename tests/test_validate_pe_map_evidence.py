@@ -295,7 +295,7 @@ class EvidenceTest(unittest.TestCase):
                                allow_i386=False, allow_wx=False)
         self.assertIn("error record", str(caught.exception))
 
-    # --- gate 0.2a --------------------------------------------------
+    # --- compatibility-mode diagnostic -----------------------------
     COMPAT32_BASE = (
         "PW_COMPAT32 schema=1 install=ok install_errno=0 ldt_index=0 "
         "code_sel=0x7 data_sel=0xf cs64=0x33 ds64=0x0 reserve=ok "

@@ -1,13 +1,12 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /*
- * prospero-win Phase 0 gate 1: make the console's Zen 2 cores read and
- * understand a raw Windows executable.
+ * prospero-win's non-executing PE mapping validator for the native console.
  *
  * The title stages a PE image and its third-party dependencies under a
  * read-only directory, manually maps every one of them, verifies the
  * mapping byte by byte and reports the whole graph through ps5log/1.
  * The staged PE is never executed. A separate synthetic Win64 call probe
- * checks the explicit integer ABI bridge before the mapping gate. Neither
+ * checks the explicit integer ABI bridge before mapping. Neither
  * result establishes execution of the original Windows application.
  *
  * Teardown follows the laboratory's measured rule: after the report and the
@@ -43,9 +42,9 @@
 #define PW_ROOT_MODULE "sample.exe"
 #endif
 /*
- * Gate 0.2a. Stage one installs the descriptors and reports; it cannot
- * fault. Stage two performs the far transfer and can, which is why it is
- * opt-in and why the stage-one record is flushed before it runs.
+ * The compatibility-mode diagnostic first installs the descriptors and
+ * reports without transferring control. Its optional second step performs
+ * the far transfer and may fault, so the first record is flushed beforehand.
  */
 #ifndef PW_COMPAT32_TRANSFER
 #define PW_COMPAT32_TRANSFER 0
@@ -201,10 +200,10 @@ int main(int argc, char **argv)
     }
 
     /*
-     * Gate 0.2a, once telemetry and the filesystem are known good: can a
-     * title reach 32-bit compatibility mode? The answer decides whether
-     * 32-bit programs run natively through ABI thunking or need
-     * recompilation, and it costs one syscall to ask.
+     * Once telemetry and the filesystem are known good, record whether the
+     * title can reach 32-bit compatibility mode. The measured refusal is why
+     * PE32 applications use the DBT; this diagnostic remains a bounded
+     * regression check.
      */
     {
         /*

@@ -18,7 +18,7 @@ PE64 support will use native x86-64 instructions once its Windows-to-native ABI,
 loader, callback and exception boundaries are complete.
 
 The first compatibility target is the original Windows Space Cadet Pinball
-executable, running without recompilation. Pinball is a bring-up and regression
+executable, running without recompilation. Pinball is a compatibility regression
 target for the general runtime, not a project-specific architecture. DRM,
 anti-cheat, kernel drivers and distribution of proprietary game files are out
 of scope.

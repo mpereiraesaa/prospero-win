@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /*
- * PS5 platform half of gate 0.2a.
+ * PS5 platform half of the compatibility-mode diagnostic.
  *
  * Descriptor installation goes through `sysarch(I386_SET_LDT, ...)`, which
  * FreeBSD amd64 implements as `amd64_set_ldt`. The pinned payload SDK
  * declares it, but a declaration is not a capability: this firmware may
  * have removed local-descriptor-table support or filtered `sysarch` down to
  * the fsbase/gsbase operations an ordinary title needs. Measuring that is
- * the whole point of the gate.
+ * the purpose of this bounded diagnostic.
  *
  * The pages are reserved low and separately, one writable and one made
  * executable afterwards, so the probe never asks for memory that is

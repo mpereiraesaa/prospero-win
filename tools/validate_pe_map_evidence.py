@@ -238,7 +238,7 @@ def check_modules(records: list[str], *, allow_i386: bool,
 
 
 def check_compat32(records: list[str], expectation: str) -> dict[str, object]:
-    """Validates the gate 0.2a record, without prejudging its answer.
+    """Validate the compatibility-mode record without prejudging its answer.
 
     Whether this firmware allows 32-bit compatibility mode is the thing
     being measured, so a refusal is a valid result. What is checked is that
@@ -459,7 +459,7 @@ def main() -> int:
                              "coarse mapping granularity")
     parser.add_argument("--expect-compat32", default="any",
                         choices=("any", "proven", "refused"),
-                        help="assert the gate 0.2a outcome explicitly")
+                        help="assert the compatibility-mode outcome")
     arguments = parser.parse_args()
 
     try:

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Build the prospero-win native PS5 title. Runtime is the default; the
-# historical non-executing mapping gate remains available explicitly.
+# non-executing PE mapping validator remains available explicitly.
 #
-# Phase 0 gate 1 needs no shaders and no GPU: it maps Windows images and
-# reports the graph through ps5log/1. The staged Windows binaries are read
-# from a private path the operator passes in and are never committed.
+# The mapping validator needs no shaders or GPU: it maps Windows images and
+# reports their dependency graph through ps5log/1. Staged Windows binaries
+# come from an operator-provided private path and are never committed.
 #
 # Environment:
 #   PS5_NATIVE_FOUNDATION  boilerplate checkout (default .deps/, pinned)
@@ -14,7 +14,7 @@
 #   PW_ROOT_MODULE         root image inside that directory (default sample.exe)
 #   PW_SAMPLE              1 stages generated synthetic images instead of a
 #                          private directory (default 0)
-#   PW_COMPAT32_TRANSFER   1 attempts the gate 0.2a far transfer into 32-bit
+#   PW_COMPAT32_TRANSFER   1 attempts an experimental far transfer into 32-bit
 #                          compatibility mode (default 0: install and report
 #                          the descriptors only, which cannot fault)
 #   PW_FOUNDATION_READY    1 trusts an already prepared foundation checkout
