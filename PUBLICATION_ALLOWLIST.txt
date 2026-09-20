@@ -17,6 +17,7 @@ docs/PE_MAPPING_PHASE0.md
 docs/PINBALL_TARGET.md
 docs/README.md
 docs/ROADMAP.md
+docs/TECHNICAL_DETAILS.md
 docs/TELEMETRY.md
 .gitignore
 include/prospero_win_file.h
