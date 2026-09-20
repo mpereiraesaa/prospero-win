@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""The handler ledger must not drift from the code or the Wine revision.
+"""The handler registry must not drift from the pinned Wine revision.
 
 The gate's registry is the one place the serviced calls are listed, so this
-checks that the list agrees with everything around it: every id exists in the
-versioned table that src/pw_unix_call.c carries (which is itself checked
-against the pinned Wine source by tests/test_unix_call_table.py), no id appears
-twice, every entry names a test that exists, and the handler list the runtime
-docs publish is exactly the registry plus the one deliberate stop.
+checks that every id exists in the versioned table carried by
+src/pw_unix_call.c, no id appears twice, every entry names a test that exists,
+and every class list is unique. tests/test_unix_call_table.py independently
+checks that table against the pinned Wine source.
 """
 
 from __future__ import annotations
@@ -23,15 +22,6 @@ ENTRY = re.compile(
     r'([A-Za-z_][A-Za-z0-9_]*)\s*\}')
 # The versioned Wine call table: id and name.
 CALL = re.compile(r'\{\s*(0x[0-9a-f]{4})u,\s*"([^"]+)",\s*(\d+)u\s*\}')
-# The handler list in the runtime documentation.
-DOC = re.compile(r'^(Nt[A-Za-z]+)\s+\(0x([0-9a-f]{4})\)', re.M)
-
-# NtTerminateProcess and NtTerminateThread are stops, not services: the
-# dispatcher handles them before it consults the registry, so the documentation
-# lists them and the registry does not.
-DOCUMENTED_STOPS = {0x002C, 0x0053}
-
-
 def registry() -> list[tuple[int, list[int], str, str]]:
     text = (ROOT / "src/pw_wine_gate.c").read_text(encoding="utf-8")
     table = text.split("static const PwNtHandler dispatch_table[] = {", 1)[1]
@@ -57,15 +47,9 @@ def versioned_calls() -> dict[int, str]:
     return {int(m.group(1), 0): m.group(2) for m in CALL.finditer(text)}
 
 
-def documented() -> dict[int, str]:
-    text = (ROOT / "docs/WINE_RUNTIME.md").read_text(encoding="utf-8")
-    return {int(m.group(2), 16): m.group(1) for m in DOC.finditer(text)}
-
-
 def main() -> int:
     entries = registry()
     calls = versioned_calls()
-    docs = documented()
 
     assert entries, "the registry is empty"
     assert calls, "the versioned call table is empty"
@@ -78,24 +62,9 @@ def main() -> int:
         assert len(classes) == len(set(classes)), f"{handler} repeats a class"
         assert handler, "an entry has no handler"
 
-    # The documentation's list is the registry plus the one deliberate stop.
-    for identifier, name in docs.items():
-        if identifier in DOCUMENTED_STOPS:
-            continue
-        assert identifier in ids, (
-            f"the docs list {name} (0x{identifier:04x}) but nothing serves it")
-        assert calls[identifier] == name, (
-            f"the docs call 0x{identifier:04x} {name}, the table says "
-            f"{calls[identifier]}")
-    for identifier, _classes, _test, handler in entries:
-        assert identifier in docs, (
-            f"{handler} (0x{identifier:04x}) is not in the documented list")
-
     print("handler ledger passed: "
           f"{len(entries)} serviced calls, all present in the pinned Wine "
-          f"table and in the documented list, plus the documented stops "
-          + ", ".join(f"0x{documented:04x}" for documented in
-                      sorted(DOCUMENTED_STOPS)))
+          "table with unique ownership and existing tests")
     for identifier, classes, test, handler in entries:
         named = ", ".join(f"0x{class_id:04x}" for class_id in classes)
         print(f"  0x{identifier:04x} {calls[identifier]:<28} "

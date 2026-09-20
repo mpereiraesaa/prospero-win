@@ -82,7 +82,8 @@ PE32 executable, two local DLLs and their dependency diamond load through that
 runtime. Every chaining/residency combination reaches the application's own
 entry point, returns `1` and exits through `NtTerminateThread` after the same
 598,404 retired instructions and 2,981 translated blocks. Loader-list and
-attach-order validation remain. See [WINE_RUNTIME.md](WINE_RUNTIME.md).
+attach-order validation remain. The current verified boundary and measurements
+are summarized in [technical details](TECHNICAL_DETAILS.md).
 Staging the runtime inside the title and booting a Wine process remain separate
 hardware acceptance gates.
 

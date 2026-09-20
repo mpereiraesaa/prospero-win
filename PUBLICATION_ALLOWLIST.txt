@@ -4,7 +4,6 @@ CONTRIBUTING.md
 docs/ARCHITECTURE.md
 docs/CASE_STUDY_PINBALL.md
 docs/DEVELOPMENT.md
-docs/GUEST_ABI.md
 docs/HARDWARE_VALIDATION.md
 docs/GDI.md
 docs/WINE_INTEGRATION.md
@@ -251,7 +250,6 @@ tools/build_wine_runtime.sh
 tools/validate_wine_runtime.py
 tools/wine_ntdll_entry.c
 tools/validate_wine_ntdll_evidence.py
-docs/WINE_RUNTIME.md
 docs/WINE_RUNTIME_MANIFEST.schema.json
 tests/test_wine_gate_host.py
 tests/test_pw_guest_process.c
