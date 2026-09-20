@@ -16,6 +16,8 @@ planning stay outside the standalone repository.
 - [Hardware validation](HARDWARE_VALIDATION.md): accepted claims and evidence
   requirements.
 - [Telemetry](TELEMETRY.md): the `ps5log/1` runtime contract and validators.
+- [Pinball case study](CASE_STUDY_PINBALL.md): the first playable PE32 target
+  and the reusable contracts it validates.
 
 `WINE_FOUNDATION.json` is a machine-readable support ledger. It describes
 current evidence and dependencies; it is not a release schedule.

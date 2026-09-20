@@ -2,13 +2,13 @@ dev.conf.example
 .github/workflows/ci.yml
 CONTRIBUTING.md
 docs/ARCHITECTURE.md
+docs/CASE_STUDY_PINBALL.md
 docs/DEVELOPMENT.md
 docs/GUEST_ABI.md
 docs/HARDWARE_VALIDATION.md
 docs/GDI.md
 docs/WINE_INTEGRATION.md
 docs/WINE_FOUNDATION.json
-docs/PINBALL_TARGET.md
 docs/README.md
 docs/ROADMAP.md
 docs/TECHNICAL_DETAILS.md
@@ -181,8 +181,8 @@ tests/test_pw_time.c
 src/pe_resource.c
 src/pe_resource.h
 tests/test_pe_resource.c
-docs/PINBALL_SOURCE_ORACLE.json
-docs/PINBALL_X86_COVERAGE.json
+tests/fixtures/pinball_source_oracle.json
+tests/fixtures/pinball_x86_coverage.json
 references/spacecadet_pinball.json
 tools/build_source_oracle.py
 tests/test_build_source_oracle.py

@@ -44,7 +44,9 @@ forms = {
     "FSUBR:op0/mem/g5": "d82d00000000",
     "FUCOMPP:op2/reg/g5/r1": "dae9",
 }
-coverage = json.loads((root / "docs/PINBALL_X86_COVERAGE.json").read_text())
+coverage = json.loads(
+    (root / "tests/fixtures/pinball_x86_coverage.json").read_text()
+)
 startup = coverage["roots"]["startup"]
 observed = {name for name, _ in startup["x87_forms"]}
 supported = {name for name, _ in startup["x87_supported_forms"]}
