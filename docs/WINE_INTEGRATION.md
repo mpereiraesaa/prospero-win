@@ -36,6 +36,26 @@ route to this title. Therefore:
 This avoids an unnecessary x86-64-to-x86-64 DBT for modern titles while
 retaining one Windows subsystem for both architectures.
 
+## Why a successful Wine build is not yet a PS5 boot
+
+The pinned Wine build proves that the selected revision, PE modules and runtime
+data can be reproduced. It does not produce a desktop-host Wine binary that can
+simply be loaded by a PS5 title:
+
+- the i386 Wine PE modules and PE32 applications still execute through the DBT;
+- Wine's Unix-facing code expects host facilities that must be implemented by
+  PS5-native adapters rather than Linux or desktop FreeBSD libraries;
+- shared x86-64 instructions do not imply a shared ABI: PE64 still needs
+  Windows/SysV calling-convention, callback, exception, unwind and context
+  bridges; and
+- the native title must own startup, manifest selection, prefix mounting,
+  telemetry and cleanup around Wine's loader lifecycle.
+
+The host gate has already joined the real PE32 runtime graph to the DBT and
+reached an application's entry point. The next boundary is therefore not a new
+Wine build; it is the first equivalent boot through the PS5-native runner and
+platform adapters.
+
 ## Wine reuse boundary
 
 The scalable unit of reuse is a Wine module and its tests, not an isolated C
@@ -90,6 +110,42 @@ The first implementation may embed the object service in the title process.
 Its API must preserve Wine/NT object semantics so a separate wineserver-style
 transport can be introduced later without changing PE modules or guest ABI.
 Multi-process compatibility is not claimed by the embedded service.
+
+## Copy-and-run application model
+
+The first distributable workflow does not require a Windows desktop. A shared
+Wine runtime is packaged with prospero-win, while each user-supplied application
+has two isolated inputs:
+
+```text
+application/<id>/
+  manifest                 exact EXE, cwd, arguments, architecture and prefix
+  files/                   copied installed application directory
+
+prefix/<id>/
+  drive_c/                 Windows-visible files and user directories
+  system.reg               machine registry state
+  user.reg                 per-user registry state
+  classes.reg              COM/class registrations when required
+```
+
+The paths are a logical contract; the final title-storage layout remains a
+platform-adapter decision. The manifest must never silently search arbitrary
+executables or inherit DLL overrides from another application.
+
+For portable applications, the launcher selects the manifest's EXE directly.
+Applications that depend on installer-created registry state can use reviewed
+compatibility recipes first. Direct `setup.exe` execution follows once process,
+filesystem and persistence behavior is sufficient; MSI and complex child
+process trees follow after that. Explorer may later provide a familiar shell,
+but is not required to launch an EXE. Store clients are a substantially later
+multi-process integration target and are not a prerequisite for game
+compatibility.
+
+This is the same practical separation used by other constrained Wine ports:
+application files may be copied from an existing installation while registry
+and Windows environment state live in a persistent prefix. The design does not
+assume that copying a directory also copies installer registry state.
 
 ## Title sandbox and guest boundary
 

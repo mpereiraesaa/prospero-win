@@ -53,6 +53,18 @@ is not persistent, and general threads, objects and waits remain incomplete.
 Pinball still uses the hardware-validated direct bootstrap, PE64 application
 execution is incomplete, and Direct3D awaits DXVK over `ps5-vulkan`.
 
+Building Wine successfully is an important input, not a loadable PS5 runtime by
+itself. PE32 Wine and applications still enter through the DBT, while PE64 will
+need a Windows-to-native calling-convention, exception and callback bridge even
+though both sides use x86-64 instructions. Wine's Unix-facing services must
+also be connected to PS5-native VM, file, thread, object and lifecycle adapters.
+
+The next release target is a native **copy-and-run** path: stage the shared Wine
+runtime in the title, copy an already installed portable application into a
+title-owned `drive_c`, select its EXE through a manifest, boot it through Wine,
+persist its prefix, then close and relaunch cleanly. A desktop shell, graphical
+installer and store client are not prerequisites for that milestone.
+
 ## Build and test
 
 ```sh
