@@ -5,11 +5,17 @@
 
 static int valid_identifier(const char *text)
 {
-    if (!text || !text[0] ||
+    size_t length = 0u;
+
+    if (!text)
+        return 0;
+    while (length < PW_PREFIX_ID_CAPACITY && text[length])
+        ++length;
+    if (length == 0u || length == PW_PREFIX_ID_CAPACITY ||
         !((text[0] >= 'a' && text[0] <= 'z') ||
           (text[0] >= '0' && text[0] <= '9')))
         return 0;
-    for (size_t index = 1u; text[index]; ++index) {
+    for (size_t index = 1u; index < length; ++index) {
         char value = text[index];
         if (!((value >= 'a' && value <= 'z') ||
               (value >= '0' && value <= '9') || value == '-' || value == '_'))

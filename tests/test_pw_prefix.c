@@ -75,6 +75,20 @@ int main(void)
     assert(storage.calls == 9u);
 
     {
+        char oversized_id[PW_PREFIX_ID_CAPACITY + 1u];
+        PwPrefixLayout unchanged;
+        PwPrefixLayout before;
+        memset(oversized_id, 'a', sizeof(oversized_id) - 1u);
+        oversized_id[sizeof(oversized_id) - 1u] = '\0';
+        memset(&unchanged, 0x6d, sizeof(unchanged));
+        before = unchanged;
+        assert(pw_prefix_open(&service, oversized_id, &unchanged) ==
+               PW_ERR_MALFORMED);
+        assert(memcmp(&unchanged, &before, sizeof(unchanged)) == 0);
+        assert(storage.calls == 9u);
+    }
+
+    {
         PwPrefixService untouched;
         memset(&untouched, 0x5a, sizeof(untouched));
         PwPrefixService before = untouched;
