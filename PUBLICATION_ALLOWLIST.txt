@@ -116,6 +116,8 @@ tests/test_pw_win32.c
 tests/test_pw_audio_ps5.c
 tests/test_pw_ini.c
 tests/test_pw_app_profile.c
+examples/profiles/pinball.profile
+examples/profiles/paint.profile
 tests/test_pw_prefix.c
 tests/test_pw_runtime_supervisor.c
 tests/test_pw_pad.c

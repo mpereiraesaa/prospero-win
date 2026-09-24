@@ -160,7 +160,7 @@ executable = C:\Games\Pinball\PINBALL.EXE
 working_directory = C:\Games\Pinball
 arguments =
 prefix = pinball
-runtime = wine-i386-pinned
+runtime = prospero-win-direct
 architecture = pe32
 graphics = gdi
 ```
@@ -168,17 +168,18 @@ graphics = gdi
 The parser rejects unknown or duplicate fields, missing required fields,
 relative or traversal paths, invalid identifiers and unsupported enum values.
 `arguments` is optional. `pe64` and `dxvk` can be represented in a profile
-before their runtime paths are available; selection does not claim they can
-currently launch. The profile parser is an allocation-free host contract at
-this stage. Native menu integration, prefix creation/migration and the
-single-guest supervisor remain separate runtime work.
+before their runtime paths are available; the native profile boot path rejects
+them until those backends exist. Parsing is allocation-free and is covered by
+host tests. The optional runtime boot path and remaining prefix/supervisor
+integration are described below.
 
-The same schema describes Paint with `id = mspaint`,
-`executable = C:\Windows\System32\mspaint.exe`,
-`working_directory = C:\Windows\System32`, `prefix = paint`,
-`architecture = pe32` and `graphics = gdi`. These are path examples only; the
-prefix contents come from user managed files, and Paint requires a legally
-obtained compatible `mspaint.exe`.
+Ready-to-edit examples live in `examples/profiles/pinball.profile` and
+`examples/profiles/paint.profile`; `test_pw_app_profile` parses those exact
+files through the production parser. They describe user-supplied executable
+paths only. The direct runtime identifier is metadata, not Wine startup, and
+the Paint profile does not assert that the current Win32 surface can run every
+Paint build. Prefix contents come from user-managed files, and Paint requires
+a legally obtained compatible `mspaint.exe`.
 
 The native runner can now be built with `PW_APP_PROFILE=/path/to/app.profile`.
 The manifest is copied to `/app0/win/app.profile`, parsed with the bounded
@@ -189,7 +190,8 @@ or separate persistent prefixes. `working_directory` is retained in the
 profile, while full guest filesystem/cwd semantics remain future work. With
 `PW_APP_PROFILE` unset, the existing `PW_ROOT_MODULE` path is unchanged.
 
-For portable applications, the launcher selects the manifest's EXE directly.
+The intended launcher selects the manifest's EXE directly for portable
+applications.
 Applications that depend on installer-created registry state can use reviewed
 compatibility recipes first. Direct `setup.exe` execution follows once process,
 filesystem and persistence behavior is sufficient; MSI and complex child
