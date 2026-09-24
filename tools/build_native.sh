@@ -150,7 +150,7 @@ common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
 entry=native/runtime_main.c
 [[ $native_mode == gate ]] && entry=native/main.c
 sources=(
-    "$entry" native/pw_file_ps5.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_state_ps5.c native/pw_agc_ps5.c native/pw_agc_submit_lifecycle.c native/pw_videoout_ps5.c native/pw_compat32_ps5.c
+    "$entry" native/pw_file_ps5.c native/pw_prefix_ps5.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_state_ps5.c native/pw_agc_ps5.c native/pw_agc_submit_lifecycle.c native/pw_videoout_ps5.c native/pw_compat32_ps5.c
     native/pw_lowmem_ps5.c
     src/pe_image.c src/pe_import.c src/pe_layout.c src/pe_reloc.c src/pw_guest_heap.c
     src/pe_export.c src/pe_tls.c src/pw_export.c src/pw_tls.c src/pw_sha256.c

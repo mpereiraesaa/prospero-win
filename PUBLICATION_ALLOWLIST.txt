@@ -31,6 +31,8 @@ native/pw_audio_ps5.h
 native/pw_pad_ps5.c
 native/pw_pad_ps5.h
 native/pw_state_ps5.c
+native/pw_prefix_ps5.c
+native/pw_prefix_ps5.h
 native/pw_state_ps5.h
 native/pw_videoout_ps5.c
 native/pw_videoout_ps5.h
@@ -119,6 +121,7 @@ tests/test_pw_app_profile.c
 examples/profiles/pinball.profile
 examples/profiles/paint.profile
 tests/test_pw_prefix.c
+tests/test_pw_prefix_ps5.c
 tests/test_pw_runtime_supervisor.c
 tests/test_pw_pad.c
 tests/test_pw_pad_ps5.c

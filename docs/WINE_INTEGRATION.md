@@ -142,6 +142,12 @@ hive paths. The operation is idempotent and may be retried after partial
 directory creation. It does not use host filesystem calls or claim that Wine's
 registry hives are already loaded or persisted; those file operations remain
 the responsibility of the PS5 storage adapter and Wine registry integration.
+The native `pw_prefix_ps5` adapter implements recursive, idempotent directory
+creation with `sceKernelStat` and `sceKernelMkdir`; it exposes
+`/download0/prospero-win` as `PW_PREFIX_PS5_DEFAULT_ROOT`, which yields
+`/download0/prospero-win/prefixes/<id>`. The adapter is host-tested through a
+POSIX test shim. It is not yet called by `runtime_main`, and the four hive
+files are still path contracts rather than persistent Wine registry stores.
 
 `PwRuntimeSupervisor` joins a parsed profile to its prefix and defines the
 single-guest states `IDLE → PREPARING → RUNNING → STOPPING → CLEANUP → IDLE`.
