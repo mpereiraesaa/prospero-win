@@ -134,6 +134,36 @@ The paths are a logical contract; the final title-storage layout remains a
 platform-adapter decision. The manifest must never silently search arbitrary
 executables or inherit DLL overrides from another application.
 
+The initial host-side `PwAppProfile` contract uses a bounded INI manifest:
+
+```ini
+[application]
+id = space-cadet-pinball
+name = Space Cadet Pinball
+executable = C:\Games\Pinball\PINBALL.EXE
+working_directory = C:\Games\Pinball
+arguments =
+prefix = pinball
+runtime = wine-i386-pinned
+architecture = pe32
+graphics = gdi
+```
+
+The parser rejects unknown or duplicate fields, missing required fields,
+relative or traversal paths, invalid identifiers and unsupported enum values.
+`arguments` is optional. `pe64` and `dxvk` can be represented in a profile
+before their runtime paths are available; selection does not claim they can
+currently launch. The profile parser is an allocation-free host contract at
+this stage. Native menu integration, prefix creation/migration and the
+single-guest supervisor remain separate runtime work.
+
+The same schema describes Paint with `id = mspaint`,
+`executable = C:\Windows\System32\mspaint.exe`,
+`working_directory = C:\Windows\System32`, `prefix = paint`,
+`architecture = pe32` and `graphics = gdi`. These are path examples only; the
+prefix contents come from user managed files, and Paint requires a legally
+obtained compatible `mspaint.exe`.
+
 For portable applications, the launcher selects the manifest's EXE directly.
 Applications that depend on installer-created registry state can use reviewed
 compatibility recipes first. Direct `setup.exe` execution follows once process,

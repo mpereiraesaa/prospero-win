@@ -96,6 +96,8 @@ src/pw_gdi.c
 src/pw_gdi.h
 src/pw_ini.c
 src/pw_ini.h
+src/pw_app_profile.c
+src/pw_app_profile.h
 src/pw_pad.c
 src/pw_pad.h
 src/pw_guest_call.c
@@ -109,6 +111,7 @@ tools/make_win32_catalog.py
 tests/test_pw_win32.c
 tests/test_pw_audio_ps5.c
 tests/test_pw_ini.c
+tests/test_pw_app_profile.c
 tests/test_pw_pad.c
 tests/test_pw_pad_ps5.c
 tests/test_pw_file_posix.c
