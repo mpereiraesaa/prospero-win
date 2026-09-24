@@ -123,6 +123,7 @@ TESTS := test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini 
 test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/inspect_pe $(BUILD)/trace_x86_entry $(BUILD)/classify_x86 $(BUILD)/bench_dynarec $(BUILD)/wine_ntdll_entry
 	@set -e; for test in $(addprefix $(BUILD)/,$(TESTS)); do $$test; done
 	python3 tests/test_title_identity.py
+	python3 tests/test_runtime_profile_selection.py
 	python3 tests/test_icon.py
 	python3 tests/test_docs_links.py
 	python3 tests/test_native_contract.py

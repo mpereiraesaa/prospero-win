@@ -13,6 +13,7 @@
 #include "pw_pad_ps5.h"
 #include "pw_state_ps5.h"
 #include "pw_videoout_ps5.h"
+#include "../src/pw_app_profile.h"
 #include "ps5log/ps5log.h"
 #include <errno.h>
 #include <signal.h>
@@ -33,6 +34,9 @@
 #endif
 #ifndef PW_ROOT_MODULE
 #define PW_ROOT_MODULE "pinball.exe"
+#endif
+#ifndef PW_USE_APP_PROFILE
+#define PW_USE_APP_PROFILE 0
 #endif
 #ifndef PW_TEST_EXIT_AFTER_MS
 #define PW_TEST_EXIT_AFTER_MS 0
@@ -228,6 +232,64 @@ static void abort_runtime(const char *stage,int status)
     ps5log_close(stage);_exit(1);
 }
 
+static int app_profile_load(PwFilePs5 *files, uint8_t *buffer,
+                            PwAppProfile *profile)
+{
+    uint32_t handle=0,total=0;
+    int status=pw_file_ps5_stream_open(files,"app.profile","rb",&handle);
+    if(status!=PW_OK)return status;
+    while(total<PW_APP_PROFILE_MAX_BYTES) {
+        uint32_t got=0;
+        status=pw_file_ps5_stream_read(files,handle,buffer+total,
+            PW_APP_PROFILE_MAX_BYTES-total,&got);
+        if(status!=PW_OK || !got)break;
+        total+=got;
+    }
+    if(status==PW_OK && total==PW_APP_PROFILE_MAX_BYTES) {
+        uint8_t extra;uint32_t got=0;
+        status=pw_file_ps5_stream_read(files,handle,&extra,1,&got);
+        if(status==PW_OK && got)status=PW_ERR_LIMIT;
+    }
+    int close_status=pw_file_ps5_stream_close(files,handle);
+    if(status==PW_OK && close_status!=PW_OK)status=close_status;
+    if(status!=PW_OK)return status;
+    return pw_app_profile_parse(buffer,total,profile);
+}
+
+static int app_profile_stage_name(const char *path,char *out,size_t capacity)
+{
+    const char *basename=strrchr(path,'\\');
+    basename=basename?basename+1:path;
+    size_t length=strlen(basename);
+    if(!length || length>=capacity)return PW_ERR_LIMIT;
+    for(size_t index=0;index<length;index++) {
+        unsigned char value=(unsigned char)basename[index];
+        out[index]=(char)(value>='A' && value<='Z'?value+('a'-'A'):value);
+    }
+    out[length]='\0';
+    return PW_OK;
+}
+
+static int app_profile_commandline(const PwAppProfile *profile,char *out,
+                                   size_t capacity)
+{
+    size_t used=0;
+    const char *parts[]={"\"",profile->executable,"\""};
+    for(unsigned part=0;part<3;part++) {
+        size_t length=strlen(parts[part]);
+        if(length>=capacity-used)return PW_ERR_LIMIT;
+        memcpy(out+used,parts[part],length);used+=length;
+    }
+    if(profile->arguments[0]) {
+        size_t length=strlen(profile->arguments);
+        if(used+1u+length>=capacity)return PW_ERR_LIMIT;
+        out[used++]=' ';
+        memcpy(out+used,profile->arguments,length);used+=length;
+    }
+    out[used]='\0';
+    return PW_OK;
+}
+
 static void report_execute_abort(const NativeServices *services,
                                  const PwX86State *state,int status)
 {
@@ -289,14 +351,34 @@ int main(int argc,char **argv)
     ps5log_config_defaults(&config);int config_rc=ps5log_load_config(ps5log_default_conf_paths,
         ps5log_default_conf_path_count,&config,&config_path);
     int log_rc=config_rc==0?ps5log_init(&config,PW_TITLE_ID,PW_APP_NAME,now_ns()):config_rc;
-    install_signals();PS5LOG_LOG("PW_RUNTIME_BEGIN schema=1 title=%s root=%s config=%d log=%d",
-        PW_TITLE_ID,PW_ROOT_MODULE,config_rc,log_rc);
+    install_signals();PS5LOG_LOG("PW_RUNTIME_BEGIN schema=1 title=%s profile_mode=%u fallback_root=%s config=%d log=%d",
+        PW_TITLE_ID,(unsigned)PW_USE_APP_PROFILE,PW_ROOT_MODULE,config_rc,log_rc);
 
     PwFilePs5 *files=scratch(sizeof(*files));PwFileProvider provider;PwFileSpan root={0};
     if(!files)abort_runtime("files-scratch",PW_ERR_VM);
     int status=pw_file_ps5_init(files,PW_STAGE_DIR);if(status!=PW_OK)abort_runtime("files",status);
     (void)pw_file_ps5_provider(files,&provider);
-    status=provider.open(provider.context,PW_ROOT_MODULE,&root);if(status!=PW_OK)abort_runtime("root",status);
+    PwAppProfile app_profile;memset(&app_profile,0,sizeof(app_profile));
+    const char *root_module=PW_ROOT_MODULE;
+    char profile_module[PW_APP_PATH_CAPACITY];
+    if(PW_USE_APP_PROFILE) {
+        uint8_t *profile_bytes=scratch(PW_APP_PROFILE_MAX_BYTES);
+        if(!profile_bytes)abort_runtime("profile-scratch",PW_ERR_VM);
+        status=app_profile_load(files,profile_bytes,&app_profile);
+        if(status!=PW_OK)abort_runtime("app-profile",status);
+        if(app_profile.architecture!=PW_APP_ARCH_PE32 ||
+           app_profile.graphics!=PW_APP_GRAPHICS_GDI)
+            abort_runtime("profile-capability",PW_ERR_UNSUPPORTED);
+        status=app_profile_stage_name(app_profile.executable,profile_module,
+                                      sizeof(profile_module));
+        if(status!=PW_OK)abort_runtime("profile-module-name",status);
+        root_module=profile_module;
+        PS5LOG_LOG("PW_APP_PROFILE schema=1 id=%s runtime=%s prefix=%s exe=%s cwd=%s arch=pe32 graphics=gdi arguments=%u",
+            app_profile.id,app_profile.runtime,app_profile.prefix,
+            app_profile.executable,app_profile.working_directory,
+            (unsigned)(app_profile.arguments[0]!=0));
+    }
+    status=provider.open(provider.context,root_module,&root);if(status!=PW_OK)abort_runtime("root",status);
     PeImage image;if((status=pe_image_parse(&image,root.bytes,root.size))!=PW_OK ||
        image.machine!=PE_MACHINE_I386)abort_runtime("pe32",status);
 
@@ -368,7 +450,16 @@ int main(int argc,char **argv)
         pad.pad_handle,PW_PAD_PS5_BATCH);
     NativeServices services={.image=&image,.layout=&layout,.files=files,.audio=&audio,
         .user32=&user32,.profile_buffer=profile_buffer,.profile_capacity=64u*1024u};
-    PwWin32 runtime;char commandline[64]="\"C:\\game\\" PW_ROOT_MODULE "\"";
+    PwWin32 runtime;char commandline[1024];
+    if(PW_USE_APP_PROFILE) {
+        status=app_profile_commandline(&app_profile,commandline,sizeof(commandline));
+        if(status!=PW_OK)abort_runtime("profile-commandline",status);
+    } else {
+        const char legacy_commandline[]="\"C:\\game\\" PW_ROOT_MODULE "\"";
+        if(sizeof(legacy_commandline)>sizeof(commandline))
+            abort_runtime("legacy-commandline",PW_ERR_LIMIT);
+        memcpy(commandline,legacy_commandline,sizeof(legacy_commandline));
+    }
     if((status=pw_win32_init(&runtime,(uint32_t)mapped.actual_base,0x03300000,commandline))!=PW_OK)
         abort_runtime("win32-init",status);
     runtime.heap=&heap;runtime.registry=&registry;runtime.user32=&user32;runtime.gdi=&gdi;
@@ -376,7 +467,8 @@ int main(int argc,char **argv)
         .process_id=1,.thread_id=2,.string_resource=string_resource,
         .named_resource=named_resource,.integer_resource=integer_resource,
         .code_address=code_address,.ansi_codepage=1252,
-        .main_module_filename="C:\\game\\" PW_ROOT_MODULE,
+        .main_module_filename=PW_USE_APP_PROFILE?app_profile.executable:
+            "C:\\game\\" PW_ROOT_MODULE,
         .file_open=file_open,.file_close=file_close,.file_read=file_read,.file_seek=file_seek,
         .profile_int=profile_int,.message_wait=message_wait,.sleep_ms=sleep_ms,.audio_open=audio_open,
         .audio_submit=audio_submit,.audio_poll=audio_poll,.audio_control=audio_control};

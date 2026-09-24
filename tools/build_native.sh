@@ -12,6 +12,7 @@
 #   PS5LOG_DEV_CONF        private dev.conf copied into the title
 #   PW_STAGE_INPUT         private directory holding the PE images to stage
 #   PW_ROOT_MODULE         root image inside that directory (default sample.exe)
+#   PW_APP_PROFILE         optional app.profile manifest for profile launch
 #   PW_SAMPLE              1 stages generated synthetic images instead of a
 #                          private directory (default 0)
 #   PW_COMPAT32_TRANSFER   1 attempts an experimental far transfer into 32-bit
@@ -35,6 +36,8 @@ foundation=${PS5_NATIVE_FOUNDATION:-$root/.deps/ps5-native-app-boilerplate}
 dev_conf=${PS5LOG_DEV_CONF:-$root/dev.conf}
 stage_input=${PW_STAGE_INPUT:-}
 root_module=${PW_ROOT_MODULE:-sample.exe}
+app_profile=${PW_APP_PROFILE:-}
+use_app_profile=0
 use_sample=${PW_SAMPLE:-0}
 compat32_transfer=${PW_COMPAT32_TRANSFER:-0}
 native_mode=${PW_NATIVE_MODE:-runtime}
@@ -59,6 +62,13 @@ for value in "$dbt_chaining" "$dbt_residency" "$dbt_lazy_flags"; do
 done
 [[ $root_module =~ ^[A-Za-z0-9_.-]+$ ]] || {
     echo "PW_ROOT_MODULE must be a bare file name" >&2; exit 2; }
+if [[ -n $app_profile ]]; then
+    [[ -f $app_profile ]] || { echo "PW_APP_PROFILE must name a file" >&2; exit 2; }
+    profile_bytes=$(wc -c < "$app_profile")
+    (( profile_bytes > 0 && profile_bytes <= 8192 )) || {
+        echo "PW_APP_PROFILE must be between 1 and 8192 bytes" >&2; exit 2; }
+    use_app_profile=1
+fi
 if [[ $use_sample == 0 && -z $stage_input ]]; then
     echo "PW_STAGE_INPUT or PW_SAMPLE=1 is required" >&2; exit 2
 fi
@@ -130,6 +140,7 @@ common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -I"$root/native/ps5log"
         -DPW_STAGE_DIR='"/app0/win"'
         -DPW_ROOT_MODULE="\"$root_module\""
+        -DPW_USE_APP_PROFILE="$use_app_profile"
         -DPW_TEST_EXIT_AFTER_MS="$test_exit_after_ms"
         -DPW_DBT_CHAINING="$dbt_chaining"
         -DPW_DBT_RESIDENCY="$dbt_residency"
@@ -224,8 +235,12 @@ else
     done
     shopt -u nullglob
 fi
-[[ -f $dist/win/$root_module ]] || {
-    echo "root module $root_module is not staged in $dist/win" >&2; exit 2; }
+if (( use_app_profile )); then
+    cp -- "$app_profile" "$dist/win/app.profile"
+else
+    [[ -f $dist/win/$root_module ]] || {
+        echo "root module $root_module is not staged in $dist/win" >&2; exit 2; }
+fi
 
 # Every dynamic import in the linked ELF is reviewed, per the porting
 # playbook: an exported platform symbol is not a working one.

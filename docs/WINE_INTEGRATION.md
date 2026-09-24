@@ -180,6 +180,15 @@ The same schema describes Paint with `id = mspaint`,
 prefix contents come from user managed files, and Paint requires a legally
 obtained compatible `mspaint.exe`.
 
+The native runner can now be built with `PW_APP_PROFILE=/path/to/app.profile`.
+The manifest is copied to `/app0/win/app.profile`, parsed with the bounded
+profile contract at startup, and selects its executable by staged basename.
+This boot path currently accepts only PE32 + GDI profiles; the runtime and
+prefix identifiers are reported as metadata but do not yet select Wine builds
+or separate persistent prefixes. `working_directory` is retained in the
+profile, while full guest filesystem/cwd semantics remain future work. With
+`PW_APP_PROFILE` unset, the existing `PW_ROOT_MODULE` path is unchanged.
+
 For portable applications, the launcher selects the manifest's EXE directly.
 Applications that depend on installer-created registry state can use reviewed
 compatibility recipes first. Direct `setup.exe` execution follows once process,
