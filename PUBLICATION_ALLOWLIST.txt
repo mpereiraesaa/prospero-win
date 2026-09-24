@@ -298,3 +298,4 @@ tests/test_pw_wine_section.c
 tests/test_pw_wine_thread.c
 tests/test_pw_wine_continue.c
 tests/test_pw_wine_vm_transactions.c
+tools/stage_app_files.py

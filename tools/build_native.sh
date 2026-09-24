@@ -149,6 +149,9 @@ else
     done
     shopt -u nullglob
 fi
+if (( use_app_profile && use_sample == 0 )); then
+    python3 "$root/tools/stage_app_files.py" "$stage_input" "$dist/win/app"
+fi
 if (( use_app_profile )); then
     cp -- "$app_profile" "$dist/win/app.profile"
     "${HOST_CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror \

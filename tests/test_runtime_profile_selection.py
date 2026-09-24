@@ -3,6 +3,7 @@
 """Static contract for the native runtime's optional app-profile boot path."""
 
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -46,8 +47,51 @@ def test_builder_stages_profile_explicitly() -> None:
     assert '"$dist/win/app.profile"' in source
     assert "profile_bytes <= 8192" in source
     assert '"$build/validate_profile_stage" "$dist/win/app.profile" "$dist/win"' in source
+    assert 'tools/stage_app_files.py" "$stage_input" "$dist/win/app' in source
     assert source.index('"$build/validate_profile_stage"') < source.index(
         'for source in "${sources[@]}"')
+
+
+def test_recursive_app_staging_is_case_folded_and_confined() -> None:
+    with tempfile.TemporaryDirectory(prefix="app-stage-test-") as directory:
+        root = Path(directory)
+        source = root / "installed"
+        destination = root / "stage" / "app"
+        (source / "Maps" / "Night").mkdir(parents=True)
+        (source / "PINBALL.EXE").write_bytes(b"exe")
+        (source / "Maps" / "Night" / "BOARD.DAT").write_bytes(b"board")
+        completed = subprocess.run([
+            sys.executable, str(ROOT / "tools/stage_app_files.py"),
+            str(source), str(destination),
+        ], check=False, capture_output=True, text=True)
+        assert completed.returncode == 0, completed.stderr
+        assert (destination / "pinball.exe").read_bytes() == b"exe"
+        assert (destination / "maps" / "night" / "board.dat").read_bytes() == b"board"
+
+        colliding = root / "colliding"
+        (colliding / "A").mkdir(parents=True)
+        (colliding / "a").mkdir()
+        (colliding / "A" / "same.dat").write_bytes(b"one")
+        (colliding / "a" / "SAME.DAT").write_bytes(b"two")
+        collision_output = root / "collision-output"
+        rejected = subprocess.run([
+            sys.executable, str(ROOT / "tools/stage_app_files.py"),
+            str(colliding), str(collision_output),
+        ], check=False, capture_output=True, text=True)
+        assert rejected.returncode != 0
+        assert "case-folded path collision" in rejected.stderr
+        assert not collision_output.exists()
+
+        linked = root / "linked"
+        linked.mkdir()
+        (linked / "outside.dat").symlink_to(source / "PINBALL.EXE")
+        rejected = subprocess.run([
+            sys.executable, str(ROOT / "tools/stage_app_files.py"),
+            str(linked), str(root / "symlink-output"),
+        ], check=False, capture_output=True, text=True)
+        assert rejected.returncode != 0
+        assert "symlink" in rejected.stderr
+        assert not (root / "symlink-output").exists()
 
 
 def test_profile_stage_validator_uses_real_manifests() -> None:
@@ -84,5 +128,6 @@ def test_profile_stage_validator_uses_real_manifests() -> None:
 if __name__ == "__main__":
     test_native_runtime_loads_only_bounded_supported_profiles()
     test_builder_stages_profile_explicitly()
+    test_recursive_app_staging_is_case_folded_and_confined()
     test_profile_stage_validator_uses_real_manifests()
     print("runtime profile selection contract passed")
