@@ -143,6 +143,13 @@ directory creation. It does not use host filesystem calls or claim that Wine's
 registry hives are already loaded or persisted; those file operations remain
 the responsibility of the PS5 storage adapter and Wine registry integration.
 
+`PwRuntimeSupervisor` joins a parsed profile to its prefix and defines the
+single-guest states `IDLE → PREPARING → RUNNING → STOPPING → CLEANUP → IDLE`.
+Guest exit and launch failure both enter cleanup; a failed cleanup retains the
+active ownership data for retry, and a successful cleanup preserves the final
+result for the shell. It is a host-tested lifecycle contract at present; the
+native runner does not yet dispatch through it or launch generic Wine guests.
+
 The initial host-side `PwAppProfile` contract uses a bounded INI manifest:
 
 ```ini
