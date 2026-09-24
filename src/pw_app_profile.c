@@ -334,17 +334,48 @@ static int path_char_equal(char left, char right)
            lower_ascii((unsigned char)right);
 }
 
-int pw_app_profile_resolve_flat_file(const PwAppProfile *profile,
-                                     const char *guest_path, char *output,
-                                     size_t capacity)
+static int reserved_windows_component(const char *value,size_t length)
+{
+    size_t stem=0u;
+    while(stem<length && value[stem]!='.')stem++;
+    if(stem==3u &&
+       ((lower_ascii((unsigned char)value[0])=='c' &&
+         lower_ascii((unsigned char)value[1])=='o' &&
+         lower_ascii((unsigned char)value[2])=='n') ||
+        (lower_ascii((unsigned char)value[0])=='p' &&
+         lower_ascii((unsigned char)value[1])=='r' &&
+         lower_ascii((unsigned char)value[2])=='n') ||
+        (lower_ascii((unsigned char)value[0])=='a' &&
+         lower_ascii((unsigned char)value[1])=='u' &&
+         lower_ascii((unsigned char)value[2])=='x') ||
+        (lower_ascii((unsigned char)value[0])=='n' &&
+         lower_ascii((unsigned char)value[1])=='u' &&
+         lower_ascii((unsigned char)value[2])=='l')))
+        return 1;
+    if(stem==4u &&
+       lower_ascii((unsigned char)value[3])>='1' &&
+       lower_ascii((unsigned char)value[3])<='9' &&
+       ((lower_ascii((unsigned char)value[0])=='c' &&
+         lower_ascii((unsigned char)value[1])=='o' &&
+         lower_ascii((unsigned char)value[2])=='m') ||
+        (lower_ascii((unsigned char)value[0])=='l' &&
+         lower_ascii((unsigned char)value[1])=='p' &&
+         lower_ascii((unsigned char)value[2])=='t')))
+        return 1;
+    return 0;
+}
+
+int pw_app_profile_resolve_staged_file(const PwAppProfile *profile,
+                                       const char *guest_path, char *output,
+                                       size_t capacity)
 {
     char staged[PW_APP_PATH_CAPACITY];
     size_t path_length = 0u;
     size_t directory_length;
     size_t directory_prefix;
-    size_t basename_offset = 0u;
-    const char *basename;
-    size_t basename_length;
+    size_t relative_offset = 0u;
+    size_t relative_length;
+    size_t output_length = 4u;
     const char *directory_end;
 
     if (!profile || !guest_path || !output || !capacity)
@@ -379,12 +410,12 @@ int pw_app_profile_resolve_flat_file(const PwAppProfile *profile,
         }
         if (directory_prefix == 3u &&
             profile->working_directory[2] == '\\') {
-            basename_offset = directory_prefix;
+            relative_offset = directory_prefix;
         } else {
             if (guest_path[directory_prefix] != '\\' &&
                 guest_path[directory_prefix] != '/')
                 return PW_ERR_UNSUPPORTED;
-            basename_offset = directory_prefix + 1u;
+            relative_offset = directory_prefix + 1u;
         }
     } else {
         if (guest_path[0] == '\\' || guest_path[0] == '/' ||
@@ -392,23 +423,44 @@ int pw_app_profile_resolve_flat_file(const PwAppProfile *profile,
             return PW_ERR_UNSUPPORTED;
     }
 
-    basename = guest_path + basename_offset;
-    basename_length = path_length - basename_offset;
-    if (basename_length == 0u || basename_length > PW_PATH_MAX ||
-        strcmp(basename, ".") == 0 || strcmp(basename, "..") == 0)
+    relative_length = path_length - relative_offset;
+    if (relative_length == 0u || relative_length > PW_PATH_MAX)
         return PW_ERR_UNSUPPORTED;
-    for (size_t index = 0; index < basename_length; ++index) {
-        unsigned char value = (unsigned char)basename[index];
-        if (value < 0x20u || value == 0x7fu || value == '/' || value == '\\' ||
-            value == ':' || value == '*' || value == '?' || value == '"' ||
-            value == '<' || value == '>' || value == '|')
+    memcpy(staged,"app/",4u);
+    for(size_t position=0u;position<relative_length;) {
+        size_t start=position;
+        while(position<relative_length && guest_path[relative_offset+position]!='/' &&
+              guest_path[relative_offset+position]!='\\')position++;
+        size_t component_length=position-start;
+        if(!component_length ||
+           (component_length==1u && guest_path[relative_offset+start]=='.') ||
+           (component_length==2u && guest_path[relative_offset+start]=='.' &&
+            guest_path[relative_offset+start+1u]=='.') ||
+           guest_path[relative_offset+position-1u]=='.' ||
+           guest_path[relative_offset+position-1u]==' ' ||
+           reserved_windows_component(guest_path+relative_offset+start,
+                                      component_length))
             return PW_ERR_UNSUPPORTED;
-        staged[index] = (char)lower_ascii(value);
+        size_t separator=position<relative_length?1u:0u;
+        if(output_length+component_length+separator>=sizeof(staged))
+            return PW_ERR_LIMIT;
+        for(size_t index=0u;index<component_length;index++) {
+            unsigned char value=(unsigned char)guest_path[relative_offset+start+index];
+            if(value<0x20u || value==0x7fu || value==':' || value=='*' ||
+               value=='?' || value=='"' || value=='<' || value=='>' || value=='|')
+                return PW_ERR_UNSUPPORTED;
+            staged[output_length++]=(char)lower_ascii(value);
+        }
+        if(position<relative_length) {
+            staged[output_length++]='/';
+            position++;
+            if(position==relative_length)return PW_ERR_UNSUPPORTED;
+        }
     }
-    staged[basename_length] = '\0';
-    if (basename_length >= capacity)
+    staged[output_length]='\0';
+    if (output_length >= capacity)
         return PW_ERR_LIMIT;
-    memcpy(output, staged, basename_length + 1u);
+    memcpy(output, staged, output_length + 1u);
     return PW_OK;
 }
 

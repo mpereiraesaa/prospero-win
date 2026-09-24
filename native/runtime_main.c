@@ -159,10 +159,11 @@ static int open_guest_file(NativeServices *services,const char *path,
     char staged_name[PW_APP_PATH_CAPACITY];
     if(!services)return PW_ERR_PRECONDITION;
     if(services->app_profile) {
-        int status=pw_app_profile_resolve_flat_file(services->app_profile,path,
+        int status=pw_app_profile_resolve_staged_file(services->app_profile,path,
             staged_name,sizeof(staged_name));
         if(status!=PW_OK)return status;
-        path=staged_name;
+        return pw_file_ps5_stream_open_staged(services->files,staged_name,
+                                               mode,handle);
     }
     return pw_file_ps5_stream_open(services->files,path,mode,handle);
 }

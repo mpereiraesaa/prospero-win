@@ -202,12 +202,14 @@ This boot path currently accepts only PE32 + GDI profiles; the runtime and
 prefix identifiers are reported as metadata but do not yet select Wine builds
 or separate Wine builds. `working_directory` is exposed through
 `GetCurrentDirectoryA`. In profile mode, read-only file callbacks accept a
-bare filename or a full DOS path within that working directory, then resolve
-it to the case-folded basename in the flat package. Paths outside the profile
-directory and nested paths are rejected; recursive app-file staging,
-`SetCurrentDirectoryA` and a general prefix filesystem remain future work.
-With `PW_APP_PROFILE` unset, the existing `PW_ROOT_MODULE` and legacy path
-handling remain unchanged.
+relative path or a full DOS path within that working directory and resolve it
+under the recursive, case-folded `/app0/win/app/` package tree. Absolute paths
+outside the profile directory, traversal components, invalid Windows names,
+symlinks and case-fold collisions are rejected. The executable must currently
+also be present at the top level of `PW_STAGE_INPUT`; it remains staged at the
+package root for PE loading. Writes to app files, `SetCurrentDirectoryA` and a
+general writable prefix filesystem remain future work. With `PW_APP_PROFILE`
+unset, the existing `PW_ROOT_MODULE` and legacy path handling remain unchanged.
 
 The intended launcher selects the manifest's EXE directly for portable
 applications.

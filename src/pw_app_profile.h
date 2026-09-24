@@ -56,12 +56,12 @@ int pw_app_profile_parse(const uint8_t *bytes, size_t length,
 int pw_app_profile_stage_name(const PwAppProfile *profile, char *output,
                               size_t capacity);
 
-/* Resolve a guest file path to one case-folded filename in the current flat
- * package. Accept a bare relative name or an absolute path in the profile's
- * working directory; nested and out-of-directory paths are rejected. */
-int pw_app_profile_resolve_flat_file(const PwAppProfile *profile,
-                                     const char *guest_path, char *output,
-                                     size_t capacity);
+/* Resolve a guest file path into the read-only app/ package tree. Accept a
+ * relative path or an absolute path under working_directory; reject traversal
+ * and paths outside that directory. Output separators are forward slashes. */
+int pw_app_profile_resolve_staged_file(const PwAppProfile *profile,
+                                       const char *guest_path, char *output,
+                                       size_t capacity);
 
 /* Build the guest-visible Windows command line: a quoted executable path,
  * followed by the profile's raw argument string when nonempty. */

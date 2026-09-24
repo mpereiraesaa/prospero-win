@@ -19,7 +19,8 @@ def test_native_runtime_loads_only_bounded_supported_profiles() -> None:
     assert "app_profile.graphics!=PW_APP_GRAPHICS_GDI" in source
     assert "pw_app_profile_stage_name(&app_profile,profile_module" in source
     assert "pw_app_profile_build_command_line(&app_profile,commandline" in source
-    assert "pw_app_profile_resolve_flat_file(services->app_profile,path" in source
+    assert "pw_app_profile_resolve_staged_file(services->app_profile,path" in source
+    assert "pw_file_ps5_stream_open_staged(services->files,staged_name" in source
     assert 'open_guest_file(services,filename,"rb",&handle)' in source
     assert ".app_profile=PW_USE_APP_PROFILE?&app_profile:NULL" in source
     assert ".startup_command_id=PW_USE_APP_PROFILE?app_profile.startup_command_id:101u" in source

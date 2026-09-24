@@ -46,9 +46,12 @@ static void parse_example(const char *path,const char *expected_id,
         : "c:/games/pinball/TABLE.DAT";
     const char *expected_data_name=strcmp(expected_id,"paint")==0
         ? "mspaint.ini" : "table.dat";
-    assert(pw_app_profile_resolve_flat_file(&profile,guest_data_path,
+    assert(pw_app_profile_resolve_staged_file(&profile,guest_data_path,
         staged_name,sizeof(staged_name))==PW_OK);
-    assert(strcmp(staged_name,expected_data_name)==0);
+    char expected_staged_name[PW_APP_PATH_CAPACITY];
+    assert(snprintf(expected_staged_name,sizeof(expected_staged_name),
+        "app/%s",expected_data_name)>0);
+    assert(strcmp(staged_name,expected_staged_name)==0);
     assert(strcmp(profile.runtime,"prospero-win-direct")==0);
     assert(profile.architecture==PW_APP_ARCH_PE32);
     assert(profile.graphics==PW_APP_GRAPHICS_GDI);
@@ -79,22 +82,30 @@ int main(void)
     assert(profile.architecture == PW_APP_ARCH_PE32);
     assert(profile.graphics == PW_APP_GRAPHICS_GDI);
 
-    assert(pw_app_profile_resolve_flat_file(&profile,"table.dat",staged_name,
-        sizeof(staged_name))==PW_OK && strcmp(staged_name,"table.dat")==0);
-    assert(pw_app_profile_resolve_flat_file(&profile,
+    assert(pw_app_profile_resolve_staged_file(&profile,"table.dat",staged_name,
+        sizeof(staged_name))==PW_OK && strcmp(staged_name,"app/table.dat")==0);
+    assert(pw_app_profile_resolve_staged_file(&profile,
         "C:\\Other\\table.dat",staged_name,sizeof(staged_name))==
         PW_ERR_UNSUPPORTED);
-    assert(pw_app_profile_resolve_flat_file(&profile,
+    assert(pw_app_profile_resolve_staged_file(&profile,
         "C:\\Games\\Pinball\\data\\table.dat",staged_name,
-        sizeof(staged_name))==PW_ERR_UNSUPPORTED);
-    assert(pw_app_profile_resolve_flat_file(&profile,"..\\table.dat",
+        sizeof(staged_name))==PW_OK &&
+        strcmp(staged_name,"app/data/table.dat")==0);
+    assert(pw_app_profile_resolve_staged_file(&profile,
+        "data\\asset.DAT",staged_name,sizeof(staged_name))==PW_OK &&
+        strcmp(staged_name,"app/data/asset.dat")==0);
+    assert(pw_app_profile_resolve_staged_file(&profile,"..\\table.dat",
+        staged_name,sizeof(staged_name))==PW_ERR_UNSUPPORTED);
+    assert(pw_app_profile_resolve_staged_file(&profile,"CON.txt",
+        staged_name,sizeof(staged_name))==PW_ERR_UNSUPPORTED);
+    assert(pw_app_profile_resolve_staged_file(&profile,"trailing.",
         staged_name,sizeof(staged_name))==PW_ERR_UNSUPPORTED);
     memset(staged_name,0xcc,sizeof(staged_name));
-    assert(pw_app_profile_resolve_flat_file(&profile,"table.dat",staged_name,
+    assert(pw_app_profile_resolve_staged_file(&profile,"table.dat",staged_name,
         4u)==PW_ERR_LIMIT && (unsigned char)staged_name[0]==0xcc);
-    assert(pw_app_profile_resolve_flat_file(&profile,"name..data.ini",
+    assert(pw_app_profile_resolve_staged_file(&profile,"name..data.ini",
         staged_name,sizeof(staged_name))==PW_OK &&
-        strcmp(staged_name,"name..data.ini")==0);
+        strcmp(staged_name,"app/name..data.ini")==0);
 
     assert(parse_text(
         "[application]\n"
