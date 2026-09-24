@@ -18,7 +18,7 @@ def transcript(end: bool = False) -> str:
              "5\t3000000000\tINFO\tPW_RUNTIME_HEARTBEAT retired=10 calls=2 flips=3 audio_blocks=4 pad_samples=5 pad_connected=5 pad_events=5 pad_read_errors=0 profile_lookups=2 profile_missing=0 profile_errors=0 profile_bytes=10 idle_yields=1"]
     if end:
         lines += ["6\t3050000000\tINFO\tPW_PAD_QUIT source=create action=WM_QUIT",
-                  "7\t3100000000\tINFO\tPW_RUNTIME_TEARDOWN state=ok pad=ok audio=ok gdi=ok video=ok agc=ok dbt=ok image=ok stack=ok thread=ok crt=ok heap=ok",
+                  "7\t3100000000\tINFO\tPW_RUNTIME_TEARDOWN schema=2 state=ok pad=ok audio=ok gdi=ok video=ok agc=ok dbt=ok image=ok stack=ok thread=ok crt=ok heap=ok session=1 outcome=1 supervisor_state=0 supervisor_cleanup=ok",
                   "8\t3200000000\tINFO\tPW_RUNTIME_END reason=validation-deadline flips=5 audio_blocks=6",
                   "BYE seq=8 reason=validation-deadline"]
     return "\n".join(lines) + "\n"
@@ -58,6 +58,9 @@ def main() -> int:
     check(transcript().replace("3\t", "4\t", 1), True, False)
     check(transcript(True).replace("pad=ok", "pad=state"), False, False)
     check(transcript(True).replace("flips=5", "flips=1"), False, False)
+    check(transcript(True).replace("supervisor_state=0", "supervisor_state=4"), False, False)
+    check(transcript(True).replace("supervisor_cleanup=ok", "supervisor_cleanup=state"), False, False)
+    check(transcript(True).replace("session=1 outcome=1", "session=1 outcome=0"), False, False)
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "gameplay.log"; path.write_text(transcript(True))
         MODULE.validate(path, False, 1, 2, 2, 5, True)

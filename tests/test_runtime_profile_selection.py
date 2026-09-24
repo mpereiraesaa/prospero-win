@@ -18,6 +18,19 @@ def test_native_runtime_loads_only_bounded_supported_profiles() -> None:
     assert "value>='A' && value<='Z'?value+('a'-'A'):value" in source
     assert "app_profile_commandline(&app_profile" in source
     assert ".main_module_filename=PW_USE_APP_PROFILE?app_profile.executable" in source
+    assert "pw_prefix_ps5_io(&prefix_io)" in source
+    assert "PW_PREFIX_PS5_DEFAULT_ROOT" in source
+    assert "pw_prefix_open(&prefix_service,app_profile.prefix" in source
+    assert "prefix_registry_path(prefix_layout,profile_registry_path" in source
+    assert "registry_path=profile_registry_path" in source
+    assert "pw_state_ps5_load_registry(&registry,registry_path" in source
+    assert "pw_state_ps5_save_registry_ex(&registry,registry_path" in source
+    assert "pw_runtime_supervisor_begin(supervisor,&app_profile" in source
+    assert "pw_runtime_supervisor_guest_started(supervisor)" in source
+    assert "pw_runtime_supervisor_request_stop(supervisor)" in source
+    assert "pw_runtime_supervisor_guest_exited(supervisor" in source
+    assert "pw_runtime_supervisor_cleanup_complete(" in source
+    assert "PW_RUNTIME_TEARDOWN schema=2" in source
 
 
 def test_builder_stages_profile_explicitly() -> None:

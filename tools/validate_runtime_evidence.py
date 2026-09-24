@@ -101,6 +101,15 @@ def validate(path: Path, continuous: bool, min_seconds: float,
                     "image", "stack", "thread", "crt", "heap"):
             if teardown.get(key) != "ok":
                 raise ValueError(f"teardown {key} is not ok")
+        if "session" in teardown:
+            session = number(teardown.get("session", "-1"))
+            expected_outcome = 1 if session else 0
+            if number(teardown.get("outcome", "-1")) != expected_outcome:
+                raise ValueError("runtime supervisor outcome does not match session")
+            if number(teardown.get("supervisor_state", "-1")) != 0:
+                raise ValueError("runtime supervisor did not return to IDLE")
+            if teardown.get("supervisor_cleanup") != "ok":
+                raise ValueError("runtime supervisor cleanup is not ok")
         end = latest(records, "PW_RUNTIME_END")[3]
         if bye is None or f"reason={end.get('reason')}" not in bye:
             raise ValueError("missing/mismatched BYE")

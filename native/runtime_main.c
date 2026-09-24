@@ -11,9 +11,11 @@
 #include "pw_audio_ps5.h"
 #include "pw_file_ps5.h"
 #include "pw_pad_ps5.h"
+#include "pw_prefix_ps5.h"
 #include "pw_state_ps5.h"
 #include "pw_videoout_ps5.h"
 #include "../src/pw_app_profile.h"
+#include "../src/pw_runtime_supervisor.h"
 #include "ps5log/ps5log.h"
 #include <errno.h>
 #include <signal.h>
@@ -290,6 +292,24 @@ static int app_profile_commandline(const PwAppProfile *profile,char *out,
     return PW_OK;
 }
 
+static int prefix_registry_path(const PwPrefixLayout *prefix,char *out,
+                                size_t capacity)
+{
+    static const char suffix[]="/registry.pwrg";
+    size_t root_length;
+    if(!prefix || !out)return PW_ERR_PRECONDITION;
+    root_length=strlen(prefix->root);
+    if(root_length+sizeof(suffix)>capacity)return PW_ERR_LIMIT;
+    memcpy(out,prefix->root,root_length);
+    memcpy(out+root_length,suffix,sizeof(suffix));
+    return PW_OK;
+}
+
+static void collect_cleanup_status(int *overall,int status)
+{
+    if(*overall==PW_OK && status!=PW_OK)*overall=status;
+}
+
 static void report_execute_abort(const NativeServices *services,
                                  const PwX86State *state,int status)
 {
@@ -360,7 +380,11 @@ int main(int argc,char **argv)
     (void)pw_file_ps5_provider(files,&provider);
     PwAppProfile app_profile;memset(&app_profile,0,sizeof(app_profile));
     const char *root_module=PW_ROOT_MODULE;
+    const char *registry_path=PW_REGISTRY_PATH;
     char profile_module[PW_APP_PATH_CAPACITY];
+    char profile_registry_path[PW_PREFIX_PATH_CAPACITY];
+    PwPrefixLayout *prefix_layout=NULL;
+    PwRuntimeSupervisor *supervisor=NULL;
     if(PW_USE_APP_PROFILE) {
         uint8_t *profile_bytes=scratch(PW_APP_PROFILE_MAX_BYTES);
         if(!profile_bytes)abort_runtime("profile-scratch",PW_ERR_VM);
@@ -373,6 +397,26 @@ int main(int argc,char **argv)
                                       sizeof(profile_module));
         if(status!=PW_OK)abort_runtime("profile-module-name",status);
         root_module=profile_module;
+        PwPrefixIo prefix_io;PwPrefixService prefix_service;
+        prefix_layout=scratch(sizeof(*prefix_layout));
+        supervisor=scratch(sizeof(*supervisor));
+        if(!prefix_layout || !supervisor)abort_runtime("profile-state-scratch",PW_ERR_VM);
+        if((status=pw_prefix_ps5_io(&prefix_io))!=PW_OK ||
+           (status=pw_prefix_service_init(&prefix_service,
+               PW_PREFIX_PS5_DEFAULT_ROOT,&prefix_io))!=PW_OK ||
+           (status=pw_prefix_open(&prefix_service,app_profile.prefix,
+               prefix_layout))!=PW_OK)
+            abort_runtime("prefix-open",status);
+        if((status=prefix_registry_path(prefix_layout,profile_registry_path,
+            sizeof(profile_registry_path)))!=PW_OK)
+            abort_runtime("prefix-registry-path",status);
+        registry_path=profile_registry_path;
+        pw_runtime_supervisor_init(supervisor);
+        if((status=pw_runtime_supervisor_begin(supervisor,&app_profile,
+            prefix_layout))!=PW_OK)
+            abort_runtime("runtime-session-begin",status);
+        PS5LOG_LOG("PW_PREFIX_OPEN schema=1 id=%s root=%s registry=%s",
+            prefix_layout->id,prefix_layout->root,registry_path);
         PS5LOG_LOG("PW_APP_PROFILE schema=1 id=%s runtime=%s prefix=%s exe=%s cwd=%s arch=pe32 graphics=gdi arguments=%u",
             app_profile.id,app_profile.runtime,app_profile.prefix,
             app_profile.executable,app_profile.working_directory,
@@ -427,10 +471,10 @@ int main(int argc,char **argv)
        (status=pw_gdi_init(&gdi,dcs,128,surfaces,128,pixels,32u*1024u*1024u))!=PW_OK)
         abort_runtime("win32-state",status);
     uint32_t state_loaded=0;
-    status=pw_state_ps5_load_registry(&registry,PW_REGISTRY_PATH,state_buffer,
+    status=pw_state_ps5_load_registry(&registry,registry_path,state_buffer,
                                       PW_STATE_PS5_MAX_BYTES,&state_loaded);
-    PS5LOG_LOG("PW_STATE_LOAD schema=1 status=%s bytes=%u storage=download0",
-               pw_result_name(status),state_loaded);
+    PS5LOG_LOG("PW_STATE_LOAD schema=1 status=%s bytes=%u path=%s",
+               pw_result_name(status),state_loaded,registry_path);
     if(status!=PW_OK)abort_runtime("state-load",status);
 
     PwAudioPs5 audio;PwAudioPs5Ops audio_ops;
@@ -502,6 +546,9 @@ int main(int argc,char **argv)
         abort_runtime("dbt-mode",PW_ERR_STATE);
     PwVideoOutPs5 video;
     if((status=pw_videoout_ps5_open(&video))!=PW_OK)abort_runtime("videoout",status);
+    if(supervisor &&
+       (status=pw_runtime_supervisor_guest_started(supervisor))!=PW_OK)
+        abort_runtime("runtime-session-start",status);
     PS5LOG_LOG("PW_RUNTIME_READY imports=%u entry=0x%08x image_bytes=%u "
                "dbt_chaining=%u dbt_residency=%u dbt_lazy_flags=%u dbt_quantum=%u",
                binding.total,state.eip,image.size_of_image,PW_DBT_CHAINING,
@@ -553,12 +600,13 @@ int main(int argc,char **argv)
         uint64_t now=now_ns();
         if(registry.generation!=saved_generation && now-last_save_attempt>=1000000000ull) {
             uint32_t state_written=0;PwStatePs5Report save_report;last_save_attempt=now;
-            int save_status=pw_state_ps5_save_registry_ex(&registry,PW_REGISTRY_PATH,state_buffer,
+            int save_status=pw_state_ps5_save_registry_ex(&registry,registry_path,state_buffer,
                 PW_STATE_PS5_MAX_BYTES,&state_written,&save_report);
-            PS5LOG_LOG("PW_STATE_SAVE schema=1 status=%s generation=%llu bytes=%u storage=download0 "
+            PS5LOG_LOG("PW_STATE_SAVE schema=1 status=%s generation=%llu bytes=%u path=%s "
                 "encoded=%u open_rc=0x%08x write_rc=%d written=%u fsync_rc=0x%08x "
                 "close_rc=0x%08x rename_rc=0x%08x unlink_rc=0x%08x",
                 pw_result_name(save_status),(unsigned long long)registry.generation,state_written,
+                registry_path,
                 save_report.encoded_bytes,(uint32_t)save_report.open_rc,save_report.write_rc,
                 save_report.written_bytes,(uint32_t)save_report.fsync_rc,
                 (uint32_t)save_report.close_rc,(uint32_t)save_report.rename_rc,
@@ -700,6 +748,12 @@ int main(int argc,char **argv)
     /* Normal shutdown is best-effort but exhaustive.  Preserve every result
      * in one record so a later launch can distinguish a clean guest exit from
      * a title-manager kill, which cannot run process cleanup code. */
+    if(supervisor) {
+        if((status=pw_runtime_supervisor_request_stop(supervisor))!=PW_OK ||
+           (status=pw_runtime_supervisor_guest_exited(supervisor,
+               (int32_t)exit_code))!=PW_OK)
+            abort_runtime("runtime-session-exit",status);
+    }
     const uint64_t final_retired=engine.retired_instructions,final_flips=video.flips;
     PwAudioPs5Stats final_audio_stats;
     if(pw_audio_ps5_stats(&audio,&final_audio_stats)!=PW_OK)
@@ -707,7 +761,7 @@ int main(int argc,char **argv)
     const uint64_t final_audio_blocks=final_audio_stats.blocks;
     uint32_t final_state_written=0;int state_close=PW_OK;
     if(registry.generation!=saved_generation)
-        state_close=pw_state_ps5_save_registry(&registry,PW_REGISTRY_PATH,state_buffer,
+        state_close=pw_state_ps5_save_registry(&registry,registry_path,state_buffer,
             PW_STATE_PS5_MAX_BYTES,&final_state_written);
     PwGdiTargetView close_view;uint32_t close_window=presentation_window(&user32,&gdi,&close_view);
     int pad_close=pw_pad_ps5_close(&pad,&user32,close_window);
@@ -721,13 +775,33 @@ int main(int argc,char **argv)
     int thread_close=vm.release(vm.context,&thread);
     int crt_close=vm.release(vm.context,&crt);
     int heap_close=vm.release(vm.context,&heap_region);
-    for(uint32_t handle=0x0d000001u;handle<=0x0d000008u;handle++)
-        (void)pw_file_ps5_stream_close(files,handle);
-    PS5LOG_LOG("PW_RUNTIME_TEARDOWN schema=1 reason=%s exit_code=%u state=%s state_bytes=%u "
+    int cleanup_status=PW_OK;
+    collect_cleanup_status(&cleanup_status,state_close);
+    collect_cleanup_status(&cleanup_status,pad_close);
+    collect_cleanup_status(&cleanup_status,audio_close);
+    collect_cleanup_status(&cleanup_status,gdi_close);
+    collect_cleanup_status(&cleanup_status,video_close);
+    collect_cleanup_status(&cleanup_status,dbt_close);
+    collect_cleanup_status(&cleanup_status,image_close);
+    collect_cleanup_status(&cleanup_status,stack_close);
+    collect_cleanup_status(&cleanup_status,thread_close);
+    collect_cleanup_status(&cleanup_status,crt_close);
+    collect_cleanup_status(&cleanup_status,heap_close);
+    for(unsigned slot=0;slot<8;slot++)if(files->streams[slot]>=0) {
+        int stream_close=pw_file_ps5_stream_close(files,0x0d000001u+slot);
+        collect_cleanup_status(&cleanup_status,stream_close);
+    }
+    int supervisor_cleanup=PW_OK;
+    if(supervisor) {
+        supervisor_cleanup=pw_runtime_supervisor_cleanup_complete(
+            supervisor,cleanup_status);
+    }
+    PS5LOG_LOG("PW_RUNTIME_TEARDOWN schema=2 reason=%s exit_code=%u state=%s state_bytes=%u "
         "pad=%s pad_close_rc=%d user_terminate_rc=%d audio=%s gdi=%s "
         "video=%s unregister_rc=0x%08x video_close_rc=0x%08x video_munmap_rc=0x%08x "
         "video_release_rc=0x%08x agc=%s agc_unmap_rc=0x%08x agc_release_rc=0x%08x "
-        "agc_munmap_rc=0x%08x agc_unload_rc=0x%08x dbt=%s image=%s stack=%s thread=%s crt=%s heap=%s",
+        "agc_munmap_rc=0x%08x agc_unload_rc=0x%08x dbt=%s image=%s stack=%s thread=%s crt=%s heap=%s"
+        " session=%u outcome=%u supervisor_state=%u supervisor_cleanup=%s",
         exit_reason,exit_code,pw_result_name(state_close),final_state_written,
         pw_result_name(pad_close),pad.close_rc,pad.terminate_rc,pw_result_name(audio_close),
         pw_result_name(gdi_close),pw_result_name(video_close),(uint32_t)video.unregister_rc,
@@ -736,7 +810,10 @@ int main(int argc,char **argv)
         (uint32_t)video.agc.release_rc,(uint32_t)video.agc.munmap_rc,
         (uint32_t)video.agc.unload_rc,pw_result_name(dbt_close),pw_result_name(image_close),
         pw_result_name(stack_close),pw_result_name(thread_close),pw_result_name(crt_close),
-        pw_result_name(heap_close));
+        pw_result_name(heap_close),supervisor?supervisor->last_result.session_id:0u,
+        supervisor?(unsigned)supervisor->last_result.outcome:0u,
+        supervisor?(unsigned)supervisor->state:(unsigned)PW_RUNTIME_IDLE,
+        pw_result_name(supervisor_cleanup));
     PS5LOG_LOG("PW_RUNTIME_END schema=1 reason=%s exit_code=%u events=%llu retired=%llu flips=%llu audio_blocks=%llu",
         exit_reason,exit_code,(unsigned long long)events,
         (unsigned long long)final_retired,(unsigned long long)final_flips,
@@ -753,5 +830,7 @@ int main(int argc,char **argv)
     (void)munmap(registry_values,128u*sizeof(*registry_values));
     (void)munmap(registry_keys,32u*sizeof(*registry_keys));
     (void)munmap(heap_blocks,131072u*sizeof(*heap_blocks));(void)munmap(files,sizeof(*files));
+    if(supervisor)(void)munmap(supervisor,sizeof(*supervisor));
+    if(prefix_layout)(void)munmap(prefix_layout,sizeof(*prefix_layout));
     ps5log_close(exit_reason);return (int)exit_code;
 }

@@ -146,15 +146,19 @@ The native `pw_prefix_ps5` adapter implements recursive, idempotent directory
 creation with `sceKernelStat` and `sceKernelMkdir`; it exposes
 `/download0/prospero-win` as `PW_PREFIX_PS5_DEFAULT_ROOT`, which yields
 `/download0/prospero-win/prefixes/<id>`. The adapter is host-tested through a
-POSIX test shim. It is not yet called by `runtime_main`, and the four hive
-files are still path contracts rather than persistent Wine registry stores.
+POSIX test shim. Profile-mode `runtime_main` creates that tree and stores its
+current emulator registry snapshot as `registry.pwrg` under the prefix. This
+is not Wine's four-hive format: the hive paths remain contracts, not
+persistent Wine registry stores.
 
 `PwRuntimeSupervisor` joins a parsed profile to its prefix and defines the
 single-guest states `IDLE → PREPARING → RUNNING → STOPPING → CLEANUP → IDLE`.
 Guest exit and launch failure both enter cleanup; a failed cleanup retains the
 active ownership data for retry, and a successful cleanup preserves the final
-result for the shell. It is a host-tested lifecycle contract at present; the
-native runner does not yet dispatch through it or launch generic Wine guests.
+result for the shell. Profile-mode `runtime_main` now drives this lifecycle
+around its single direct PE32/GDI guest and records the result in teardown
+telemetry. This is not yet generic Wine process startup or multi-process
+supervision; the legacy no-profile runner path remains unchanged.
 
 The initial host-side `PwAppProfile` contract uses a bounded INI manifest:
 

@@ -9,14 +9,15 @@ classifies cleanup or failure without depending on a screenshot.
 
 | Record | Carries |
 | --- | --- |
-| `PW_RUNTIME_BEGIN` | schema, title, root basename and telemetry status |
+| `PW_RUNTIME_BEGIN` | schema, title, profile-mode flag, fallback root basename and telemetry status |
+| `PW_APP_PROFILE` / `PW_PREFIX_OPEN` | selected app identity and profile-owned persistent root |
 | `PW_RUNTIME_READY` | bound imports, guest entry and mapped bytes |
 | `PW_STATE_LOAD` / `PW_STATE_SAVE` | persistent state bytes, generation and atomic-write results |
 | `PW_PAD_OPEN` / `PW_PAD_EVENT` / `PW_PAD_QUIT` | Pad ownership, physical edges and explicit quit |
 | `PW_VIDEO_FRAME` | dimensions, changing frame hash, flips, submits and fence state |
 | `PW_AUDIO_OPEN` / `PW_AUDIO_QUEUE` | PCM format, worker ownership, queue depth and completion |
 | `PW_RUNTIME_HEARTBEAT` | DBT, pacing, adapter, renderer, audio and input counters |
-| `PW_RUNTIME_TEARDOWN` | ordered release result for each owned subsystem |
+| `PW_RUNTIME_TEARDOWN` | ordered release result plus RuntimeSupervisor session, outcome and cleanup state |
 | `PW_RUNTIME_END` | normal reason, guest status and final counters |
 | `PW_RUNTIME_ABORT` | fail-closed stage and status |
 | `PW_RUNTIME_SIGNAL` | signal, fault address and native register context |
@@ -30,6 +31,11 @@ validation and follows the same teardown path.
 A live run requires rising heartbeats, matching title and artifact identity,
 and no abort or signal. A completed finite run additionally requires ordered
 teardown, `PW_RUNTIME_END` and the transport's matching `BYE` record.
+When supervisor fields are present, finite-run validation also requires the
+session to have completed, the supervisor to have returned to `IDLE`, and
+cleanup to report `ok`. Profile-mode `PW_STATE_LOAD` / `PW_STATE_SAVE` paths
+are isolated under that profile's prefix; they store Prospero-Win's current
+registry snapshot, not Wine registry hives.
 
 Renderer acceptance requires changing frame hashes, advancing flips/submits
 and completed fence ownership. Audio acceptance requires advancing byte,
