@@ -75,6 +75,8 @@ typedef struct PwWin32Services {
     unsigned ansi_codepage; /* currently exact CP1252 conversion only */
     /* Stable guest-visible DOS path for the main image, never a host path. */
     const char *main_module_filename;
+    /* Borrowed absolute DOS path returned by GetCurrentDirectoryA. */
+    const char *current_directory;
     /* CRT stream handles are provider-owned opaque 32-bit tokens. Paths are
      * guest DOS paths; providers must confine translation to the title root. */
     int (*file_open)(void *,const char *,const char *,uint32_t *);

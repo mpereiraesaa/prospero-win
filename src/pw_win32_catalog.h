@@ -36,6 +36,7 @@ static const struct { const char *dll,*name; PwImportKind kind; } pw_catalog[] =
     {"gdi32.dll","StretchDIBits",PW_IMPORT_FUNCTION},
     {"kernel32.dll","FindResourceA",PW_IMPORT_FUNCTION},
     {"kernel32.dll","FreeResource",PW_IMPORT_FUNCTION},
+    {"kernel32.dll","GetCurrentDirectoryA",PW_IMPORT_FUNCTION},
     {"kernel32.dll","GetCurrentProcess",PW_IMPORT_FUNCTION},
     {"kernel32.dll","GetCurrentProcessId",PW_IMPORT_FUNCTION},
     {"kernel32.dll","GetCurrentThread",PW_IMPORT_FUNCTION},

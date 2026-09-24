@@ -1536,6 +1536,36 @@ int pw_win32_dispatch(PwWin32 *r,PwX86State *state)
         r->calls++;return PW_OK;
     }
     unsigned kernel=!strcmp(r->last_dll,"kernel32.dll");
+    if(kernel && !strcmp(r->last_name,"GetCurrentDirectoryA")) {
+        PwGuestCall call={0};uint32_t capacity,destination;
+        int status=pw_guest_call_begin(&call,state,PW_GUEST_STDCALL,8,0);
+        if(status!=PW_OK)return status;
+        if((status=pw_guest_call_u32(&call,0,&capacity))!=PW_OK ||
+           (status=pw_guest_call_u32(&call,4,&destination))!=PW_OK)return status;
+        const char *directory=r->services.current_directory;
+        if(!directory)return PW_ERR_STATE;
+        size_t length=0;
+        while(length<=PW_PATH_MAX && directory[length])length++;
+        if(length==0 || length>PW_PATH_MAX)return PW_ERR_MALFORMED;
+        uint32_t required=(uint32_t)length+1u,result;
+        unsigned copy=0;
+        if(!destination && capacity==0) {
+            result=required; /* documented size query */
+        } else if(!destination) {
+            r->last_error=87; /* ERROR_INVALID_PARAMETER */
+            result=0;
+        } else if(capacity<required) {
+            result=required;
+        } else {
+            if((status=range_access(state,destination,required,PW_X86_WRITE))!=PW_OK)
+                return status;
+            result=(uint32_t)length;copy=1;
+        }
+        PwX86State after=*state;call.state=&after;
+        if((status=pw_guest_call_finish(&call,32,result))!=PW_OK)return status;
+        if(copy)memcpy((void *)(uintptr_t)destination,directory,required);
+        *state=after;r->calls++;return PW_OK;
+    }
     if(kernel && !strcmp(r->last_name,"GetLastError")) {
         PwGuestCall call={0};int status=pw_guest_call_begin(&call,state,PW_GUEST_STDCALL,0,0);
         if(status==PW_OK)status=pw_guest_call_finish(&call,32,r->last_error);

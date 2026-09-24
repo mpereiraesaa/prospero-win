@@ -691,6 +691,44 @@ static void registry_tests(PwWin32 *r,PwX86State *s)
     assert(registry_call(r,s,"RegCreateKeyExA",create,9)==PW_ERR_VM);
     assert(r->calls==calls && r->registry->keys[0].open_count==0);
 }
+static void current_directory_tests(PwWin32 *runtime,PwX86State *state)
+{
+    PeImportSymbol symbol={0};PwImportTarget target;
+    const char *directory="C:\\Games\\Pinball";
+    size_t length=strlen(directory);
+    uint32_t destination=state->stack_low+128;
+    runtime->services.current_directory=directory;
+    strcpy(symbol.name,"GetCurrentDirectoryA");
+    assert(pw_win32_resolve(runtime,"kernel32.dll",&symbol,&target)==PW_OK);
+
+    runtime->last_error=0x1234;
+    state->gpr[4]=state->stack_high-12;state->eip=(uint32_t)target.address;
+    uint32_t query[]={0x01001234,0,0};
+    memcpy((void *)(uintptr_t)state->gpr[4],query,sizeof(query));
+    assert(pw_win32_dispatch(runtime,state)==PW_OK &&
+           state->gpr[0]==length+1u && runtime->last_error==0x1234);
+
+    memset((void *)(uintptr_t)destination,0xcc,length+2u);
+    state->gpr[4]=state->stack_high-12;state->eip=(uint32_t)target.address;
+    uint32_t short_buffer[]={0x01001234,(uint32_t)length,destination};
+    memcpy((void *)(uintptr_t)state->gpr[4],short_buffer,sizeof(short_buffer));
+    assert(pw_win32_dispatch(runtime,state)==PW_OK &&
+           state->gpr[0]==length+1u && runtime->last_error==0x1234 &&
+           *(uint8_t *)(uintptr_t)destination==0xcc);
+
+    state->gpr[4]=state->stack_high-12;state->eip=(uint32_t)target.address;
+    uint32_t enough[]={0x01001234,(uint32_t)length+1u,destination};
+    memcpy((void *)(uintptr_t)state->gpr[4],enough,sizeof(enough));
+    assert(pw_win32_dispatch(runtime,state)==PW_OK && state->gpr[0]==length &&
+           !strcmp((char *)(uintptr_t)destination,directory));
+
+    state->gpr[4]=state->stack_high-12;state->eip=(uint32_t)target.address;
+    uint32_t bad_null[]={0x01001234,(uint32_t)length+1u,0};
+    memcpy((void *)(uintptr_t)state->gpr[4],bad_null,sizeof(bad_null));
+    assert(pw_win32_dispatch(runtime,state)==PW_OK && state->gpr[0]==0 &&
+           runtime->last_error==87);
+}
+
 int main(void)
 {
     PwVmBackend vm;PwVmRegion data;
@@ -854,6 +892,7 @@ int main(void)
            state.gpr[4]==state.stack_high-4); /* cdecl leaves the argument */
     runtime.exit_requested=0;runtime.exit_code=0;
     string_tests(&runtime,&state);
+    current_directory_tests(&runtime,&state);
     itoa_tests(&runtime,&state);
     profile_tests(&runtime,&state);
     waveout_tests(&runtime,&state);

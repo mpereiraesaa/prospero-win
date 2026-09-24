@@ -479,6 +479,7 @@ int main(int argc,char **argv)
         .process_id=1,.thread_id=2,.string_resource=string_resource,
         .named_resource=named_resource,.integer_resource=integer_resource,
         .code_address=code_address,.ansi_codepage=1252,
+        .current_directory=PW_USE_APP_PROFILE?app_profile.working_directory:"C:\\game",
         .main_module_filename=PW_USE_APP_PROFILE?app_profile.executable:
             "C:\\game\\" PW_ROOT_MODULE,
         .file_open=file_open,.file_close=file_close,.file_read=file_read,.file_seek=file_seek,

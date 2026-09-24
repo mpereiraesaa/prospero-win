@@ -18,6 +18,7 @@ def test_native_runtime_loads_only_bounded_supported_profiles() -> None:
     assert "app_profile.graphics!=PW_APP_GRAPHICS_GDI" in source
     assert "pw_app_profile_stage_name(&app_profile,profile_module" in source
     assert "pw_app_profile_build_command_line(&app_profile,commandline" in source
+    assert '.current_directory=PW_USE_APP_PROFILE?app_profile.working_directory:"C:\\\\game"' in source
     assert ".main_module_filename=PW_USE_APP_PROFILE?app_profile.executable" in source
     assert "pw_prefix_ps5_io(&prefix_io)" in source
     assert "PW_PREFIX_PS5_DEFAULT_ROOT" in source
