@@ -108,14 +108,61 @@ static int guest_path(PwFilePs5 *state, const char *guest, char *out,
     return join(out, capacity, state->directory, lower);
 }
 
+static int staged_path(PwFilePs5 *state, const char *relative, char *out,
+                       size_t capacity)
+{
+    char lower[PW_PATH_MAX + 1];
+    size_t length=0u,component=0u;
+    if(!state || !relative || !out)return PW_ERR_PRECONDITION;
+    while(length<=PW_PATH_MAX && relative[length])length++;
+    if(!length)return PW_ERR_PRECONDITION;
+    if(length>PW_PATH_MAX || relative[0]=='/' || relative[0]=='\\')
+        return PW_ERR_LIMIT;
+    for(size_t index=0;index<=length;index++) {
+        unsigned char value=(unsigned char)relative[index];
+        if(value=='\\')value='/';
+        if(value=='/' || value=='\0') {
+            size_t component_length=index-component;
+            if(!component_length || (component_length==1u && lower[component]=='.') ||
+               (component_length==2u && lower[component]=='.' &&
+                lower[component+1u]=='.'))return PW_ERR_PRECONDITION;
+            component=index+1u;
+            if(value=='\0')break;
+            lower[index]='/';
+            continue;
+        }
+        if(value<0x20u || value==0x7fu || value==':' || value=='*' ||
+           value=='?' || value=='"' || value=='<' || value=='>' || value=='|')
+            return PW_ERR_PRECONDITION;
+        lower[index]=(char)(value>='A' && value<='Z'
+            ? value+('a'-'A') : value);
+    }
+    lower[length]='\0';
+    return join(out,capacity,state->directory,lower);
+}
+
+static int stream_open_translated(PwFilePs5 *state,const char *translated,
+                                  uint32_t *handle)
+{
+    unsigned slot=8u;
+    int descriptor;
+    for(unsigned index=0;index<8u;index++)if(state->streams[index]<0) {
+        slot=index;break;
+    }
+    if(slot==8u)return PW_ERR_LIMIT;
+    descriptor=sceKernelOpen(translated,O_RDONLY,0);
+    if(descriptor<0)return PW_ERR_NOT_FOUND;
+    state->streams[slot]=descriptor;
+    *handle=0x0d000001u+slot;
+    return PW_OK;
+}
+
 int pw_file_ps5_stream_open(void *opaque, const char *path, const char *mode,
                             uint32_t *handle)
 {
     PwFilePs5 *state = opaque;
     char translated[2u * (PW_PATH_MAX + 1u)];
-    unsigned slot = 8u;
     int status;
-    int descriptor;
 
     if (!state || !path || !mode || !handle ||
         (strcmp(mode, "r") && strcmp(mode, "rb")))
@@ -123,20 +170,20 @@ int pw_file_ps5_stream_open(void *opaque, const char *path, const char *mode,
     status = guest_path(state, path, translated, sizeof(translated));
     if (status != PW_OK)
         return status;
-    for (unsigned index = 0; index < 8u; ++index) {
-        if (state->streams[index] < 0) {
-            slot = index;
-            break;
-        }
-    }
-    if (slot == 8u)
-        return PW_ERR_LIMIT;
-    descriptor = sceKernelOpen(translated, O_RDONLY, 0);
-    if (descriptor < 0)
-        return PW_ERR_NOT_FOUND;
-    state->streams[slot] = descriptor;
-    *handle = 0x0d000001u + slot;
-    return PW_OK;
+    return stream_open_translated(state,translated,handle);
+}
+
+int pw_file_ps5_stream_open_staged(void *opaque,const char *path,
+                                   const char *mode,uint32_t *handle)
+{
+    PwFilePs5 *state=opaque;
+    char translated[2u*(PW_PATH_MAX+1u)];
+    int status;
+    if(!state || !path || !mode || !handle ||
+       (strcmp(mode,"r") && strcmp(mode,"rb")))return PW_ERR_UNSUPPORTED;
+    status=staged_path(state,path,translated,sizeof(translated));
+    if(status!=PW_OK)return status;
+    return stream_open_translated(state,translated,handle);
 }
 
 int pw_file_ps5_stream_close(void *opaque, uint32_t handle)

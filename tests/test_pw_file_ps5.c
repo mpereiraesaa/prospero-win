@@ -36,6 +36,8 @@ int main(void)
 {
     char root[128];
     char application[160];
+    char staged_application[192];
+    char staged_nested[224];
     char runtime[160];
     char path[256];
     PwFilePs5 state;
@@ -45,9 +47,15 @@ int main(void)
     assert(snprintf(root, sizeof(root), "/tmp/pw_file_ps5_ns_%ld",
                     (long)getpid()) > 0);
     assert(snprintf(application, sizeof(application), "%s/application", root) > 0);
+    assert(snprintf(staged_application,sizeof(staged_application),
+                    "%s/app",application)>0);
+    assert(snprintf(staged_nested,sizeof(staged_nested),
+                    "%s/sub",staged_application)>0);
     assert(snprintf(runtime, sizeof(runtime), "%s/runtime", root) > 0);
     assert(mkdir(root, 0700) == 0);
     assert(mkdir(application, 0700) == 0);
+    assert(mkdir(staged_application,0700)==0);
+    assert(mkdir(staged_nested,0700)==0);
     assert(mkdir(runtime, 0700) == 0);
 
     assert(snprintf(path, sizeof(path), "%s/kernel32.dll", application) > 0);
@@ -56,6 +64,8 @@ int main(void)
     write_one(path, 'R');
     assert(snprintf(path, sizeof(path), "%s/name..data.ini", application) > 0);
     write_one(path, 'D');
+    assert(snprintf(path,sizeof(path),"%s/layout.ini",staged_nested)>0);
+    write_one(path,'N');
 
     assert(pw_file_ps5_init(&state, application) == PW_OK);
     assert(pw_file_ps5_provider(&state, &provider) == PW_OK);
@@ -82,6 +92,16 @@ int main(void)
     assert(pw_file_ps5_stream_read(&state,stream,&value,1,&got)==PW_OK &&
            got==1u && value=='D');
     assert(pw_file_ps5_stream_close(&state,stream)==PW_OK);
+    assert(pw_file_ps5_stream_open_staged(&state,"app\\SUB\\layout.ini",
+        "rb",&stream)==PW_OK);
+    value=0;got=0;
+    assert(pw_file_ps5_stream_read(&state,stream,&value,1,&got)==PW_OK &&
+           got==1u && value=='N');
+    assert(pw_file_ps5_stream_close(&state,stream)==PW_OK);
+    assert(pw_file_ps5_stream_open_staged(&state,"app/../kernel32.dll",
+        "rb",&stream)==PW_ERR_PRECONDITION);
+    assert(pw_file_ps5_stream_open_staged(&state,"/app/layout.ini",
+        "rb",&stream)==PW_ERR_LIMIT);
 
     assert(snprintf(path, sizeof(path), "%s/kernel32.dll", application) > 0);
     assert(remove(path) == 0);
@@ -89,6 +109,10 @@ int main(void)
     assert(remove(path) == 0);
     assert(snprintf(path, sizeof(path), "%s/name..data.ini", application) > 0);
     assert(remove(path) == 0);
+    assert(snprintf(path,sizeof(path),"%s/layout.ini",staged_nested)>0);
+    assert(remove(path)==0);
+    assert(rmdir(staged_nested)==0);
+    assert(rmdir(staged_application)==0);
     assert(rmdir(application) == 0);
     assert(rmdir(runtime) == 0);
     assert(rmdir(root) == 0);

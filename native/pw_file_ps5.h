@@ -70,9 +70,10 @@ int pw_file_ps5_provider(PwFilePs5 *state, PwFileProvider *provider);
 int pw_file_ps5_smoke(PwFilePs5 *state, const char *name,
                       PwFilePs5Smoke *out);
 
-/* Confined CRT-stream adapter for PwWin32Services. Guest paths are reduced
- * to a basename and lowercased to match build_native.sh staging. */
+/* Confined CRT-stream adapters. The legacy entry reduces guest paths to a
+ * basename; the staged entry accepts only a relative package path. */
 int pw_file_ps5_stream_open(void *,const char *,const char *,uint32_t *);
+int pw_file_ps5_stream_open_staged(void *,const char *,const char *,uint32_t *);
 int pw_file_ps5_stream_close(void *,uint32_t);
 int pw_file_ps5_stream_read(void *,uint32_t,void *,uint32_t,uint32_t *);
 int pw_file_ps5_stream_seek(void *,uint32_t,int32_t,uint32_t,uint32_t *);
