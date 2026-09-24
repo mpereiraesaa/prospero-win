@@ -54,6 +54,8 @@ int main(void)
     write_one(path, 'A');
     assert(snprintf(path, sizeof(path), "%s/kernel32.dll", runtime) > 0);
     write_one(path, 'R');
+    assert(snprintf(path, sizeof(path), "%s/name..data.ini", application) > 0);
+    write_one(path, 'D');
 
     assert(pw_file_ps5_init(&state, application) == PW_OK);
     assert(pw_file_ps5_provider(&state, &provider) == PW_OK);
@@ -75,9 +77,17 @@ int main(void)
            PW_ERR_PRECONDITION);
     assert(state.opens == 2u && state.closes == 2u);
 
+    uint32_t stream=0;unsigned char value=0;uint32_t got=0;
+    assert(pw_file_ps5_stream_open(&state,"name..data.ini","rb",&stream)==PW_OK);
+    assert(pw_file_ps5_stream_read(&state,stream,&value,1,&got)==PW_OK &&
+           got==1u && value=='D');
+    assert(pw_file_ps5_stream_close(&state,stream)==PW_OK);
+
     assert(snprintf(path, sizeof(path), "%s/kernel32.dll", application) > 0);
     assert(remove(path) == 0);
     assert(snprintf(path, sizeof(path), "%s/kernel32.dll", runtime) > 0);
+    assert(remove(path) == 0);
+    assert(snprintf(path, sizeof(path), "%s/name..data.ini", application) > 0);
     assert(remove(path) == 0);
     assert(rmdir(application) == 0);
     assert(rmdir(runtime) == 0);

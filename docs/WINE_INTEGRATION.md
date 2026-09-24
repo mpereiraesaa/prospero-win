@@ -200,12 +200,14 @@ The manifest is copied to `/app0/win/app.profile`, parsed with the bounded
 profile contract at startup, and selects its executable by staged basename.
 This boot path currently accepts only PE32 + GDI profiles; the runtime and
 prefix identifiers are reported as metadata but do not yet select Wine builds
-or separate Wine builds. `working_directory` is exposed to the guest through
-`GetCurrentDirectoryA`; relative file operations are not yet resolved against
-that directory because the current provider still stages files in a flat
-directory and resolves by basename. `SetCurrentDirectoryA` and a general
-prefix filesystem remain future work. With `PW_APP_PROFILE` unset, the
-existing `PW_ROOT_MODULE` path is unchanged.
+or separate Wine builds. `working_directory` is exposed through
+`GetCurrentDirectoryA`. In profile mode, read-only file callbacks accept a
+bare filename or a full DOS path within that working directory, then resolve
+it to the case-folded basename in the flat package. Paths outside the profile
+directory and nested paths are rejected; recursive app-file staging,
+`SetCurrentDirectoryA` and a general prefix filesystem remain future work.
+With `PW_APP_PROFILE` unset, the existing `PW_ROOT_MODULE` and legacy path
+handling remain unchanged.
 
 The intended launcher selects the manifest's EXE directly for portable
 applications.

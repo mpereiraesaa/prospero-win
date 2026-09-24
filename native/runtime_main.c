@@ -57,6 +57,7 @@ typedef struct NativeServices {
     const PeImage *image;
     const PeLayout *layout;
     PwFilePs5 *files;
+    const PwAppProfile *app_profile;
     PwAudioPs5 *audio;
     PwUser32 *user32;
     uint8_t *profile_buffer;
@@ -152,8 +153,21 @@ static int clock_ns(void *opaque,PwClockDomain domain,uint64_t *value)
     struct timespec now;if(clock_gettime(id,&now))return PW_ERR_STATE;
     *value=(uint64_t)now.tv_sec*1000000000ull+(uint64_t)now.tv_nsec;return PW_OK;
 }
+static int open_guest_file(NativeServices *services,const char *path,
+                           const char *mode,uint32_t *handle)
+{
+    char staged_name[PW_APP_PATH_CAPACITY];
+    if(!services)return PW_ERR_PRECONDITION;
+    if(services->app_profile) {
+        int status=pw_app_profile_resolve_flat_file(services->app_profile,path,
+            staged_name,sizeof(staged_name));
+        if(status!=PW_OK)return status;
+        path=staged_name;
+    }
+    return pw_file_ps5_stream_open(services->files,path,mode,handle);
+}
 static int file_open(void *opaque,const char *path,const char *mode,uint32_t *handle)
-{return pw_file_ps5_stream_open(((NativeServices *)opaque)->files,path,mode,handle);}
+{return open_guest_file(opaque,path,mode,handle);}
 static int file_close(void *opaque,uint32_t handle)
 {return pw_file_ps5_stream_close(((NativeServices *)opaque)->files,handle);}
 static int file_read(void *opaque,uint32_t handle,void *output,uint32_t bytes,uint32_t *got)
@@ -166,7 +180,7 @@ static int profile_int(void *opaque,const char *section,const char *key,uint32_t
     NativeServices *services=opaque;if(!services || !section || !key || !filename || !value)
         return PW_ERR_PRECONDITION;
     services->profile_lookups++;*value=fallback;uint32_t handle=0;
-    int status=pw_file_ps5_stream_open(services->files,filename,"rb",&handle);
+    int status=open_guest_file(services,filename,"rb",&handle);
     if(status==PW_ERR_NOT_FOUND){services->profile_missing++;return PW_OK;}
     if(status!=PW_OK){services->profile_errors++;return status;}
     uint32_t total=0;
@@ -463,7 +477,8 @@ int main(int argc,char **argv)
     PS5LOG_LOG("PW_PAD_OPEN schema=1 user_service_rc=%d owns_user_service=%u user=%d pad_init_rc=%d handle=%d read=scePadRead batch=%u",
         pad.user_initialize_rc,pad.owns_user_service,pad.user_id,pad.pad_init_rc,
         pad.pad_handle,PW_PAD_PS5_BATCH);
-    NativeServices services={.image=&image,.layout=&layout,.files=files,.audio=&audio,
+    NativeServices services={.image=&image,.layout=&layout,.files=files,
+        .app_profile=PW_USE_APP_PROFILE?&app_profile:NULL,.audio=&audio,
         .user32=&user32,.profile_buffer=profile_buffer,.profile_capacity=64u*1024u,
         .startup_command_id=PW_USE_APP_PROFILE?app_profile.startup_command_id:101u};
     PwWin32 runtime;char commandline[1024];

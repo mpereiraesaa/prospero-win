@@ -92,7 +92,8 @@ static int guest_path(PwFilePs5 *state, const char *guest, char *out,
         return PW_ERR_PRECONDITION;
     base = strrchr(guest, '\\');
     base = base ? base + 1 : guest;
-    if (!*base || strchr(base, '/') || strchr(base, '\\') || strstr(base, ".."))
+    if (!*base || strchr(base, '/') || strchr(base, '\\') ||
+        !strcmp(base, ".") || !strcmp(base, ".."))
         return PW_ERR_PRECONDITION;
     length = strlen(base);
     if (length > PW_PATH_MAX)
