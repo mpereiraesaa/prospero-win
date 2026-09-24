@@ -134,6 +134,15 @@ The paths are a logical contract; the final title-storage layout remains a
 platform-adapter decision. The manifest must never silently search arbitrary
 executables or inherit DLL overrides from another application.
 
+`PwPrefixService` now defines the persistent path layout below a configured
+title-owned storage root. It creates the prefix, `drive_c`, Windows system
+directories, Program Files, the default user tree and temp directory through
+an injected recursive directory adapter. It also resolves the four registry
+hive paths. The operation is idempotent and may be retried after partial
+directory creation. It does not use host filesystem calls or claim that Wine's
+registry hives are already loaded or persisted; those file operations remain
+the responsibility of the PS5 storage adapter and Wine registry integration.
+
 The initial host-side `PwAppProfile` contract uses a bounded INI manifest:
 
 ```ini
