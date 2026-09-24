@@ -122,6 +122,7 @@ examples/profiles/pinball.profile
 examples/profiles/paint.profile
 tests/test_pw_prefix.c
 tests/test_pw_prefix_ps5.c
+tests/test_pw_profile_session_flow.c
 tests/test_pw_runtime_supervisor.c
 tests/test_pw_pad.c
 tests/test_pw_pad_ps5.c
