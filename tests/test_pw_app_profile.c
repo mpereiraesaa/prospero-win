@@ -24,7 +24,8 @@ static int parse_text(const char *text, PwAppProfile *profile)
 }
 
 static void parse_example(const char *path,const char *expected_id,
-                          const char *expected_executable)
+                          const char *expected_executable,
+                          uint32_t expected_startup_command)
 {
     uint8_t bytes[PW_APP_PROFILE_MAX_BYTES];
     FILE *file=fopen(path,"rb");
@@ -38,6 +39,7 @@ static void parse_example(const char *path,const char *expected_id,
     assert(pw_app_profile_parse(bytes,length,&profile)==PW_OK);
     assert(strcmp(profile.id,expected_id)==0);
     assert(strcmp(profile.executable,expected_executable)==0);
+    assert(profile.startup_command_id==expected_startup_command);
     assert(strcmp(profile.runtime,"prospero-win-direct")==0);
     assert(profile.architecture==PW_APP_ARCH_PE32);
     assert(profile.graphics==PW_APP_GRAPHICS_GDI);
@@ -49,9 +51,9 @@ int main(void)
     PwAppProfile before;
 
     parse_example("examples/profiles/pinball.profile","space-cadet-pinball",
-                  "C:\\Games\\Pinball\\PINBALL.EXE");
+                  "C:\\Games\\Pinball\\PINBALL.EXE",101u);
     parse_example("examples/profiles/paint.profile","paint",
-                  "C:\\Windows\\System32\\mspaint.exe");
+                  "C:\\Windows\\System32\\mspaint.exe",0u);
 
     memset(&profile, 0xa5, sizeof(profile));
     assert(pw_app_profile_parse(valid_profile, sizeof(valid_profile) - 1u,
@@ -61,6 +63,7 @@ int main(void)
     assert(strcmp(profile.executable, "C:\\Games\\Pinball\\PINBALL.EXE") == 0);
     assert(strcmp(profile.working_directory, "C:\\Games\\Pinball") == 0);
     assert(strcmp(profile.arguments, "/windowed -test") == 0);
+    assert(profile.startup_command_id==0u);
     assert(strcmp(profile.prefix, "pinball") == 0);
     assert(strcmp(profile.runtime, "wine-i386-pinned") == 0);
     assert(profile.architecture == PW_APP_ARCH_PE32);
@@ -76,6 +79,29 @@ int main(void)
     assert(profile.architecture == PW_APP_ARCH_PE64);
     assert(profile.graphics == PW_APP_GRAPHICS_DXVK);
     assert(profile.arguments[0] == '\0');
+
+    assert(parse_text(
+        "[application]\nid=pinball\nname=Pinball\n"
+        "executable=C:\\pinball.exe\nworking_directory=C:\\Games\n"
+        "startup_command_id=65535\nprefix=pinball\nruntime=wine\n"
+        "architecture=pe32\ngraphics=gdi\n", &profile) == PW_OK);
+    assert(profile.startup_command_id==65535u);
+    assert(parse_text(
+        "[application]\nid=pinball\nname=Pinball\n"
+        "executable=C:\\pinball.exe\nworking_directory=C:\\Games\n"
+        "startup_command_id=65536\nprefix=pinball\nruntime=wine\n"
+        "architecture=pe32\ngraphics=gdi\n", &profile) == PW_ERR_LIMIT);
+    assert(parse_text(
+        "[application]\nid=pinball\nname=Pinball\n"
+        "executable=C:\\pinball.exe\nworking_directory=C:\\Games\n"
+        "startup_command_id=7x\nprefix=pinball\nruntime=wine\n"
+        "architecture=pe32\ngraphics=gdi\n", &profile) == PW_ERR_MALFORMED);
+    assert(parse_text(
+        "[application]\nid=pinball\nname=Pinball\n"
+        "executable=C:\\pinball.exe\nworking_directory=C:\\Games\n"
+        "startup_command_id=101\nstartup_command_id=102\n"
+        "prefix=pinball\nruntime=wine\narchitecture=pe32\ngraphics=gdi\n",
+        &profile) == PW_ERR_MALFORMED);
 
     before = profile;
     assert(parse_text(

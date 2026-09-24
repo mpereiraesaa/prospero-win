@@ -169,6 +169,7 @@ name = Space Cadet Pinball
 executable = C:\Games\Pinball\PINBALL.EXE
 working_directory = C:\Games\Pinball
 arguments =
+startup_command_id = 101
 prefix = pinball
 runtime = prospero-win-direct
 architecture = pe32
@@ -180,8 +181,11 @@ relative or traversal paths, invalid identifiers and unsupported enum values.
 `arguments` is optional. `pe64` and `dxvk` can be represented in a profile
 before their runtime paths are available; the native profile boot path rejects
 them until those backends exist. Parsing is allocation-free and is covered by
-host tests. The optional runtime boot path and remaining prefix/supervisor
-integration are described below.
+host tests. The `startup_command_id` field is an optional decimal `WM_COMMAND`
+ID queued once when the first window enters the runtime message wait; it
+defaults to zero (no command).
+The Pinball example requests ID 101 to start a game, while Paint does not.
+Without profile mode the legacy Pinball runner retains its ID 101 behavior.
 
 Ready-to-edit examples live in `examples/profiles/pinball.profile` and
 `examples/profiles/paint.profile`; `test_pw_app_profile` parses those exact

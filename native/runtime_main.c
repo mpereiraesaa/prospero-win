@@ -63,6 +63,7 @@ typedef struct NativeServices {
     uint32_t profile_capacity;
     uint64_t waits;
     uint64_t profile_lookups,profile_missing,profile_errors,profile_bytes;
+    uint32_t startup_command_id;
 } NativeServices;
 
 static volatile sig_atomic_t shutdown_requested;
@@ -195,12 +196,15 @@ static int message_wait(void *opaque,uint32_t window,PwUser32QueueEntry *message
     (void)usleep(16667);uint64_t phase=services->waits++;
     *message=(PwUser32QueueEntry){.window=window};
     if(phase==0) {
-        /* A shown top-level window gains focus on Win32. Start a normal game,
-         * but leave every gameplay edge to the physical input adapter. */
+        /* A shown top-level window gains focus on Win32. Profiles may request
+         * one startup command; gameplay remains driven by the input adapter. */
         message->message=0x0007; /* WM_SETFOCUS */
-        PwUser32QueueEntry new_game={.window=window,.message=0x0111,.wparam=101};
-        int status=pw_user32_post_message(services->user32,&new_game);
-        if(status!=PW_OK)return status;
+        if(services->startup_command_id) {
+            PwUser32QueueEntry startup_command={.window=window,.message=0x0111,
+                .wparam=services->startup_command_id};
+            int status=pw_user32_post_message(services->user32,&startup_command);
+            if(status!=PW_OK)return status;
+        }
     }
     return PW_OK;
 }
@@ -460,7 +464,8 @@ int main(int argc,char **argv)
         pad.user_initialize_rc,pad.owns_user_service,pad.user_id,pad.pad_init_rc,
         pad.pad_handle,PW_PAD_PS5_BATCH);
     NativeServices services={.image=&image,.layout=&layout,.files=files,.audio=&audio,
-        .user32=&user32,.profile_buffer=profile_buffer,.profile_capacity=64u*1024u};
+        .user32=&user32,.profile_buffer=profile_buffer,.profile_capacity=64u*1024u,
+        .startup_command_id=PW_USE_APP_PROFILE?app_profile.startup_command_id:101u};
     PwWin32 runtime;char commandline[1024];
     if(PW_USE_APP_PROFILE) {
         status=pw_app_profile_build_command_line(&app_profile,commandline,

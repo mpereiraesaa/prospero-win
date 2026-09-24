@@ -13,6 +13,7 @@ enum {
     FIELD_RUNTIME = 1u << 6,
     FIELD_ARCH = 1u << 7,
     FIELD_GRAPHICS = 1u << 8,
+    FIELD_STARTUP_COMMAND = 1u << 9,
     REQUIRED_FIELDS = FIELD_ID | FIELD_NAME | FIELD_EXE | FIELD_CWD |
                       FIELD_PREFIX | FIELD_RUNTIME | FIELD_ARCH |
                       FIELD_GRAPHICS,
@@ -104,6 +105,24 @@ static int valid_windows_path(const char *path)
     return 1;
 }
 
+static int parse_command_id(const uint8_t *value, size_t length,
+                            uint32_t *command_id)
+{
+    uint32_t parsed = 0u;
+
+    if (!value || !length || !command_id)
+        return PW_ERR_MALFORMED;
+    for (size_t index = 0; index < length; ++index) {
+        if (value[index] < '0' || value[index] > '9')
+            return PW_ERR_MALFORMED;
+        parsed = parsed * 10u + (uint32_t)(value[index] - '0');
+        if (parsed > 0xffffu)
+            return PW_ERR_LIMIT;
+    }
+    *command_id = parsed;
+    return PW_OK;
+}
+
 static int has_exe_extension(const char *path)
 {
     size_t length = strlen(path);
@@ -131,6 +150,7 @@ static int parse_field(PwAppProfile *profile, uint32_t *fields,
     if (!field) field = MATCH_KEY("runtime", FIELD_RUNTIME);
     if (!field) field = MATCH_KEY("architecture", FIELD_ARCH);
     if (!field) field = MATCH_KEY("graphics", FIELD_GRAPHICS);
+    if (!field) field = MATCH_KEY("startup_command_id", FIELD_STARTUP_COMMAND);
 #undef MATCH_KEY
     if (!field)
         return PW_ERR_UNSUPPORTED;
@@ -158,6 +178,10 @@ static int parse_field(PwAppProfile *profile, uint32_t *fields,
     case FIELD_ARGUMENTS:
         status = copy_value(profile->arguments, sizeof(profile->arguments),
                             value, value_end, 1);
+        break;
+    case FIELD_STARTUP_COMMAND:
+        status = parse_command_id(value, (size_t)(value_end - value),
+                                  &profile->startup_command_id);
         break;
     case FIELD_PREFIX:
         status = copy_value(profile->prefix, sizeof(profile->prefix), value,

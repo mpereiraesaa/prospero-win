@@ -36,6 +36,8 @@ typedef struct PwAppProfile {
     char executable[PW_APP_PATH_CAPACITY];
     char working_directory[PW_APP_PATH_CAPACITY];
     char arguments[PW_APP_ARGUMENTS_CAPACITY];
+    /* Optional initial WM_COMMAND queued when the first window enters wait. */
+    uint32_t startup_command_id;
     char prefix[PW_APP_ID_CAPACITY];
     char runtime[PW_APP_RUNTIME_CAPACITY];
     PwAppArchitecture architecture;
