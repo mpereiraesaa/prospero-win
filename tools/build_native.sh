@@ -9,6 +9,7 @@
 #
 # Environment:
 #   PS5_NATIVE_FOUNDATION  boilerplate checkout (default .deps/, pinned)
+#   HOST_CC                host C compiler for the profile stage preflight
 #   PS5LOG_DEV_CONF        private dev.conf copied into the title
 #   PW_STAGE_INPUT         private directory holding the PE images to stage
 #   PW_ROOT_MODULE         root image inside that directory (default sample.exe)
@@ -134,6 +135,31 @@ dist="$root/dist/$title_id"
 rm -rf -- "$build" "$dist"
 mkdir -p "$build/obj" "$build/import-stubs" "$dist/sce_sys" "$dist/sce_module" "$dist/win"
 
+# Stage and validate guest inputs before the costly native link. A profile
+# whose executable is absent must fail here, not after producing a title that
+# can only abort at runtime.
+if [[ $use_sample == 1 ]]; then
+    python3 "$root/tools/make_test_pe.py" --out-dir "$dist/win"
+else
+    shopt -s nullglob
+    for source in "$stage_input"/*; do
+        [[ -f $source ]] || continue
+        name=$(basename -- "$source")
+        cp -- "$source" "$dist/win/${name,,}"
+    done
+    shopt -u nullglob
+fi
+if (( use_app_profile )); then
+    cp -- "$app_profile" "$dist/win/app.profile"
+    "${HOST_CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror \
+        "$root/tools/validate_profile_stage.c" "$root/src/pw_app_profile.c" \
+        -o "$build/validate_profile_stage"
+    "$build/validate_profile_stage" "$dist/win/app.profile" "$dist/win"
+else
+    [[ -f $dist/win/$root_module ]] || {
+        echo "root module $root_module is not staged in $dist/win" >&2; exit 2; }
+fi
+
 cc=(env PS5_PAYLOAD_SDK="$sdk" sh "$foundation/tooling/prospero-clang18")
 common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -I"$root/include" -I"$root/src" -I"$root/native"
@@ -220,26 +246,6 @@ cp "$root/sce_sys/param.json" "$root/sce_sys/icon0.png" "$dist/sce_sys/"
 cp "$foundation/runtime/libc.prx" "$dist/sce_module/libc.prx"
 if [[ -f $dev_conf ]]; then
     cp "$dev_conf" "$dist/dev.conf"
-fi
-
-# Stage the Windows images the gate will map. Names are lowercased because
-# the console image cannot be listed: the provider resolves exact paths only.
-if [[ $use_sample == 1 ]]; then
-    python3 "$root/tools/make_test_pe.py" --out-dir "$dist/win"
-else
-    shopt -s nullglob
-    for source in "$stage_input"/*; do
-        [[ -f $source ]] || continue
-        name=$(basename -- "$source")
-        cp -- "$source" "$dist/win/${name,,}"
-    done
-    shopt -u nullglob
-fi
-if (( use_app_profile )); then
-    cp -- "$app_profile" "$dist/win/app.profile"
-else
-    [[ -f $dist/win/$root_module ]] || {
-        echo "root module $root_module is not staged in $dist/win" >&2; exit 2; }
 fi
 
 # Every dynamic import in the linked ELF is reviewed, per the porting

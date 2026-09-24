@@ -183,6 +183,7 @@ tests/test_trace_x86_entry.py
 tools/make_icon.py
 tools/make_test_pe.py
 tools/validate_pe_map_evidence.py
+tools/validate_profile_stage.c
 tools/validate_runtime_evidence.py
 src/pw_guest_fp.c
 src/pw_guest_fp.h

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Static contract for the native runtime's optional app-profile boot path."""
 
+import subprocess
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,9 +40,44 @@ def test_builder_stages_profile_explicitly() -> None:
     assert "-DPW_USE_APP_PROFILE=\"$use_app_profile\"" in source
     assert '"$dist/win/app.profile"' in source
     assert "profile_bytes <= 8192" in source
+    assert '"$build/validate_profile_stage" "$dist/win/app.profile" "$dist/win"' in source
+    assert source.index('"$build/validate_profile_stage"') < source.index(
+        'for source in "${sources[@]}"')
+
+
+def test_profile_stage_validator_uses_real_manifests() -> None:
+    with tempfile.TemporaryDirectory(prefix="profile-stage-test-") as directory:
+        binary = Path(directory) / "validate-profile-stage"
+        subprocess.run([
+            "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+            str(ROOT / "tools/validate_profile_stage.c"),
+            str(ROOT / "src/pw_app_profile.c"), "-o", str(binary),
+        ], check=True, cwd=ROOT)
+        profiles = (
+            ("pinball.profile", "pinball.exe", "space-cadet-pinball"),
+            ("paint.profile", "mspaint.exe", "paint"),
+        )
+        for manifest, executable, profile_id in profiles:
+            stage = Path(directory) / manifest.removesuffix(".profile")
+            stage.mkdir()
+            (stage / executable).write_bytes(b"staged PE fixture")
+            completed = subprocess.run([
+                str(binary), str(ROOT / "examples/profiles" / manifest),
+                str(stage),
+            ], check=False, capture_output=True, text=True)
+            assert completed.returncode == 0, completed.stderr
+            assert f"id={profile_id}" in completed.stdout
+            (stage / executable).unlink()
+            completed = subprocess.run([
+                str(binary), str(ROOT / "examples/profiles" / manifest),
+                str(stage),
+            ], check=False, capture_output=True, text=True)
+            assert completed.returncode != 0
+            assert executable in completed.stderr
 
 
 if __name__ == "__main__":
     test_native_runtime_loads_only_bounded_supported_profiles()
     test_builder_stages_profile_explicitly()
+    test_profile_stage_validator_uses_real_manifests()
     print("runtime profile selection contract passed")
