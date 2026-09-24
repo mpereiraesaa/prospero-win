@@ -172,7 +172,8 @@ static int profile_int(void *opaque,const char *section,const char *key,uint32_t
     while(total<services->profile_capacity) {
         uint32_t got=0;status=pw_file_ps5_stream_read(services->files,handle,
             services->profile_buffer+total,services->profile_capacity-total,&got);
-        if(status!=PW_OK || !got)break;total+=got;
+        if(status!=PW_OK || !got)break;
+        total+=got;
     }
     if(status==PW_OK && total==services->profile_capacity) {
         uint8_t extra;uint32_t got=0;
@@ -256,40 +257,6 @@ static int app_profile_load(PwFilePs5 *files, uint8_t *buffer,
     if(status==PW_OK && close_status!=PW_OK)status=close_status;
     if(status!=PW_OK)return status;
     return pw_app_profile_parse(buffer,total,profile);
-}
-
-static int app_profile_stage_name(const char *path,char *out,size_t capacity)
-{
-    const char *basename=strrchr(path,'\\');
-    basename=basename?basename+1:path;
-    size_t length=strlen(basename);
-    if(!length || length>=capacity)return PW_ERR_LIMIT;
-    for(size_t index=0;index<length;index++) {
-        unsigned char value=(unsigned char)basename[index];
-        out[index]=(char)(value>='A' && value<='Z'?value+('a'-'A'):value);
-    }
-    out[length]='\0';
-    return PW_OK;
-}
-
-static int app_profile_commandline(const PwAppProfile *profile,char *out,
-                                   size_t capacity)
-{
-    size_t used=0;
-    const char *parts[]={"\"",profile->executable,"\""};
-    for(unsigned part=0;part<3;part++) {
-        size_t length=strlen(parts[part]);
-        if(length>=capacity-used)return PW_ERR_LIMIT;
-        memcpy(out+used,parts[part],length);used+=length;
-    }
-    if(profile->arguments[0]) {
-        size_t length=strlen(profile->arguments);
-        if(used+1u+length>=capacity)return PW_ERR_LIMIT;
-        out[used++]=' ';
-        memcpy(out+used,profile->arguments,length);used+=length;
-    }
-    out[used]='\0';
-    return PW_OK;
 }
 
 static int prefix_registry_path(const PwPrefixLayout *prefix,char *out,
@@ -393,8 +360,8 @@ int main(int argc,char **argv)
         if(app_profile.architecture!=PW_APP_ARCH_PE32 ||
            app_profile.graphics!=PW_APP_GRAPHICS_GDI)
             abort_runtime("profile-capability",PW_ERR_UNSUPPORTED);
-        status=app_profile_stage_name(app_profile.executable,profile_module,
-                                      sizeof(profile_module));
+        status=pw_app_profile_stage_name(&app_profile,profile_module,
+                                         sizeof(profile_module));
         if(status!=PW_OK)abort_runtime("profile-module-name",status);
         root_module=profile_module;
         PwPrefixIo prefix_io;PwPrefixService prefix_service;
@@ -496,7 +463,8 @@ int main(int argc,char **argv)
         .user32=&user32,.profile_buffer=profile_buffer,.profile_capacity=64u*1024u};
     PwWin32 runtime;char commandline[1024];
     if(PW_USE_APP_PROFILE) {
-        status=app_profile_commandline(&app_profile,commandline,sizeof(commandline));
+        status=pw_app_profile_build_command_line(&app_profile,commandline,
+                                                  sizeof(commandline));
         if(status!=PW_OK)abort_runtime("profile-commandline",status);
     } else {
         const char legacy_commandline[]="\"C:\\game\\" PW_ROOT_MODULE "\"";

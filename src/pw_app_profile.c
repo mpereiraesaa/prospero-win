@@ -272,3 +272,67 @@ int pw_app_profile_parse(const uint8_t *bytes, size_t length,
     *profile = parsed;
     return PW_OK;
 }
+
+int pw_app_profile_stage_name(const PwAppProfile *profile, char *output,
+                              size_t capacity)
+{
+    const char *end;
+    const char *basename;
+    size_t length;
+
+    if (!profile || !output || capacity == 0u)
+        return PW_ERR_PRECONDITION;
+    end = memchr(profile->executable, '\0', sizeof(profile->executable));
+    if (!end || end == profile->executable)
+        return PW_ERR_MALFORMED;
+    basename = profile->executable;
+    for (const char *cursor = profile->executable; cursor < end; ++cursor)
+        if (*cursor == '\\')
+            basename = cursor + 1;
+    length = (size_t)(end - basename);
+    if (length == 0u)
+        return PW_ERR_MALFORMED;
+    if (length >= capacity)
+        return PW_ERR_LIMIT;
+    for (size_t index = 0; index < length; ++index)
+        output[index] = (char)lower_ascii((unsigned char)basename[index]);
+    output[length] = '\0';
+    return PW_OK;
+}
+
+int pw_app_profile_build_command_line(const PwAppProfile *profile,
+                                      char *output, size_t capacity)
+{
+    const char *exe_end;
+    const char *args_end;
+    size_t exe_bytes;
+    size_t args_bytes;
+    size_t required;
+    size_t cursor = 0u;
+
+    if (!profile || !output || capacity == 0u)
+        return PW_ERR_PRECONDITION;
+    exe_end = memchr(profile->executable, '\0', sizeof(profile->executable));
+    args_end = memchr(profile->arguments, '\0', sizeof(profile->arguments));
+    if (!exe_end || exe_end == profile->executable || !args_end)
+        return PW_ERR_MALFORMED;
+    exe_bytes = (size_t)(exe_end - profile->executable);
+    args_bytes = (size_t)(args_end - profile->arguments);
+    required = exe_bytes + 2u + 1u;
+    if (args_bytes != 0u)
+        required += args_bytes + 1u;
+    if (required > capacity)
+        return PW_ERR_LIMIT;
+
+    output[cursor++] = '"';
+    memcpy(output + cursor, profile->executable, exe_bytes);
+    cursor += exe_bytes;
+    output[cursor++] = '"';
+    if (args_bytes != 0u) {
+        output[cursor++] = ' ';
+        memcpy(output + cursor, profile->arguments, args_bytes);
+        cursor += args_bytes;
+    }
+    output[cursor] = '\0';
+    return PW_OK;
+}

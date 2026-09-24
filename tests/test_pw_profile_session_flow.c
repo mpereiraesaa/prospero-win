@@ -82,8 +82,28 @@ int main(void)
         load_profile(manifests[i],&profiles[i]);
         assert(profiles[i].architecture==PW_APP_ARCH_PE32);
         assert(profiles[i].graphics==PW_APP_GRAPHICS_GDI);
+        char staged[PW_APP_PATH_CAPACITY],command_line[1024];
+        assert(pw_app_profile_stage_name(&profiles[i],staged,sizeof(staged))==PW_OK);
+        assert(pw_app_profile_build_command_line(&profiles[i],command_line,
+            sizeof(command_line))==PW_OK);
+        assert(strcmp(staged,i==0?"pinball.exe":"mspaint.exe")==0);
+        char expected_command_line[PW_APP_PATH_CAPACITY+3];
+        assert(snprintf(expected_command_line,sizeof(expected_command_line),
+            "\"%s\"",profiles[i].executable)>0);
+        assert(strcmp(command_line,expected_command_line)==0);
+        char too_small[2]={'x','x'};
+        assert(pw_app_profile_build_command_line(&profiles[i],too_small,
+            sizeof(too_small))==PW_ERR_LIMIT);
+        assert(too_small[0]=='x' && too_small[1]=='x');
         assert(pw_prefix_open(&service,profiles[i].prefix,&prefixes[i])==PW_OK);
     }
+    PwAppProfile with_arguments=profiles[0];
+    strcpy(with_arguments.arguments,"-windowed -safe");
+    char command_line[1024];
+    assert(pw_app_profile_build_command_line(&with_arguments,command_line,
+        sizeof(command_line))==PW_OK);
+    assert(strcmp(command_line,
+        "\"C:\\Games\\Pinball\\PINBALL.EXE\" -windowed -safe")==0);
     assert(strcmp(prefixes[0].root,prefixes[1].root)!=0);
 
     PwRuntimeSupervisor supervisor;pw_runtime_supervisor_init(&supervisor);
