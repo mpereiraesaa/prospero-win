@@ -308,3 +308,8 @@ tests/test_pw_wine_thread.c
 tests/test_pw_wine_continue.c
 tests/test_pw_wine_vm_transactions.c
 tools/stage_app_files.py
+data/box86_opcode_catalog.json
+docs/BOX86_OPCODE_CATALOG.md
+tests/test_box86_opcode_catalog.py
+tools/box86_opcode_catalog.py
+tools/pw_x86_decode_probe.c

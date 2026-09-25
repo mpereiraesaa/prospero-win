@@ -7,7 +7,7 @@ BUILD := build/host
 WINE_SOURCE ?= .deps/wine/source
 HEADERS := $(wildcard include/*.h src/*.h native/*.h tests/*.h)
 
-.PHONY: all test wine-check sanitize audit check-whitespace inspect inspect-only sample native native-release clean
+.PHONY: all test wine-check sanitize audit check-whitespace inspect inspect-only sample native native-release box86-catalog clean
 
 all: test
 	$(MAKE) audit check-whitespace
@@ -131,7 +131,17 @@ $(eval $(call test_rule,classify_x86,tools/classify_x86.c src/pw_x86_block.c src
 $(eval $(call test_rule,test_pw_win64,tests/test_pw_win64.c src/pw_exec_probe.c src/pw_win64_call.S $(CORE),))
 $(eval $(call test_rule,inspect_pe,tools/inspect_pe.c $(CORE) src/pw_file_posix.c,))
 $(eval $(call test_rule,bench_dynarec,tools/bench_dynarec.c src/pw_x86_engine.c src/pw_x86_cache.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,-lm))
+$(eval $(call test_rule,pw_x86_decode_probe,tools/pw_x86_decode_probe.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c src/pw_guest_call.c src/pw_vm.c src/pw_vm_posix.c,))
 $(eval $(call test_rule,wine_ntdll_entry,tools/wine_ntdll_entry.c $(WINE_GATE) src/pw_file_posix.c src/pw_wine_seed_services.c src/pw_app_profile.c $(CORE),))
+
+BOX86_SOURCE ?= .deps/box86
+box86-catalog: $(BUILD)/pw_x86_decode_probe
+	@test -f "$(BOX86_SOURCE)/src/emu/x86run.c" || \
+		{ echo 'box86-catalog: set BOX86_SOURCE to the pinned Box86 checkout' >&2; exit 2; }
+	python3 tools/box86_opcode_catalog.py --box86-source "$(BOX86_SOURCE)" \
+		--probe "$(BUILD)/pw_x86_decode_probe" \
+		--json-output data/box86_opcode_catalog.json \
+		--markdown-output docs/BOX86_OPCODE_CATALOG.md
 
 TESTS := test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_pw_gdi test_pw_gdi_abi test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
 	test_pe_export \
@@ -170,6 +180,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/inspect_pe $(BUILD)/trace_x86_ent
 	python3 tests/test_status_vocabulary.py
 	python3 tests/test_support_matrix.py
 	python3 tests/test_classify_x86.py
+	python3 tests/test_box86_opcode_catalog.py
 	python3 tests/test_startup_x87_contract.py
 	python3 tests/test_build_source_oracle.py
 	python3 tests/test_dynarec_bench.py
