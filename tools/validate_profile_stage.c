@@ -28,8 +28,9 @@ int main(int argc, char **argv)
     int too_large;
     int close_error;
 
-    if (argc != 3)
-        return fail("usage: validate_profile_stage PROFILE STAGE_DIR");
+    if (argc != 3 &&
+        !(argc == 4 && strcmp(argv[3], "--root-module") == 0))
+        return fail("usage: validate_profile_stage PROFILE STAGE_DIR [--root-module]");
     file = fopen(argv[1], "rb");
     if (!file)
         return fail("cannot open profile");
@@ -62,7 +63,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    printf("profile stage ready: id=%s executable=%s bytes=%lld\n",
-           profile.id, staged_name, (long long)status.st_size);
+    if (argc == 4)
+        printf("%s\n", staged_name);
+    else
+        printf("profile stage ready: id=%s executable=%s bytes=%lld\n",
+               profile.id, staged_name, (long long)status.st_size);
     return 0;
 }
