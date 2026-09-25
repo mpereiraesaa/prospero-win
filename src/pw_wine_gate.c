@@ -1717,6 +1717,10 @@ int pw_wine_gate_run(const PwWineGateConfig *config, PwWineGateReport *report)
                 ? (uint32_t)root_module_loaded->mapped.actual_base : 0u,
             .dispatcher_thunk = report->boundary_thunk_va,
             .root_module = root_canonical,
+            .image_path = config->process_image_path,
+            .current_directory = config->process_current_directory,
+            .application_directory = config->process_application_directory,
+            .command_line = config->process_command_line,
             .root_application = config->root_application,
         };
 

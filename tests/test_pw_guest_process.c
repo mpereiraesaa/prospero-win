@@ -164,6 +164,34 @@ int main(void)
         assert(backend.release(backend.context, &process.pages[3]) == PW_OK);
         assert(process.mapped == 0u);
     }
+    {
+        PwGuestProcessConfig manifest_config = config;
+        uint8_t *manifest_parameters;
+
+        manifest_config.root_application = 1u;
+        manifest_config.image_path =
+            "C:\\Games\\Pinball\\PINBALL.EXE";
+        manifest_config.current_directory = "C:\\Games\\Pinball";
+        manifest_config.application_directory = "C:\\Games\\Pinball";
+        manifest_config.command_line =
+            "\"C:\\Games\\Pinball\\PINBALL.EXE\" -windowed";
+        assert(pw_guest_process_create(&process, &manifest_config) == PW_OK);
+        manifest_parameters = process.pages[3].write_base;
+        read_wide(manifest_parameters, 0x24u, text, sizeof(text));
+        assert(strcmp(text, "C:\\Games\\Pinball") == 0);
+        read_wide(manifest_parameters, 0x30u, text, sizeof(text));
+        assert(strcmp(text,
+                      "C:\\Games\\Pinball;C:\\windows\\system32;"
+                      "C:\\windows\\system;C:\\windows") == 0);
+        read_wide(manifest_parameters, 0x38u, text, sizeof(text));
+        assert(strcmp(text, "C:\\Games\\Pinball\\PINBALL.EXE") == 0);
+        read_wide(manifest_parameters, 0x40u, text, sizeof(text));
+        assert(strcmp(text,
+                      "\"C:\\Games\\Pinball\\PINBALL.EXE\" -windowed") ==
+               0);
+        assert(pw_guest_process_release(&process, &backend) == PW_OK);
+        assert(backend.release(backend.context, &process.pages[3]) == PW_OK);
+    }
 
     /*
      * The layout: the stack, the TEB, the PEB and the parameters page at the
