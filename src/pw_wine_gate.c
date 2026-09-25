@@ -1574,12 +1574,12 @@ int pw_wine_gate_run(const PwWineGateConfig *config, PwWineGateReport *report)
 
         if (record) {
             record->loaded = 1u;
-            /* The gate opens every module through PW_FILE_RUNTIME; the root
-             * is registered as PW_MODULE_ROOT by the loader, not as a
-             * dependency, so its origin is recorded from here. */
+            /* The root is registered as PW_MODULE_ROOT rather than as a
+             * dependency, so its namespace comes from the run configuration. */
             record->runtime =
                 (uint8_t)(module->kind == PW_MODULE_RUNTIME ||
-                          strcmp(module->name, root_canonical) == 0);
+                          (!config->root_application &&
+                           strcmp(module->name, root_canonical) == 0));
             record->machine = module->machine;
             record->base = (uint32_t)module->mapped.actual_base;
             record->image_bytes = module->mapped.image_bytes;
@@ -1999,6 +1999,9 @@ int pw_wine_gate_run(const PwWineGateConfig *config, PwWineGateReport *report)
     for (uint32_t step = 0; step < budget; ++step) {
         PwX86StepReport progress;
 
+        if (config->root_application && report->main_entry_eip != 0u &&
+            state.eip == report->main_entry_eip)
+            report->main_entry_reached = 1u;
         if (config->trace)
             config->trace(config->trace_context, &state);
         if (report->unixlib_boundary_va != 0u &&

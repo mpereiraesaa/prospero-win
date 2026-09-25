@@ -233,7 +233,13 @@ def test_native_wine_bootstrap_is_opt_in_and_bounded() -> None:
     assert "native/wine_main.c" in builder
     assert "PW_NATIVE_MODE=wine" in builder
     assert "PW_WINE_RUNTIME_DIR is required" in builder
-    assert "PW_APP_PROFILE is not yet supported" in builder
+    assert "PW_APP_PROFILE is required for PW_NATIVE_MODE=wine" in builder
+    assert '"$dist/win/app/app.profile"' in builder
+    assert "--root-module" in builder
+    assert "PW_USE_APP_PROFILE" in entry
+    assert "app_profile.graphics != PW_APP_GRAPHICS_GDI" in entry
+    host_entry = read("tools/wine_ntdll_entry.c")
+    assert "app_profile.graphics != PW_APP_GRAPHICS_GDI" in host_entry
     assert "PW_OUTPUT_SUFFIX" in builder
     assert "--application" in builder
     assert 'PW_STAGE_DIR "/runtime/lib/i386-windows"' in entry

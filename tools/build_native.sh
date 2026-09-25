@@ -54,6 +54,14 @@ output_suffix=${PW_OUTPUT_SUFFIX:-}
 
 [[ $use_sample == 0 || $use_sample == 1 ]] || {
     echo "PW_SAMPLE must be 0 or 1" >&2; exit 2; }
+if [[ $native_mode == wine && -z $app_profile ]]; then
+    if [[ $use_sample == 1 ]]; then
+        app_profile="$root/examples/profiles/wine-sample.profile"
+    else
+        echo "PW_APP_PROFILE is required for PW_NATIVE_MODE=wine" >&2
+        exit 2
+    fi
+fi
 [[ $compat32_transfer == 0 || $compat32_transfer == 1 ]] || {
     echo "PW_COMPAT32_TRANSFER must be 0 or 1" >&2; exit 2; }
 [[ $native_mode == runtime || $native_mode == gate || $native_mode == wine ]] || {
@@ -86,10 +94,6 @@ if [[ -n $app_profile ]]; then
 fi
 if [[ $native_mode == wine && -z $wine_runtime_dir ]]; then
     echo "PW_WINE_RUNTIME_DIR is required for PW_NATIVE_MODE=wine" >&2; exit 2
-fi
-if [[ $native_mode == wine && $use_app_profile == 1 ]]; then
-    echo "PW_APP_PROFILE is not yet supported by the native Wine bootstrap" >&2
-    exit 2
 fi
 if [[ $use_sample == 0 && -z $stage_input ]]; then
     echo "PW_STAGE_INPUT or PW_SAMPLE=1 is required" >&2; exit 2
@@ -169,14 +173,19 @@ if [[ $native_mode == wine ]]; then
         python3 "$root/tools/make_test_pe.py" --application \
             --out-dir "$dist/win/app"
     else
-        shopt -s nullglob
-        for source in "$stage_input"/*; do
-            [[ -f $source ]] || continue
-            name=$(basename -- "$source")
-            cp -- "$source" "$dist/win/app/${name,,}"
-        done
-        shopt -u nullglob
+        python3 "$root/tools/stage_app_files.py" \
+            "$stage_input" "$dist/win/app"
     fi
+    cp -- "$app_profile" "$dist/win/app/app.profile"
+    "${HOST_CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror \
+        "$root/tools/validate_profile_stage.c" "$root/src/pw_app_profile.c" \
+        -o "$build/validate_profile_stage"
+    "$build/validate_profile_stage" \
+        "$dist/win/app/app.profile" "$dist/win/app"
+    root_module=$("$build/validate_profile_stage" \
+        "$dist/win/app/app.profile" "$dist/win/app" --root-module)
+    [[ $root_module =~ ^[A-Za-z0-9_.-]+$ ]] || {
+        echo "app.profile selected an invalid Wine root module" >&2; exit 2; }
     [[ -f $dist/win/app/$root_module ]] || {
         echo "Wine root module $root_module is not staged in $dist/win/app" >&2
         exit 2
@@ -192,10 +201,10 @@ else
     done
     shopt -u nullglob
 fi
-if (( use_app_profile && use_sample == 0 )); then
+if (( use_app_profile && use_sample == 0 )) && [[ $native_mode != wine ]]; then
     python3 "$root/tools/stage_app_files.py" "$stage_input" "$dist/win/app"
 fi
-if (( use_app_profile )); then
+if (( use_app_profile )) && [[ $native_mode != wine ]]; then
     cp -- "$app_profile" "$dist/win/app.profile"
     "${HOST_CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror \
         "$root/tools/validate_profile_stage.c" "$root/src/pw_app_profile.c" \
