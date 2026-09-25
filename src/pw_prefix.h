@@ -9,14 +9,13 @@
 enum {
     PW_PREFIX_ID_CAPACITY = 65,
     PW_PREFIX_PATH_CAPACITY = 512,
-    PW_PREFIX_HIVE_COUNT = 4,
+    PW_PREFIX_HIVE_COUNT = 3,
 };
 
 typedef enum PwPrefixHive {
     PW_PREFIX_HIVE_SYSTEM = 0,
     PW_PREFIX_HIVE_USER = 1,
     PW_PREFIX_HIVE_USERDEF = 2,
-    PW_PREFIX_HIVE_CLASSES = 3,
 } PwPrefixHive;
 
 /* The platform adapter supplies recursive, idempotent directory creation.

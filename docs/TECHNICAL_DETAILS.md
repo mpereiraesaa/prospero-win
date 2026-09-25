@@ -89,8 +89,20 @@ reach the application entry point, return `1` and exit through
 status.
 
 That result is a host integration checkpoint, not evidence of a Wine process
-running on PS5. The native Wine runner, persistent prefix, broader objects and
-waits, thread creation and loader attach-order evidence remain incomplete.
+running on PS5. An opt-in PS5 bootstrap entry now connects the runner to the
+platform file adapter and bounded, process-local registry/object seed services,
+and its native package cross-builds. It has not completed a console run: the
+deployment was restored before launch after the service preflight reported
+`shsrv` unavailable. Persistent prefix hives, manifest-driven executable
+selection, broader objects and waits, thread creation and loader attach-order
+evidence remain incomplete.
+
+The bootstrap build uses `PW_NATIVE_MODE=wine PW_SAMPLE=1` with a validated
+`PW_WINE_RUNTIME_DIR`. `PW_OUTPUT_SUFFIX` isolates its build and package from
+the normal Pinball outputs. Its generated PE32 fixture is staged in
+`/app0/win/app`; the pinned Wine modules and NLS data remain in separate runtime
+directories. The first console run still needs to verify startup and teardown
+from `ps5log/1`; successful cross-compilation alone is not runtime evidence.
 
 ## Application and prefix model
 
@@ -100,7 +112,8 @@ The intended generic workflow separates three things:
 - a user-supplied installed application directory plus a manifest naming its
   EXE, working directory, arguments, architecture and DLL policy; and
 - an isolated persistent prefix containing `drive_c`, Windows directories,
-  registry hives, environment and per-application state.
+  Wine's `system.reg`, `user.reg` and `userdef.reg` stores, environment and
+  per-application state.
 
 Copying an installed folder does not recreate registry values written by an
 installer. Portable applications can run directly; applications with setup

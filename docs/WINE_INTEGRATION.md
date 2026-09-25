@@ -52,9 +52,12 @@ simply be loaded by a PS5 title:
   telemetry and cleanup around Wine's loader lifecycle.
 
 The host gate has already joined the real PE32 runtime graph to the DBT and
-reached an application's entry point. The next boundary is therefore not a new
-Wine build; it is the first equivalent boot through the PS5-native runner and
-platform adapters.
+reached an application's entry point. An opt-in `native/wine_main.c` bootstrap
+now wires that gate to the PS5 file, registry-seed and object services, and the
+cross-build completes. It has not yet been executed on the console; the first
+deployment was rolled back without launching when the console preflight found
+`shsrv` unavailable. This is a native bootstrap build, not yet a generic Wine
+application launcher.
 
 ## Wine reuse boundary
 
@@ -83,9 +86,29 @@ runtime. Every chaining/residency combination reaches the application's own
 entry point, returns `1` and exits through `NtTerminateThread` after the same
 598,404 retired instructions and 2,981 translated blocks. Loader-list and
 attach-order validation remain. The current verified boundary and measurements
-are summarized in [technical details](TECHNICAL_DETAILS.md).
-Staging the runtime inside the title and booting a Wine process remain separate
-hardware acceptance gates.
+are summarized in [technical details](TECHNICAL_DETAILS.md). Runtime staging
+into a native package is implemented; hardware execution of this Wine bootstrap
+remains an acceptance gate.
+
+The native bootstrap can be cross-built with the generated PE32 application
+fixture and a validated runtime:
+
+```sh
+PW_NATIVE_MODE=wine PW_SAMPLE=1 \
+  PW_WINE_RUNTIME_DIR=/path/to/wine-runtime \
+  PW_OUTPUT_SUFFIX=-wine-bootstrap \
+  bash tools/build_native.sh
+```
+
+The isolated output suffix keeps the ordinary `build/native` and
+`dist/PPSA99995` artifacts untouched. The package places the fixture under
+`/app0/win/app`, the Wine DLLs under `/app0/win/runtime/lib/i386-windows`, and
+NLS data under `/app0/win/runtime/nls`. The entry starts at
+`ntdll!LdrInitializeThunk` through the IA-32 DBT and records module identity,
+dispatch counts and cleanup through `ps5log/1`. Its seed registry/object
+services are process-local bootstrap defaults, not persistent Wine prefix
+hives. `PW_APP_PROFILE` is deliberately rejected in this mode until manifest,
+prefix persistence and executable selection are wired to the Wine runner.
 
 DXVK DLLs use the same runtime-distribution mechanism. Per-application DLL
 overrides will be an explicit policy entry, not an accidental filename search
@@ -127,7 +150,7 @@ prefix/<id>/
   drive_c/                 Windows-visible files and user directories
   system.reg               machine registry state
   user.reg                 per-user registry state
-  classes.reg              COM/class registrations when required
+  userdef.reg              default user registry state
 ```
 
 The paths are a logical contract; the final title-storage layout remains a
@@ -137,8 +160,10 @@ executables or inherit DLL overrides from another application.
 `PwPrefixService` now defines the persistent path layout below a configured
 title-owned storage root. It creates the prefix, `drive_c`, Windows system
 directories, Program Files, the default user tree and temp directory through
-an injected recursive directory adapter. It also resolves the four registry
-hive paths. The operation is idempotent and may be retried after partial
+an injected recursive directory adapter. It also resolves Wine 11.17's three
+registry text-file paths: `system.reg`, `user.reg` and `userdef.reg` (there is
+no separate `classes.reg` in this pinned prefix contract). The operation is
+idempotent and may be retried after partial
 directory creation. It does not use host filesystem calls or claim that Wine's
 registry hives are already loaded or persisted; those file operations remain
 the responsibility of the PS5 storage adapter and Wine registry integration.
@@ -148,8 +173,7 @@ creation with `sceKernelStat` and `sceKernelMkdir`; it exposes
 `/download0/prospero-win/prefixes/<id>`. The adapter is host-tested through a
 POSIX test shim. Profile-mode `runtime_main` creates that tree and stores its
 current emulator registry snapshot as `registry.pwrg` under the prefix. This
-is not Wine's four-hive format: the hive paths remain contracts, not
-persistent Wine registry stores.
+is not a Wine registry hive and is not read by the native Wine bootstrap.
 
 `PwRuntimeSupervisor` joins a parsed profile to its prefix and defines the
 single-guest states `IDLE → PREPARING → RUNNING → STOPPING → CLEANUP → IDLE`.
