@@ -227,6 +227,36 @@ def test_runtime_entry_owns_execution_services() -> None:
     assert "ps5log_close(\"runtime-signal\")" in text
 
 
+def test_native_wine_bootstrap_is_opt_in_and_bounded() -> None:
+    builder = read("tools/build_native.sh")
+    entry = read("native/wine_main.c")
+    assert "native/wine_main.c" in builder
+    assert "PW_NATIVE_MODE=wine" in builder
+    assert "PW_WINE_RUNTIME_DIR is required" in builder
+    assert "PW_APP_PROFILE is not yet supported" in builder
+    assert "PW_OUTPUT_SUFFIX" in builder
+    assert "--application" in builder
+    assert 'PW_STAGE_DIR "/runtime/lib/i386-windows"' in entry
+    assert 'PW_STAGE_DIR "/runtime/nls"' in entry
+    for contract in ("pw_wine_seed_registry", "pw_wine_seed_objects",
+                     "pw_wine_seed_user_sid", "pw_file_ps5_wine_file_service",
+                     "LdrInitializeThunk", "host_calls=%llu", "ps5log_close"):
+        assert contract in entry, contract
+    assert '"FreeBSD"' in entry and '"PS5"' in entry
+
+
+def test_prefix_registry_names_match_pinned_wine_contract() -> None:
+    header = read("src/pw_prefix.h")
+    source = read("src/pw_prefix.c")
+    docs = read("docs/WINE_INTEGRATION.md")
+    assert "PW_PREFIX_HIVE_COUNT = 3" in header
+    for name in ("system.reg", "user.reg", "userdef.reg"):
+        assert f'"{name}"' in source
+        assert name in docs
+    assert "classes.reg" not in source
+    assert "no separate `classes.reg`" in docs
+
+
 def test_agc_submit_establishes_a_suspend_point() -> None:
     adapter = read("native/pw_agc_ps5.c")
     stub = read("native/stubs/libSceAgc.c")
