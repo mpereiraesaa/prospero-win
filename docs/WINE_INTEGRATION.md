@@ -281,6 +281,18 @@ but is not required to launch an EXE. Store clients are a substantially later
 multi-process integration target and are not a prerequisite for game
 compatibility.
 
+### Planning the Wine runtime for a PE32 application
+
+`tools/wine_runtime_modules.py <application.exe> --wine-source <pinned-checkout>`
+uses the canonical PE parser to inventory the application's static imports,
+then follows Wine's `dlls/<module>/Makefile.in` `IMPORTS` fields at the pinned
+Wine revision to produce a reproducible PE-DLL dependency closure. Wine import
+libraries are reported separately from runtime DLLs; unknown dependencies fail
+closed. The report records the application hash and Wine commit, and explicitly
+does not claim coverage of delay-loaded or dynamic imports. This is a planning
+artifact: a module being present in the closure does not prove its exports are
+implemented or that the application can run through Wine.
+
 This is the same practical separation used by other constrained Wine ports:
 application files may be copied from an existing installation while registry
 and Windows environment state live in a persistent prefix. The design does not

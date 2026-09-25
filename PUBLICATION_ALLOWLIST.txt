@@ -115,6 +115,7 @@ src/pw_win32.c
 src/pw_win32.h
 src/pw_win32_catalog.h
 tools/make_win32_catalog.py
+tools/wine_runtime_modules.py
 tests/test_pw_win32.c
 tests/test_pw_audio_ps5.c
 tests/test_pw_ini.c
@@ -131,6 +132,7 @@ tests/test_pw_pad_ps5.c
 tests/test_pw_file_posix.c
 tests/test_pw_file_ps5.c
 tests/test_win32_catalog.py
+tests/test_wine_runtime_modules.py
 tests/test_status_vocabulary.py
 tests/test_support_matrix.py
 tests/test_classify_x86.py
