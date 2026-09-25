@@ -84,7 +84,7 @@ static int build_layout(const PwPrefixService *service, const char *id,
                         PwPrefixLayout *layout)
 {
     static const char *const hive_names[PW_PREFIX_HIVE_COUNT] = {
-        "system.reg", "user.reg", "userdef.reg", "classes.reg",
+        "system.reg", "user.reg", "userdef.reg",
     };
     int status;
 

@@ -44,7 +44,10 @@ def main() -> int:
 
     builder = (ROOT / "tools/build_native.sh").read_text()
     require(builder, f"title_id={TITLE_ID}", "tools/build_native.sh")
-    require(builder, 'dist="$root/dist/$title_id"', "tools/build_native.sh")
+    require(builder, 'dist="$root/dist/$title_id$output_suffix"',
+            "tools/build_native.sh")
+    require(builder, 'build="$root/build/native$output_suffix"',
+            "tools/build_native.sh")
 
     validator = (ROOT / "tools/validate_pe_map_evidence.py").read_text()
     require(validator, f'TITLE = "{TITLE_ID}"',

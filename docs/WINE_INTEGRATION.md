@@ -36,7 +36,7 @@ route to this title. Therefore:
 This avoids an unnecessary x86-64-to-x86-64 DBT for modern titles while
 retaining one Windows subsystem for both architectures.
 
-## Why a successful Wine build is not yet a PS5 boot
+## Boundaries beyond the native Wine bootstrap
 
 The pinned Wine build proves that the selected revision, PE modules and runtime
 data can be reproduced. It does not produce a desktop-host Wine binary that can
@@ -51,10 +51,17 @@ simply be loaded by a PS5 title:
 - the native title must own startup, manifest selection, prefix mounting,
   telemetry and cleanup around Wine's loader lifecycle.
 
-The host gate has already joined the real PE32 runtime graph to the DBT and
-reached an application's entry point. The next boundary is therefore not a new
-Wine build; it is the first equivalent boot through the PS5-native runner and
-platform adapters.
+The host gate has joined the real PE32 runtime graph to the DBT and reached an
+application entry point. An opt-in `native/wine_main.c` bootstrap wires that
+gate to the PS5 file, registry-seed and object services. It has now launched on
+the console with the generated profile fixture: the log records three loaded
+images (`app.exe`, `ntdll.dll` and `kernelbase.dll`), 598,649 retired guest
+instructions, 2,981 translated blocks and an explicit DBT-observed transfer to
+the fixture's entrypoint, followed by process termination with guest status
+1. The title closed normally and `ps5log/1` reported a clean BYE, no sequence
+gaps and zero cleanup failures. The runner reports `status=unsupported` for
+the process-terminated gate stop; this validates the generated fixture's path,
+not generic app compatibility.
 
 ## Wine reuse boundary
 
@@ -83,9 +90,50 @@ runtime. Every chaining/residency combination reaches the application's own
 entry point, returns `1` and exits through `NtTerminateThread` after the same
 598,404 retired instructions and 2,981 translated blocks. Loader-list and
 attach-order validation remain. The current verified boundary and measurements
-are summarized in [technical details](TECHNICAL_DETAILS.md).
-Staging the runtime inside the title and booting a Wine process remain separate
-hardware acceptance gates.
+are summarized in [technical details](TECHNICAL_DETAILS.md). Runtime staging
+into a native package is implemented, and a bounded generated-fixture
+bootstrap has been validated on PS5. User-installed applications remain a
+separate compatibility and copy-and-run acceptance gate.
+
+The native bootstrap can be cross-built with the generated PE32 application
+fixture and a validated runtime:
+
+```sh
+PW_NATIVE_MODE=wine PW_SAMPLE=1 \
+  PW_WINE_RUNTIME_DIR=/path/to/wine-runtime \
+  PW_OUTPUT_SUFFIX=-wine-bootstrap \
+  bash tools/build_native.sh
+```
+
+The isolated output suffix keeps the ordinary `build/native` and
+`dist/PPSA99995` artifacts untouched. The package places the fixture under
+`/app0/win/app`, the Wine DLLs under `/app0/win/runtime/lib/i386-windows`, and
+NLS data under `/app0/win/runtime/nls`. The entry starts at
+`ntdll!LdrInitializeThunk` through the IA-32 DBT and records module identity,
+dispatch counts and cleanup through `ps5log/1`. Its seed registry/object
+services are process-local bootstrap defaults, not persistent Wine prefix
+hives. Wine mode requires `PW_APP_PROFILE` for user applications; with
+`PW_SAMPLE=1`, the builder selects the checked-in fixture profile automatically.
+It copies the profile into `/app0/win/app/app.profile`; startup validates it,
+selects the executable by staged basename and supplies its image path, current
+directory, command line and application-first DLL search path to ntdll. The
+current Wine bootstrap accepts PE32 + GDI only. The profile's prefix and runtime
+identifiers are still metadata: they do not yet select persistent prefix hives
+or multiple Wine builds. The generated-profile host gate reaches normal process
+termination across all four DBT configurations (598,430 retired instructions).
+The console smoke is separate hardware evidence for the staged profile,
+Wine initialization and generated application's entrypoint. Persistent prefix
+state, loader-list and TLS attach-order validation, and a user-supplied
+copy-and-run workflow remain open gates.
+
+The manifest-driven staging route was also exercised with `PW_STAGE_INPUT`
+pointing to an external temporary directory containing a generated PE32
+`app.exe` and two DLLs. The builder copied and preflighted that tree with the
+profile and pinned Wine runtime; the host gate then consumed the staged package
+and reached the app entrypoint before its expected fixture exit. The app image
+hash matches the PE32 image recorded by the PS5 smoke. This validates the
+fixture's copy-and-run path, not a user-installed application, installer-created
+registry state or persistent-prefix behavior.
 
 DXVK DLLs use the same runtime-distribution mechanism. Per-application DLL
 overrides will be an explicit policy entry, not an accidental filename search
@@ -127,7 +175,7 @@ prefix/<id>/
   drive_c/                 Windows-visible files and user directories
   system.reg               machine registry state
   user.reg                 per-user registry state
-  classes.reg              COM/class registrations when required
+  userdef.reg              default user registry state
 ```
 
 The paths are a logical contract; the final title-storage layout remains a
@@ -137,8 +185,10 @@ executables or inherit DLL overrides from another application.
 `PwPrefixService` now defines the persistent path layout below a configured
 title-owned storage root. It creates the prefix, `drive_c`, Windows system
 directories, Program Files, the default user tree and temp directory through
-an injected recursive directory adapter. It also resolves the four registry
-hive paths. The operation is idempotent and may be retried after partial
+an injected recursive directory adapter. It also resolves Wine 11.17's three
+registry text-file paths: `system.reg`, `user.reg` and `userdef.reg` (there is
+no separate `classes.reg` in this pinned prefix contract). The operation is
+idempotent and may be retried after partial
 directory creation. It does not use host filesystem calls or claim that Wine's
 registry hives are already loaded or persisted; those file operations remain
 the responsibility of the PS5 storage adapter and Wine registry integration.
@@ -148,8 +198,7 @@ creation with `sceKernelStat` and `sceKernelMkdir`; it exposes
 `/download0/prospero-win/prefixes/<id>`. The adapter is host-tested through a
 POSIX test shim. Profile-mode `runtime_main` creates that tree and stores its
 current emulator registry snapshot as `registry.pwrg` under the prefix. This
-is not Wine's four-hive format: the hive paths remain contracts, not
-persistent Wine registry stores.
+is not a Wine registry hive and is not read by the native Wine bootstrap.
 
 `PwRuntimeSupervisor` joins a parsed profile to its prefix and defines the
 single-guest states `IDLE → PREPARING → RUNNING → STOPPING → CLEANUP → IDLE`.
@@ -215,11 +264,12 @@ The native package builder can also receive
 `PW_WINE_RUNTIME_DIR=/path/to/wine-runtime`. It checks the runtime manifest
 against the pinned Wine commit and module/data hashes, then copies only the
 manifest-listed PE modules and NLS files into `/app0/win/runtime/`, preserving
-the distribution's `lib/i386-windows/` and `nls/` layout. This is package
-staging only: `runtime_main` still launches the direct PE32/GDI runner and
-does not select or execute those Wine modules. Native Wine startup and
-manifest-driven launch through `LdrInitializeThunk` remain separate acceptance
-gates.
+the distribution's `lib/i386-windows/` and `nls/` layout. The `runtime`
+package mode still launches the direct PE32/GDI runner through `runtime_main`
+and does not select these Wine modules. The separate `wine` package mode
+selects its profile and enters `LdrInitializeThunk`; its profile selection and
+process-parameter path has host evidence, while PS5 execution has only been
+validated for the generated profile fixture, not user-installed applications.
 
 The intended launcher selects the manifest's EXE directly for portable
 applications.

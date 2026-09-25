@@ -100,6 +100,7 @@ $(eval $(call test_rule,test_pw_guest_process,tests/test_pw_guest_process.c src/
 $(eval $(call test_rule,test_pw_nt_handle,tests/test_pw_nt_handle.c src/pw_nt_handle.c,))
 $(eval $(call test_rule,test_pw_unixlib,tests/test_pw_unixlib.c src/pw_unixlib.c,))
 $(eval $(call test_rule,test_pw_wine_runner,tests/test_pw_wine_runner.c src/pw_wine_runner.c,))
+$(eval $(call test_rule,test_pw_wine_seed_services,tests/test_pw_wine_seed_services.c src/pw_wine_seed_services.c,))
 $(eval $(call test_rule,test_pw_wine_unixlib,tests/test_pw_wine_unixlib.c src/pw_wine_unixlib.c src/pw_unixlib.c src/pw_unix_call.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c src/pw_guest_call.c src/pw_vm.c src/pw_vm_posix.c,))
 $(eval $(call test_rule,test_pw_wine_handle,tests/test_pw_wine_handle.c src/pw_wine_handle.c src/pw_nt_handle.c,))
 $(eval $(call test_rule,test_pw_wine_path,tests/test_pw_wine_path.c src/pw_wine_path.c,))
@@ -130,12 +131,12 @@ $(eval $(call test_rule,classify_x86,tools/classify_x86.c src/pw_x86_block.c src
 $(eval $(call test_rule,test_pw_win64,tests/test_pw_win64.c src/pw_exec_probe.c src/pw_win64_call.S $(CORE),))
 $(eval $(call test_rule,inspect_pe,tools/inspect_pe.c $(CORE) src/pw_file_posix.c,))
 $(eval $(call test_rule,bench_dynarec,tools/bench_dynarec.c src/pw_x86_engine.c src/pw_x86_cache.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,-lm))
-$(eval $(call test_rule,wine_ntdll_entry,tools/wine_ntdll_entry.c $(WINE_GATE) src/pw_file_posix.c $(CORE),))
+$(eval $(call test_rule,wine_ntdll_entry,tools/wine_ntdll_entry.c $(WINE_GATE) src/pw_file_posix.c src/pw_wine_seed_services.c src/pw_app_profile.c $(CORE),))
 
 TESTS := test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_pw_gdi test_pw_gdi_abi test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
 	test_pe_export \
 	test_pw_module_name test_pw_file_posix test_pw_file_ps5 test_pw_vm test_pw_map test_pw_loader \
-	test_pw_segment test_pw_compat32 test_pw_guest_vm test_pw_guest_process test_pw_nt_handle test_pw_unixlib test_pw_wine_runner test_pw_wine_unixlib test_pw_wine_handle test_pw_wine_path test_pw_gate test_pw_win64 test_pw_x86_block test_pw_x86_cache test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_lazyflags test_pw_guest_call test_pw_tls test_pw_import_bind test_pw_export test_pw_wine_gate test_pw_wine_gate_bridge test_pw_wine_file_service test_pw_wine_registry test_pw_wine_objects test_pw_wine_process_info test_pw_wine_virtual_memory test_pw_wine_section test_pw_wine_thread test_pw_wine_continue test_pw_wine_vm_transactions test_pw_wine_teardown test_pw_win32 test_pw_x87 test_pw_audio_ps5 test_pw_agc_submit_lifecycle test_pw_pad_ps5 test_pw_state_ps5
+	test_pw_segment test_pw_compat32 test_pw_guest_vm test_pw_guest_process test_pw_nt_handle test_pw_unixlib test_pw_wine_runner test_pw_wine_seed_services test_pw_wine_unixlib test_pw_wine_handle test_pw_wine_path test_pw_gate test_pw_win64 test_pw_x86_block test_pw_x86_cache test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_lazyflags test_pw_guest_call test_pw_tls test_pw_import_bind test_pw_export test_pw_wine_gate test_pw_wine_gate_bridge test_pw_wine_file_service test_pw_wine_registry test_pw_wine_objects test_pw_wine_process_info test_pw_wine_virtual_memory test_pw_wine_section test_pw_wine_thread test_pw_wine_continue test_pw_wine_vm_transactions test_pw_wine_teardown test_pw_win32 test_pw_x87 test_pw_audio_ps5 test_pw_agc_submit_lifecycle test_pw_pad_ps5 test_pw_state_ps5
 
 # The Python suites drive the built binaries: the evidence validator is
 # tested against a transcript the real gate produced, and the Python PE

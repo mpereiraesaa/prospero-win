@@ -3,10 +3,27 @@
 
 #include <string.h>
 
+enum { PW_GUEST_PROCESS_TEXT_CAPACITY = 1024u };
+
 /* Writes one UTF-16LE string into the page and returns its offset. */
-static uint32_t write_wide(uint8_t *page, uint32_t *cursor, const char *ascii)
+static int write_wide(uint8_t *page, uint32_t page_bytes, uint32_t *cursor,
+                      const char *ascii, uint32_t *offset)
 {
-    const uint32_t offset = *cursor;
+    size_t length;
+
+    if (!page || !cursor || !ascii || !offset)
+        return PW_ERR_PRECONDITION;
+    length = strlen(ascii);
+    if (length == 0u || length > (UINT16_MAX / 2u) - 1u ||
+        (uint64_t)*cursor + (length + 1u) * 2u > page_bytes)
+        return PW_ERR_LIMIT;
+    for (size_t index = 0u; index < length; ++index) {
+        const unsigned char value = (unsigned char)ascii[index];
+
+        if (value < 0x20u || value > 0x7eu)
+            return PW_ERR_UNSUPPORTED;
+    }
+    *offset = *cursor;
 
     while (*ascii != '\0') {
         page[*cursor] = (uint8_t)*ascii++;
@@ -16,7 +33,7 @@ static uint32_t write_wide(uint8_t *page, uint32_t *cursor, const char *ascii)
     page[*cursor] = 0u;
     page[*cursor + 1u] = 0u;
     *cursor += 2u;
-    return offset;
+    return PW_OK;
 }
 
 static void set_unicode_string(uint8_t *page, uint32_t field, uint32_t offset,
@@ -54,6 +71,10 @@ static void set_unicode_string(uint8_t *page, uint32_t field, uint32_t offset,
  */
 static int populate_parameters(uint8_t *page, uint32_t page_bytes,
                                const char *root_module, uint8_t root_application,
+                               const char *image_path_input,
+                               const char *current_directory_input,
+                               const char *application_directory_input,
+                               const char *command_line_input,
                                uint32_t *length_out)
 {
     /*
@@ -83,11 +104,18 @@ static int populate_parameters(uint8_t *page, uint32_t page_bytes,
         "C:\\;C:\\windows\\system32;C:\\windows\\system;C:\\windows";
     static const char system_dll_path[] =
         "C:\\windows\\system32;C:\\windows\\system;C:\\windows";
-    const char *directory = root_application ? application : system32;
-    const char *dll_path = root_application ? application_dll_path
-                                            : system_dll_path;
+    const char *default_directory = root_application ? application : system32;
+    const char *current_directory = current_directory_input
+        ? current_directory_input : default_directory;
+    const char *application_directory = application_directory_input
+        ? application_directory_input : application;
+    const char *default_dll_path = root_application ? application_dll_path
+                                                    : system_dll_path;
     uint32_t cursor = 0x100u;
-    char image_path[128];
+    char image_path[PW_GUEST_PROCESS_TEXT_CAPACITY];
+    char dll_path[PW_GUEST_PROCESS_TEXT_CAPACITY];
+    const char *command_line;
+    int status;
     uint32_t current_offset;
     uint32_t dll_offset;
     uint32_t image_offset;
@@ -96,11 +124,34 @@ static int populate_parameters(uint8_t *page, uint32_t page_bytes,
 
     if (!page || page_bytes < 4096u || !root_module)
         return PW_ERR_PRECONDITION;
-    if (strlen(root_module) + strlen(directory) + 1u > sizeof(image_path))
+    if (image_path_input) {
+        if (strlen(image_path_input) >= sizeof(image_path))
+            return PW_ERR_LIMIT;
+        memcpy(image_path, image_path_input, strlen(image_path_input) + 1u);
+    } else if (strlen(root_module) + strlen(default_directory) + 1u >
+               sizeof(image_path)) {
         return PW_ERR_LIMIT;
-    memcpy(image_path, directory, strlen(directory));
-    memcpy(image_path + strlen(directory), root_module,
-           strlen(root_module) + 1u);
+    } else {
+        memcpy(image_path, default_directory, strlen(default_directory));
+        memcpy(image_path + strlen(default_directory), root_module,
+               strlen(root_module) + 1u);
+    }
+    if (application_directory_input) {
+        const size_t directory_length = strlen(application_directory);
+        const size_t system_length = strlen(";C:\\windows\\system32;C:\\windows\\system;C:\\windows");
+
+        if (directory_length + system_length + 1u > sizeof(dll_path))
+            return PW_ERR_LIMIT;
+        memcpy(dll_path, application_directory, directory_length);
+        memcpy(dll_path + directory_length,
+               ";C:\\windows\\system32;C:\\windows\\system;C:\\windows",
+               system_length + 1u);
+    } else {
+        if (strlen(default_dll_path) >= sizeof(dll_path))
+            return PW_ERR_LIMIT;
+        memcpy(dll_path, default_dll_path, strlen(default_dll_path) + 1u);
+    }
+    command_line = command_line_input ? command_line_input : image_path;
 
     /*
      * Every string here is published the way Windows stores it, with room for
@@ -112,19 +163,32 @@ static int populate_parameters(uint8_t *page, uint32_t page_bytes,
      * The current directory is the image's own directory, which is also the
      * first entry of the search path above.
      */
-    current_offset = write_wide(page, &cursor, directory);
-    dll_offset = write_wide(page, &cursor, dll_path);
-    image_offset = write_wide(page, &cursor, image_path);
-    command_offset = write_wide(page, &cursor, image_path);
-    environment_offset = write_wide(page, &cursor, "SystemRoot=C:\\windows");
+    status = write_wide(page, page_bytes, &cursor, current_directory,
+                        &current_offset);
+    if (status != PW_OK)
+        return status;
+    status = write_wide(page, page_bytes, &cursor, dll_path, &dll_offset);
+    if (status != PW_OK)
+        return status;
+    status = write_wide(page, page_bytes, &cursor, image_path, &image_offset);
+    if (status != PW_OK)
+        return status;
+    status = write_wide(page, page_bytes, &cursor, command_line,
+                        &command_offset);
+    if (status != PW_OK)
+        return status;
+    status = write_wide(page, page_bytes, &cursor, "SystemRoot=C:\\windows",
+                        &environment_offset);
+    if (status != PW_OK)
+        return status;
     page[cursor] = 0u;
     page[cursor + 1u] = 0u;
     cursor += 2u;
 
-    set_unicode_string(page, 0x24u, current_offset, directory);
+    set_unicode_string(page, 0x24u, current_offset, current_directory);
     set_unicode_string(page, 0x30u, dll_offset, dll_path);
     set_unicode_string(page, 0x38u, image_offset, image_path);
-    set_unicode_string(page, 0x40u, command_offset, image_path);
+    set_unicode_string(page, 0x40u, command_offset, command_line);
     {
         const uint32_t base = (uint32_t)(uintptr_t)page;
         const uint32_t environment = base + environment_offset;
@@ -262,6 +326,10 @@ int pw_guest_process_create(PwGuestProcess *process,
                             process->layout.parameters_bytes,
                             config->root_module,
                             config->root_application,
+                            config->image_path,
+                            config->current_directory,
+                            config->application_directory,
+                            config->command_line,
                             &process->layout.parameters_length) != PW_OK)
         goto failed;
 

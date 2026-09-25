@@ -88,9 +88,28 @@ reach the application entry point, return `1` and exit through
 598,404 guest instructions over 2,981 translated blocks and return the same
 status.
 
-That result is a host integration checkpoint, not evidence of a Wine process
-running on PS5. The native Wine runner, persistent prefix, broader objects and
-waits, thread creation and loader attach-order evidence remain incomplete.
+That result is host integration evidence. Separately, the opt-in PS5 bootstrap
+has launched the profile-selected generated fixture through the platform file
+adapter and process-local registry/object seed services. The hardware log
+records `app.exe`, `ntdll.dll` and `kernelbase.dll`, 598,649 retired guest
+instructions, 2,981 blocks, and an explicit DBT-observed transfer to the
+fixture's entrypoint before process termination with guest status 1. Its
+`ps5log/1` manifest is clean (eight records, no gaps, clean BYE); the transcript
+SHA-256 is
+`5af8bdd68f3afe7461742d6cf26ef741c95fb4c9cb7bcfed9ba9929a009dafd5`. The gate
+reports `status=unsupported` because process termination is not currently an
+accepted stop. This validates the generated profile through its entrypoint and
+exit, not compatibility with arbitrary Windows programs. Persistent prefix
+hives, broader objects and waits, thread creation and loader attach-order
+evidence remain incomplete.
+
+The bootstrap build uses `PW_NATIVE_MODE=wine PW_SAMPLE=1` with a validated
+`PW_WINE_RUNTIME_DIR`. `PW_OUTPUT_SUFFIX` isolates its build and package from
+the normal Pinball outputs. Its generated PE32 fixture is staged in
+`/app0/win/app`; the pinned Wine modules and NLS data remain in separate runtime
+directories. Startup and teardown have now been observed on hardware through
+`ps5log/1`; the run does not validate persistent prefix behavior or a copied,
+user-installed application.
 
 ## Application and prefix model
 
@@ -100,7 +119,8 @@ The intended generic workflow separates three things:
 - a user-supplied installed application directory plus a manifest naming its
   EXE, working directory, arguments, architecture and DLL policy; and
 - an isolated persistent prefix containing `drive_c`, Windows directories,
-  registry hives, environment and per-application state.
+  Wine's `system.reg`, `user.reg` and `userdef.reg` stores, environment and
+  per-application state.
 
 Copying an installed folder does not recreate registry values written by an
 installer. Portable applications can run directly; applications with setup

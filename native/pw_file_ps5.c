@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -41,6 +42,15 @@ static int join(char *out, size_t out_bytes, const char *directory,
     return PW_OK;
 }
 
+static PwWineFileStatus wine_errno_status(int error)
+{
+    if (error == EACCES || error == EPERM)
+        return PW_WINE_FILE_DENIED;
+    if (error == ENOENT || error == ENOTDIR)
+        return PW_WINE_FILE_NOT_FOUND;
+    return PW_WINE_FILE_ERROR;
+}
+
 int pw_file_ps5_init(PwFilePs5 *state, const char *directory)
 {
     size_t length;
@@ -49,6 +59,8 @@ int pw_file_ps5_init(PwFilePs5 *state, const char *directory)
         return PW_ERR_PRECONDITION;
     memset(state, 0, sizeof(*state));
     for(unsigned index=0;index<8;index++)state->streams[index]=-1;
+    for(unsigned index=0;index<PW_FILE_PS5_MAX_WINE_OPEN;index++)
+        state->wine_files[index]=-1;
     length = strlen(directory);
     if (length == 0u || length > PW_PATH_MAX)
         return PW_ERR_LIMIT;
@@ -70,6 +82,22 @@ int pw_file_ps5_set_runtime_directory(PwFilePs5 *state,
     memcpy(state->runtime_directory, directory, length);
     state->runtime_directory[length] = '\0';
     state->runtime_configured = 1u;
+    return PW_OK;
+}
+
+int pw_file_ps5_set_runtime_nls_directory(PwFilePs5 *state,
+                                           const char *directory)
+{
+    size_t length;
+
+    if (!state || !directory)
+        return PW_ERR_PRECONDITION;
+    length = strlen(directory);
+    if (length == 0u || length > PW_PATH_MAX)
+        return PW_ERR_LIMIT;
+    memcpy(state->runtime_nls_directory, directory, length);
+    state->runtime_nls_directory[length] = '\0';
+    state->runtime_nls_configured = 1u;
     return PW_OK;
 }
 
@@ -391,6 +419,145 @@ int pw_file_ps5_provider(PwFilePs5 *state, PwFileProvider *provider)
     provider->open = provider_open;
     provider->close = provider_close;
     provider->open_namespace = provider_open_namespace;
+    return PW_OK;
+}
+
+static int wine_name_valid(const char *name)
+{
+    size_t length = 0u;
+
+    if (!name || !name[0])
+        return 0;
+    while (length <= PW_WINE_GATE_MAX_PATH && name[length]) {
+        const unsigned char value = (unsigned char)name[length];
+
+        if (value < 0x20u || value == 0x7fu || value == '/' ||
+            value == '\\' || value == ':')
+            return 0;
+        ++length;
+    }
+    return length <= PW_WINE_GATE_MAX_PATH &&
+           strcmp(name, ".") != 0 && strcmp(name, "..") != 0;
+}
+
+static PwWineFileStatus wine_file_try_open(PwFilePs5 *state,
+                                           const char *directory,
+                                           const char *name,
+                                           unsigned slot, void **token,
+                                           uint64_t *size)
+{
+    char path[2u * (PW_PATH_MAX + 1u)];
+    struct stat status;
+    int descriptor;
+
+    if (!directory || !directory[0] || join(path, sizeof(path), directory,
+                                            name) != PW_OK)
+        return PW_WINE_FILE_ERROR;
+    if (sceKernelStat(path, &status) != 0)
+        return wine_errno_status(errno);
+    if (!S_ISREG(status.st_mode) || status.st_size < 0)
+        return PW_WINE_FILE_ERROR;
+    descriptor = sceKernelOpen(path, O_RDONLY, 0);
+    if (descriptor < 0)
+        return wine_errno_status(errno);
+    state->wine_files[slot] = descriptor;
+    state->wine_file_sizes[slot] = (uint64_t)status.st_size;
+    *size = (uint64_t)status.st_size;
+    *token = &state->wine_files[slot];
+    return PW_WINE_FILE_OK;
+}
+
+static PwWineFileStatus wine_file_open(void *context,
+                                       PwFileNamespace file_namespace,
+                                       const char *name, uint64_t *size,
+                                       void **token)
+{
+    PwFilePs5 *state = context;
+    unsigned slot = PW_FILE_PS5_MAX_WINE_OPEN;
+    PwWineFileStatus status;
+
+    if (!state || !size || !token || !wine_name_valid(name))
+        return PW_WINE_FILE_DENIED;
+    for (unsigned index = 0u; index < PW_FILE_PS5_MAX_WINE_OPEN; ++index) {
+        if (state->wine_files[index] < 0) {
+            slot = index;
+            break;
+        }
+    }
+    if (slot == PW_FILE_PS5_MAX_WINE_OPEN)
+        return PW_WINE_FILE_ERROR;
+    if (file_namespace == PW_FILE_APPLICATION)
+        return wine_file_try_open(state, state->directory, name, slot,
+                                  token, size);
+    if (file_namespace != PW_FILE_RUNTIME || !state->runtime_configured)
+        return PW_WINE_FILE_NOT_FOUND;
+    if (state->runtime_nls_configured) {
+        status = wine_file_try_open(state, state->runtime_nls_directory,
+                                    name, slot, token, size);
+        if (status == PW_WINE_FILE_OK || status == PW_WINE_FILE_DENIED)
+            return status;
+    }
+    return wine_file_try_open(state, state->runtime_directory, name, slot,
+                              token, size);
+}
+
+static int wine_file_slot(PwFilePs5 *state, void *token, unsigned *slot)
+{
+    if (!state || !token || !slot)
+        return PW_ERR_PRECONDITION;
+    for (unsigned index = 0u; index < PW_FILE_PS5_MAX_WINE_OPEN; ++index) {
+        if (token == &state->wine_files[index] &&
+            state->wine_files[index] >= 0) {
+            *slot = index;
+            return PW_OK;
+        }
+    }
+    return PW_ERR_NOT_FOUND;
+}
+
+static PwWineFileStatus wine_file_read(void *context, void *token,
+                                       uint64_t offset, void *bytes,
+                                       uint32_t size, uint32_t *read_bytes)
+{
+    PwFilePs5 *state = context;
+    unsigned slot;
+    off_t result_offset;
+    ssize_t result;
+
+    if (!bytes || !read_bytes || wine_file_slot(state, token, &slot) != PW_OK ||
+        offset > (uint64_t)INT64_MAX)
+        return PW_WINE_FILE_ERROR;
+    result_offset = lseek(state->wine_files[slot], (off_t)offset, SEEK_SET);
+    if (result_offset < 0 || (uint64_t)result_offset != offset)
+        return PW_WINE_FILE_ERROR;
+    result = read(state->wine_files[slot], bytes, size);
+    if (result < 0)
+        return PW_WINE_FILE_ERROR;
+    *read_bytes = (uint32_t)result;
+    return PW_WINE_FILE_OK;
+}
+
+static void wine_file_close(void *context, void *token)
+{
+    PwFilePs5 *state = context;
+    unsigned slot;
+
+    if (wine_file_slot(state, token, &slot) != PW_OK)
+        return;
+    (void)sceKernelClose(state->wine_files[slot]);
+    state->wine_files[slot] = -1;
+    state->wine_file_sizes[slot] = 0u;
+}
+
+int pw_file_ps5_wine_file_service(PwFilePs5 *state,
+                                  PwWineFileService *service)
+{
+    if (!state || !service)
+        return PW_ERR_PRECONDITION;
+    service->context = state;
+    service->open = wine_file_open;
+    service->read = wine_file_read;
+    service->close = wine_file_close;
     return PW_OK;
 }
 

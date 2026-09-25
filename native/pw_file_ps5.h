@@ -17,9 +17,11 @@
 #define PROSPERO_WIN_FILE_PS5_H
 
 #include "../include/prospero_win_file.h"
+#include "../src/pw_wine_gate.h"
 
 enum {
     PW_FILE_PS5_MAX_OPEN = 32,
+    PW_FILE_PS5_MAX_WINE_OPEN = 32,
     PW_FILE_PS5_MAX_BYTES = 192u * 1024u * 1024u,
 };
 
@@ -31,13 +33,17 @@ typedef struct PwFilePs5Mapping {
 typedef struct PwFilePs5 {
     char directory[PW_PATH_MAX + 1];
     char runtime_directory[PW_PATH_MAX + 1];
+    char runtime_nls_directory[PW_PATH_MAX + 1];
     uint8_t runtime_configured;
+    uint8_t runtime_nls_configured;
     uint32_t opens;
     uint32_t closes;
     uint32_t failures;
     uint64_t bytes_read;
     PwFilePs5Mapping mappings[PW_FILE_PS5_MAX_OPEN];
     int streams[8];
+    int wine_files[PW_FILE_PS5_MAX_WINE_OPEN];
+    uint64_t wine_file_sizes[PW_FILE_PS5_MAX_WINE_OPEN];
 } PwFilePs5;
 
 /* Result of the boot-time filesystem smoke test. */
@@ -57,8 +63,12 @@ int pw_file_ps5_init(PwFilePs5 *state, const char *directory);
 /* Configures the independent, exact-name Wine/DXVK distribution root. */
 int pw_file_ps5_set_runtime_directory(PwFilePs5 *state,
                                       const char *directory);
+int pw_file_ps5_set_runtime_nls_directory(PwFilePs5 *state,
+                                           const char *directory);
 
 int pw_file_ps5_provider(PwFilePs5 *state, PwFileProvider *provider);
+int pw_file_ps5_wine_file_service(PwFilePs5 *state,
+                                  PwWineFileService *service);
 
 /*
  * Calls sceKernelOpen, sceKernelStat, read, lseek and sceKernelClose on one

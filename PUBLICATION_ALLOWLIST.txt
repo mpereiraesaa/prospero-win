@@ -22,6 +22,7 @@ LICENSING.md
 Makefile
 native/main.c
 native/runtime_main.c
+native/wine_main.c
 native/pw_agc_ps5.c
 native/pw_agc_ps5.h
 native/pw_agc_submit_lifecycle.c
@@ -120,6 +121,7 @@ tests/test_pw_ini.c
 tests/test_pw_app_profile.c
 examples/profiles/pinball.profile
 examples/profiles/paint.profile
+examples/profiles/wine-sample.profile
 tests/test_pw_prefix.c
 tests/test_pw_prefix_ps5.c
 tests/test_pw_profile_session_flow.c
@@ -236,6 +238,8 @@ src/pw_wine_unixlib.c
 src/pw_wine_unixlib.h
 src/pw_wine_runner.c
 src/pw_wine_runner.h
+src/pw_wine_seed_services.c
+src/pw_wine_seed_services.h
 src/pw_guest_process.h
 src/pw_guest_vm.c
 src/pw_guest_vm.h
@@ -273,6 +277,7 @@ tests/test_pw_guest_process.c
 tests/test_pw_nt_handle.c
 tests/test_pw_unixlib.c
 tests/test_pw_wine_runner.c
+tests/test_pw_wine_seed_services.c
 tests/test_pw_wine_unixlib.c
 tests/test_pw_wine_handle.c
 tests/test_pw_wine_path.c
