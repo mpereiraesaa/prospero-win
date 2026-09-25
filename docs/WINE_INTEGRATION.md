@@ -36,7 +36,7 @@ route to this title. Therefore:
 This avoids an unnecessary x86-64-to-x86-64 DBT for modern titles while
 retaining one Windows subsystem for both architectures.
 
-## Why a successful Wine build is not yet a PS5 boot
+## Boundaries beyond the native Wine bootstrap
 
 The pinned Wine build proves that the selected revision, PE modules and runtime
 data can be reproduced. It does not produce a desktop-host Wine binary that can
@@ -51,13 +51,17 @@ simply be loaded by a PS5 title:
 - the native title must own startup, manifest selection, prefix mounting,
   telemetry and cleanup around Wine's loader lifecycle.
 
-The host gate has already joined the real PE32 runtime graph to the DBT and
-reached an application's entry point. An opt-in `native/wine_main.c` bootstrap
-now wires that gate to the PS5 file, registry-seed and object services, and the
-cross-build completes. It has not yet been executed on the console; the first
-deployment was rolled back without launching when the console preflight found
-`shsrv` unavailable. This is a native bootstrap build, not yet a generic Wine
-application launcher.
+The host gate has joined the real PE32 runtime graph to the DBT and reached an
+application entry point. An opt-in `native/wine_main.c` bootstrap wires that
+gate to the PS5 file, registry-seed and object services. It has now launched on
+the console with the generated profile fixture: the log records three loaded
+images (`app.exe`, `ntdll.dll` and `kernelbase.dll`), 598,649 retired guest
+instructions, 2,981 translated blocks and an explicit DBT-observed transfer to
+the fixture's entrypoint, followed by process termination with guest status
+1. The title closed normally and `ps5log/1` reported a clean BYE, no sequence
+gaps and zero cleanup failures. The runner reports `status=unsupported` for
+the process-terminated gate stop; this validates the generated fixture's path,
+not generic app compatibility.
 
 ## Wine reuse boundary
 
@@ -115,9 +119,11 @@ directory, command line and application-first DLL search path to ntdll. The
 current Wine bootstrap accepts PE32 + GDI only. The profile's prefix and runtime
 identifiers are still metadata: they do not yet select persistent prefix hives
 or multiple Wine builds. The generated-profile host gate reaches normal process
-termination across all four DBT configurations (598,430 retired instructions);
-that is host evidence only, not console acceptance. Persistent prefix state and
-hardware execution remain open gates.
+termination across all four DBT configurations (598,430 retired instructions).
+The console smoke is separate hardware evidence for the staged profile,
+Wine initialization and generated application's entrypoint. Persistent prefix
+state, loader-list and TLS attach-order validation, and a user-supplied
+copy-and-run workflow remain open gates.
 
 DXVK DLLs use the same runtime-distribution mechanism. Per-application DLL
 overrides will be an explicit policy entry, not an accidental filename search
