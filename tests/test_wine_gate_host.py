@@ -13,6 +13,7 @@ tests/test_wine_ntdll_evidence.py.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "build/host/wine_ntdll_entry"
-DISTRIBUTION = ROOT / ".deps/wine-runtime"
+DISTRIBUTION = Path(os.environ.get(
+    "PW_WINE_RUNTIME_DIR", ROOT / ".deps/wine-runtime"))
 MANIFEST = DISTRIBUTION / "wine-runtime-manifest.json"
 VALIDATOR = ROOT / "tools/validate_wine_ntdll_evidence.py"
 MODES = ("1,1,1", "0,0,0", "1,0,1", "0,1,0")
