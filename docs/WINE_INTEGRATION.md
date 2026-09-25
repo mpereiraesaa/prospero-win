@@ -107,8 +107,17 @@ NLS data under `/app0/win/runtime/nls`. The entry starts at
 `ntdll!LdrInitializeThunk` through the IA-32 DBT and records module identity,
 dispatch counts and cleanup through `ps5log/1`. Its seed registry/object
 services are process-local bootstrap defaults, not persistent Wine prefix
-hives. `PW_APP_PROFILE` is deliberately rejected in this mode until manifest,
-prefix persistence and executable selection are wired to the Wine runner.
+hives. Wine mode requires `PW_APP_PROFILE` for user applications; with
+`PW_SAMPLE=1`, the builder selects the checked-in fixture profile automatically.
+It copies the profile into `/app0/win/app/app.profile`; startup validates it,
+selects the executable by staged basename and supplies its image path, current
+directory, command line and application-first DLL search path to ntdll. The
+current Wine bootstrap accepts PE32 + GDI only. The profile's prefix and runtime
+identifiers are still metadata: they do not yet select persistent prefix hives
+or multiple Wine builds. The generated-profile host gate reaches normal process
+termination across all four DBT configurations (598,430 retired instructions);
+that is host evidence only, not console acceptance. Persistent prefix state and
+hardware execution remain open gates.
 
 DXVK DLLs use the same runtime-distribution mechanism. Per-application DLL
 overrides will be an explicit policy entry, not an accidental filename search
@@ -239,11 +248,12 @@ The native package builder can also receive
 `PW_WINE_RUNTIME_DIR=/path/to/wine-runtime`. It checks the runtime manifest
 against the pinned Wine commit and module/data hashes, then copies only the
 manifest-listed PE modules and NLS files into `/app0/win/runtime/`, preserving
-the distribution's `lib/i386-windows/` and `nls/` layout. This is package
-staging only: `runtime_main` still launches the direct PE32/GDI runner and
-does not select or execute those Wine modules. Native Wine startup and
-manifest-driven launch through `LdrInitializeThunk` remain separate acceptance
-gates.
+the distribution's `lib/i386-windows/` and `nls/` layout. The `runtime`
+package mode still launches the direct PE32/GDI runner through `runtime_main`
+and does not select these Wine modules. The separate `wine` package mode
+selects its profile and enters `LdrInitializeThunk`; its profile selection and
+process-parameter path has host evidence, while PS5 execution remains an
+acceptance gate.
 
 The intended launcher selects the manifest's EXE directly for portable
 applications.

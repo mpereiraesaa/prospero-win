@@ -89,13 +89,15 @@ reach the application entry point, return `1` and exit through
 status.
 
 That result is a host integration checkpoint, not evidence of a Wine process
-running on PS5. An opt-in PS5 bootstrap entry now connects the runner to the
-platform file adapter and bounded, process-local registry/object seed services,
-and its native package cross-builds. It has not completed a console run: the
-deployment was restored before launch after the service preflight reported
-`shsrv` unavailable. Persistent prefix hives, manifest-driven executable
-selection, broader objects and waits, thread creation and loader attach-order
-evidence remain incomplete.
+running on PS5. An opt-in PS5 bootstrap entry connects the runner to the
+platform file adapter and bounded, process-local registry/object seed services.
+The native Wine package now reads an `app.profile`, selects its staged PE32
+image, and fills the initial process image, command line, current directory and
+DLL search path; the host gate validates that route against the generated
+application. This profile path is still not accepted on the console: the last
+deployment was restored before launch after service preflight reported
+`shsrv` unavailable. Persistent prefix hives, broader objects and waits, thread
+creation and loader attach-order evidence remain incomplete.
 
 The bootstrap build uses `PW_NATIVE_MODE=wine PW_SAMPLE=1` with a validated
 `PW_WINE_RUNTIME_DIR`. `PW_OUTPUT_SUFFIX` isolates its build and package from
