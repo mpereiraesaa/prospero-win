@@ -49,7 +49,53 @@ def check(text: str, continuous: bool, accepted: bool) -> None:
             assert accepted
 
 
+def vk_transcript() -> str:
+    text = transcript(True).replace(
+        "4\t1300000000\tINFO\tPW_RUNTIME_READY",
+        "4\t1250000000\tINFO\tPW_PRESENT_OPEN schema=1 backend=vk-wsi status=ok failed_call=none\n"
+        "4\t1300000000\tINFO\tPW_RUNTIME_READY")
+    frames = ("PW_VIDEO_FRAME flips=1 backend=vk-wsi slot=0 token=1\n"
+              "5\t2000000000\tINFO\tPW_VIDEO_FRAME flips=2 backend=vk-wsi slot=1 token=2\n"
+              "6\t3000000000\tINFO\tPW_RUNTIME_HEARTBEAT ")
+    text = text.replace("PW_RUNTIME_HEARTBEAT ", frames)
+    text = text.replace("heap=ok ", "heap=ok present_backend=vk-wsi present_flips=5 present_failed_call=none ")
+    return renumber(text)
+
+
+def renumber(text: str) -> str:
+    lines, seq = [], 0
+    for line in text.splitlines():
+        if line[:1].isdigit():
+            seq += 1; line = f"{seq}\t" + line.split("\t", 1)[1]
+        elif line.startswith("BYE"):
+            line = f"BYE seq={seq} " + line.split(" ", 2)[2]
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def check_vk(text: str, accepted: bool) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "vk.log"; path.write_text(text)
+        try:
+            MODULE.validate(path, False, 1, 2, 2, present_backend="vk-wsi")
+        except ValueError:
+            assert not accepted
+        else:
+            assert accepted
+
+
 def main() -> int:
+    check_vk(vk_transcript(), True)
+    check_vk(transcript(True), False)
+    check_vk(vk_transcript().replace("status=ok failed_call", "status=state failed_call"), False)
+    check_vk(vk_transcript().replace("slot=1", "slot=0"), False)
+    check_vk(vk_transcript().replace("flips=2 backend=vk-wsi slot=1 token=2",
+                                     "flips=2 backend=vk-wsi slot=1 token=1"), False)
+    check_vk(vk_transcript().replace("flips=2 backend=vk-wsi", "flips=2 backend=agc-dma"), False)
+    check_vk(vk_transcript().replace("present_flips=5", "present_flips=4"), False)
+    check_vk(vk_transcript().replace("present_failed_call=none", "present_failed_call=vkQueueSubmit"), False)
+    check_vk(renumber(vk_transcript().replace(
+        "PW_RUNTIME_READY", "PW_PRESENT_FAIL status=state\n4\t1300000000\tINFO\tPW_RUNTIME_READY")), False)
     check(transcript(), True, True); check(transcript(True), False, True)
     check(async_transcript(), True, True)
     check(async_transcript().replace("audio_errors=0", "audio_errors=1"), True, False)

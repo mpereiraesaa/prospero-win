@@ -45,7 +45,8 @@ def latest(records, name: str):
 
 def validate(path: Path, continuous: bool, min_seconds: float,
              min_flips: int, min_audio_blocks: int, min_pad_events: int = 0,
-             require_pad_quit: bool = False) -> None:
+             require_pad_quit: bool = False,
+             present_backend: str | None = None) -> None:
     records, bye = parse(path)
     names = [item[2] for item in records]
     if "PW_RUNTIME_ABORT" in names or "PW_RUNTIME_SIGNAL" in names:
@@ -118,8 +119,35 @@ def validate(path: Path, continuous: bool, min_seconds: float,
         counters = end
     if number(counters.get("flips", "0")) < min_flips:
         raise ValueError("insufficient flips")
+    if present_backend == "vk-wsi":
+        validate_vk_wsi(records, names, None if continuous else teardown, counters)
     if number(counters.get("audio_blocks", "0")) < min_audio_blocks:
         raise ValueError("insufficient audio blocks")
+
+
+def validate_vk_wsi(records, names, teardown, counters) -> None:
+    """ps5-vulkan WSI presentation: opened, never failed, every sampled frame
+    presented through it with strictly increasing tokens over both images."""
+    opened = latest(records, "PW_PRESENT_OPEN")[3]
+    if opened.get("backend") != "vk-wsi" or opened.get("status") != "ok":
+        raise ValueError("vk-wsi presentation was not opened")
+    if "PW_PRESENT_FAIL" in names:
+        raise ValueError("vk-wsi presentation failure recorded")
+    frames = [item[3] for item in records if item[2] == "PW_VIDEO_FRAME"]
+    if not frames or any(frame.get("backend") != "vk-wsi" for frame in frames):
+        raise ValueError("frames were not presented through vk-wsi")
+    tokens = [number(frame.get("token", "0")) for frame in frames]
+    if any(token != number(frame.get("flips", "-1")) for token, frame in zip(tokens, frames)) or \
+            any(later <= earlier for earlier, later in zip(tokens, tokens[1:])):
+        raise ValueError("vk-wsi frame tokens are not the strictly increasing flip count")
+    if len(frames) > 1 and {frame.get("slot") for frame in frames} != {"0", "1"}:
+        raise ValueError("vk-wsi frames did not use both swapchain images")
+    if teardown is not None:
+        if teardown.get("present_backend") != "vk-wsi" or \
+                teardown.get("present_failed_call") != "none":
+            raise ValueError("vk-wsi teardown is not clean")
+        if number(teardown.get("present_flips", "-1")) != number(counters.get("flips", "0")):
+            raise ValueError("vk-wsi teardown flips do not match the end record")
 
 
 def main() -> int:
@@ -131,11 +159,12 @@ def main() -> int:
     parser.add_argument("--min-audio-blocks", type=int, default=1)
     parser.add_argument("--min-pad-events", type=int, default=0)
     parser.add_argument("--require-pad-quit", action="store_true")
+    parser.add_argument("--present-backend", choices=("vk-wsi",))
     args = parser.parse_args()
     try:
         validate(args.transcript, args.continuous, args.min_seconds,
                  args.min_flips, args.min_audio_blocks, args.min_pad_events,
-                 args.require_pad_quit)
+                 args.require_pad_quit, args.present_backend)
     except (OSError, ValueError) as error:
         raise SystemExit(f"runtime evidence rejected: {error}")
     print("runtime evidence accepted")

@@ -1,8 +1,19 @@
 # Presenting GDI surfaces through ps5-vulkan WSI
 
-Status: **analysis and portable API only.** Nothing here claims that GDI is
-complete or that the Vulkan route presents on PS5. The host tests named below
-prove contracts; hardware acceptance is listed separately and has not run.
+Status: the route is implemented as the opt-in `PW_PRESENT_BACKEND=vk`
+runtime backend and **validated on PS5 for the direct runner's GDI
+surfaces** (Pinball); see [hardware validation](HARDWARE_VALIDATION.md). Wine
+still has no presentation path, and GDI remains the bounded model described in
+[GDI.md](GDI.md), not a complete GDI.
+
+Hardware found one gap the host tests could not: ps5-vulkan's native queue
+refused the `PRESENT_SRC`↔`TRANSFER_DST` barriers the recorder accepts
+(`PS5VK_UPLOAD_PREPARE_FAILED rc=-8`), because the companion host test stubs
+that native segment. ps5-vulkan PR #562 accepts exactly those two forms. The
+title must also stay clear of the PE32 image's fixed base: the backend links
+ps5-vulkan with `--gc-sections` and replaces its unused SPIR-V compiler with
+fail-closed stubs (`native/pw_psbc_absent_ps5.c`), keeping the image near
+0.7 MiB instead of 15.6 MiB.
 
 ## Verified starting point
 
@@ -125,7 +136,7 @@ Every refusal happens before `acquire`; after a successful `acquire` exactly
 one `submit` follows, with `commit=0` to abandon. The runner and a future Wine
 display path produce a `PwPresentFrame`; only a native backend knows Vulkan.
 
-Backend mapping (not implemented in this change):
+Backend mapping (the Vulkan WSI backend is implemented in `native/pw_present_vk_ps5.c`; the default AGC path does not use the sink yet):
 
 - **AGC backend** (`native/`, wraps today's code): `acquire` lends a linear
   scratch; `submit` tiles it and calls `pw_agc_ps5_copy_flip`.
