@@ -16,9 +16,27 @@ $(BUILD):
 	mkdir -p $@
 
 define test_rule
+$(if $(strip $(3)),\
 $(BUILD)/$(1): $(2) $(HEADERS) | $(BUILD)
-	$(CC) $(CFLAGS) $$(filter %.c %.S,$$^) $(3) -o $$@
+	$(CC) $(CFLAGS) $$(filter %.c %.S,$$^) $(3) -o $$@,\
+$(BUILD)/$(1): $$(addprefix $(BUILD)/obj/shared/,$$(addsuffix .o,$$(basename $(2)))) | $(BUILD)
+	$$(CC) $$(CFLAGS) $$^ -o $$@)
 endef
+
+# Compile common test and tool sources once, with compiler-emitted header
+# dependencies so unrelated header edits do not rebuild every executable.
+SHARED_SOURCES := $(wildcard src/*.c tests/*.c native/*.c tools/*.c \
+	src/*.S tests/*.S native/*.S tools/*.S)
+SHARED_DEPFILES := $(addprefix $(BUILD)/obj/shared/,$(addsuffix .d,$(basename $(SHARED_SOURCES))))
+-include $(SHARED_DEPFILES)
+
+$(BUILD)/obj/shared/%.o: %.c | $(BUILD)
+	mkdir -p $(@D)
+	$(CC) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(BUILD)/obj/shared/%.o: %.S | $(BUILD)
+	mkdir -p $(@D)
+	$(CC) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 CORE := src/pe_image.c src/pe_layout.c src/pe_reloc.c src/pe_import.c \
 	src/pw_map.c src/pw_module_name.c src/pw_vm.c src/pw_vm_posix.c \
@@ -152,7 +170,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/inspect_pe $(BUILD)/trace_x86_ent
 	python3 tests/test_startup_x87_contract.py
 	python3 tests/test_build_source_oracle.py
 	python3 tests/test_dynarec_bench.py
-	rm -rf build tools/__pycache__ tests/__pycache__
+	rm -rf tools/__pycache__ tests/__pycache__
 
 # Release evidence. `make test` skips two checks when the pinned Wine checkout
 # or the staged runtime are absent, which is right on a machine that has
@@ -183,9 +201,10 @@ check-whitespace:
 		echo 'whitespace check passed'; \
 	fi
 
-# Rebuild so previously cached non-instrumented binaries cannot pass this gate.
+# Keep sanitizer objects in their own tree: no stale normal binary can satisfy
+# the instrumented gate, and subsequent sanitizer runs can reuse its objects.
 sanitize:
-	ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 $(MAKE) -B test CC=clang CFLAGS='-O1 -g -std=c11 -Wall -Wextra -Werror -fno-omit-frame-pointer -fsanitize=address,undefined'
+	ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 $(MAKE) test BUILD=build/sanitize CC=clang CFLAGS='-O1 -g -std=c11 -Wall -Wextra -Werror -fno-omit-frame-pointer -fsanitize=address,undefined'
 
 # Structural report for a private Windows binary. Nothing is copied here.
 #   make inspect PE_INPUT=/private/path/game.exe PE_DIR=/private/path

@@ -26,11 +26,15 @@ then remove the worktree from the primary checkout.
 
 ```sh
 make -j2 test        # C contracts and Python integration suites
-make -j2 sanitize    # Clang ASan/UBSan rebuild, including leak detection
+make -j2 sanitize    # separate incremental Clang ASan/UBSan tree with leak detection
 make audit       # fail-closed publication audit
 git diff --check
 git status --short
 ```
+
+Build objects and binaries stay under the ignored `build/host/` and
+`build/sanitize/` trees. They are retained between test runs for incremental
+rebuilds; use `make clean` when you explicitly want to remove generated files.
 
 Native changes additionally require a clean `make native-release`, the
 artifact hashes it prints, and one hardware launch whose `ps5log/1` manifest
