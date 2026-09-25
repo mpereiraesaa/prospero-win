@@ -88,21 +88,28 @@ reach the application entry point, return `1` and exit through
 598,404 guest instructions over 2,981 translated blocks and return the same
 status.
 
-That result is a host integration checkpoint, not evidence of a Wine process
-running on PS5. An opt-in PS5 bootstrap entry now connects the runner to the
-platform file adapter and bounded, process-local registry/object seed services,
-and its native package cross-builds. It has not completed a console run: the
-deployment was restored before launch after the service preflight reported
-`shsrv` unavailable. Persistent prefix hives, manifest-driven executable
-selection, broader objects and waits, thread creation and loader attach-order
+That result is host integration evidence. Separately, the opt-in PS5 bootstrap
+has launched the profile-selected generated fixture through the platform file
+adapter and process-local registry/object seed services. The hardware log
+records `app.exe`, `ntdll.dll` and `kernelbase.dll`, 598,649 retired guest
+instructions, 2,981 blocks, and an explicit DBT-observed transfer to the
+fixture's entrypoint before process termination with guest status 1. Its
+`ps5log/1` manifest is clean (eight records, no gaps, clean BYE); the transcript
+SHA-256 is
+`5af8bdd68f3afe7461742d6cf26ef741c95fb4c9cb7bcfed9ba9929a009dafd5`. The gate
+reports `status=unsupported` because process termination is not currently an
+accepted stop. This validates the generated profile through its entrypoint and
+exit, not compatibility with arbitrary Windows programs. Persistent prefix
+hives, broader objects and waits, thread creation and loader attach-order
 evidence remain incomplete.
 
 The bootstrap build uses `PW_NATIVE_MODE=wine PW_SAMPLE=1` with a validated
 `PW_WINE_RUNTIME_DIR`. `PW_OUTPUT_SUFFIX` isolates its build and package from
 the normal Pinball outputs. Its generated PE32 fixture is staged in
 `/app0/win/app`; the pinned Wine modules and NLS data remain in separate runtime
-directories. The first console run still needs to verify startup and teardown
-from `ps5log/1`; successful cross-compilation alone is not runtime evidence.
+directories. Startup and teardown have now been observed on hardware through
+`ps5log/1`; the run does not validate persistent prefix behavior or a copied,
+user-installed application.
 
 ## Application and prefix model
 

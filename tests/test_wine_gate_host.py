@@ -45,7 +45,7 @@ INITIALIZATION_BUDGET = "1500"
 # -call dispatcher this gate does not publish yet, so the run ends with
 # returned-to-caller at address zero.
 PINNED_DISTRIBUTION = (
-    "a70042324ceb268a714936501add18de2cd0a4a6f3fd16b7a758e7893c186bb5")
+    "19363b382da91d73c8161d7c335922003c68dd8331a526a40be2ac6470b1d079")
 PINNED_RUN = {
     "stop": "returned-to-caller",
     "stop_address": "0x00000000",
@@ -116,6 +116,16 @@ def call_records(text: str) -> list[dict[str, str]]:
     return sorted(records, key=lambda record: int(record["index"]))
 
 
+def module_records(text: str) -> list[dict[str, str]]:
+    records = []
+    for line in text.splitlines():
+        if "kind=host-wine-module " not in line:
+            continue
+        records.append(dict(token.split("=", 1)
+                            for token in line.split() if "=" in token))
+    return records
+
+
 def compare(observed: dict[str, str], expected: dict[str, str], label: str,
             problems: list[str]) -> None:
     for name, value in expected.items():
@@ -156,26 +166,30 @@ APPLICATION_PINNED = {
         "modes": "0,0,1", "stop": "process-terminated", "retired": "598430",
         "dispatches": "120937", "blocks": "2981", "bytes": "1678688",
         "reg_loads": "0", "reg_stores": "0", "reg_reconciliations": "0",
-        "reg_spills": "0", "exit_status": "0x1", "exit_call": "0x00000053",
+        "reg_spills": "0", "entry_reached": "1",
+        "exit_status": "0x1", "exit_call": "0x00000053",
     },
     "unchained_resident": {
         "modes": "0,1,1", "stop": "process-terminated", "retired": "598430",
         "dispatches": "120937", "blocks": "2981", "bytes": "1759312",
         "reg_loads": "222021", "reg_stores": "77015",
         "reg_reconciliations": "0", "reg_spills": "0",
+        "entry_reached": "1",
         "exit_status": "0x1", "exit_call": "0x00000053",
     },
     "chained_canonical": {
         "modes": "1,0,1", "stop": "process-terminated", "retired": "598430",
         "dispatches": "15787", "blocks": "2981", "bytes": "1678688",
         "reg_loads": "0", "reg_stores": "0", "reg_reconciliations": "0",
-        "reg_spills": "0", "exit_status": "0x1", "exit_call": "0x00000053",
+        "reg_spills": "0", "entry_reached": "1",
+        "exit_status": "0x1", "exit_call": "0x00000053",
     },
     "chained_resident": {
         "modes": "1,1,1", "stop": "process-terminated", "retired": "598430",
         "dispatches": "15787", "blocks": "2981", "bytes": "1759312",
         "reg_loads": "215846", "reg_stores": "12656",
         "reg_reconciliations": "82346", "reg_spills": "61805",
+        "entry_reached": "1",
         "exit_status": "0x1", "exit_call": "0x00000053",
     },
 }
@@ -216,6 +230,10 @@ def check_application_frontier() -> None:
     semantics = None
     for label, expected in APPLICATION_PINNED.items():
         text = run_application(expected["modes"])
+        app_module = next((module for module in module_records(text)
+                           if module.get("name") == "app.exe"), None)
+        if not app_module or app_module.get("runtime") != "0":
+            problems.append(f"{label}: application image must come from app namespace")
         stop = field(text, "run", "stop")
         if stop != expected["stop"]:
             problems.append(f"{label}: stop {stop} != {expected['stop']}")
@@ -230,6 +248,9 @@ def check_application_frontier() -> None:
             if observed != expected[name]:
                 problems.append(f"{label}: {name} {observed} != "
                                 f"{expected[name]}")
+        if field(text, "run", "entry_reached") != expected["entry_reached"]:
+            problems.append(
+                f"{label}: application entry was not observed in DBT execution")
         current = (stop, field(text, "run", "retired"),
                    field(text, "run", "blocks"),
                    field(text, "verdict", "exit_status"),

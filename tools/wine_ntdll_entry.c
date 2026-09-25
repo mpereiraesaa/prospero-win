@@ -714,6 +714,8 @@ int main(int argc, char **argv)
         status = load_host_app_profile(profile_path, &app_profile);
         if (status == PW_OK && app_profile.architecture != PW_APP_ARCH_PE32)
             status = PW_ERR_UNSUPPORTED;
+        if (status == PW_OK && app_profile.graphics != PW_APP_GRAPHICS_GDI)
+            status = PW_ERR_UNSUPPORTED;
         if (status == PW_OK)
             status = pw_app_profile_stage_name(&app_profile, profile_root,
                                                sizeof(profile_root));
@@ -871,6 +873,7 @@ int main(int argc, char **argv)
            "retired=%llu dispatches=%llu blocks=%llu bytes=%llu "
            "reg_loads=%llu reg_stores=%llu reg_reconciliations=%llu "
            "reg_spills=%llu "
+           "main_entry=0x%08x entry_reached=%u "
            "stop_address=0x%08x stop=%s syscall=0x%08x host_calls=%llu\n",
            report.first_eip, report.last_eip,
            (unsigned long long)report.retired,
@@ -881,6 +884,7 @@ int main(int argc, char **argv)
            (unsigned long long)report.register_stores,
            (unsigned long long)report.register_reconciliations,
            (unsigned long long)report.register_spills,
+           report.main_entry_eip, report.main_entry_reached,
            report.stop_address, pw_wine_stop_name(report.stop),
            report.observed_syscall_id, (unsigned long long)report.host_calls);
     if (report.stop == PW_WINE_STOP_MEMORY_BOUNDS) {
