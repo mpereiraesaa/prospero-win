@@ -131,7 +131,7 @@ $(eval $(call test_rule,classify_x86,tools/classify_x86.c src/pw_x86_block.c src
 $(eval $(call test_rule,test_pw_win64,tests/test_pw_win64.c src/pw_exec_probe.c src/pw_win64_call.S $(CORE),))
 $(eval $(call test_rule,inspect_pe,tools/inspect_pe.c $(CORE) src/pw_file_posix.c,))
 $(eval $(call test_rule,bench_dynarec,tools/bench_dynarec.c src/pw_x86_engine.c src/pw_x86_cache.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,-lm))
-$(eval $(call test_rule,wine_ntdll_entry,tools/wine_ntdll_entry.c $(WINE_GATE) src/pw_file_posix.c $(CORE),))
+$(eval $(call test_rule,wine_ntdll_entry,tools/wine_ntdll_entry.c $(WINE_GATE) src/pw_file_posix.c src/pw_wine_seed_services.c $(CORE),))
 
 TESTS := test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_pw_gdi test_pw_gdi_abi test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
 	test_pe_export \

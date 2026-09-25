@@ -16,6 +16,7 @@
 #include "../src/pw_vm_posix.h"
 #include "../src/pw_wine_gate.h"
 #include "../src/pw_wine_runner.h"
+#include "../src/pw_wine_seed_services.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -617,6 +618,7 @@ static void print_module(const PwWineModuleRecord *module)
 int main(int argc, char **argv)
 {
     PwWineGateConfig config;
+    PwWineSeedServices seed_services;
     PwFilePosix files;
     PwFileProvider provider;
     PwVmBackend vm;
@@ -640,6 +642,8 @@ int main(int argc, char **argv)
     const char *nls = argument_value(argc, argv, "--nls", "");
     const char *dlls = argument_value(argc, argv, "--modules",
                                       "ntdll.dll,kernelbase.dll");
+    const int use_seed_services =
+        argument_number(argc, argv, "--seed-services", 0u) != 0u;
     int status;
 
     if (!runtime) {
@@ -657,6 +661,8 @@ int main(int argc, char **argv)
         return 2;
     }
     memset(&config, 0, sizeof(config));
+    if (use_seed_services)
+        pw_wine_seed_services_init(&seed_services);
     pw_wine_runner_init(&gate_runner);
     config.runner = &gate_runner;
     config.root_application =
@@ -686,10 +692,17 @@ int main(int argc, char **argv)
     config.root_module = root;
     config.entry_module = entry_module;
     config.entry_symbol = entry_symbol;
-    config.registry = &host_registry;
-    config.objects = &host_objects;
-    config.token_user_sid = host_user_sid;
-    config.token_user_sid_bytes = (uint32_t)sizeof(host_user_sid);
+    if (use_seed_services) {
+        config.registry = pw_wine_seed_registry(&seed_services);
+        config.objects = pw_wine_seed_objects(&seed_services);
+        config.token_user_sid = pw_wine_seed_user_sid(
+            &config.token_user_sid_bytes);
+    } else {
+        config.registry = &host_registry;
+        config.objects = &host_objects;
+        config.token_user_sid = host_user_sid;
+        config.token_user_sid_bytes = (uint32_t)sizeof(host_user_sid);
+    }
     {
         const char *manifest = argument_value(
             argc, argv, "--manifest",

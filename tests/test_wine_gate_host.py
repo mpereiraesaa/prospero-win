@@ -188,6 +188,7 @@ def run_application(modes: str) -> str:
         assert built.returncode == 0, built.stderr
         return run_gate("--runtime", str(DISTRIBUTION / "lib/i386-windows"),
                         "--application", directory, "--root-application", "1",
+                        "--seed-services", "1",
                         "--root", "app.exe", "--entry-module", "ntdll.dll",
                         "--entry-symbol", "LdrInitializeThunk",
                         "--modules",
