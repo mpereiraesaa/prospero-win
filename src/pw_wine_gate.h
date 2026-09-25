@@ -360,6 +360,8 @@ typedef struct PwWineGateReport {
      * argument. Zero when the root image has no entry point.
      */
     uint32_t main_entry_eip;
+    /* Set only after the DBT is about to execute the root image entrypoint. */
+    uint32_t main_entry_reached;
     uint32_t stub_syscall_id;       /* decoded from the stub's first bytes */
     uint32_t observed_syscall_id;   /* EAX when the boundary was reached */
     uint32_t boundary_return_eip;   /* guest return address at the boundary */

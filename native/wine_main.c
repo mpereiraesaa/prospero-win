@@ -353,7 +353,8 @@ int main(int argc, char **argv)
     status = pw_wine_gate_run(&config, report);
     PS5LOG_LOG("PW_WINE_RUN status=%s stop=%s stage=%s retired=%llu "
                "dispatches=%llu blocks=%llu modes=%u,%u,%u calls=%u "
-               "unixlib=%llu app_exit=0x%x app_call=0x%x host_calls=%llu",
+               "unixlib=%llu entry_eip=0x%x entry_reached=%u "
+               "app_exit=0x%x app_call=0x%x host_calls=%llu",
                pw_result_name(status), pw_wine_stop_name(report->stop),
                report->gate_stage ? report->gate_stage : "none",
                (unsigned long long)report->retired,
@@ -362,6 +363,7 @@ int main(int argc, char **argv)
                report->chaining, report->residency, report->lazy_flags,
                report->calls_serviced,
                (unsigned long long)report->unixlib.serviced,
+               report->main_entry_eip, report->main_entry_reached,
                report->exit_status, report->exit_call_id,
                (unsigned long long)report->host_calls);
     for (uint32_t index = 0; index < report->module_count; ++index) {
