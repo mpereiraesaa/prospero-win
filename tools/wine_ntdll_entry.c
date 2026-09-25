@@ -13,9 +13,11 @@
  * tools/validate_wine_ntdll_evidence.py.
  */
 #include "../src/pw_file_posix.h"
+#include "../src/pw_app_profile.h"
 #include "../src/pw_vm_posix.h"
 #include "../src/pw_wine_gate.h"
 #include "../src/pw_wine_runner.h"
+#include "../src/pw_wine_seed_services.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +56,48 @@ static int runner_debug_write(void *context, const void *bytes,
 static const PwWineDebugSink debug_sink = {
     .context = &debug_sink_state, .write = runner_debug_write,
 };
+
+static int load_host_app_profile(const char *path, PwAppProfile *profile)
+{
+    uint8_t bytes[PW_APP_PROFILE_MAX_BYTES];
+    FILE *file;
+    size_t length;
+    int too_large;
+    int read_error;
+    int close_error;
+
+    if (!path || !profile)
+        return PW_ERR_PRECONDITION;
+    file = fopen(path, "rb");
+    if (!file)
+        return PW_ERR_NOT_FOUND;
+    length = fread(bytes, 1u, sizeof(bytes), file);
+    read_error = ferror(file);
+    too_large = fgetc(file) != EOF;
+    close_error = fclose(file) != 0;
+    if (read_error || too_large || close_error)
+        return too_large ? PW_ERR_LIMIT : PW_ERR_STATE;
+    return pw_app_profile_parse(bytes, length, profile);
+}
+
+static int profile_application_directory(const PwAppProfile *profile,
+                                         char *output, size_t capacity)
+{
+    const char *separator;
+    size_t length;
+
+    if (!profile || !output || capacity == 0u)
+        return PW_ERR_PRECONDITION;
+    separator = strrchr(profile->executable, '\\');
+    if (!separator)
+        return PW_ERR_MALFORMED;
+    length = (size_t)(separator - profile->executable) + 1u;
+    if (length == 0u || length >= capacity)
+        return PW_ERR_LIMIT;
+    memcpy(output, profile->executable, length);
+    output[length] = '\0';
+    return PW_OK;
+}
 
 /*
  * Host file service below the Unix-call boundary. The gate has already
@@ -617,6 +661,7 @@ static void print_module(const PwWineModuleRecord *module)
 int main(int argc, char **argv)
 {
     PwWineGateConfig config;
+    PwWineSeedServices seed_services;
     PwFilePosix files;
     PwFileProvider provider;
     PwVmBackend vm;
@@ -629,6 +674,7 @@ int main(int argc, char **argv)
     const char *entry_symbol = argument_value(argc, argv, "--entry-symbol",
                                               "NtClose");
     const char *root = argument_value(argc, argv, "--root", "kernelbase.dll");
+    const char *profile_path = argument_value(argc, argv, "--profile", NULL);
     /* The application namespace: the directory a Windows loader searches first.
      * Defaults to the runtime directory, which is what the ntdll control wants;
      * an application fixture lives elsewhere and is reached through
@@ -640,6 +686,13 @@ int main(int argc, char **argv)
     const char *nls = argument_value(argc, argv, "--nls", "");
     const char *dlls = argument_value(argc, argv, "--modules",
                                       "ntdll.dll,kernelbase.dll");
+    PwAppProfile app_profile;
+    char profile_root[PW_APP_PATH_CAPACITY];
+    char profile_app_dir[PW_APP_PATH_CAPACITY];
+    char profile_command_line[PW_APP_ARGUMENTS_CAPACITY];
+    int have_profile = 0;
+    const int use_seed_services =
+        argument_number(argc, argv, "--seed-services", 0u) != 0u;
     int status;
 
     if (!runtime) {
@@ -657,10 +710,35 @@ int main(int argc, char **argv)
         return 2;
     }
     memset(&config, 0, sizeof(config));
+    if (profile_path) {
+        status = load_host_app_profile(profile_path, &app_profile);
+        if (status == PW_OK && app_profile.architecture != PW_APP_ARCH_PE32)
+            status = PW_ERR_UNSUPPORTED;
+        if (status == PW_OK && app_profile.graphics != PW_APP_GRAPHICS_GDI)
+            status = PW_ERR_UNSUPPORTED;
+        if (status == PW_OK)
+            status = pw_app_profile_stage_name(&app_profile, profile_root,
+                                               sizeof(profile_root));
+        if (status == PW_OK)
+            status = profile_application_directory(&app_profile,
+                profile_app_dir, sizeof(profile_app_dir));
+        if (status == PW_OK)
+            status = pw_app_profile_build_command_line(&app_profile,
+                profile_command_line, sizeof(profile_command_line));
+        if (status != PW_OK) {
+            fprintf(stderr, "invalid app profile %s: %s\n", profile_path,
+                    pw_result_name(status));
+            return 2;
+        }
+        root = profile_root;
+        have_profile = 1;
+    }
+    if (use_seed_services)
+        pw_wine_seed_services_init(&seed_services);
     pw_wine_runner_init(&gate_runner);
     config.runner = &gate_runner;
-    config.root_application =
-        (uint8_t)(argument_number(argc, argv, "--root-application", 0u) != 0u);
+    config.root_application = (uint8_t)(have_profile ||
+        argument_number(argc, argv, "--root-application", 0u) != 0u);
     config.provider = &provider;
     config.backend = &vm;
     {
@@ -686,10 +764,24 @@ int main(int argc, char **argv)
     config.root_module = root;
     config.entry_module = entry_module;
     config.entry_symbol = entry_symbol;
-    config.registry = &host_registry;
-    config.objects = &host_objects;
-    config.token_user_sid = host_user_sid;
-    config.token_user_sid_bytes = (uint32_t)sizeof(host_user_sid);
+    if (have_profile) {
+        config.process_image_path = app_profile.executable;
+        config.process_current_directory = app_profile.working_directory;
+        config.process_application_directory =
+            profile_app_dir;
+        config.process_command_line = profile_command_line;
+    }
+    if (use_seed_services) {
+        config.registry = pw_wine_seed_registry(&seed_services);
+        config.objects = pw_wine_seed_objects(&seed_services);
+        config.token_user_sid = pw_wine_seed_user_sid(
+            &config.token_user_sid_bytes);
+    } else {
+        config.registry = &host_registry;
+        config.objects = &host_objects;
+        config.token_user_sid = host_user_sid;
+        config.token_user_sid_bytes = (uint32_t)sizeof(host_user_sid);
+    }
     {
         const char *manifest = argument_value(
             argc, argv, "--manifest",
@@ -781,6 +873,7 @@ int main(int argc, char **argv)
            "retired=%llu dispatches=%llu blocks=%llu bytes=%llu "
            "reg_loads=%llu reg_stores=%llu reg_reconciliations=%llu "
            "reg_spills=%llu "
+           "main_entry=0x%08x entry_reached=%u "
            "stop_address=0x%08x stop=%s syscall=0x%08x host_calls=%llu\n",
            report.first_eip, report.last_eip,
            (unsigned long long)report.retired,
@@ -791,6 +884,7 @@ int main(int argc, char **argv)
            (unsigned long long)report.register_stores,
            (unsigned long long)report.register_reconciliations,
            (unsigned long long)report.register_spills,
+           report.main_entry_eip, report.main_entry_reached,
            report.stop_address, pw_wine_stop_name(report.stop),
            report.observed_syscall_id, (unsigned long long)report.host_calls);
     if (report.stop == PW_WINE_STOP_MEMORY_BOUNDS) {

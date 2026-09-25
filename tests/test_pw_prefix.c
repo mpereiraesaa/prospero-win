@@ -64,8 +64,7 @@ int main(void)
                   "/data/prospero-win/prefixes/space-cadet-pinball/user.reg") == 0);
     assert(strcmp(layout.hives[PW_PREFIX_HIVE_USERDEF],
                   "/data/prospero-win/prefixes/space-cadet-pinball/userdef.reg") == 0);
-    assert(strcmp(layout.hives[PW_PREFIX_HIVE_CLASSES],
-                  "/data/prospero-win/prefixes/space-cadet-pinball/classes.reg") == 0);
+    assert(PW_PREFIX_HIVE_COUNT == 3);
     assert(storage.calls == 9u);
     assert(strcmp(storage.paths[0], layout.root) == 0);
     assert(strcmp(storage.paths[8], layout.temp) == 0);

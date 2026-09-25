@@ -42,8 +42,15 @@ unchained steps and 1,609,088 chained steps.
 
 The public generated-Wine gate adds a four-mode chaining/residency parity
 matrix: every mode exits through `NtTerminateThread` after exactly 598,404
-guest instructions and 2,981 blocks. This is host-side DBT evidence; a native
-Wine process on PS5 remains a separate hardware milestone.
+guest instructions and 2,981 blocks. A separate native bootstrap smoke has
+now run on the PS5 (firmware 12.02): the profile-selected generated PE32/GDI
+fixture loaded `app.exe`, `ntdll` and `kernelbase`, retired 598,649 guest
+instructions over 2,981 blocks. A DBT-observed `entry_reached=1` confirms the
+fixture's entrypoint executed before it stopped at `NtTerminateThread` with
+guest status 1. The current gate labels process termination `unsupported` as
+a gate stop. `ps5log/1` recorded eight sequenced records, a clean BYE, no gaps
+and zero cleanup failures. Persistent prefixes and user-supplied copy-and-run
+remain unvalidated.
 
 The final bounded lazy-flags candidate used:
 
