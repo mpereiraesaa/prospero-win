@@ -206,6 +206,7 @@ sources=(
     src/pw_wine_handle.c
     src/pw_wine_file.c
     src/pw_wine_registry.c
+    src/pw_wine_seed_services.c
     src/pw_wine_query.c
     src/pw_wine_section.c
     src/pw_wine_object.c

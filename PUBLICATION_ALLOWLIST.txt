@@ -236,6 +236,8 @@ src/pw_wine_unixlib.c
 src/pw_wine_unixlib.h
 src/pw_wine_runner.c
 src/pw_wine_runner.h
+src/pw_wine_seed_services.c
+src/pw_wine_seed_services.h
 src/pw_guest_process.h
 src/pw_guest_vm.c
 src/pw_guest_vm.h
@@ -273,6 +275,7 @@ tests/test_pw_guest_process.c
 tests/test_pw_nt_handle.c
 tests/test_pw_unixlib.c
 tests/test_pw_wine_runner.c
+tests/test_pw_wine_seed_services.c
 tests/test_pw_wine_unixlib.c
 tests/test_pw_wine_handle.c
 tests/test_pw_wine_path.c
