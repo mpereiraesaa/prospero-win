@@ -285,6 +285,12 @@ typedef struct PwWineGateConfig {
     const char *entry_module;       /* default "ntdll.dll" */
     const char *entry_symbol;       /* default "NtClose" */
     const char *dispatcher_symbol;  /* default "__wine_syscall_dispatcher" */
+    /* Optional application process parameters. NULL retains the bounded
+     * defaults used by the ntdll control and generated fixture. */
+    const char *process_image_path;
+    const char *process_current_directory;
+    const char *process_application_directory;
+    const char *process_command_line;
     const char *modules[PW_WINE_GATE_MAX_MODULES];
     uint32_t module_count;
     uint32_t step_budget;           /* 0 uses PW_WINE_GATE_DEFAULT_STEPS */
@@ -354,6 +360,8 @@ typedef struct PwWineGateReport {
      * argument. Zero when the root image has no entry point.
      */
     uint32_t main_entry_eip;
+    /* Set only after the DBT is about to execute the root image entrypoint. */
+    uint32_t main_entry_reached;
     uint32_t stub_syscall_id;       /* decoded from the stub's first bytes */
     uint32_t observed_syscall_id;   /* EAX when the boundary was reached */
     uint32_t boundary_return_eip;   /* guest return address at the boundary */

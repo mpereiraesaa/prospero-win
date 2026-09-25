@@ -40,17 +40,20 @@ register residency, dead-flag elimination and lazy arithmetic flags. Exact
 host matrices finish with identical guest CPU state in every supported mode,
 and bounded hardware runs reach video, audio and input teardown cleanly.
 
-The reusable Wine path is further along than a loader-only prototype, but it
-has not booted as a Wine process on PS5 yet. A pinned i386 Wine distribution is
-manifest-validated; both Wine dispatch boundaries are published; 32 NT call
-shapes are serviced; and a generated PE32 application with two DLLs loads
-through Wine's own `ntdll`, reaches its entry point under the DBT, returns `1`
-and exits through `NtTerminateThread` in the host integration gate.
+The opt-in native Wine bootstrap has now run on the PS5 with a generated PE32
+profile. An explicit DBT marker confirms it reached the `app.exe` entrypoint;
+the fixture then stopped at `NtTerminateThread` with guest status 1 after
+598,649 guest instructions across 2,981 blocks. `ps5log/1` recorded a clean
+close with no gaps or cleanup failures. The runner still labels process
+termination `unsupported` as a gate stop, so this does not claim general
+application compatibility.
 
-Compiling Wine is necessary but not sufficient to load it inside a PS5 title.
-The remaining native integration connects that runtime to PS5 memory, file,
-thread, object, wait, prefix and lifecycle adapters. Sharing the x86-64 ISA
-does not remove the Windows/native ABI boundary for future PE64 applications.
+This proves the generated fixture reached its entrypoint, not that arbitrary
+Windows apps run. Persistent prefixes, Wine loader-list/TLS attach validation,
+broader thread and object services, and a user-supplied copy-and-run path
+remain open.
+Sharing the x86-64 ISA also does not remove the Windows/native ABI boundary for
+future PE64 applications.
 
 The next public milestone is a native copy-and-run path: a shared Wine runtime,
 an application manifest, an isolated persistent prefix and a user-supplied
