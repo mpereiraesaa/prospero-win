@@ -15,6 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Host contracts and publication audit
-        run: make all
+        run: make -j2 all
       - name: ASan and UBSan
-        run: make sanitize
+        run: make -j2 sanitize

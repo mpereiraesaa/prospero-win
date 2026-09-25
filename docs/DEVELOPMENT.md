@@ -15,7 +15,7 @@ while sharing history:
 git switch main
 git worktree add ../prospero-win-exp-<topic> -b exp/<topic>
 cd ../prospero-win-exp-<topic>
-make all
+make -j2 all
 ```
 
 Commit small steps on `exp/<topic>`, validate them independently, and merge
@@ -25,8 +25,8 @@ then remove the worktree from the primary checkout.
 ## Required gates
 
 ```sh
-make test        # C contracts and Python integration suites
-make sanitize    # clean Clang ASan/UBSan rebuild, including leak detection
+make -j2 test        # C contracts and Python integration suites
+make -j2 sanitize    # Clang ASan/UBSan rebuild, including leak detection
 make audit       # fail-closed publication audit
 git diff --check
 git status --short

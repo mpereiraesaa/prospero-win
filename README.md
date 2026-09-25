@@ -60,8 +60,8 @@ clients are not prerequisites for this first generic workflow.
 ## Build and test
 
 ```sh
-make all
-make sanitize
+make -j2 all
+make -j2 sanitize
 make inspect-only PE_INPUT=/private/path/APPLICATION.EXE
 ```
 
