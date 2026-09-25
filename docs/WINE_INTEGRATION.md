@@ -211,6 +211,16 @@ package root for PE loading. Writes to app files, `SetCurrentDirectoryA` and a
 general writable prefix filesystem remain future work. With `PW_APP_PROFILE`
 unset, the existing `PW_ROOT_MODULE` and legacy path handling remain unchanged.
 
+The native package builder can also receive
+`PW_WINE_RUNTIME_DIR=/path/to/wine-runtime`. It checks the runtime manifest
+against the pinned Wine commit and module/data hashes, then copies only the
+manifest-listed PE modules and NLS files into `/app0/win/runtime/`, preserving
+the distribution's `lib/i386-windows/` and `nls/` layout. This is package
+staging only: `runtime_main` still launches the direct PE32/GDI runner and
+does not select or execute those Wine modules. Native Wine startup and
+manifest-driven launch through `LdrInitializeThunk` remain separate acceptance
+gates.
+
 The intended launcher selects the manifest's EXE directly for portable
 applications.
 Applications that depend on installer-created registry state can use reviewed

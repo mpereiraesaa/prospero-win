@@ -172,6 +172,7 @@ tests/test_validate_runtime_evidence.py
 tools/audit_publication.py
 tools/classify_x86.c
 tools/build_native.sh
+tools/stage_wine_runtime.py
 tools/inspect_pe.c
 tools/inventory_imports.py
 tools/audit_wine_imports.py
@@ -286,6 +287,7 @@ tests/test_nt_handler_ledger.py
 tests/test_reentrancy_contract.py
 tests/test_test_reachability.py
 tests/test_runtime_profile_selection.py
+tests/test_stage_wine_runtime.py
 tests/test_unix_call_table.py
 tests/test_unixlib_table.py
 tests/test_pw_wine_file_service.c

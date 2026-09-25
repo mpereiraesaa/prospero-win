@@ -14,6 +14,8 @@
 #   PW_STAGE_INPUT         private directory holding the PE images to stage
 #   PW_ROOT_MODULE         root image inside that directory (default sample.exe)
 #   PW_APP_PROFILE         optional app.profile manifest for profile launch
+#   PW_WINE_RUNTIME_DIR    optional pinned Wine distribution packaged under
+#                          win/runtime; this does not select the Wine runner
 #   PW_SAMPLE              1 stages generated synthetic images instead of a
 #                          private directory (default 0)
 #   PW_COMPAT32_TRANSFER   1 attempts an experimental far transfer into 32-bit
@@ -38,6 +40,7 @@ dev_conf=${PS5LOG_DEV_CONF:-$root/dev.conf}
 stage_input=${PW_STAGE_INPUT:-}
 root_module=${PW_ROOT_MODULE:-sample.exe}
 app_profile=${PW_APP_PROFILE:-}
+wine_runtime_dir=${PW_WINE_RUNTIME_DIR:-}
 use_app_profile=0
 use_sample=${PW_SAMPLE:-0}
 compat32_transfer=${PW_COMPAT32_TRANSFER:-0}
@@ -161,6 +164,15 @@ if (( use_app_profile )); then
 else
     [[ -f $dist/win/$root_module ]] || {
         echo "root module $root_module is not staged in $dist/win" >&2; exit 2; }
+fi
+if [[ -n $wine_runtime_dir ]]; then
+    [[ -d $wine_runtime_dir ]] || {
+        echo "PW_WINE_RUNTIME_DIR must name a staged Wine distribution" >&2
+        exit 2
+    }
+    python3 "$root/tools/stage_wine_runtime.py" \
+        --source "$wine_runtime_dir" \
+        --destination "$dist/win/runtime"
 fi
 
 cc=(env PS5_PAYLOAD_SDK="$sdk" sh "$foundation/tooling/prospero-clang18")

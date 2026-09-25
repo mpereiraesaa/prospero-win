@@ -53,6 +53,14 @@ def test_builder_stages_profile_explicitly() -> None:
         'for source in "${sources[@]}"')
 
 
+def test_builder_optionally_stages_validated_wine_runtime() -> None:
+    source = (ROOT / "tools/build_native.sh").read_text(encoding="utf-8")
+    assert "wine_runtime_dir=${PW_WINE_RUNTIME_DIR:-}" in source
+    assert 'tools/stage_wine_runtime.py"' in source
+    assert '"$dist/win/runtime"' in source
+    assert "this does not select the Wine runner" in source
+
+
 def test_recursive_app_staging_is_case_folded_and_confined() -> None:
     with tempfile.TemporaryDirectory(prefix="app-stage-test-") as directory:
         root = Path(directory)
