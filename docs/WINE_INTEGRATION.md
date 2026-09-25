@@ -91,8 +91,9 @@ entry point, returns `1` and exits through `NtTerminateThread` after the same
 598,404 retired instructions and 2,981 translated blocks. Loader-list and
 attach-order validation remain. The current verified boundary and measurements
 are summarized in [technical details](TECHNICAL_DETAILS.md). Runtime staging
-into a native package is implemented; hardware execution of this Wine bootstrap
-remains an acceptance gate.
+into a native package is implemented, and a bounded generated-fixture
+bootstrap has been validated on PS5. User-installed applications remain a
+separate compatibility and copy-and-run acceptance gate.
 
 The native bootstrap can be cross-built with the generated PE32 application
 fixture and a validated runtime:
@@ -124,6 +125,15 @@ The console smoke is separate hardware evidence for the staged profile,
 Wine initialization and generated application's entrypoint. Persistent prefix
 state, loader-list and TLS attach-order validation, and a user-supplied
 copy-and-run workflow remain open gates.
+
+The manifest-driven staging route was also exercised with `PW_STAGE_INPUT`
+pointing to an external temporary directory containing a generated PE32
+`app.exe` and two DLLs. The builder copied and preflighted that tree with the
+profile and pinned Wine runtime; the host gate then consumed the staged package
+and reached the app entrypoint before its expected fixture exit. The app image
+hash matches the PE32 image recorded by the PS5 smoke. This validates the
+fixture's copy-and-run path, not a user-installed application, installer-created
+registry state or persistent-prefix behavior.
 
 DXVK DLLs use the same runtime-distribution mechanism. Per-application DLL
 overrides will be an explicit policy entry, not an accidental filename search
@@ -258,8 +268,8 @@ the distribution's `lib/i386-windows/` and `nls/` layout. The `runtime`
 package mode still launches the direct PE32/GDI runner through `runtime_main`
 and does not select these Wine modules. The separate `wine` package mode
 selects its profile and enters `LdrInitializeThunk`; its profile selection and
-process-parameter path has host evidence, while PS5 execution remains an
-acceptance gate.
+process-parameter path has host evidence, while PS5 execution has only been
+validated for the generated profile fixture, not user-installed applications.
 
 The intended launcher selects the manifest's EXE directly for portable
 applications.
