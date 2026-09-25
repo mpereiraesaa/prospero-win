@@ -2,6 +2,7 @@
 /* Bounded native Wine bootstrap for the generated PE32 application fixture. */
 #include "pw_file_ps5.h"
 #include "ps5log/ps5log.h"
+#include "../src/pw_app_profile.h"
 #include "../src/pw_vm_posix.h"
 #include "../src/pw_wine_gate.h"
 #include "../src/pw_wine_runner.h"
@@ -26,6 +27,9 @@
 #endif
 #ifndef PW_ROOT_MODULE
 #define PW_ROOT_MODULE "app.exe"
+#endif
+#ifndef PW_USE_APP_PROFILE
+#define PW_USE_APP_PROFILE 0
 #endif
 #ifndef PW_WINE_VERSION
 #define PW_WINE_VERSION "11.17"
@@ -106,6 +110,63 @@ static int debug_write(void *context, const void *bytes, uint32_t length)
     return 0;
 }
 
+static int load_app_profile(PwFilePs5 *state, uint8_t *buffer,
+                            PwAppProfile *profile)
+{
+    uint32_t handle = 0u;
+    uint32_t total = 0u;
+    int status = pw_file_ps5_stream_open(state, "app.profile", "rb", &handle);
+
+    if (status != PW_OK)
+        return status;
+    while (total < PW_APP_PROFILE_MAX_BYTES) {
+        uint32_t received = 0u;
+
+        status = pw_file_ps5_stream_read(state, handle, buffer + total,
+            PW_APP_PROFILE_MAX_BYTES - total, &received);
+        if (status != PW_OK || received == 0u)
+            break;
+        total += received;
+    }
+    if (status == PW_OK && total == PW_APP_PROFILE_MAX_BYTES) {
+        uint8_t extra;
+        uint32_t received = 0u;
+
+        status = pw_file_ps5_stream_read(state, handle, &extra, 1u,
+                                         &received);
+        if (status == PW_OK && received != 0u)
+            status = PW_ERR_LIMIT;
+    }
+    {
+        const int close_status = pw_file_ps5_stream_close(state, handle);
+
+        if (status == PW_OK && close_status != PW_OK)
+            status = close_status;
+    }
+    if (status != PW_OK)
+        return status;
+    return pw_app_profile_parse(buffer, total, profile);
+}
+
+static int profile_application_directory(const PwAppProfile *profile,
+                                         char *output, size_t capacity)
+{
+    const char *separator;
+    size_t length;
+
+    if (!profile || !output || capacity == 0u)
+        return PW_ERR_PRECONDITION;
+    separator = strrchr(profile->executable, '\\');
+    if (!separator)
+        return PW_ERR_MALFORMED;
+    length = (size_t)(separator - profile->executable) + 1u;
+    if (length == 0u || length >= capacity)
+        return PW_ERR_LIMIT;
+    memcpy(output, profile->executable, length);
+    output[length] = '\0';
+    return PW_OK;
+}
+
 static void fatal_signal(int number, siginfo_t *info, void *context)
 {
     const ucontext_t *uc = context;
@@ -135,9 +196,6 @@ static void install_signals(void)
 
 int main(int argc, char **argv)
 {
-    static const char *const modules[] = {
-        PW_ROOT_MODULE, "ntdll.dll", "kernelbase.dll", "a.dll", "b.dll",
-    };
     static const char *const runtime_dir =
         PW_STAGE_DIR "/runtime/lib/i386-windows";
     static const char *const nls_dir = PW_STAGE_DIR "/runtime/nls";
@@ -146,6 +204,12 @@ int main(int argc, char **argv)
     PwWineRunner *runner;
     PwWineGateReport *report;
     PwWineGateConfig config;
+    PwAppProfile app_profile;
+    uint8_t *profile_bytes = NULL;
+    char root_module[PW_APP_PATH_CAPACITY] = PW_ROOT_MODULE;
+    char application_directory[PW_APP_PATH_CAPACITY] = "C:\\";
+    char command_line[PW_APP_ARGUMENTS_CAPACITY];
+    const char *modules[3];
     PwWineDebugSink debug_sink = {.context = NULL, .write = debug_write};
     int log_config_status;
     int log_status;
@@ -160,6 +224,7 @@ int main(int argc, char **argv)
         ? ps5log_init(&log_config, PW_TITLE_ID, PW_APP_NAME, now_ns())
         : log_config_status;
     install_signals();
+    memset(&app_profile, 0, sizeof(app_profile));
 
     runner = reserve_scratch(sizeof(*runner));
     report = reserve_scratch(sizeof(*report));
@@ -171,7 +236,7 @@ int main(int argc, char **argv)
     }
     PS5LOG_LOG("PW_WINE_BEGIN schema=1 stage=%s root=%s log_config=%d "
                "log_init=%d runner_bytes=%llu report_bytes=%llu",
-               PW_STAGE_DIR, PW_ROOT_MODULE, log_config_status, log_status,
+               PW_STAGE_DIR, root_module, log_config_status, log_status,
                (unsigned long long)sizeof(*runner),
                (unsigned long long)sizeof(*report));
 
@@ -193,7 +258,46 @@ int main(int argc, char **argv)
         _exit(1);
     }
 
-    status = pw_file_ps5_smoke(&files, PW_ROOT_MODULE, &smoke);
+    if (PW_USE_APP_PROFILE) {
+        profile_bytes = reserve_scratch(PW_APP_PROFILE_MAX_BYTES);
+        if (!profile_bytes) {
+            PS5LOG_LOG("PW_WINE_ABORT stage=profile-buffer");
+            ps5log_close("wine-bootstrap-profile-buffer");
+            _exit(1);
+        }
+        status = load_app_profile(&files, profile_bytes, &app_profile);
+        if (status == PW_OK && app_profile.architecture != PW_APP_ARCH_PE32)
+            status = PW_ERR_UNSUPPORTED;
+        if (status == PW_OK && app_profile.graphics != PW_APP_GRAPHICS_GDI)
+            status = PW_ERR_UNSUPPORTED;
+        if (status == PW_OK)
+            status = pw_app_profile_stage_name(&app_profile, root_module,
+                                               sizeof(root_module));
+        if (status == PW_OK)
+            status = profile_application_directory(&app_profile,
+                application_directory, sizeof(application_directory));
+        if (status == PW_OK)
+            status = pw_app_profile_build_command_line(&app_profile,
+                command_line, sizeof(command_line));
+        if (status != PW_OK) {
+            PS5LOG_LOG("PW_WINE_ABORT stage=profile status=%s",
+                       pw_result_name(status));
+            ps5log_close("wine-bootstrap-profile-invalid");
+            _exit(1);
+        }
+        PS5LOG_LOG("PW_WINE_PROFILE id=%s runtime=%s prefix=%s exe=%s "
+                   "cwd=%s args=%u architecture=pe32 graphics=%u",
+                   app_profile.id, app_profile.runtime, app_profile.prefix,
+                   root_module, app_profile.working_directory,
+                   (unsigned)(app_profile.arguments[0] != '\0'),
+                   (unsigned)app_profile.graphics);
+    }
+
+    modules[0] = root_module;
+    modules[1] = "ntdll.dll";
+    modules[2] = "kernelbase.dll";
+
+    status = pw_file_ps5_smoke(&files, root_module, &smoke);
     PS5LOG_LOG("PW_WINE_FS_SMOKE status=%s open=%d stat=%d read=%d seek=%d "
                "close=%d size=%lld magic=0x%02x%02x is_pe=%d",
                pw_result_name(status), smoke.open_result, smoke.stat_result,
@@ -223,13 +327,19 @@ int main(int argc, char **argv)
     config.wine_version_info_bytes = wine_version_info_bytes;
     config.token_user_sid = pw_wine_seed_user_sid(
         &config.token_user_sid_bytes);
-    config.root_module = PW_ROOT_MODULE;
+    config.root_module = root_module;
     config.entry_module = "ntdll.dll";
     config.entry_symbol = "LdrInitializeThunk";
     config.module_count = sizeof(modules) / sizeof(modules[0]);
     for (uint32_t index = 0; index < config.module_count; ++index)
         config.modules[index] = modules[index];
     config.root_application = 1u;
+    if (PW_USE_APP_PROFILE) {
+        config.process_image_path = app_profile.executable;
+        config.process_current_directory = app_profile.working_directory;
+        config.process_application_directory = application_directory;
+        config.process_command_line = command_line;
+    }
     config.bridge_calls = 1u;
     config.unixlib_calls = 1u;
     config.debug_sink = &debug_sink;
@@ -243,7 +353,8 @@ int main(int argc, char **argv)
     status = pw_wine_gate_run(&config, report);
     PS5LOG_LOG("PW_WINE_RUN status=%s stop=%s stage=%s retired=%llu "
                "dispatches=%llu blocks=%llu modes=%u,%u,%u calls=%u "
-               "unixlib=%llu app_exit=0x%x app_call=0x%x host_calls=%llu",
+               "unixlib=%llu entry_eip=0x%x entry_reached=%u "
+               "app_exit=0x%x app_call=0x%x host_calls=%llu",
                pw_result_name(status), pw_wine_stop_name(report->stop),
                report->gate_stage ? report->gate_stage : "none",
                (unsigned long long)report->retired,
@@ -252,6 +363,7 @@ int main(int argc, char **argv)
                report->chaining, report->residency, report->lazy_flags,
                report->calls_serviced,
                (unsigned long long)report->unixlib.serviced,
+               report->main_entry_eip, report->main_entry_reached,
                report->exit_status, report->exit_call_id,
                (unsigned long long)report->host_calls);
     for (uint32_t index = 0; index < report->module_count; ++index) {
