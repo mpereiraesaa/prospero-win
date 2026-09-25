@@ -714,6 +714,8 @@ int main(int argc, char **argv)
         status = load_host_app_profile(profile_path, &app_profile);
         if (status == PW_OK && app_profile.architecture != PW_APP_ARCH_PE32)
             status = PW_ERR_UNSUPPORTED;
+        if (status == PW_OK && app_profile.graphics != PW_APP_GRAPHICS_GDI)
+            status = PW_ERR_UNSUPPORTED;
         if (status == PW_OK)
             status = pw_app_profile_stage_name(&app_profile, profile_root,
                                                sizeof(profile_root));
