@@ -32,6 +32,9 @@ native/pw_audio_ps5.c
 native/pw_audio_ps5.h
 native/pw_pad_ps5.c
 native/pw_pad_ps5.h
+native/pw_present_vk_ps5.c
+native/pw_present_vk_ps5.h
+native/pw_psbc_absent_ps5.c
 native/pw_state_ps5.c
 native/pw_prefix_ps5.c
 native/pw_prefix_ps5.h

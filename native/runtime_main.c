@@ -13,7 +13,14 @@
 #include "pw_pad_ps5.h"
 #include "pw_prefix_ps5.h"
 #include "pw_state_ps5.h"
+#ifndef PW_PRESENT_VK
+#define PW_PRESENT_VK 0
+#endif
+#if PW_PRESENT_VK
+#include "pw_present_vk_ps5.h"
+#else
 #include "pw_videoout_ps5.h"
+#endif
 #include "../src/pw_app_profile.h"
 #include "../src/pw_runtime_supervisor.h"
 #include "ps5log/ps5log.h"
@@ -534,8 +541,20 @@ int main(int argc,char **argv)
        pw_x86_engine_set_residency(&engine,PW_DBT_RESIDENCY)!=PW_OK ||
        pw_x86_engine_set_lazy_flags(&engine,PW_DBT_LAZY_FLAGS)!=PW_OK)
         abort_runtime("dbt-mode",PW_ERR_STATE);
+#if PW_PRESENT_VK
+    /* ps5-vulkan owns VideoOut and AGC for this process; pw_videoout_ps5 is
+     * never opened alongside it. */
+    PwPresentVkPs5 video;PwPresentSink present_sink;
+    status=pw_present_vk_ps5_open(&video,&present_sink);
+    PS5LOG_LOG("PW_PRESENT_OPEN schema=1 backend=vk-wsi status=%s width=%u height=%u "
+               "images=2 format=bgra8 usage=transfer-dst mode=fifo failed_call=%s failed_rc=%d",
+               pw_result_name(status),(unsigned)PW_PRESENT_VK_WIDTH,(unsigned)PW_PRESENT_VK_HEIGHT,
+               video.failed_call?video.failed_call:"none",video.failed_result);
+    if(status!=PW_OK)abort_runtime("present-open",status);
+#else
     PwVideoOutPs5 video;
     if((status=pw_videoout_ps5_open(&video))!=PW_OK)abort_runtime("videoout",status);
+#endif
     if(supervisor &&
        (status=pw_runtime_supervisor_guest_started(supervisor))!=PW_OK)
         abort_runtime("runtime-session-start",status);
@@ -631,6 +650,30 @@ int main(int argc,char **argv)
                     for(uint32_t x=0;x<best.width*4u;x++){hash^=row[x];hash*=16777619u;}
                 }
                 if(hash!=last_frame_hash) {
+#if PW_PRESENT_VK
+                    PwPresentFrame frame;PwPresentPlacement placement;
+                    if((status=pw_present_frame_from_gdi(&best,&frame))==PW_OK)
+                        status=pw_present_frame(&present_sink,&frame,80,3,0x00101018u,
+                                                video.flips+1,&placement);
+                    if(status!=PW_OK) {
+                        PS5LOG_LOG("PW_PRESENT_FAIL schema=1 backend=vk-wsi status=%s flips=%llu failed_call=%s failed_rc=%d",
+                            pw_result_name(status),(unsigned long long)video.flips,
+                            video.failed_call?video.failed_call:"none",video.failed_result);
+                        abort_runtime("present",status);
+                    }
+                    last_frame_hash=hash;
+                    if(video.flips<=3 || !(video.flips%120)) {
+                        /* Hash of the exact linear frame the copy consumed. */
+                        uint32_t staging_hash=2166136261u;
+                        for(size_t i=0;i<(size_t)PW_PRESENT_VK_WIDTH*PW_PRESENT_VK_HEIGHT*4u;i++)
+                            {staging_hash^=video.mapped[i];staging_hash*=16777619u;}
+                        PS5LOG_LOG("PW_VIDEO_FRAME flips=%llu width=%u height=%u owner=0x%08x focus=0x%08x hash=0x%08x backend=vk-wsi submits=%llu fence=zero slot=%u token=%llu scale=%u left=%u top=%u staging_hash=0x%08x",
+                            (unsigned long long)video.flips,best.width,best.height,owner,user32.focus_window,hash,
+                            (unsigned long long)video.submits,video.last_slot,
+                            (unsigned long long)video.last_sequence,placement.scale,
+                            placement.left,placement.top,staging_hash);
+                    }
+#else
                     if((status=pw_videoout_ps5_present(&video,&best))!=PW_OK)
                         abort_runtime("present",status);
                     last_frame_hash=hash;
@@ -638,6 +681,7 @@ int main(int argc,char **argv)
                         PS5LOG_LOG("PW_VIDEO_FRAME flips=%llu width=%u height=%u owner=0x%08x focus=0x%08x hash=0x%08x backend=agc-dma submits=%llu fence=zero",
                             (unsigned long long)video.flips,best.width,best.height,owner,user32.focus_window,hash,
                             (unsigned long long)video.agc.submits);
+#endif
                 }
             }
             last_present=now;
@@ -757,7 +801,11 @@ int main(int argc,char **argv)
     int pad_close=pw_pad_ps5_close(&pad,&user32,close_window);
     int audio_close=pw_audio_ps5_close(&audio);
     int gdi_close=pw_gdi_reset(&gdi);
+#if PW_PRESENT_VK
+    int video_close=pw_present_vk_ps5_close(&video);
+#else
     int video_close=pw_videoout_ps5_close(&video);
+#endif
     int dbt_close=pw_x86_engine_destroy(&engine);
     int image_close=pw_map_release(&mapped,&vm);
     provider.close(provider.context,&root);
@@ -786,6 +834,26 @@ int main(int argc,char **argv)
         supervisor_cleanup=pw_runtime_supervisor_cleanup_complete(
             supervisor,cleanup_status);
     }
+#if PW_PRESENT_VK
+    /* ps5-vulkan owns both VideoOut and AGC here, so its close result is the
+     * video and agc outcome; failed_call names the first refused call. */
+    PS5LOG_LOG("PW_RUNTIME_TEARDOWN schema=2 reason=%s exit_code=%u state=%s state_bytes=%u "
+        "pad=%s pad_close_rc=%d user_terminate_rc=%d audio=%s gdi=%s "
+        "video=%s agc=%s present_backend=vk-wsi present_flips=%llu present_submits=%llu "
+        "present_failed_call=%s present_failed_rc=%d dbt=%s image=%s stack=%s thread=%s crt=%s heap=%s"
+        " session=%u outcome=%u supervisor_state=%u supervisor_cleanup=%s",
+        exit_reason,exit_code,pw_result_name(state_close),final_state_written,
+        pw_result_name(pad_close),pad.close_rc,pad.terminate_rc,pw_result_name(audio_close),
+        pw_result_name(gdi_close),pw_result_name(video_close),pw_result_name(video_close),
+        (unsigned long long)video.flips,(unsigned long long)video.submits,
+        video.failed_call?video.failed_call:"none",video.failed_result,
+        pw_result_name(dbt_close),pw_result_name(image_close),
+        pw_result_name(stack_close),pw_result_name(thread_close),pw_result_name(crt_close),
+        pw_result_name(heap_close),supervisor?supervisor->last_result.session_id:0u,
+        supervisor?(unsigned)supervisor->last_result.outcome:0u,
+        supervisor?(unsigned)supervisor->state:(unsigned)PW_RUNTIME_IDLE,
+        pw_result_name(supervisor_cleanup));
+#else
     PS5LOG_LOG("PW_RUNTIME_TEARDOWN schema=2 reason=%s exit_code=%u state=%s state_bytes=%u "
         "pad=%s pad_close_rc=%d user_terminate_rc=%d audio=%s gdi=%s "
         "video=%s unregister_rc=0x%08x video_close_rc=0x%08x video_munmap_rc=0x%08x "
@@ -804,6 +872,7 @@ int main(int argc,char **argv)
         supervisor?(unsigned)supervisor->last_result.outcome:0u,
         supervisor?(unsigned)supervisor->state:(unsigned)PW_RUNTIME_IDLE,
         pw_result_name(supervisor_cleanup));
+#endif
     PS5LOG_LOG("PW_RUNTIME_END schema=1 reason=%s exit_code=%u events=%llu retired=%llu flips=%llu audio_blocks=%llu",
         exit_reason,exit_code,(unsigned long long)events,
         (unsigned long long)final_retired,(unsigned long long)final_flips,
