@@ -45,7 +45,7 @@ INITIALIZATION_BUDGET = "1500"
 # -call dispatcher this gate does not publish yet, so the run ends with
 # returned-to-caller at address zero.
 PINNED_DISTRIBUTION = (
-    "a70042324ceb268a714936501add18de2cd0a4a6f3fd16b7a758e7893c186bb5")
+    "19363b382da91d73c8161d7c335922003c68dd8331a526a40be2ac6470b1d079")
 PINNED_RUN = {
     "stop": "returned-to-caller",
     "stop_address": "0x00000000",
