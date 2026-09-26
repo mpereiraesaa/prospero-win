@@ -16,10 +16,22 @@
  * The directory is logical: chdir() folds "." and ".." lexically, like a
  * shell's cd. Paths passed to other calls are only joined to it; the kernel
  * resolves them, so symbolic links keep their meaning.
+ *
+ * A title cannot create symbolic links either: symlink() is libkernel_sys
+ * only, and a system call from title code kills the process (FW 12.02,
+ * PPRBUG-22859). Wine needs two, dosdevices/c: -> ../drive_c and z: -> /, so
+ * links are virtual: kept here, followed by every wrapped call, and saved in
+ * a PW_CWD_LINK_TABLE file in the link's directory, which is read the first
+ * time a lookup below that directory fails.
  */
 #include <stddef.h>
+#include <sys/types.h>
 
-enum { PW_CWD_PATH_MAX = 1024, PW_CWD_MAX_FDS = 4096 };
+enum {
+    PW_CWD_PATH_MAX = 1024, PW_CWD_MAX_FDS = 4096,
+    PW_CWD_MAX_LINKS = 64, PW_CWD_MAX_HOPS = 16, PW_CWD_MAX_PROBED = 1024
+};
+#define PW_CWD_LINK_TABLE ".pw-symlinks"
 
 /* The directory relative paths are resolved against; "/" at start. */
 size_t pw_cwd_get(char *out, size_t size);
@@ -50,4 +62,26 @@ int pw_cwd_resolve_at(int dirfd, int at_fdcwd, const char *path, char *out, size
  * where open() works: the title is the only user of its own storage, so any
  * of the user, group or other bits grants. want is R_OK/W_OK/X_OK flags. */
 int pw_cwd_mode_allows(unsigned int st_mode, int want);
+
+/* Record a link at an absolute path; target is kept as given, and a relative
+ * one is resolved from the link's directory. 0, or -1 with errno EEXIST,
+ * ENOSPC (table full), ENOENT (empty target), EINVAL or ENAMETOOLONG. */
+int pw_cwd_link_add(const char *absolute, const char *target);
+/* Forget the link at absolute; 0, or -1 with errno ENOENT. */
+int pw_cwd_link_remove(const char *absolute);
+/* readlink() of a virtual link: the target, truncated to size and not
+ * terminated; its length, or -1 with errno EINVAL when absolute is no link. */
+ssize_t pw_cwd_link_target(const char *absolute, char *out, size_t size);
+/* Replace every link among the directories of an absolute path, and the path
+ * itself when follow_last, by its target. A path through no link is copied
+ * unchanged. 0, or -1 with errno ELOOP or ENAMETOOLONG. */
+int pw_cwd_follow(const char *absolute, int follow_last, char *out, size_t size);
+/* 1 the first time a directory is asked about (its table should be read), 0
+ * after that. */
+int pw_cwd_probe_directory(const char *absolute);
+/* The table of the links in directory, one "name<TAB>target" line each;
+ * its length, or -1 with errno ENAMETOOLONG. */
+ssize_t pw_cwd_links_format(const char *directory, char *out, size_t size);
+/* Record the links of a table read from directory; how many were new. */
+int pw_cwd_links_parse(const char *directory, const char *text, size_t length);
 #endif
