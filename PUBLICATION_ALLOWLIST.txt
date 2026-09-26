@@ -374,3 +374,4 @@ native/pw_vmspace_ps5.h
 wine/patches/0500-ntdll-ps5-signal-context-and-segment-bases.patch
 wine/patches/0510-ntdll-ps5-host-page-size.patch
 wine/patches/0520-ntdll-ps5-ntdll-directory.patch
+wine/patches/0530-ntdll-syscall-dispatcher-slot-in-large-host-page.patch
