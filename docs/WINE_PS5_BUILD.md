@@ -53,6 +53,7 @@ of the port never collide:
 | 0100 | `ntdll`: a PS5 title has no fstab and no `getfsent`; report no default device |
 | 0101 | `server`: resolve file names into server-owned memory instead of `realpath(path, NULL)` |
 | 0102 | `server`: size the user shared data section to a whole host page; with 16 KiB pages that page also holds the syscall dispatcher pointer at `0x7ffe1000` (patch 0530) |
+| 0110 | `server`: run in-process (`WINE_INPROCESS_SERVER`, set on PS5): `pw_wineserver_connect()` starts the server on a thread and returns a client socket; see [In-process server](#in-process-server) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
 | 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
 | 0520 | `ntdll`: name the ntdll directory with `WINE_PS5_NTDLL_DIR` when `dladdr` cannot (PRX) |
@@ -121,6 +122,36 @@ that has it; otherwise the PRX link is skipped and the report says why.
 `report.json` gains a `prx` section. For each module it lists whether the
 PRX was built, what the stub link left unresolved, the tool's refusals, the
 modules it needs, and its data imports.
+
+## In-process server
+
+A PS5 title cannot create processes, so wineserver runs on a thread of the
+process that hosts Wine. Patch 0110 adds `pw_wineserver_connect(nls_dir)`:
+
+1. On first use, the caller's thread runs the server's initialisation (what
+   `main()` does). It skips option parsing, signal handlers, rlimits, the
+   lock file and the fork into a daemon.
+2. `main_loop()` then runs on its own thread.
+3. Each call returns the client end of a new socketpair. The server end
+   reaches the server thread through a channel with `SCM_RIGHTS` and is
+   accepted as a new process, exactly like a connection on the master
+   socket.
+
+Other differences from a standalone server:
+- The NLS directory comes from the caller, and the server directory lives
+  under the prefix.
+- When idle, the server flushes the registry but keeps running and keeps
+  the channel open, so the host can start Wine again.
+- It never signals its own host process.
+
+`tools/test_wine_inprocess_server.sh` builds the patched server objects for
+the host with `WINE_INPROCESS_SERVER` and links them into
+`tests/wine_inprocess_server_check.c`. The test starts the server inside the
+test process and receives the protocol version and request pipe over two
+connections, dropping the first one before it initialises. It passes on the
+host with protocol 961. It needs the host Wine build, so it is not part of
+`make test`. ntdll's side (connecting through this entry instead of the
+socket file) and the `wineserver.prx` link come next.
 
 ## Measured result
 

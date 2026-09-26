@@ -362,6 +362,9 @@ wine/ps5/pw_wine_heap.c
 wine/ps5/pw_wine_heap.h
 wine/patches/0101-server-realpath-into-server-memory.patch
 wine/patches/0102-server-user-shared-data-fills-a-host-page.patch
+wine/patches/0110-server-run-in-process-on-ps5.patch
+tools/test_wine_inprocess_server.sh
+tests/wine_inprocess_server_check.c
 wine/ps5/pw_wine_heap_libc.c
 native/pw_ucontext_map_ps5.c
 native/pw_ucontext_map_ps5.h

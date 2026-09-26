@@ -1,0 +1,323 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 13:20:00 +0200
+Subject: [PATCH] server: Run in-process on PS5.
+
+A PS5 title cannot create processes, so the server runs on a thread of
+the process that hosts Wine (WINE_INPROCESS_SERVER, set for __PROSPERO__
+and available to host builds for testing). pw_wineserver_connect()
+starts it on first use, running main()'s initialisation on the caller
+thread, without options, signal handlers, rlimits, a lock or a daemon,
+then main_loop() on its own thread. Each call returns the client end of
+a new socketpair; the server end reaches the server thread through a
+channel with SCM_RIGHTS and is accepted as a new process exactly like a
+connection on the master socket.
+
+The NLS directory comes from the caller (ntdll knows its data dir), the
+server directory lives under the prefix as on Android, and the ownership
+checks are skipped on PS5, whose file systems keep no unix owners.
+Idle, the server flushes the registry but neither exits nor drops the
+channel, since the host may start Wine again, and it never signals its
+own host process when a client process dies.
+---
+ server/main.c    | 47 +++++++++++++++++++++++++++
+ server/process.c | 10 ++++++
+ server/request.c | 99 +++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ server/request.h | 10 ++++++
+ server/unicode.c |  4 +++
+ 5 files changed, 169 insertions(+), 1 deletion(-)
+
+diff --git a/server/main.c b/server/main.c
+index 46419a09cb..34f51cbae4 100644
+--- a/server/main.c
++++ b/server/main.c
+@@ -26,6 +26,7 @@
+ #include <signal.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <sys/time.h>
+ #include <unistd.h>
+ #ifdef HAVE_SYS_RESOURCE_H
+@@ -241,6 +242,52 @@ static void init_limits(void)
+ #endif
+ }
+ 
++#ifdef WINE_INPROCESS_SERVER
++#include <pthread.h>
++
++const char *inprocess_nls_dir;
++static int inprocess_started;
++
++static void *inprocess_server_thread( void *arg )
++{
++    main_loop();
++    return NULL;
++}
++
++/* main() without options, signal handlers, rlimits or a daemon */
++static void start_inprocess_server(void)
++{
++    pthread_attr_t attr;
++    pthread_t thread;
++
++    sock_init();
++    open_master_socket();
++    set_current_time();
++    init_memory();
++    init_directories( load_intl_file() );
++    init_threading();
++    init_registry();
++
++    pthread_attr_init( &attr );
++    pthread_attr_setstacksize( &attr, 1024 * 1024 );
++    pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED );
++    inprocess_started = !pthread_create( &thread, &attr, inprocess_server_thread, NULL );
++    pthread_attr_destroy( &attr );
++}
++
++/* Start the server on first use and return a new client connection, which
++ * ntdll uses in place of connecting to the server socket. Initialisation
++ * runs on the caller's thread, so it completes before the first request. */
++int pw_wineserver_connect( const char *nls_dir )
++{
++    static pthread_once_t once = PTHREAD_ONCE_INIT;
++
++    if (!inprocess_nls_dir && nls_dir) inprocess_nls_dir = strdup( nls_dir );
++    pthread_once( &once, start_inprocess_server );
++    return inprocess_started ? connect_inprocess_client() : -1;
++}
++#endif
++
+ int main( int argc, char *argv[] )
+ {
+     setvbuf( stderr, NULL, _IOLBF, 0 );
+diff --git a/server/process.c b/server/process.c
+index 94adb19c1c..a0d95f4d38 100644
+--- a/server/process.c
++++ b/server/process.c
+@@ -567,6 +567,16 @@ static void process_sigkill( void *private )
+     process->sigkill_delay *= 2;
+     if (process->sigkill_delay >= TICKS_PER_SEC / 2)
+         signal = SIGKILL;
++#ifdef WINE_INPROCESS_SERVER
++    if (process->unix_pid == getpid())
++    {
++        /* the process is the server's own host: it cannot be killed, only
++         * forgotten once its threads stopped talking to the server */
++        process->sigkill_timeout = NULL;
++        process_died( process );
++        return;
++    }
++#endif
+ 
+     if (!kill( process->unix_pid, signal ) && !signal)
+         process->sigkill_timeout = add_timeout_user( -process->sigkill_delay, process_sigkill, process );
+diff --git a/server/request.c b/server/request.c
+index 5135ed50cf..44ff43012e 100644
+--- a/server/request.c
++++ b/server/request.c
+@@ -102,6 +102,9 @@ int server_dir_fd = -1;    /* file descriptor for the server dir */
+ int config_dir_fd = -1;    /* file descriptor for the config dir */
+ 
+ static struct master_socket *master_socket;  /* the master socket object */
++#ifdef WINE_INPROCESS_SERVER
++static int client_channel = -1;  /* send side of the in-process client channel */
++#endif
+ static struct timeout_user *master_timeout;
+ 
+ /* complain about a protocol error and terminate the client connection */
+@@ -518,6 +521,68 @@ static void master_socket_destroy( struct object *obj )
+     release_object( sock->fd );
+ }
+ 
++#ifdef WINE_INPROCESS_SERVER
++/* receive one client socket sent by connect_inprocess_client */
++static int receive_inprocess_client( int channel )
++{
++    char dummy;
++    struct iovec vec = { &dummy, 1 };
++    union { struct cmsghdr header; char buffer[CMSG_SPACE( sizeof(int) )]; } control;
++    struct msghdr msg;
++    struct cmsghdr *cmsg;
++    int fd;
++
++    memset( &msg, 0, sizeof(msg) );
++    msg.msg_iov = &vec;
++    msg.msg_iovlen = 1;
++    msg.msg_control = &control;
++    msg.msg_controllen = sizeof(control);
++    if (recvmsg( channel, &msg, 0 ) != 1) return -1;
++    for (cmsg = CMSG_FIRSTHDR( &msg ); cmsg; cmsg = CMSG_NXTHDR( &msg, cmsg ))
++    {
++        if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) continue;
++        memcpy( &fd, CMSG_DATA( cmsg ), sizeof(fd) );
++        return fd;
++    }
++    return -1;
++}
++
++/* create a connection to the in-process server and return the client end;
++ * the server end is handed to the server thread, which accepts it as a new
++ * process exactly as it would a connection on the master socket */
++int connect_inprocess_client(void)
++{
++    char dummy = 0;
++    struct iovec vec = { &dummy, 1 };
++    union { struct cmsghdr header; char buffer[CMSG_SPACE( sizeof(int) )]; } control;
++    struct msghdr msg;
++    struct cmsghdr *cmsg;
++    int pair[2];
++
++    if (client_channel == -1) return -1;
++    if (socketpair( AF_UNIX, SOCK_STREAM, 0, pair ) == -1) return -1;
++    memset( &msg, 0, sizeof(msg) );
++    memset( &control, 0, sizeof(control) );
++    msg.msg_iov = &vec;
++    msg.msg_iovlen = 1;
++    msg.msg_control = &control;
++    msg.msg_controllen = CMSG_SPACE( sizeof(int) );
++    cmsg = CMSG_FIRSTHDR( &msg );
++    cmsg->cmsg_level = SOL_SOCKET;
++    cmsg->cmsg_type = SCM_RIGHTS;
++    cmsg->cmsg_len = CMSG_LEN( sizeof(int) );
++    memcpy( CMSG_DATA( cmsg ), &pair[0], sizeof(int) );
++    if (sendmsg( client_channel, &msg, 0 ) != 1)
++    {
++        close( pair[0] );
++        close( pair[1] );
++        return -1;
++    }
++    close( pair[0] );
++    return pair[1];
++}
++#endif
++
+ /* handle a socket event */
+ static void master_socket_poll_event( struct fd *fd, int event )
+ {
+@@ -535,9 +600,13 @@ static void master_socket_poll_event( struct fd *fd, int event )
+     else if (event & POLLIN)
+     {
+         struct process *process;
++#ifdef WINE_INPROCESS_SERVER
++        int client = receive_inprocess_client( get_unix_fd( master_socket->fd ) );
++#else
+         struct sockaddr_un dummy;
+         socklen_t len = sizeof(dummy);
+         int client = accept( get_unix_fd( master_socket->fd ), (struct sockaddr *) &dummy, &len );
++#endif
+         if (client == -1) return;
+         fcntl( client, F_SETFL, O_NONBLOCK );
+         if ((process = create_process( client, NULL, 0, NULL, NULL, NULL, 0, NULL )))
+@@ -569,8 +638,10 @@ static void create_dir( const char *name, struct stat *st )
+             fatal_error( "lstat %s: %s\n", name, strerror( errno ));
+     }
+     if (!S_ISDIR(st->st_mode)) fatal_error( "%s is not a directory\n", name );
++#ifndef __PROSPERO__  /* one user; its file systems do not keep unix owners */
+     if (st->st_uid != getuid()) fatal_error( "%s is not owned by you\n", name );
+     if (st->st_mode & 077) fatal_error( "%s must not be accessible by other users\n", name );
++#endif
+ }
+ 
+ /* create the server directory and chdir to it */
+@@ -620,7 +691,7 @@ static char *create_server_dir( int force )
+ 
+     /* create the base directory if needed */
+ 
+-#ifdef __ANDROID__  /* there's no /tmp dir on Android */
++#if defined(__ANDROID__) || defined(__PROSPERO__)  /* there's no /tmp dir on Android or PS5 */
+     if (asprintf( &base_dir, "%s/.wineserver", config_dir ) == -1)
+         fatal_error( "out of memory\n" );
+ #else
+@@ -828,6 +899,27 @@ void open_master_socket(void)
+     assert( sizeof(union generic_request) == sizeof(struct request_max_size) );
+     assert( sizeof(union generic_reply) == sizeof(struct request_max_size) );
+ 
++#ifdef WINE_INPROCESS_SERVER
++    {
++        /* no socket file, lock or daemon: clients arrive through a channel */
++        int channel[2];
++
++        server_dir = create_server_dir( 1 );
++        if (socketpair( AF_UNIX, SOCK_STREAM, 0, channel ) == -1)
++            fatal_error( "socketpair: %s\n", strerror( errno ));
++        fcntl( channel[0], F_SETFD, FD_CLOEXEC );
++        fcntl( channel[1], F_SETFD, FD_CLOEXEC );
++        if (!(master_socket = alloc_object( &master_socket_ops )) ||
++            !(master_socket->fd = create_anonymous_fd( &master_socket_fd_ops, channel[0], &master_socket->obj, 0 )))
++            fatal_error( "out of memory\n" );
++        set_fd_events( master_socket->fd, POLLIN );
++        make_object_permanent( &master_socket->obj );
++        client_channel = channel[1];
++        init_tracing_mechanism();
++        return;
++    }
++#endif
++
+     /* make sure the stdio fds are open */
+     fd = open( "/dev/null", O_RDWR );
+     while (fd >= 0 && fd <= 2) fd = dup( fd );
+@@ -887,6 +979,9 @@ static void close_socket_timeout( void *arg )
+ {
+     master_timeout = NULL;
+     flush_registry();
++#ifdef WINE_INPROCESS_SERVER
++    return;  /* exiting would end the process that hosts the server */
++#endif
+     if (debug_level) fprintf( stderr, "wineserver: exiting (pid=%ld)\n", (long) getpid() );
+ 
+ #ifdef DEBUG_OBJECTS
+@@ -898,11 +993,13 @@ static void close_socket_timeout( void *arg )
+ /* close the master socket and stop waiting for new clients */
+ void close_master_socket( timeout_t timeout )
+ {
++#ifndef WINE_INPROCESS_SERVER  /* in-process, the host may start Wine again */
+     if (master_socket)
+     {
+         release_object( master_socket );
+         master_socket = NULL;
+     }
++#endif
+     if (master_timeout)  /* cancel previous timeout */
+         remove_timeout_user( master_timeout );
+ 
+diff --git a/server/request.h b/server/request.h
+index 68229d10bf..397f6625cb 100644
+--- a/server/request.h
++++ b/server/request.h
+@@ -53,6 +53,16 @@ extern int send_client_fd( struct process *process, int fd, obj_handle_t handle
+ extern void read_request( struct thread *thread );
+ extern void write_reply( struct thread *thread );
+ extern timeout_t monotonic_counter(void);
++#if defined(__PROSPERO__) && !defined(WINE_INPROCESS_SERVER)
++/* A PS5 title cannot create processes: the server runs on a thread of the
++ * process that hosts Wine and receives its clients through a socketpair. */
++#define WINE_INPROCESS_SERVER 1
++#endif
++#ifdef WINE_INPROCESS_SERVER
++extern int connect_inprocess_client(void);
++extern int pw_wineserver_connect( const char *nls_dir );
++extern const char *inprocess_nls_dir;
++#endif
+ extern void open_master_socket(void);
+ extern void close_master_socket( timeout_t timeout );
+ extern void shutdown_master_socket(void);
+diff --git a/server/unicode.c b/server/unicode.c
+index bb39b55e50..b2960ec4de 100644
+--- a/server/unicode.c
++++ b/server/unicode.c
+@@ -338,7 +338,11 @@ struct fd *load_intl_file(void)
+     int unix_fd;
+     mode_t mode = 0600;
+ 
++#ifdef WINE_INPROCESS_SERVER
++    nls_dirs[0] = inprocess_nls_dir ? strdup( inprocess_nls_dir ) : NULL;
++#else
+     nls_dirs[0] = get_nls_dir();
++#endif
+     for (i = 0; i < ARRAY_SIZE( nls_dirs ); i++)
+     {
+         if (!nls_dirs[i]) continue;
+-- 
+2.43.0
