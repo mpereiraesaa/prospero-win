@@ -91,12 +91,13 @@ compose + GPU DMA). Their relative cost is unmeasured.
   sRGB-nonlinear UNORM means values pass through unchanged, as on the AGC path.
 - **Orientation.** Frames are top-down; any bottom-up DIB is resolved inside
   GDI. Neither backend flips.
-- **Extent.** The display extent is fixed per backend. A frame larger than the
-  output is refused (`PW_ERR_LIMIT`) before any image is acquired. The current
-  `pw_videoout_ps5_present` computes `left=(WIDTH-shown_w)/2` without that
-  guard (`native/pw_videoout_ps5.c:117`), so a target wider than 1920 or taller
-  than 1080 underflows and writes outside the scratch frame. That needs its own
-  native fix with hardware validation.
+- **Extent.** The display extent is fixed per backend. `pw_present_fit`
+  refuses a frame larger than the output (`PW_ERR_LIMIT`) before any image is
+  acquired. The AGC presenter crops instead (`native/pw_videoout_layout.h`):
+  an axis that fits stays centred and an oversized axis shows its leading
+  part at scale 1. It previously computed `left=(WIDTH-shown_w)/2` without a
+  guard, so a target wider than 1920 or taller than 1080 underflowed and wrote
+  outside the scratch frame.
 - **Ownership and lifetime.** The frame is borrowed from GDI and valid only
   until the next resize, destroy or reset of that target
   (`pw_gdi_resize_target` can move the offset, `src/pw_gdi.c:301`). It must be
