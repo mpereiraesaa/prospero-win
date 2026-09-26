@@ -332,3 +332,5 @@ wine/wowprospero/wowprospero.spec
 src/pw_x86_hostexec.c
 src/pw_x86_hostexec.h
 tests/test_pw_x86_hostexec.c
+tools/dbt_differential.c
+tests/fixtures/dbt_differential_forms.txt

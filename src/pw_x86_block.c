@@ -2246,7 +2246,7 @@ analyze_and_emit:
                             byte(&e,0x0f);byte(&e,0xba);byte(&e,0x67);
                             byte(&e,offsetof(PwX86State,eflags));byte(&e,0);
                         }
-                        byte(&e,word_general);byte(&e,0xc8);
+                        byte(&e,word_general);byte(&e,0xc1); /* ax = ax op cx (reg op mem) */
                         byte(&e,0x66);byte(&e,0x89);byte(&e,0x47);byte(&e,operand.reg*4);
                         if (get_resident_host_reg(&block->exit_contract, operand.reg) >= 0) {
                             emit_load_single(&e, &block->exit_contract, operand.reg);

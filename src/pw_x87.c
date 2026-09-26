@@ -243,9 +243,10 @@ static int stack_preflight(PwGuestFp *fp,PwX87Action action,uintptr_t operand)
     case PW_X87_FSUBR_TO_ST:case PW_X87_FDIV_TO_ST:case PW_X87_FDIVR_TO_ST:
     case PW_X87_FADDP_ST:case PW_X87_FMULP_ST:case PW_X87_FSUBP_ST:
     case PW_X87_FDIVP_ST:case PW_X87_FDIVRP_ST:
-    case PW_X87_FST_ST:case PW_X87_FSTP_ST:
     case PW_X87_FCOM_ST:case PW_X87_FCOMP_ST:
         logical=(unsigned)operand;break;
+    /* FST/FSTP ST(i) only read ST(0); an empty destination is not a stack
+     * fault on hardware (compilers use FSTP ST(1) to drop a shallow stack). */
     case PW_X87_FCOMPP:case PW_X87_FUCOMPP:logical=1;break;
     default:break;
     }
@@ -287,7 +288,8 @@ static void pack_special(Soft80 value,uint8_t out[10])
     if(value.kind==SOFT_ZERO)put80(out,0,(uint16_t)(value.sign<<15));
     else if(value.kind==SOFT_INFINITY)
         put80(out,UINT64_C(0x8000000000000000),(uint16_t)((value.sign<<15)|0x7fff));
-    else put80(out,UINT64_C(0xc000000000000000),(uint16_t)((value.sign<<15)|0x7fff));
+    else put80(out,value.sig?value.sig|UINT64_C(0xc000000000000000):UINT64_C(0xc000000000000000),
+               (uint16_t)((value.sign<<15)|0x7fff));
 }
 static unsigned highest128(__uint128_t value)
 {
@@ -323,8 +325,30 @@ static int pack_exact(PwGuestFp *fp,unsigned sign,int exponent,
 }
 static int invalid_result(PwGuestFp *fp,uint8_t out[10])
 {
+    /* The x87 default ("real indefinite") QNaN is negative. */
     int status=exception(fp,X87_IE);
-    pack_special((Soft80){.kind=SOFT_NAN},out);return status;
+    pack_special((Soft80){.kind=SOFT_NAN,.sign=1},out);return status;
+}
+/* NaN operands of a two-operand arithmetic instruction (SDM Vol. 1, 4.8.3.5):
+ * an SNaN raises IE; the result is the QNaN operand when the other is an SNaN,
+ * otherwise the NaN with the larger significand, always quieted and keeping
+ * its own sign and payload. */
+static int nan_operands(PwGuestFp *fp,Soft80 a,Soft80 b,uint8_t out[10])
+{
+    const uint64_t quiet=UINT64_C(0x4000000000000000);
+    unsigned a_nan=a.kind==SOFT_NAN,b_nan=b.kind==SOFT_NAN;
+    unsigned a_snan=a_nan && !(a.sig&quiet),b_snan=b_nan && !(b.sig&quiet);
+    Soft80 pick;
+    int status=PW_OK;
+
+    if(a_snan || b_snan)status=exception(fp,X87_IE);
+    if(a_nan && b_nan) {
+        if(a_snan!=b_snan)pick=a_snan?b:a;
+        else pick=(b.sig&~quiet)>(a.sig&~quiet)?b:a;
+    } else pick=a_nan?a:b;
+    pick.sig|=quiet;
+    pack_special(pick,out);
+    return status;
 }
 static int soft_add(PwGuestFp *fp,Soft80 a,Soft80 b,uint8_t out[10])
 {
@@ -573,7 +597,8 @@ static int binary(PwGuestFp *fp,Soft80 rhs,unsigned operation,unsigned reverse,
     Soft80 left=unpack80(left_raw);
     if(reverse){Soft80 swap=left;left=rhs;rhs=swap;}
     PwGuestFp after=*fp;
-    status=operation==0?soft_add(&after,left,rhs,result):
+    status=(left.kind==SOFT_NAN || rhs.kind==SOFT_NAN)?nan_operands(&after,left,rhs,result):
+        operation==0?soft_add(&after,left,rhs,result):
         operation==1?soft_mul(&after,left,rhs,result):
         operation==2?soft_add(&after,left,(Soft80){.sig=rhs.sig,.exp=rhs.exp,.sign=!rhs.sign,.kind=rhs.kind},result):
         soft_div(&after,left,rhs,result);
