@@ -377,6 +377,9 @@ tests/test_pw_wine_dl.c
 wine/ps5/pw_wine_dl.c
 wine/ps5/pw_wine_dl.h
 wine/ps5/pw_wine_dl_libc.c
+tests/test_pw_wine_sink.c
+wine/ps5/pw_wine_sink.c
+wine/ps5/pw_wine_sink.h
 tests/test_pw_wine_threads.c
 wine/ps5/pw_wine_threads.c
 wine/ps5/pw_wine_threads.h

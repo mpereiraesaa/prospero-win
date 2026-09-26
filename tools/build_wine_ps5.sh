@@ -209,16 +209,23 @@ link_prx() {
         prx_status=1
 }
 if [ "$prx_status" = 0 ]; then
-    shims=""
     for unit in pw_wine_prx pw_wine_dl pw_wine_dl_libc pw_wine_compat pw_wine_compat_libc \
-            pw_wine_threads pw_wine_threads_libc; do
+            pw_wine_threads pw_wine_threads_libc pw_wine_sink; do
         "$sdk/bin/prospero-clang" -std=gnu11 -O2 -Wall -Wextra -Werror -fPIC \
             -c "$root/wine/ps5/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
+    done
+    # ntdll: the loader, compat, and the title's present and input sink; the
+    # thread registry belongs to the server alone.
+    shims=""
+    for unit in pw_wine_prx pw_wine_dl pw_wine_dl_libc pw_wine_compat pw_wine_compat_libc \
+            pw_wine_sink; do
         shims="$shims $prx/obj/$unit.o"
     done
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/ntdll_desc.c" \
         __wine_main pw_wine_dl_adopt dlopen dlsym dlerror \
-        pw_wine_heap_stats pw_wine_heap_malloc pw_wine_heap_free
+        pw_wine_heap_stats pw_wine_heap_malloc pw_wine_heap_free \
+        pw_wine_set_present_sink pw_wine_post_input pw_wine_sink_stats \
+        pw_wine_present pw_wine_next_input
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/win32u_desc.c" __wine_unix_lib_init
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \
         pw_wineserver_connect pw_wine_thread_register
