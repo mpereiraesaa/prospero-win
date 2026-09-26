@@ -229,6 +229,27 @@ input.
 - No text is drawn, because the build has no fonts (`--without-freetype`,
   as on PS5). Fonts for the console are still open.
 
+## WoW64 CPU backend
+
+The PRX stage also links `wowprospero.prx`, the Unix side of the WoW64 CPU
+backend (`wine/wowprospero`). It holds `unix.c` and the IA-32 DBT sources,
+built with the payload SDK, and imports ntdll's functions like win32u does.
+Its descriptor exports `__wine_unix_call_funcs`, which ntdll's `dlsym`
+looks up.
+
+`unix.c` keeps one `__thread` pointer, which the PS5 compiler turns into
+emulated TLS, so the module also links the payload SDK's own `emutls.o`.
+Host run: no unresolved symbols, nothing bound only to `libkernel_sys`, no
+raw syscalls, 142,235 bytes.
+
+To use it on the console:
+- the PE side, `wowprospero.dll` from `tools/build_wowprospero.sh`, goes in
+  `lib/wine/x86_64-windows` and in the prefix's `system32`;
+- the prefix selects it with
+  `HKLM\Software\Microsoft\Wow64\x86` (default value) =
+  `wowprospero.dll`, since Wine's default `wow64cpu.dll` needs 32-bit
+  compatibility mode, which the console refuses.
+
 ## Imports a title does not get
 
 The SDK stubs include `libkernel_sys`, so a PRX links against functions

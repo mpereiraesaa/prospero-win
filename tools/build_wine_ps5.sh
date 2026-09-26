@@ -192,11 +192,13 @@ if lines:
                    if arg.endswith(".o") and not arg.startswith("/")))
 PY
 }
-# link_prx NAME TARGET "EXTRA OBJECTS" [IMPORTED MODULE]
+# link_prx NAME TARGET "EXTRA OBJECTS" [IMPORTED MODULE]; TARGET "-" takes
+# only the extra objects (a module that is not one of Wine's own targets).
 link_prx() {
-    name=$1; objects=$(link_objects "$2")
+    name=$1; objects=
+    [ "$2" = - ] || objects=$(link_objects "$2")
     log=$prx/$name.link.log
-    [ -n "$objects" ] || { echo "no ELF link of $2 in make.log" > "$log"; prx_status=1; return; }
+    [ -n "$objects$3" ] || { echo "no ELF link of $2 in make.log" > "$log"; prx_status=1; return; }
     # shellcheck disable=SC2086
     (cd "$build" && "$sdk/bin/prospero-lld" --shared -Bsymbolic -T "$pie" \
         -T "$root/wine/ps5/prx_eh_frame.ld" --eh-frame-hdr -soname "$name.prx" -z defs \
@@ -237,7 +239,8 @@ if [ "$prx_status" = 0 ]; then
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/win32u_desc.c" __wine_unix_lib_init
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \
         pw_wineserver_connect pw_wine_thread_register
-    for unit in ntdll_desc win32u_desc wineserver_desc; do
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wowprospero_desc.c" __wine_unix_call_funcs
+    for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc; do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
@@ -249,6 +252,23 @@ if [ "$prx_status" = 0 ]; then
         $prx/obj/pw_wine_compat_libc.o $prx/obj/pw_wine_threads.o \
         $prx/obj/pw_wine_threads_libc.o $prx/obj/wineserver_desc.o \
         $prx/obj/pw_wine_cwd.o $prx/obj/pw_wine_cwd_libc.o $cwd_wraps"
+    # The WoW64 CPU backend (wine/wowprospero): its Unix library runs i386
+    # code through the IA-32 DBT and imports ntdll's functions like win32u.
+    wow=""
+    for unit in wine/wowprospero/unix.c src/pw_x86_engine.c src/pw_x86_block.c \
+            src/pw_x86_cache.c src/pw_x86_hostexec.c src/pw_x87.c src/pw_guest_fp.c \
+            src/pw_vm.c src/pw_vm_posix.c; do
+        object=$prx/obj/wow_$(basename "$unit" .c).o
+        "$sdk/bin/prospero-clang" -std=gnu11 -O2 -fPIC -D__WINESRC__ -DWINE_UNIX_LIB -D_REENTRANT \
+            -I"$root/wine/wowprospero" -I"$build/include" -I"$tree/include" \
+            -I"$root/src" -I"$root/include" -c "$root/$unit" -o "$object" || fail "cannot compile $unit"
+        wow="$wow $object"
+    done
+    # unix.c keeps one __thread pointer, which the PS5 compiler emulates;
+    # the payload SDK's own emutls object provides __emutls_get_address.
+    (cd "$prx/obj" && "$sdk/bin/llvm-ar" x "$sdk/target/lib/libc.a" emutls.o) ||
+        fail "no emutls.o in the payload SDK's libc.a"
+    link_prx wowprospero - "$wow $prx/obj/emutls.o $prx/obj/wowprospero_desc.o" "$prx/ntdll.shared.elf"
 fi
 
 if python3 - "$build" "$work/make.log" "$work/report.json" "$sdk" "$WINE_COMMIT" "$prx" "$prx_status" \
@@ -304,7 +324,7 @@ title_exports = exports("libkernel.so") | exports("libSceLibcInternal.so")
 objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{sdk}/bin/llvm-objdump"
 SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
-for name in ("ntdll", "win32u", "wineserver") if not prx_status.startswith("skipped") else ():
+for name in ("ntdll", "win32u", "wineserver", "wowprospero") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
     link_text = link_log.read_text(errors="replace") if link_log.is_file() else ""
@@ -323,7 +343,7 @@ for name in ("ntdll", "win32u", "wineserver") if not prx_status.startswith("skip
         # stay 0 and a call to one jumps to 0 (measured, FW 12.02).
         imports = {fields[7].split("@")[0] for fields in (line.split() for line in symbols.splitlines())
                    if len(fields) >= 8 and fields[6] == "UND"}
-        provided = title_exports | (ntdll_exports if name == "win32u" else set())
+        provided = title_exports | (ntdll_exports if name in ("win32u", "wowprospero") else set())
         entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
         # The kernel kills a title that executes a syscall instruction outside
         # libkernel (measured: SYSTEM_ILLEGAL_FUNCTION_CALL). Wine's dispatchers
