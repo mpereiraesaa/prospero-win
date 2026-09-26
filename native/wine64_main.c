@@ -28,11 +28,10 @@
 
 /* Where the title's Wine runtime can be seen: /app0 inside the sandbox;
  * once /data is granted the process sees the real root, where /app0 does
- * not exist (measured), so the sandbox view and the installed title follow. */
+ * not exist (measured), and the sandbox's view of app0 is used instead. */
 #define PW_WINE64_RUNTIME "/win/wine/lib/wine/x86_64-unix"
 #define PW_SANDBOX_APP0 "/mnt/sandbox/" PW_TITLE_ID "_000/app0"
-#define PW_INSTALLED_TITLE "/data/homebrew/" PW_TITLE_ID
-static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0, PW_INSTALLED_TITLE };
+static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 #ifndef PW_WINE64_PREFIX
 #define PW_WINE64_PREFIX "/download0/prospero-win/prefix"  /* sandbox fallback */
 #endif

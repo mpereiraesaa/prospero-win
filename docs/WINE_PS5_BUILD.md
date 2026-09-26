@@ -283,8 +283,8 @@ Until Wine installs its own handlers, a fault is reported with its RIP
 (read at ucontext +224) and the ntdll segment it falls in. The main thread
 logs a heartbeat and ntdll's address-space counters for up to 30 s.
 
-The runtime is found at the first of `/app0`,
-`/mnt/sandbox/PPSA99995_000/app0` and `/data/homebrew/PPSA99995` that holds
+The runtime is found at `/app0` or, failing that, at
+`/mnt/sandbox/PPSA99995_000/app0`, whichever holds
 `win/wine/lib/wine/x86_64-unix/ntdll.prx`. Once `/data` is granted, the
 process sees the real root, where `/app0` does not exist.
 
