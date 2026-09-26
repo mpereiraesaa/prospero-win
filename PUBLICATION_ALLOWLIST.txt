@@ -373,6 +373,9 @@ tests/test_pw_wine_dl.c
 wine/ps5/pw_wine_dl.c
 wine/ps5/pw_wine_dl.h
 wine/ps5/pw_wine_dl_libc.c
+tests/test_pw_wine_unix_probe.c
+wine/ps5/pw_wine_unix_probe.c
+wine/ps5/pw_wine_unix_probe.h
 native/pw_vmspace_ps5.c
 native/pw_vmspace_ps5.h
 wine/patches/0500-ntdll-ps5-signal-context-and-segment-bases.patch

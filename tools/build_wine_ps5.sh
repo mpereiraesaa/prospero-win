@@ -215,7 +215,8 @@ if [ "$prx_status" = 0 ]; then
         shims="$shims $prx/obj/$unit.o"
     done
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/ntdll_desc.c" \
-        __wine_main pw_wine_dl_adopt pw_wine_heap_stats dlopen dlsym
+        __wine_main pw_wine_dl_adopt dlopen dlsym dlerror \
+        pw_wine_heap_stats pw_wine_heap_malloc pw_wine_heap_free
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/win32u_desc.c" __wine_unix_lib_init
     for unit in ntdll_desc win32u_desc; do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \

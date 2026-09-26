@@ -26,6 +26,9 @@ static void configure(void)
     const char *dir=getenv("WINE_PRX_DIR");
     pw_wine_dl_configure(&ops,dir && *dir?dir:"/app0/sce_module");
 }
+/* The title's first call may be pw_wine_dl_adopt, which bypasses the
+ * wrappers below, so configure as the module starts as well. */
+__attribute__((constructor)) static void configure_on_start(void){pthread_once(&once,configure);}
 static void *resolve_handle(void *handle)
 {
     return handle==&self || handle==RTLD_DEFAULT || handle==RTLD_NEXT || handle==RTLD_SELF?
