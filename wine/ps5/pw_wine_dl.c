@@ -1,0 +1,126 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#include "pw_wine_dl.h"
+#include "pw_wine_prx.h"
+#include <pthread.h>
+#include <string.h>
+
+typedef struct Module {
+    char path[PW_WINE_DL_MAX_PATH];
+    int32_t handle;uint32_t references;
+    const PwPrxDescriptor *descriptor;
+} Module;
+
+static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
+static Module modules[PW_WINE_DL_MAX_MODULES];
+static uint32_t order[PW_WINE_DL_MAX_MODULES],loaded;
+static PwWineDlOps ops;
+static char module_dir[PW_WINE_DL_MAX_PATH];
+static _Thread_local const char *last_error;
+
+void pw_wine_dl_configure(const PwWineDlOps *new_ops,const char *dir)
+{
+    pthread_mutex_lock(&lock);
+    if(new_ops)ops=*new_ops;
+    module_dir[0]=0;
+    if(dir && strlen(dir)<sizeof(module_dir))strcpy(module_dir,dir);
+    pthread_mutex_unlock(&lock);
+}
+const char *pw_wine_dl_error(void)
+{
+    const char *error=last_error;last_error=NULL;return error;
+}
+/* "dir/name.so" -> "dir/name.prx"; with a module dir, "<dir>/name.prx". */
+static int prx_path(const char *path,const char *directory,char *out)
+{
+    size_t length=strlen(path);
+    const char *base=strrchr(path,'/');base=base?base+1:path;
+    size_t stem=length>=3 && !strcmp(path+length-3,".so")?length-3:length;
+    if(directory) {
+        size_t dir_length=strlen(directory),name=stem-(size_t)(base-path);
+        if(dir_length+1+name+4>=PW_WINE_DL_MAX_PATH)return 0;
+        memcpy(out,directory,dir_length);out[dir_length]='/';
+        memcpy(out+dir_length+1,base,name);memcpy(out+dir_length+1+name,".prx",5);
+        return 1;
+    }
+    if(stem+4>=PW_WINE_DL_MAX_PATH)return 0;
+    memcpy(out,path,stem);memcpy(out+stem,".prx",5);return 1;
+}
+static Module *find(const char *path)
+{
+    for(uint32_t i=0;i<loaded;i++)if(!strcmp(modules[order[i]].path,path))return &modules[order[i]];
+    return NULL;
+}
+static int32_t try_load(const char *path)
+{
+    int result=0;return ops.load_start?ops.load_start(path,0,NULL,0,NULL,&result):-1;
+}
+static void *open_locked(const char *path)
+{
+    Module *module=find(path);
+    if(module){module->references++;return module;}
+    if(loaded==PW_WINE_DL_MAX_MODULES){last_error="too many modules";return NULL;}
+    char candidate[PW_WINE_DL_MAX_PATH];int32_t handle=-1;
+    if(prx_path(path,NULL,candidate))handle=try_load(candidate);
+    if(handle<0 && module_dir[0] && prx_path(path,module_dir,candidate))handle=try_load(candidate);
+    if(handle<0){last_error="module not found";return NULL;}
+    uint8_t info[PW_PRX_MODULE_INFO_BYTES];PwPrxSegment segments[PW_PRX_MAX_SEGMENTS];
+    uint32_t count=0;const PwPrxDescriptor *descriptor=NULL;int result=0;
+    memset(info,0,sizeof(info));
+    {uint64_t size=PW_PRX_MODULE_INFO_BYTES;memcpy(info,&size,sizeof(size));}
+    if(!ops.module_info || ops.module_info(handle,info)<0 ||
+       pw_prx_parse_module_info(info,NULL,segments,&count)!=PW_PRX_OK ||
+       pw_prx_find_descriptor(segments,count,&descriptor)!=PW_PRX_OK) {
+        if(ops.stop_unload)(void)ops.stop_unload(handle,0,NULL,0,NULL,&result);
+        last_error="module has no export descriptor";return NULL;
+    }
+    uint32_t slot=0;while(modules[slot].references)slot++;
+    module=&modules[slot];
+    strcpy(module->path,path);module->handle=handle;module->references=1;
+    module->descriptor=descriptor;order[loaded++]=slot;
+    int (*start)(size_t,const void *)=(int (*)(size_t,const void *))
+        (uintptr_t)pw_prx_lookup(descriptor,"module_start");
+    if(start)(void)start(0,NULL);
+    return module;
+}
+void *pw_wine_dl_open(const char *path)
+{
+    if(!path || !*path || strlen(path)>=PW_WINE_DL_MAX_PATH){last_error="invalid path";return NULL;}
+    pthread_mutex_lock(&lock);void *handle=open_locked(path);pthread_mutex_unlock(&lock);
+    return handle;
+}
+void *pw_wine_dl_sym(void *handle,const char *name)
+{
+    if(!name){last_error="invalid symbol";return NULL;}
+    const void *address=NULL;
+    pthread_mutex_lock(&lock);
+    if(handle==PW_WINE_DL_DEFAULT) {
+        for(uint32_t i=0;i<loaded && !address;i++)
+            address=pw_prx_lookup(modules[order[i]].descriptor,name);
+    } else {
+        Module *module=handle;
+        if(module>=modules && module<modules+PW_WINE_DL_MAX_MODULES && module->references)
+            address=pw_prx_lookup(module->descriptor,name);
+    }
+    pthread_mutex_unlock(&lock);
+    if(!address)last_error="symbol not found";
+    return (void *)(uintptr_t)address;
+}
+int pw_wine_dl_close(void *handle)
+{
+    Module *module=handle;int status=0;
+    pthread_mutex_lock(&lock);
+    if(!module || module<modules || module>=modules+PW_WINE_DL_MAX_MODULES || !module->references) {
+        last_error="invalid handle";status=-1;
+    } else if(!--module->references) {
+        int result=0;
+        if(ops.stop_unload && ops.stop_unload(module->handle,0,NULL,0,NULL,&result)<0) {
+            last_error="unload failed";status=-1;
+        }
+        uint32_t slot=(uint32_t)(module-modules),i=0;
+        while(order[i]!=slot)i++;
+        memmove(&order[i],&order[i+1],(loaded-i-1)*sizeof(order[0]));loaded--;
+        memset(module,0,sizeof(*module));
+    }
+    pthread_mutex_unlock(&lock);
+    return status;
+}
