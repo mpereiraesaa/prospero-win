@@ -41,8 +41,9 @@ void pw_cwd_forget(int fd);
 /* Copy the recorded path of fd; 0, or -1 when none is recorded. */
 int pw_cwd_fd_path(int fd, char *out, size_t size);
 /* Resolve path for an *at() call: AT_FDCWD (at_fdcwd) and absolute paths as
- * above, a recorded dirfd by its path. 1 when dirfd has no record and the
- * call should go to the kernel unchanged, 0 when out is set, -1 on error. */
+ * above, a recorded dirfd by its path. 0, or -1 with errno EBADF when dirfd
+ * has no record (the kernel's *at() calls are not linked into a title),
+ * ENOENT for an empty path, or ENAMETOOLONG. */
 int pw_cwd_resolve_at(int dirfd, int at_fdcwd, const char *path, char *out, size_t size);
 
 /* access() from a file's mode bits, for a title whose access() is EPERM even

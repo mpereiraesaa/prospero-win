@@ -51,7 +51,13 @@ static void test_fold(void)
     assert(pw_cwd_join("/base", "", out, sizeof(out)) == -1 && errno == ENOENT);
     assert(!pw_cwd_join("/base/", "x", out, sizeof(out)) && !strcmp(out, "/base/x"));
     assert(!pw_cwd_join("/base", "/abs", out, sizeof(out)) && !strcmp(out, "/abs"));
-    assert(pw_cwd_resolve_at(PW_CWD_MAX_FDS + 5, -100, "x", out, sizeof(out)) == 1);
+    errno = 0;
+    assert(pw_cwd_resolve_at(PW_CWD_MAX_FDS + 5, -100, "x", out, sizeof(out)) == -1 && errno == EBADF);
+    errno = 0;
+    assert(pw_cwd_resolve_at(-5, -100, "x", out, sizeof(out)) == -1 && errno == EBADF);
+    assert(!pw_cwd_resolve_at(-5, -100, "/abs", out, sizeof(out)) && !strcmp(out, "/abs"));
+    errno = 0;
+    assert(pw_cwd_resolve_at(-5, -100, NULL, out, sizeof(out)) == -1 && errno == EFAULT);
 
     assert(pw_cwd_mode_allows(S_IFREG | 0400, R_OK) && !pw_cwd_mode_allows(S_IFREG | 0400, W_OK));
     assert(pw_cwd_mode_allows(S_IFDIR | 0005, R_OK | X_OK) && !pw_cwd_mode_allows(S_IFREG | 0644, X_OK));
@@ -111,7 +117,12 @@ int main(void)
     assert(!chdir(".."));
     expect_cwd(prefix);
     assert(!close(fd) && !unlinkat(dir_fd, "sub", AT_REMOVEDIR));
-    assert(!symlinkat("file2", dir_fd, "link") && !unlinkat(dir_fd, "link", 0));
+    assert(!symlinkat("file2", dir_fd, "link"));
+    assert(!fstatat(dir_fd, "link", &st, AT_SYMLINK_NOFOLLOW) && S_ISLNK(st.st_mode));
+    assert(!fstatat(dir_fd, "link", &st, 0) && S_ISREG(st.st_mode) && st.st_size == 2);
+    assert(!unlinkat(dir_fd, "link", 0) && lstat("link", &st) == -1 && errno == ENOENT);
+    errno = 0;
+    assert(fstatat(dir_fd, "", &st, 0) == -1 && errno == ENOENT);
     assert(!renameat(dir_fd, "file2", AT_FDCWD, "file3"));
     assert((fd = openat(dir_fd, "made", O_CREAT | O_WRONLY, 0640)) >= 0 && !close(fd));
     assert(!stat(at_root("prefix/made"), &st) && (st.st_mode & 0777) == 0640);
@@ -130,8 +141,26 @@ int main(void)
     }
     assert(!unlink("hard") && !unlink("made") && !unlink("file3"));
 
-    /* Directories the module did not open, and stale records. */
+    /* Directories the module did not open, and stale records. The kernel's
+     * *at() calls are not linked into a title: an unrecorded dirfd is EBADF,
+     * while an absolute path still works through it. */
     assert((untracked = __real_open(root, O_RDONLY)) >= 0);
+    errno = 0;
+    assert(openat(untracked, "prefix", O_RDONLY) == -1 && errno == EBADF);
+    errno = 0;
+    assert(fstatat(untracked, "prefix", &st, 0) == -1 && errno == EBADF);
+    errno = 0;
+    assert(mkdirat(untracked, "new", 0777) == -1 && errno == EBADF);
+    errno = 0;
+    assert(unlinkat(untracked, "plain", 0) == -1 && errno == EBADF);
+    errno = 0;
+    assert(symlinkat("x", untracked, "new") == -1 && errno == EBADF);
+    errno = 0;
+    assert(renameat(untracked, "prefix", AT_FDCWD, "moved") == -1 && errno == EBADF);
+    errno = 0;
+    assert(renameat(AT_FDCWD, "missing", untracked, "moved") == -1 && errno == EBADF);
+    assert(!fstatat(untracked, at_root("prefix"), &st, 0) && S_ISDIR(st.st_mode));
+    assert(!mkdirat(untracked, at_root("abs"), 0777) && !unlinkat(untracked, at_root("abs"), AT_REMOVEDIR));
     errno = 0;
     assert(fchdir(untracked) == -1 && errno == EACCES);
     pw_cwd_track(untracked, prefix);          /* a path that names another directory */

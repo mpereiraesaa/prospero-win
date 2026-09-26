@@ -138,10 +138,12 @@ int pw_cwd_resolve_at(int dirfd, int at_fdcwd, const char *path, char *out, size
 
     if (!path) { errno = EFAULT; return -1; }
     if (path[0] == '/' || dirfd == at_fdcwd) return pw_cwd_join(NULL, path, out, size);
-    if (dirfd < 0 || dirfd >= PW_CWD_MAX_FDS) return 1;
+    if (!path[0]) { errno = ENOENT; return -1; }
+    if (dirfd < 0 || dirfd >= PW_CWD_MAX_FDS) { errno = EBADF; return -1; }
     pthread_rwlock_rdlock(&cwd_lock);
-    status = fd_paths[dirfd] ? join_locked(fd_paths[dirfd], path, out, size) : 1;
+    status = fd_paths[dirfd] ? join_locked(fd_paths[dirfd], path, out, size) : -2;
     pthread_rwlock_unlock(&cwd_lock);
+    if (status == -2) { errno = EBADF; status = -1; }
     return status;
 }
 
