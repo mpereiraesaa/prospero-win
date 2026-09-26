@@ -375,3 +375,7 @@ wine/patches/0500-ntdll-ps5-signal-context-and-segment-bases.patch
 wine/patches/0510-ntdll-ps5-host-page-size.patch
 wine/patches/0520-ntdll-ps5-ntdll-directory.patch
 wine/patches/0530-ntdll-syscall-dispatcher-slot-in-large-host-page.patch
+tests/test_pw_wine_compat.c
+wine/ps5/pw_wine_compat.c
+wine/ps5/pw_wine_compat.h
+wine/ps5/pw_wine_compat_libc.c
