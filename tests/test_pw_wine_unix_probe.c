@@ -14,6 +14,8 @@ static int32_t load_rc;
 static char loaded[256],adopted[256],opened[256],symbol[64];
 static int32_t adopted_handle;
 static int open_mode;
+static int steps[16],step_count;
+static void on_step(int step){assert(step_count<16);steps[step_count++]=step;}
 
 static int fake_start(size_t argc,const void *argv){(void)argc;(void)argv;starts++;return start_rc;}
 static void *fake_adopt(const char *path,int32_t handle)
@@ -71,13 +73,13 @@ static int module_info(int32_t handle,void *info)
     memcpy(raw+0x148,&count,4);
     return 0;
 }
-static const PwWineUnixProbeOps ops={load_start,module_info};
+static const PwWineUnixProbeOps ops={load_start,module_info,on_step};
 
 static void reset(void)
 {
     build_image(-1);memset(&heap,0,sizeof(heap));
     starts=start_rc=no_descriptor=0;adopt_ok=malloc_ok=open_ok=sym_ok=1;load_rc=7;
-    loaded[0]=adopted[0]=opened[0]=symbol[0]=0;adopted_handle=0;open_mode=0;
+    loaded[0]=adopted[0]=opened[0]=symbol[0]=0;adopted_handle=0;open_mode=0;step_count=0;
 }
 static int run(PwWineUnixProbeReport *r){return pw_wine_unix_probe(&ops,"/app0/sce_module",r);}
 
@@ -96,6 +98,9 @@ int main(void)
     assert(r.heap_after.live_bytes==64+(256u<<10));
     assert(!strcmp(opened,"/app0/sce_module/win32u.so") && open_mode==2);
     assert(!strcmp(symbol,"__wine_unix_lib_init") && !r.error[0]);
+    /* Each step is announced before it runs, done last. */
+    assert(step_count==PW_WINE_UNIX_STEP_DONE);
+    for(int i=0;i<step_count;i++)assert(steps[i]==i+1);
 
     /* Each failure stops at its own step. */
     reset();load_rc=(int32_t)0x80020002;
@@ -112,12 +117,16 @@ int main(void)
     assert(run(&r)==-1 && r.step==PW_WINE_UNIX_STEP_HEAP && r.heap_after.failures==2 && !opened[0]);
     reset();open_ok=0;
     assert(run(&r)==-1 && r.step==PW_WINE_UNIX_STEP_DLOPEN && !strcmp(r.error,"module not found"));
+    assert(step_count==PW_WINE_UNIX_STEP_DLOPEN && steps[step_count-1]==PW_WINE_UNIX_STEP_DLOPEN);
     reset();sym_ok=0;
     assert(run(&r)==-1 && r.step==PW_WINE_UNIX_STEP_DLSYM && !strcmp(pw_wine_unix_probe_step_name(r.step),"dlsym"));
 
     /* Bad arguments. */
     reset();
-    const PwWineUnixProbeOps none={NULL,NULL};
+    const PwWineUnixProbeOps none={NULL,NULL,NULL};
+    const PwWineUnixProbeOps quiet={load_start,module_info,NULL};
+    assert(pw_wine_unix_probe(&quiet,"/app0",&r)==0 && r.step==PW_WINE_UNIX_STEP_DONE);
+    reset();
     assert(pw_wine_unix_probe(&none,"/app0",&r)==-1 && r.step==PW_WINE_UNIX_STEP_LOAD && !loaded[0]);
     assert(pw_wine_unix_probe(&ops,NULL,&r)==-1 && pw_wine_unix_probe(&ops,"/app0",NULL)==-1);
     char long_dir[300];memset(long_dir,'a',sizeof(long_dir)-1);long_dir[sizeof(long_dir)-1]=0;

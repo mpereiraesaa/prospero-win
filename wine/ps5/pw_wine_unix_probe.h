@@ -15,6 +15,8 @@ typedef struct PwWineUnixProbeOps {
     int32_t (*load_start)(const char *path,size_t argc,const void *argv,uint32_t flags,
                           const void *option,int *result);
     int (*module_info)(int32_t handle,void *info);
+    /* Optional: called before each step, so a fault is attributable. */
+    void (*on_step)(int step);
 } PwWineUnixProbeOps;
 
 enum {

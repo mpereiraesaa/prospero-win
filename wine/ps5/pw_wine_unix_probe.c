@@ -26,6 +26,11 @@ const char *pw_wine_unix_probe_step_name(int step)
                                       "heap","dlopen","dlsym","done"};
     return step>=0 && step<=PW_WINE_UNIX_STEP_DONE?names[step]:"unknown";
 }
+static void enter(const PwWineUnixProbeOps *ops,PwWineUnixProbeReport *r,int step)
+{
+    r->step=step;
+    if(ops->on_step)ops->on_step(step);
+}
 static int fail(PwWineUnixProbeReport *r,int step,ErrorFn error)
 {
     const char *text=error?error():NULL;
@@ -45,6 +50,7 @@ int pw_wine_unix_probe(const PwWineUnixProbeOps *ops,const char *dir,PwWineUnixP
        snprintf(win32u,sizeof(win32u),"%s/win32u.so",dir)>=(int)sizeof(win32u))
         return fail(r,PW_WINE_UNIX_STEP_LOAD,NULL);
 
+    enter(ops,r,PW_WINE_UNIX_STEP_LOAD);
     r->ntdll_handle=ops->load_start(ntdll,0,NULL,0,NULL,&r->start_result);
     if(r->ntdll_handle<0)return fail(r,PW_WINE_UNIX_STEP_LOAD,NULL);
 
@@ -53,25 +59,30 @@ int pw_wine_unix_probe(const PwWineUnixProbeOps *ops,const char *dir,PwWineUnixP
     uint32_t count=0;
     const PwPrxDescriptor *descriptor=NULL;
     uint64_t size=PW_PRX_MODULE_INFO_BYTES;
+    enter(ops,r,PW_WINE_UNIX_STEP_DESCRIPTOR);
     memset(info,0,sizeof(info));memcpy(info,&size,sizeof(size));
     if(ops->module_info(r->ntdll_handle,info)<0 ||
        pw_prx_parse_module_info(info,NULL,segments,&count)!=PW_PRX_OK ||
        pw_prx_find_descriptor(segments,count,&descriptor)!=PW_PRX_OK)
         return fail(r,PW_WINE_UNIX_STEP_DESCRIPTOR,NULL);
 
+    enter(ops,r,PW_WINE_UNIX_STEP_EXPORTS);
     for(uint32_t i=0;i<EXPORT_COUNT;i++)
         if(!(found[i]=pw_prx_lookup(descriptor,exports[i])))r->missing_exports|=1u<<i;
     if(r->missing_exports)return fail(r,PW_WINE_UNIX_STEP_EXPORTS,NULL);
     ErrorFn error=(ErrorFn)(uintptr_t)found[4];
 
     /* Idempotent: the loader's entry call or .init_array may have run it. */
+    enter(ops,r,PW_WINE_UNIX_STEP_START);
     r->module_start_rc=((StartFn)(uintptr_t)found[0])(0,NULL);
     if(r->module_start_rc)return fail(r,PW_WINE_UNIX_STEP_START,error);
 
+    enter(ops,r,PW_WINE_UNIX_STEP_ADOPT);
     if(!((AdoptFn)(uintptr_t)found[1])(ntdll,r->ntdll_handle))
         return fail(r,PW_WINE_UNIX_STEP_ADOPT,error);
 
     /* One class allocation and one large mapping, both returned. */
+    enter(ops,r,PW_WINE_UNIX_STEP_HEAP);
     StatsFn stats=(StatsFn)(uintptr_t)found[5];
     MallocFn heap_malloc=(MallocFn)(uintptr_t)found[6];
     FreeFn heap_free=(FreeFn)(uintptr_t)found[7];
@@ -87,10 +98,12 @@ int pw_wine_unix_probe(const PwWineUnixProbeOps *ops,const char *dir,PwWineUnixP
         return fail(r,PW_WINE_UNIX_STEP_HEAP,NULL);
 
     /* win32u through ntdll: dependency loaded first, so its imports bind. */
+    enter(ops,r,PW_WINE_UNIX_STEP_DLOPEN);
     void *module=((OpenFn)(uintptr_t)found[2])(win32u,RTLD_NOW_FLAG);
     if(!module)return fail(r,PW_WINE_UNIX_STEP_DLOPEN,error);
+    enter(ops,r,PW_WINE_UNIX_STEP_DLSYM);
     if(!((SymFn)(uintptr_t)found[3])(module,"__wine_unix_lib_init"))
         return fail(r,PW_WINE_UNIX_STEP_DLSYM,error);
-    r->step=PW_WINE_UNIX_STEP_DONE;
+    enter(ops,r,PW_WINE_UNIX_STEP_DONE);
     return 0;
 }
