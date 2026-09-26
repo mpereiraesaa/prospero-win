@@ -57,6 +57,13 @@ int main(void)
     assert(!strcmp(pw->pw_dir,"/download0/prospero-win") && !strcmp(pw->pw_name,"prospero"));
     assert(!strcmp(pw_compat_codeset(),"UTF-8"));
 
+    /* Advice is accepted for open descriptors; posix_fadvise returns errors. */
+    int advised[2];assert(!pipe(advised));
+    assert(pw_compat_posix_fadvise(advised[0],0,4096,0)==0);
+    close(advised[0]);close(advised[1]);
+    assert(pw_compat_posix_fadvise(advised[0],0,4096,0)==EBADF);
+    errno=0;assert(pw_compat_if_nametoindex("eth0")==0 && errno==ENXIO);
+
     /* No descriptor is a terminal; a closed one is a bad descriptor. */
     int pipe_fds[2];assert(!pipe(pipe_fds));
     errno=0;assert(pw_compat_isatty(pipe_fds[0])==0 && errno==ENOTTY);

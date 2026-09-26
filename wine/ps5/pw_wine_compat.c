@@ -19,6 +19,17 @@ int pw_compat_isatty(int fd)
     return 0;
 }
 
+int pw_compat_posix_fadvise(int fd,off_t offset,off_t length,int advice)
+{
+    (void)offset;(void)length;(void)advice;
+    return fcntl(fd,F_GETFD)==-1?EBADF:0;  /* returns the error, as posix_fadvise does */
+}
+unsigned int pw_compat_if_nametoindex(const char *name)
+{
+    (void)name;errno=ENXIO;
+    return 0;
+}
+
 int pw_compat_pipe2(int fds[2],int flags)
 {
     if(flags&~(O_CLOEXEC|O_NONBLOCK)){errno=EINVAL;return -1;}

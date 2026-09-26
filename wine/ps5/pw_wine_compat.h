@@ -21,6 +21,10 @@ const char *pw_compat_codeset(void);                          /* "UTF-8" */
  * otherwise. The stubs have isatty only in libScePosixForWebKit, which a
  * game title does not load. */
 int pw_compat_isatty(int fd);
+/* wineserver's calls, measured by the wineserver.prx link: */
+int pw_compat_posix_fadvise(int fd,off_t offset,off_t length,int advice); /* advice only: 0 */
+/* No named interfaces are visible to a title: 0, errno ENXIO. */
+unsigned int pw_compat_if_nametoindex(const char *name);
 clock_t pw_compat_times(struct tms *buffer);
 /* Five consecutive fields of field_size bytes, as FreeBSD's struct utsname. */
 int pw_compat_uname(char *fields,size_t field_size);

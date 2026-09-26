@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <langinfo.h>
+#include <net/if.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +39,9 @@ int getmntinfo(struct statfs **mounts,int mode){(void)mode;*mounts=NULL;return 0
 
 struct passwd *getpwuid(uid_t uid){return pw_compat_getpwuid(uid);}
 int isatty(int fd){return pw_compat_isatty(fd);}
+int posix_fadvise(int fd,off_t offset,off_t length,int advice)
+{return pw_compat_posix_fadvise(fd,offset,length,advice);}
+unsigned int if_nametoindex(const char *name){return pw_compat_if_nametoindex(name);}
 char *nl_langinfo(nl_item item){return (char *)(item==CODESET?pw_compat_codeset():"");}
 clock_t times(struct tms *buffer){return pw_compat_times(buffer);}
 int __xuname(int field_size,void *fields){return pw_compat_uname(fields,(size_t)field_size);}
