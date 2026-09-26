@@ -390,6 +390,51 @@ and the temporary runtime removed after each):
   runs (GS = TEB, patch 0500), before `wowprospero` can start `PINBALL.EXE`'s
   i386 code.
 
+Runs 8–10 (FW 12.02, 2026-09-26; baseline restored and runtime removed after
+each):
+
+- **Run 8: null FS selector** (ps5log `20260926T175244919Z`, local debug
+  patch only).
+  - `sysarch(AMD64_GET_FSBASE)` returned the thread's FS base both in the
+    fault handler and at the next Unix call, which then faulted on
+    `fs:0x10`. `GET_FSBASE` reports the kernel's saved value, not the
+    hardware base.
+  - The saved context of the first fault has `mc_fs = 0x13`. Every later
+    fault has `mc_fs = 0`: after the first signal return the FS selector is
+    null, so the hardware FS base is 0.
+  - Patch 0590 (#94) repairs a null `%fs` on each entry to Unix code by
+    calling libkernel's `sysarch(AMD64_SET_FSBASE)`.
+- **Converter binding.** The first fault was a call through `win32u`'s
+  `NtCurrentTeb` import, which was still 0 (return address
+  `win32u+0x104b0e`).
+  - All 86 of `win32u.prx`'s imports from `ntdll.prx` stayed 0, while its
+    libc and libkernel imports were bound.
+  - The firmware looks exports up by the hash of
+    `NID#<library name>#<module name>`, but `link --module` hashed the
+    one-letter form `NID#C#A`. A lookup only succeeded when both landed in
+    the same bucket.
+  - Hashing the name form for module imports and exports fixes it: with
+    the fixed converter, all 129 of `win32u.prx`'s import slots are bound.
+    Until that fix is on the foundation's module branch, build with
+    `PS5_PRX_FOUNDATION` naming a checkout that has it.
+- **Run 9** (ps5log `20260926T183138315Z`, #94 and the fixed converter).
+  - No system call faults (run 7 had 68,786).
+  - `win32u`'s `__wine_unix_lib_init` runs, and `wow64.dll`, `win32u.dll`
+    and `wow64win.dll` load.
+  - WoW64 then loads `wow64cpu.dll` instead of `wowprospero.dll`, switches
+    to 32-bit mode and overflows its stack in `wow64cpu`.
+- **Run 10: empty registry** (`+reg`, ps5log `20260926T183540386Z`).
+  - `NtOpenKeyEx` fails for `\Registry\Machine\Software\Microsoft\Wow64\x86`,
+    `Session Manager\Environment` and `ProfileList`, although the prefix's
+    `system.reg` has `@="wowprospero.dll"` under `Wow64\x86`.
+  - The in-process server loads its registry with `fchdir(config_dir_fd)`
+    and then `fopen("system.reg")`. The working-directory shim does not wrap
+    `fopen`, so the relative open uses the process's real directory and
+    fails silently.
+  - With no `Wow64\x86` value, WoW64 uses its default CPU, `wow64cpu.dll`.
+    The next step is resolving registry paths through the shim, then the
+    `wowprospero` start of `PINBALL.EXE`'s i386 code.
+
 ## Measured result
 
 With the series above, all three targets compile and link (host run on
