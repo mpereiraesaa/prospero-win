@@ -408,3 +408,7 @@ native/pw_data_mount.c
 native/pw_data_mount.h
 tests/test_pw_data_mount.c
 tests/test_pw_data_mount_native.c
+tests/test_pw_wine_cwd.c
+wine/ps5/pw_wine_cwd.c
+wine/ps5/pw_wine_cwd.h
+wine/ps5/pw_wine_cwd_libc.c

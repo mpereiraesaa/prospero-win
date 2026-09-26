@@ -15,6 +15,8 @@ all: test
 $(BUILD):
 	mkdir -p $@
 
+comma := ,
+
 define test_rule
 $(if $(strip $(3)),\
 $(BUILD)/$(1): $(2) $(HEADERS) | $(BUILD)
@@ -78,6 +80,13 @@ $(eval $(call test_rule,test_pw_wine_threads,tests/test_pw_wine_threads.c wine/p
 $(eval $(call test_rule,test_pw_wine_sink,tests/test_pw_wine_sink.c wine/ps5/pw_wine_sink.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_start,tests/test_pw_wine_start.c src/pw_wine_start.c wine/ps5/pw_wine_prx.c,-I.))
 $(eval $(call test_rule,test_pw_wine_dl,tests/test_pw_wine_dl.c wine/ps5/pw_wine_dl.c wine/ps5/pw_wine_prx.c,-pthread))
+# The modules and the test are linked with --wrap for every __wrap_ name
+# the virtual working directory defines; the test turns fortify off, since
+# glibc would redirect realpath and friends to *_chk names --wrap misses.
+PW_CWD_WRAPS := $(sort $(patsubst __wrap_%,%,$(filter-out __wrap_,$(shell grep -o '__wrap_[a-z_]*' wine/ps5/pw_wine_cwd_libc.c))))
+PW_CWD_TEST_FLAGS := -std=gnu11 -pthread -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
+	$(addprefix -Wl$(comma)--wrap=,$(PW_CWD_WRAPS))
+$(eval $(call test_rule,test_pw_wine_cwd,tests/test_pw_wine_cwd.c wine/ps5/pw_wine_cwd.c wine/ps5/pw_wine_cwd_libc.c,$(PW_CWD_TEST_FLAGS)))
 $(eval $(call test_rule,test_pw_wine_compat,tests/test_pw_wine_compat.c wine/ps5/pw_wine_compat.c,-std=gnu11))
 $(eval $(call test_rule,test_pw_launcher_render,tests/test_pw_launcher_render.c src/pw_launcher_render.c,))
 $(eval $(call test_rule,test_pw_gdi_abi,tests/test_pw_gdi_abi.c src/pw_win32.c src/pw_user32.c src/pw_gdi.c src/pw_crt_format.c src/pw_registry.c src/pw_guest_heap.c src/pw_guest_args.c src/pw_x87.c src/pw_guest_fp.c src/pw_guest_call.c src/pw_module_name.c src/pw_vm.c src/pw_vm_posix.c,))
@@ -162,7 +171,7 @@ box86-catalog: $(BUILD)/pw_x86_decode_probe
 		--json-output data/box86_opcode_catalog.json \
 		--markdown-output docs/BOX86_OPCODE_CATALOG.md
 
-TESTS := test_pw_x86_hostexec test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_profile_catalog test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_launcher_model test_prefix_launcher test_pw_gdi test_pw_gdi_abi test_pw_present test_pw_wine_heap test_pw_wine_prx test_pw_wine_start test_pw_wine_dl test_pw_wine_sink test_pw_wine_threads test_pw_wine_unix_probe test_pw_wine_compat test_pw_launcher_render test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
+TESTS := test_pw_x86_hostexec test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_profile_catalog test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_launcher_model test_prefix_launcher test_pw_gdi test_pw_gdi_abi test_pw_present test_pw_wine_heap test_pw_wine_prx test_pw_wine_start test_pw_wine_dl test_pw_wine_sink test_pw_wine_threads test_pw_wine_unix_probe test_pw_wine_compat test_pw_wine_cwd test_pw_launcher_render test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
 	test_pe_export \
 	test_pw_module_name test_pw_file_posix test_pw_file_ps5 test_pw_vm test_pw_map test_pw_loader \
 	test_pw_segment test_pw_compat32 test_pw_guest_vm test_pw_guest_process test_pw_nt_handle test_pw_unixlib test_pw_wine_runner test_pw_wine_seed_services test_pw_wine_unixlib test_pw_wine_handle test_pw_wine_path test_pw_gate test_pw_win64 test_pw_x86_block test_pw_x86_cache test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_lazyflags test_pw_guest_call test_pw_tls test_pw_import_bind test_pw_export test_pw_wine_gate test_pw_wine_gate_bridge test_pw_wine_file_service test_pw_wine_registry test_pw_wine_objects test_pw_wine_process_info test_pw_wine_virtual_memory test_pw_wine_section test_pw_wine_thread test_pw_wine_continue test_pw_wine_vm_transactions test_pw_wine_teardown test_pw_win32 test_pw_x87 test_pw_audio_ps5 test_pw_agc_submit_lifecycle test_pw_videoout_layout test_pw_pad_ps5 test_pw_state_ps5 test_pw_data_mount test_pw_data_mount_native

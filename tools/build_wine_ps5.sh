@@ -210,7 +210,7 @@ link_prx() {
 }
 if [ "$prx_status" = 0 ]; then
     for unit in pw_wine_prx pw_wine_dl pw_wine_dl_libc pw_wine_compat pw_wine_compat_libc \
-            pw_wine_threads pw_wine_threads_libc pw_wine_sink; do
+            pw_wine_threads pw_wine_threads_libc pw_wine_sink pw_wine_cwd pw_wine_cwd_libc; do
         "$sdk/bin/prospero-clang" -std=gnu11 -O2 -Wall -Wextra -Werror -fPIC \
             -c "$root/wine/ps5/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
@@ -218,8 +218,15 @@ if [ "$prx_status" = 0 ]; then
     # thread registry belongs to the server alone.
     shims=""
     for unit in pw_wine_prx pw_wine_dl pw_wine_dl_libc pw_wine_compat pw_wine_compat_libc \
-            pw_wine_sink; do
+            pw_wine_sink pw_wine_cwd pw_wine_cwd_libc; do
         shims="$shims $prx/obj/$unit.o"
+    done
+    # A title cannot chdir: ntdll and wineserver each keep their own working
+    # directory, and their path calls go through it (wine/ps5/pw_wine_cwd.h).
+    cwd_wraps=""
+    for name in $(grep -o '__wrap_[a-z_]*' "$root/wine/ps5/pw_wine_cwd_libc.c" | sed 's/^__wrap_//' |
+            LC_ALL=C sort -u); do
+        cwd_wraps="$cwd_wraps --wrap=$name"
     done
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/ntdll_desc.c" \
         __wine_main pw_wine_dl_adopt dlopen dlsym dlerror \
@@ -233,13 +240,14 @@ if [ "$prx_status" = 0 ]; then
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
-    link_prx ntdll dlls/ntdll/ntdll.so "$heap $shims $prx/obj/ntdll_desc.o"
+    link_prx ntdll dlls/ntdll/ntdll.so "$heap $shims $prx/obj/ntdll_desc.o $cwd_wraps"
     link_prx win32u dlls/win32u/win32u.so "$prx/obj/win32u_desc.o" "$prx/ntdll.shared.elf"
     # ntdll loads it with its own dlopen; it has its own heap, needs no
     # dlfcn of its own, and signals threads through the registry ntdll fills.
     link_prx wineserver server/wineserver "$heap $prx/obj/pw_wine_compat.o \
         $prx/obj/pw_wine_compat_libc.o $prx/obj/pw_wine_threads.o \
-        $prx/obj/pw_wine_threads_libc.o $prx/obj/wineserver_desc.o"
+        $prx/obj/pw_wine_threads_libc.o $prx/obj/wineserver_desc.o \
+        $prx/obj/pw_wine_cwd.o $prx/obj/pw_wine_cwd_libc.o $cwd_wraps"
 fi
 
 if python3 - "$build" "$work/make.log" "$work/report.json" "$sdk" "$WINE_COMMIT" "$prx" "$prx_status" \
