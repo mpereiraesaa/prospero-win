@@ -352,8 +352,8 @@ sources=(
 )
 (( present_vk )) && sources+=(native/pw_present_vk_ps5.c native/pw_psbc_absent_ps5.c)
 [[ $native_mode == gate ]] && sources+=(wine/ps5/pw_wine_unix_probe.c)
-# wine64 requests the /data mount before starting Wine.
-[[ $native_mode == wine64 ]] && sources+=(native/pw_data_mount.c)
+# wine64 requests the /data mount before starting Wine and shows its frames.
+[[ $native_mode == wine64 ]] && sources+=(native/pw_data_mount.c native/pw_wine_display.c)
 objects=()
 for source in "${sources[@]}"; do
     object="$build/obj/${source//\//_}.o"

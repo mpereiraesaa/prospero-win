@@ -6,17 +6,23 @@
  * environment and enters __wine_main on a dedicated thread
  * (src/pw_wine_start.c). Wine's stderr reaches ps5log/1 through the sink
  * ntdll exports (Wine patch 0560), so its debug channels become telemetry;
- * the main thread reports Wine's address-space counters until Wine exits
- * the process or the run deadline passes.
+ * the main thread shows the frames Wine's user driver presents (patch 0400)
+ * on VideoOut, turns DualSense buttons into Wine key events, and reports
+ * Wine's address-space counters until Wine exits the process or the run
+ * deadline passes.
  */
 #include "ps5log/ps5log.h"
 #include "../src/pw_wine_start.h"
 #include "pw_data_mount.h"
+#include "pw_pad_ps5.h"
+#include "pw_videoout_ps5.h"
+#include "pw_wine_display.h"
 #include "../include/prospero_win.h"
 
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +54,24 @@ static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 #ifndef PW_WINE64_SECONDS
 #define PW_WINE64_SECONDS 30
 #endif
+
+/* The largest desktop shown: Wine's PS5 driver defaults to 800x600
+ * (WINE_PS5_DESKTOP overrides); bigger frames are counted and dropped. */
+enum { PW_WINE64_MAX_FRAME = 1280 * 1024 * 4, PW_WINE64_TICK_US = 16000 };
+
+/* Pinball's keys, as the direct runtime maps them (native/runtime_main.c). */
+enum { PAD_UP = 0x10u, PAD_RIGHT = 0x20u, PAD_LEFT = 0x80u, PAD_L1 = 0x400u, PAD_R1 = 0x800u,
+       PAD_CROSS = 0x4000u, PAD_SQUARE = 0x8000u, PAD_OPTIONS = 0x8u };
+static const PwPadKeyMap pinball_pad_map[] = {
+    { PAD_L1, 'Z', 0, 0, "left-flipper" },
+    { PAD_R1, 0xbf, 0, 0, "right-flipper" },
+    { PAD_CROSS, 0x20, 0, 0, "plunger" },
+    { PAD_LEFT, 'X', 0, 0, "nudge-left" },
+    { PAD_RIGHT, 0xbe, 0, 0, "nudge-right" },
+    { PAD_UP, 0x26, 0x48, 1, "nudge-up" },
+    { PAD_OPTIONS, 0x72, 0, 0, "pause" },
+    { PAD_SQUARE, 0x71, 0, 0, "new-game" },
+};
 
 int32_t sceKernelLoadStartModule(const char *path, size_t argc, const void *argv,
                                  uint32_t flags, const void *option, int *result);
@@ -82,6 +106,21 @@ static void wine_output_sink(const char *str, size_t len)
         sink_line[sink_used++] = str[i];
     }
     pthread_mutex_unlock(&sink_lock);
+}
+
+/* ---- frames and input -------------------------------------------------- */
+
+/* Wine presents on its own threads: keep a copy for the main thread. The
+ * two frame buffers are mapped, not static: the title image must stay clear
+ * of the low range PE32 executables occupy, and libc's heap is too small. */
+static PwWineFrameBox frames;
+static uint8_t *frame_shown;
+
+static int wine_present(void *context, const void *bgra, uint32_t width, uint32_t height,
+                        uint32_t stride)
+{
+    (void)context;
+    return pw_wine_frame_box_put(&frames, bgra, width, height, stride);
 }
 
 /* ---- fd 2 -> ps5log ---------------------------------------------------- */
@@ -244,8 +283,13 @@ int main(int argc, char **argv)
         .argc = 2, .argv = wine_argv, .stack_bytes = 16u << 20,
     };
     static PwWineStart start;
+    static PwVideoOutPs5 video;
+    static PwPadPs5 pad;
+    int (*post_input)(const PwWineInput *) = NULL;
+    uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
     ps5log_config log_config;
-    int status;
+    PwPadPs5Ops pad_ops;
+    int status, video_status = PW_ERR_STATE, pad_status = PW_ERR_STATE;
 
     (void)argc; (void)argv;
     ps5log_config_defaults(&log_config);
@@ -286,6 +330,28 @@ int main(int argc, char **argv)
             (uintptr_t)pw_prx_lookup(start.descriptor, "__wine_ps5_set_output_sink");
         PS5LOG_LOG("PW_WINE64 output_sink=%d", set_sink != NULL);
         if (set_sink) set_sink(wine_output_sink);
+        void (*set_present)(PwWinePresentSink, void *) = (void (*)(PwWinePresentSink, void *))
+            (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_present_sink");
+        post_input = (int (*)(const PwWineInput *))
+            (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_post_input");
+        video_status = pw_videoout_ps5_open(&video);
+        pad_status = pw_pad_ps5_platform_ops(&pad_ops);
+        if (pad_status == PW_OK)
+            pad_status = pw_pad_ps5_open(&pad, &pad_ops, pinball_pad_map,
+                                         sizeof(pinball_pad_map) / sizeof(pinball_pad_map[0]));
+        {
+            uint8_t *storage = mmap(NULL, 2u * PW_WINE64_MAX_FRAME, PROT_READ | PROT_WRITE,
+                                    MAP_PRIVATE | MAP_ANON, -1, 0);
+            if (storage != MAP_FAILED &&
+                pw_wine_frame_box_init(&frames, storage, PW_WINE64_MAX_FRAME) == 0) {
+                frame_shown = storage + PW_WINE64_MAX_FRAME;
+                if (set_present) set_present(wine_present, NULL);
+            }
+        }
+        PS5LOG_LOG("PW_WINE64 display present_sink=%d frames=%d post_input=%d video=%s pad=%s",
+                   set_present != NULL, frame_shown != NULL, post_input != NULL,
+                   pw_result_name(video_status),
+                   pw_result_name(pad_status));
         status = pw_wine_start_environment(&start, &config, &ops);
         PS5LOG_LOG("PW_WINE64 environment status=%d", status);
     }
@@ -293,17 +359,43 @@ int main(int argc, char **argv)
         status = pw_wine_start_run(&start, &config, &ops);
         PS5LOG_LOG("PW_WINE64 run status=%d", status);
     }
-    for (int second = 0; status == PW_OK && second < PW_WINE64_SECONDS; second++) {
-        uint64_t v[16] = { 0 };
+    for (uint64_t tick = 1, deadline = now_ns() + (uint64_t)PW_WINE64_SECONDS * 1000000000u;
+         status == PW_OK && now_ns() < deadline; tick++) {
+        PwGdiTargetView view;
+        PwWineInput events[2 * sizeof(pinball_pad_map) / sizeof(pinball_pad_map[0])];
+        int presented = 0;
 
-        sleep(1);
-        PS5LOG_LOG("PW_WINE64 alive t=%ds stage=%d sink_calls=%lu", second + 1, start.stage, sink_calls);
-        if (start.virtual_stats && second % 5 == 4) {
-            start.virtual_stats(v, 16);
-            PS5LOG_LOG("PW_WINE64 t=%ds mmap=%llu munmap=%llu mprotect=%llu skipped=%llu "
-                       "faults=%llu images=%llu", second + 1,
-                       (unsigned long long)v[0], (unsigned long long)v[1], (unsigned long long)v[2],
-                       (unsigned long long)v[4], (unsigned long long)v[5], (unsigned long long)v[6]);
+        if (pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK) {
+            size_t count = pw_wine_pad_inputs(&pad.core, events, sizeof(events) / sizeof(events[0]));
+            for (size_t i = 0; i < count; i++) {
+                if (post_input(&events[i]) == 0) posted++;
+                else refused++;
+            }
+        }
+        if (video_status == PW_OK && frame_shown &&
+            pw_wine_frame_box_take(&frames, &shown_sequence, frame_shown, PW_WINE64_MAX_FRAME,
+                                   &view) == 1 &&
+            pw_videoout_ps5_present(&video, &view) == PW_OK) {
+            shown++;          /* present waits for the vblank */
+            presented = 1;
+        }
+        if (!presented) usleep(PW_WINE64_TICK_US);
+        if (tick % 60 == 0) {
+            uint64_t v[16] = { 0 };
+
+            PS5LOG_LOG("PW_WINE64 alive tick=%llu sink_calls=%lu frames_put=%llu shown=%llu "
+                       "rejected=%llu last=%ux%u inputs=%llu refused=%llu",
+                       (unsigned long long)tick, sink_calls, (unsigned long long)frames.sequence,
+                       (unsigned long long)shown, (unsigned long long)frames.rejected,
+                       frames.width, frames.height, (unsigned long long)posted,
+                       (unsigned long long)refused);
+            if (start.virtual_stats && tick % 300 == 0) {
+                start.virtual_stats(v, 16);
+                PS5LOG_LOG("PW_WINE64 mmap=%llu munmap=%llu mprotect=%llu skipped=%llu "
+                           "faults=%llu images=%llu",
+                           (unsigned long long)v[0], (unsigned long long)v[1], (unsigned long long)v[2],
+                           (unsigned long long)v[4], (unsigned long long)v[5], (unsigned long long)v[6]);
+            }
         }
     }
     PS5LOG_LOG("PW_WINE64 done status=%d stage=%d", status, start.stage);

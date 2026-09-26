@@ -297,12 +297,25 @@ best-effort — if the helper is not running, the title keeps using
 2. It loads `ntdll.prx` from `/app0/win/wine/lib/wine/x86_64-unix`.
 3. It registers ntdll's stderr sink (patch 0560), which turns Wine's debug
    channels into `WINE ...` ps5log lines.
-4. It enters `__wine_main` for `C:\Games\Pinball\PINBALL.EXE` on its own
+4. It sets ntdll's present sink (`pw_wine_set_present_sink`), opens VideoOut
+   and the DualSense, and maps two frame buffers.
+5. It enters `__wine_main` for `C:\Games\Pinball\PINBALL.EXE` on its own
    thread (`src/pw_wine_start.c`).
 
+The present sink runs on Wine's threads and only copies the frame into a
+`PwWineFrameBox` (`native/pw_wine_display.c`). The main thread shows the newest
+frame through `pw_videoout_ps5_present`, which scales it into the 1920x1080
+scanout and waits for the vblank. The same thread reads the pad and posts
+Pinball's keys with `pw_wine_post_input`: L1 and R1 flip, Cross plunges, the
+d-pad nudges, Options pauses and Square starts a new game, the same map the
+direct runtime uses. Frames up to 1280x1024 are shown; larger ones are
+counted as rejected.
+
 Until Wine installs its own handlers, a fault is reported with its RIP
-(read at ucontext +224) and the ntdll segment it falls in. The main thread
-logs a heartbeat and ntdll's address-space counters for up to 30 s.
+(read at ucontext +224) and the ntdll segment it falls in. Once a second
+the main thread logs a heartbeat with the frames put and shown and the
+inputs posted, and every five seconds ntdll's address-space counters, for
+up to 30 s (`PW_WINE64_SECONDS`).
 
 The runtime is found at `/app0` or, failing that, at
 `/mnt/sandbox/PPSA99995_000/app0`, whichever holds
