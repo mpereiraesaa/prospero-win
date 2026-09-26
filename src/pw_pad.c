@@ -10,14 +10,20 @@ static unsigned transitions(const PwPad *pad,uint32_t next)
     return count;
 }
 
+static void advance(PwPad *pad,uint32_t next)
+{
+    uint32_t changed=pad->previous_buttons^next;
+    pad->pressed_edges|=changed&next;
+    pad->released_edges|=changed&~next;
+    pad->previous_buttons=next;
+}
+
 static int emit(PwPad *pad,PwUser32 *user,uint32_t window,uint32_t next,
                 uint64_t timestamp_us)
 {
     unsigned needed=transitions(pad,next);
     if(needed>PW_USER32_QUEUE_CAPACITY-user->queue_count)return PW_ERR_LIMIT;
     uint32_t changed=pad->previous_buttons^next;
-    pad->pressed_edges|=changed&next;
-    pad->released_edges|=changed&~next;
     for(size_t i=0;i<pad->map_count;i++) {
         const PwPadKeyMap *binding=&pad->map[i];
         if(!(changed&binding->mask))continue;
@@ -27,7 +33,7 @@ static int emit(PwPad *pad,PwUser32 *user,uint32_t window,uint32_t next,
         if(status!=PW_OK)return status;
         pad->stats.events++;if(down)pad->stats.presses++;else pad->stats.releases++;
     }
-    pad->previous_buttons=next;return PW_OK;
+    advance(pad,next);return PW_OK;
 }
 
 int pw_pad_init(PwPad *pad,const PwPadKeyMap *map,size_t count)
@@ -73,6 +79,21 @@ int pw_pad_process(PwPad *pad,PwUser32 *user,uint32_t window,
         pad->generation=sample->generation;pad->generation_valid=1;pad->connected=1;
         int status=emit(pad,user,window,sample->buttons,sample->timestamp_us);
         if(status!=PW_OK)return status;
+    }
+    return PW_OK;
+}
+
+int pw_pad_track(PwPad *pad,const PwPadSample *samples,size_t count)
+{
+    if(!pad || (!samples && count) || count>INT_MAX)return PW_ERR_PRECONDITION;
+    pad->pressed_edges=0;pad->released_edges=0;
+    pad->stats.batches++;if(count>pad->stats.max_batch)pad->stats.max_batch=(uint32_t)count;
+    for(size_t i=0;i<count;i++) {
+        const PwPadSample *sample=&samples[i];pad->stats.samples++;
+        if(!sample->connected || sample->intercepted){advance(pad,0);pad->connected=0;continue;}
+        if(pad->generation_valid && sample->generation!=pad->generation)advance(pad,0);
+        pad->generation=sample->generation;pad->generation_valid=1;pad->connected=1;
+        advance(pad,sample->buttons);
     }
     return PW_OK;
 }

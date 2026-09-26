@@ -36,11 +36,22 @@ int main(void)
     assert(pw_pad_ps5_poll(&pad,&user,0x10000)==PW_OK);
     assert(user.queue_count==2&&user.queue[1].message==0x101&&pad.intercepted_samples==1);
     read_rc=-9;assert(pw_pad_ps5_poll(&pad,&user,0x10000)==PW_OK&&pad.read_errors==1);
+    /* The native-UI read reports edges without posting Win32 keys. */
+    read_rc=0;unsigned queued=user.queue_count;
+    fixture[0]=(PwPadPs5Data){.buttons=CREATE,.connected=1,.timestamp=3000,.connected_count=1};
+    fixture_count=1;assert(pw_pad_ps5_read(&pad)==PW_OK);
+    assert(pad.core.pressed_edges==CREATE && pad.core.previous_buttons==CREATE &&
+           user.queue_count==queued);
+    fixture_count=0;assert(pw_pad_ps5_read(&pad)==PW_OK && !pad.core.pressed_edges);
+    read_rc=-9;assert(pw_pad_ps5_read(&pad)==PW_OK && pad.read_errors==2 &&
+                      pad.core.released_edges==CREATE && !pad.core.previous_buttons);
+    read_rc=0;
     assert(pw_pad_ps5_close(&pad,&user,0x10000)==PW_OK);
     assert(close_calls==1&&terminate_calls==1&&!pad.opened&&!pad.owns_user_service);
 
     user_init_rc=1;read_rc=0;fixture_count=0;
     assert(pw_pad_ps5_open(&pad,&ops,map,1)==PW_OK&&!pad.owns_user_service);
     assert(pw_pad_ps5_close(&pad,&user,0x10000)==PW_OK && terminate_calls==1);
+    assert(pw_pad_ps5_read(&pad)==PW_ERR_PRECONDITION);
     return 0;
 }

@@ -39,6 +39,8 @@ typedef struct PwPadPs5 {
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *);
 int pw_pad_ps5_open(PwPadPs5 *,const PwPadPs5Ops *,const PwPadKeyMap *,size_t);
 int pw_pad_ps5_poll(PwPadPs5 *,PwUser32 *,uint32_t window);
+/* The same read for a native UI: held buttons and edges, no Win32 keys. */
+int pw_pad_ps5_read(PwPadPs5 *);
 int pw_pad_ps5_close(PwPadPs5 *,PwUser32 *,uint32_t window);
 
 #endif

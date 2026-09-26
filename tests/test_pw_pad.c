@@ -52,5 +52,35 @@ int main(void)
     generation=(PwPadSample){.buttons=L1,.connected=1,.generation=2,.timestamp_us=7000};
     assert(pw_pad_process(&pad,&user,0x10000,&generation,1)==PW_ERR_LIMIT);
     assert(!pad.previous_buttons); /* fail closed; edge can be retried */
+
+    /* A native UI tracks edges without any Win32 destination. */
+    PwPad ui;assert(pw_pad_init(&ui,map,3)==PW_OK);
+    PwPadSample press[]={{.buttons=CROSS,.connected=1,.generation=1,.timestamp_us=1},
+                         {.buttons=CROSS|CREATE,.connected=1,.generation=1,.timestamp_us=2}};
+    assert(pw_pad_track(&ui,press,2)==PW_OK);
+    assert(ui.pressed_edges==(CROSS|CREATE) && !ui.released_edges &&
+           ui.previous_buttons==(CROSS|CREATE) && ui.connected && !ui.stats.events);
+    assert(pw_pad_track(&ui,NULL,0)==PW_OK && !ui.pressed_edges && !ui.released_edges);
+    /* Handing the same pad to a guest while Cross is still held: the held
+     * button is not replayed as a press, and its release is a key-up. */
+    user.queue_count=0;
+    PwPadSample held={.buttons=CROSS,.connected=1,.generation=1,.timestamp_us=3};
+    assert(pw_pad_process(&ui,&user,0x10000,&held,1)==PW_OK);
+    assert(user.queue_count==0 && ui.released_edges==CREATE && !ui.pressed_edges);
+    PwPadSample none={.connected=1,.generation=1,.timestamp_us=4};
+    assert(pw_pad_process(&ui,&user,0x10000,&none,1)==PW_OK);
+    assert(user.queue_count==1 && user.queue[0].wparam==0x20 && user.queue[0].message==0x101);
+    /* Disconnection and a new generation release everything. */
+    assert(pw_pad_track(&ui,press,1)==PW_OK && ui.previous_buttons==CROSS);
+    PwPadSample gone={.buttons=CROSS,.connected=0,.generation=1,.timestamp_us=5};
+    assert(pw_pad_track(&ui,&gone,1)==PW_OK && !ui.previous_buttons &&
+           ui.released_edges==CROSS && !ui.connected);
+    PwPadSample again={.buttons=L1,.connected=1,.generation=1,.timestamp_us=6};
+    PwPadSample regen={.buttons=L1,.connected=1,.generation=2,.timestamp_us=7};
+    assert(pw_pad_track(&ui,&again,1)==PW_OK && ui.pressed_edges==L1);
+    assert(pw_pad_track(&ui,&regen,1)==PW_OK && ui.previous_buttons==L1 &&
+           ui.pressed_edges==L1 && ui.released_edges==L1 && ui.generation==2);
+    assert(pw_pad_track(NULL,NULL,0)==PW_ERR_PRECONDITION);
+    assert(pw_pad_track(&ui,NULL,1)==PW_ERR_PRECONDITION);
     return 0;
 }

@@ -67,22 +67,18 @@ failed:
     return PW_ERR_STATE;
 }
 
-int pw_pad_ps5_poll(PwPadPs5 *pad,PwUser32 *user,uint32_t window)
+/* One native read converted to samples; count<0 reports a read error. */
+static int read_batch(PwPadPs5 *pad,PwPadSample samples[PW_PAD_PS5_BATCH])
 {
-    if(!pad || !pad->opened || !user || !window)return PW_ERR_PRECONDITION;
     PwPadPs5Data raw[PW_PAD_PS5_BATCH];pad->polls++;
     /* Edge fields describe exactly one native read, including an empty one.
      * Without this reset a Create press followed by an empty read could be
      * consumed repeatedly by the title lifecycle adapter. */
     pad->core.pressed_edges=0;pad->core.released_edges=0;
     int count=pad->ops.pad_read(pad->pad_handle,raw,PW_PAD_PS5_BATCH);pad->last_read_rc=count;
-    if(count<0) {
-        pad->read_errors++;
-        return pw_pad_neutralize(&pad->core,user,window,0);
-    }
-    if(!count){pad->empty_reads++;return PW_OK;}
+    if(count<0){pad->read_errors++;return count;}
+    if(!count){pad->empty_reads++;return 0;}
     if(count>PW_PAD_PS5_BATCH)count=PW_PAD_PS5_BATCH;
-    PwPadSample samples[PW_PAD_PS5_BATCH];
     for(int i=0;i<count;i++) {
         unsigned intercepted=(raw[i].buttons&PW_PAD_INTERCEPTED)!=0;
         samples[i]=(PwPadSample){.buttons=raw[i].buttons&~PW_PAD_INTERCEPTED,
@@ -96,7 +92,28 @@ int pw_pad_ps5_poll(PwPadPs5 *pad,PwUser32 *user,uint32_t window)
         else if(raw[i].connected)pad->connected_samples++;
         else pad->disconnected_samples++;
     }
+    return count;
+}
+
+int pw_pad_ps5_poll(PwPadPs5 *pad,PwUser32 *user,uint32_t window)
+{
+    if(!pad || !pad->opened || !user || !window)return PW_ERR_PRECONDITION;
+    PwPadSample samples[PW_PAD_PS5_BATCH];int count=read_batch(pad,samples);
+    if(count<0)return pw_pad_neutralize(&pad->core,user,window,0);
+    if(!count)return PW_OK;
     return pw_pad_process(&pad->core,user,window,samples,(size_t)count);
+}
+
+int pw_pad_ps5_read(PwPadPs5 *pad)
+{
+    if(!pad || !pad->opened)return PW_ERR_PRECONDITION;
+    PwPadSample samples[PW_PAD_PS5_BATCH];int count=read_batch(pad,samples);
+    if(count<0) {
+        const PwPadSample released={.connected=0};
+        return pw_pad_track(&pad->core,&released,1);
+    }
+    if(!count)return PW_OK;
+    return pw_pad_track(&pad->core,samples,(size_t)count);
 }
 
 int pw_pad_ps5_close(PwPadPs5 *pad,PwUser32 *user,uint32_t window)

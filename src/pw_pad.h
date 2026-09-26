@@ -42,5 +42,10 @@ int pw_pad_init(PwPad *,const PwPadKeyMap *,size_t);
 int pw_pad_process(PwPad *,PwUser32 *,uint32_t window,
                    const PwPadSample *,size_t);
 int pw_pad_neutralize(PwPad *,PwUser32 *,uint32_t window,uint64_t timestamp_us);
+/* Consumes samples for a native UI with no Win32 destination: updates the
+ * held buttons and the raw edges only.  Disconnection, interception and a
+ * generation change release every button, exactly as process does, so a
+ * later process call on the same pad never sees a phantom press. */
+int pw_pad_track(PwPad *,const PwPadSample *,size_t);
 
 #endif
