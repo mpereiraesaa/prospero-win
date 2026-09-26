@@ -329,3 +329,6 @@ wine/wowprospero/cpu.c
 wine/wowprospero/unix.c
 wine/wowprospero/wowprospero.h
 wine/wowprospero/wowprospero.spec
+src/pw_x86_hostexec.c
+src/pw_x86_hostexec.h
+tests/test_pw_x86_hostexec.c

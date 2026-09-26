@@ -28,6 +28,7 @@
 #include "pw_x86_engine.h"
 #include "pw_vm_posix.h"
 #include "pw_guest_fp.h"
+#include "pw_x86_hostexec.h"
 
 enum { CACHE_ENTRIES = 65536, ARENA_BYTES = 128u * 1024u * 1024u };
 
@@ -39,7 +40,9 @@ struct pw_thread
     uint64_t generation;     /* code_generation this cache was built for */
     uint32_t cache_epoch;    /* engine generation, bumped on every reset */
     uint32_t trace;          /* PW_WOW_TRACE: quantum 1 and an EIP ring */
+    uint32_t prefer_host;    /* PW_WOW_HOSTEXEC_ALL: reference execution */
     uint32_t ring[64], ring_pos;
+    PwX86HostExec hostexec;  /* single-instruction fallback */
     PwX86CacheEntry entries[CACHE_ENTRIES];
 };
 
@@ -94,12 +97,19 @@ static struct pw_thread *get_thread(void)
         pw_x86_engine_set_residency( &thread->engine, modes[1] == '1' );
         pw_x86_engine_set_lazy_flags( &thread->engine, modes[2] == '1' );
     }
+    thread->prefer_host = getenv( "PW_WOW_HOSTEXEC_ALL" ) != NULL;
     if (getenv( "PW_WOW_TRACE" ))
     {
         thread->trace = 1;
         pw_x86_engine_set_quantum( &thread->engine, 1 );
     }
     thread->cache_epoch = (uint32_t)code_generation;
+    if (pw_x86_hostexec_init( &thread->hostexec, &thread->vm, 4u << 20 ) != PW_OK)
+    {
+        pw_x86_engine_destroy( &thread->engine );
+        free( thread );
+        return NULL;
+    }
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
     return self = thread;
@@ -169,6 +179,7 @@ static NTSTATUS run( void *args )
     {
         thread->generation = code_generation;
         pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
+        pw_x86_hostexec_reset( &thread->hostexec );
     }
     load_state( state, ctx, params->teb32 );
     for (;;)
@@ -176,8 +187,33 @@ static NTSTATUS run( void *args )
         if (state->eip == params->bop) { params->reason = PW_WOW_SYSCALL; break; }
         if (state->eip == params->unix_bop) { params->reason = PW_WOW_UNIXCALL; break; }
         if (thread->trace) thread->ring[thread->ring_pos++ & 63] = state->eip;
+        if (thread->prefer_host)
+        {
+            /* Diagnostic: every instruction the host can execute bypasses the
+             * translator, isolating translator semantics from everything else. */
+            const uint8_t *source;
+            size_t bytes;
+
+            pw_x86_commit_canonical_flags( state );
+            if (source_view( NULL, state->eip, &source, &bytes ) == PW_OK &&
+                pw_x86_hostexec_step( &thread->hostexec, state, source, bytes ) == PW_OK)
+                continue;
+            pw_x86_engine_set_quantum( &thread->engine, 1 );
+        }
         status = pw_x86_engine_step( &thread->engine, state, &report );
         if (status == PW_OK) continue;
+        if (status == PW_ERR_UNSUPPORTED)
+        {
+            const uint8_t *source;
+            size_t bytes;
+
+            /* The block stopped before an instruction the translator does not
+             * cover; run exactly that instruction on the host. */
+            pw_x86_commit_canonical_flags( state );
+            if (source_view( NULL, state->eip, &source, &bytes ) == PW_OK &&
+                pw_x86_hostexec_step( &thread->hostexec, state, source, bytes ) == PW_OK)
+                continue;
+        }
         if (status == PW_ERR_LIMIT)
         {
             pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
@@ -224,6 +260,7 @@ static NTSTATUS thread_term( void *args )
 
     if (!thread) return STATUS_SUCCESS;
     self = NULL;
+    pw_x86_hostexec_destroy( &thread->hostexec );
     pw_x86_engine_destroy( &thread->engine );
     free( thread );
     return STATUS_SUCCESS;
