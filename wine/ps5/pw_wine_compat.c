@@ -30,6 +30,19 @@ unsigned int pw_compat_if_nametoindex(const char *name)
     return 0;
 }
 
+int pw_compat_no_fstatfs(void){errno=ENOSYS;return -1;}
+int pw_compat_no_link(void){errno=EPERM;return -1;}
+long pw_compat_no_ptrace(void){errno=EPERM;return -1;}
+/* The kernel's mask cannot be reached; files are created with the modes
+ * callers pass, and the mask is only remembered for them to read back. */
+mode_t pw_compat_umask(mode_t mask)
+{
+    static mode_t current=022;
+    mode_t previous=current;
+    current=mask&0777;
+    return previous;
+}
+
 int pw_compat_pipe2(int fds[2],int flags)
 {
     if(flags&~(O_CLOEXEC|O_NONBLOCK)){errno=EINVAL;return -1;}

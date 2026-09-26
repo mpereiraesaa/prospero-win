@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <sys/extattr.h>
 #include <sys/mount.h>
+#include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/thr.h>
 #include <sys/times.h>
@@ -42,6 +43,11 @@ int isatty(int fd){return pw_compat_isatty(fd);}
 int posix_fadvise(int fd,off_t offset,off_t length,int advice)
 {return pw_compat_posix_fadvise(fd,offset,length,advice);}
 unsigned int if_nametoindex(const char *name){return pw_compat_if_nametoindex(name);}
+int fstatfs(int fd,struct statfs *buf){(void)fd;(void)buf;return pw_compat_no_fstatfs();}
+int link(const char *from,const char *to){(void)from;(void)to;return pw_compat_no_link();}
+int ptrace(int request,pid_t pid,caddr_t address,int data)
+{(void)request;(void)pid;(void)address;(void)data;return (int)pw_compat_no_ptrace();}
+mode_t umask(mode_t mask){return pw_compat_umask(mask);}
 char *nl_langinfo(nl_item item){return (char *)(item==CODESET?pw_compat_codeset():"");}
 clock_t times(struct tms *buffer){return pw_compat_times(buffer);}
 int __xuname(int field_size,void *fields){return pw_compat_uname(fields,(size_t)field_size);}

@@ -242,7 +242,7 @@ if [ "$prx_status" = 0 ]; then
         $prx/obj/pw_wine_threads_libc.o $prx/obj/wineserver_desc.o"
 fi
 
-python3 - "$build" "$work/make.log" "$work/report.json" "$sdk" "$WINE_COMMIT" "$prx" "$prx_status" \
+if python3 - "$build" "$work/make.log" "$work/report.json" "$sdk" "$WINE_COMMIT" "$prx" "$prx_status" \
     $ordered <<'PY'
 import hashlib, json, re, shutil, subprocess, sys
 from pathlib import Path
@@ -287,6 +287,12 @@ result["errors"] = sorted(set(re.findall(r"error: (.+)", text)))
 # modules it imports from, and its data imports, since a data import
 # between application PRXs faults on the console (measured, FW 12.02).
 result["prx"] = {"status": prx_status, "modules": {}}
+def exports(library, directory=f"{sdk}/target/lib"):
+    listing = subprocess.run([f"{sdk}/bin/llvm-nm", "-D", "--defined-only", f"{directory}/{library}"],
+                             capture_output=True, text=True).stdout
+    return {line.split()[-1].split("@")[0] for line in listing.splitlines() if line.split()}
+title_exports = exports("libkernel.so") | exports("libSceLibcInternal.so")
+ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
 for name in ("ntdll", "win32u", "wineserver") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
@@ -302,6 +308,12 @@ for name in ("ntdll", "win32u", "wineserver") if not prx_status.startswith("skip
                                  capture_output=True, text=True).stdout
         entry["data_imports"] = sorted({fields[7] for fields in (line.split() for line in symbols.splitlines())
                                         if len(fields) >= 8 and fields[3] == "OBJECT" and fields[6] == "UND"})
+        # A game title does not get libkernel_sys: imports only it exports
+        # stay 0 and a call to one jumps to 0 (measured, FW 12.02).
+        imports = {fields[7].split("@")[0] for fields in (line.split() for line in symbols.splitlines())
+                   if len(fields) >= 8 and fields[6] == "UND"}
+        provided = title_exports | (ntdll_exports if name == "win32u" else set())
+        entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
     if module.is_file():
         data = module.read_bytes()
         entry.update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
@@ -318,7 +330,15 @@ for name, entry in result["prx"]["modules"].items():
           f"data_imports={','.join(entry.get('data_imports', [])) or 'none'}")
     for error in entry["errors"]:
         print(f"  error: {error}")
+    if entry.get("title_unbound"):
+        print(f"  unbound in a title (libkernel_sys only): {','.join(entry['title_unbound'])}")
+sys.exit(3 if any(e.get("title_unbound") for e in result["prx"]["modules"].values()) else 0)
 PY
+then title_status=0; else title_status=$?; fi
 [ "$status" -eq 0 ] || fail "build failed; see $work/make.log"
+# A warning until the virtual working directory (PR #82) replaces the
+# remaining fchdir/openat/fstatat/symlink calls; then this becomes fatal.
+[ "$title_status" -eq 0 ] ||
+    echo "build_wine_ps5: WARNING: PRX imports only libkernel_sys exports, which a title does not get" >&2
 [ "$prx_status" != 1 ] || fail "PRX link failed; see $prx/*.link.log"
 echo "report: $work/report.json"

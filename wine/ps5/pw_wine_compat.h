@@ -25,6 +25,12 @@ int pw_compat_isatty(int fd);
 int pw_compat_posix_fadvise(int fd,off_t offset,off_t length,int advice); /* advice only: 0 */
 /* No named interfaces are visible to a title: 0, errno ENXIO. */
 unsigned int pw_compat_if_nametoindex(const char *name);
+/* Exported only by libkernel_sys, which a game title does not get: the
+ * firmware leaves these imports at 0 (measured, FW 12.02). */
+int pw_compat_no_fstatfs(void);                               /* -1, errno ENOSYS */
+int pw_compat_no_link(void);                                  /* -1, errno EPERM */
+long pw_compat_no_ptrace(void);                               /* -1, errno EPERM */
+mode_t pw_compat_umask(mode_t mask);                          /* remembered, returns the previous */
 clock_t pw_compat_times(struct tms *buffer);
 /* Five consecutive fields of field_size bytes, as FreeBSD's struct utsname. */
 int pw_compat_uname(char *fields,size_t field_size);

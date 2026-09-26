@@ -226,6 +226,30 @@ input.
 - No text is drawn, because the build has no fonts (`--without-freetype`,
   as on PS5). Fonts for the console are still open.
 
+## Imports a title does not get
+
+The SDK stubs include `libkernel_sys`, so a PRX links against functions
+only that library exports. A game title does not get `libkernel_sys`: the
+firmware leaves those imports at 0, and a call to one jumps to address 0.
+
+This was measured on FW 12.02 (log `20260926T150634522Z`). A diagnostic gate
+loaded `wineserver.prx` through ntdll's `dlopen` and read all 127 of its
+import slots. Exactly four stayed 0: `fchdir`, `link`, `fstatfs` and
+`ptrace`, the four that only `libkernel_sys` exports. That is the `rip=0`
+fault in the first console start of the in-process server.
+
+The compat layer now provides these:
+- `fstatfs` fails with `ENOSYS`;
+- `link` and `ptrace` fail with `EPERM`;
+- `umask` is remembered.
+
+The report lists, per module, the imports still bound only to
+`libkernel_sys` (`title_unbound`), and the build warns about them. The
+remaining ones are ntdll's `fchdir`, `fstatat`, `openat` and `symlink`, and
+wineserver's `fchdir`. They belong to the virtual working directory
+(`pw_wine_cwd`), which must emulate them with libkernel calls; once it does,
+the warning becomes a failure.
+
 ## Measured result
 
 With the series above, all three targets compile and link (host run on

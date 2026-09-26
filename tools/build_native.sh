@@ -346,7 +346,7 @@ sources=(
     src/pw_vm_posix.c src/pw_exec_probe.c src/pw_x86_block.c src/pw_x86_cache.c src/pw_x86_engine.c src/pw_x86_hostexec.c src/pw_wine_start.c wine/ps5/pw_wine_prx.c src/pw_x87.c src/pw_guest_call.c src/pw_import_bind.c src/pw_win32.c src/pw_user32.c src/pw_pad.c src/pw_gdi.c src/pw_present.c src/pw_crt_format.c src/pw_registry.c src/pw_registry_store.c src/pw_guest_fp.c src/pw_guest_args.c src/pe_resource.c src/pw_app_profile.c src/pw_prefix.c src/pw_runtime_supervisor.c src/pw_launcher_model.c src/pw_prefix_registry.c src/pw_launcher_render.c src/pw_profile_catalog.c
 )
 (( present_vk )) && sources+=(native/pw_present_vk_ps5.c native/pw_psbc_absent_ps5.c)
-[[ $native_mode == gate ]] && sources+=(wine/ps5/pw_wine_unix_probe.c wine/ps5/pw_wine_prx.c)
+[[ $native_mode == gate ]] && sources+=(wine/ps5/pw_wine_unix_probe.c)
 objects=()
 for source in "${sources[@]}"; do
     object="$build/obj/${source//\//_}.o"

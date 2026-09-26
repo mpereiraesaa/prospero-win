@@ -64,6 +64,13 @@ int main(void)
     assert(pw_compat_posix_fadvise(advised[0],0,4096,0)==EBADF);
     errno=0;assert(pw_compat_if_nametoindex("eth0")==0 && errno==ENXIO);
 
+    /* libkernel_sys-only calls fail cleanly; umask is remembered. */
+    errno=0;assert(pw_compat_no_fstatfs()==-1 && errno==ENOSYS);
+    errno=0;assert(pw_compat_no_link()==-1 && errno==EPERM);
+    errno=0;assert(pw_compat_no_ptrace()==-1 && errno==EPERM);
+    assert(pw_compat_umask(077)==022 && pw_compat_umask(022)==077 && pw_compat_umask(01777)==022);
+    assert(pw_compat_umask(022)==0777);
+
     /* No descriptor is a terminal; a closed one is a bad descriptor. */
     int pipe_fds[2];assert(!pipe(pipe_fds));
     errno=0;assert(pw_compat_isatty(pipe_fds[0])==0 && errno==ENOTTY);
