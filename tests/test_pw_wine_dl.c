@@ -2,11 +2,19 @@
 #include "../wine/ps5/pw_wine_dl.h"
 #include "../wine/ps5/pw_wine_prx.h"
 #include <assert.h>
+#include <pthread.h>
 #include <string.h>
 
 static _Alignas(16) uint8_t image[2048];
 static int starts,loads,unloads,unload_fail;
 static char last_path[PW_WINE_DL_MAX_PATH];
+
+/* Another thread's failure is not this thread's dlerror. */
+static void *fail_symbol(void *arg)
+{
+    assert(!pw_wine_dl_sym(arg,"absent") && !strcmp(pw_wine_dl_error(),"symbol not found"));
+    return NULL;
+}
 
 static int module_start(size_t argc,const void *argv){(void)argc;(void)argv;starts++;return 0;}
 
@@ -55,6 +63,9 @@ int main(void)
     assert(pw_wine_dl_sym(win32u,"__wine_unix_call_funcs")==image+128);
     assert(!pw_wine_dl_sym(win32u,"__wine_unix_call_wow64_funcs"));
     assert(!strcmp(pw_wine_dl_error(),"symbol not found") && !pw_wine_dl_error());
+    pthread_t thread;
+    assert(!pthread_create(&thread,NULL,fail_symbol,win32u) && !pthread_join(thread,NULL));
+    assert(!pw_wine_dl_error());
     /* The same path is reference counted, not reloaded or restarted. */
     assert(pw_wine_dl_open("/app0/win/lib/win32u.so")==win32u && loads==1 && starts==1);
     /* The module directory is the fallback for a missing sibling .prx. */
