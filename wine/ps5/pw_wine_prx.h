@@ -24,7 +24,8 @@ typedef struct PwPrxDescriptor {
 } PwPrxDescriptor;
 typedef struct PwPrxSegment { const void *address;uint32_t size,protection; } PwPrxSegment;
 
-/* Parses a SceKernelModuleInfo record: 64-bit size (0x160) at 0, name at 8,
+/* Parses a SceKernelModuleInfo record: 64-bit size at 0 (0x160 as the
+ * caller set it, or 0: the console clears it on success), name at 8,
  * up to four {address, 32-bit size, 32-bit protection} segments at 0x108 and
  * their count at 0x148. */
 int pw_prx_parse_module_info(const void *info,char name[PW_PRX_MAX_NAME],

@@ -37,7 +37,9 @@ int pw_prx_parse_module_info(const void *info,char name[PW_PRX_MAX_NAME],
     if(!info || !segments || !count)return PW_PRX_ERR_ARGUMENT;
     const uint8_t *raw=info;uint64_t size;uint32_t n;
     memcpy(&size,raw,sizeof(size));memcpy(&n,raw+0x148,sizeof(n));
-    if(size!=PW_PRX_MODULE_INFO_BYTES || !n || n>PW_PRX_MAX_SEGMENTS)return PW_PRX_ERR_MODULE_INFO;
+    /* The caller sets the size word; FW 12.02 clears it on success (measured). */
+    if((size && size!=PW_PRX_MODULE_INFO_BYTES) || !n || n>PW_PRX_MAX_SEGMENTS)
+        return PW_PRX_ERR_MODULE_INFO;
     for(uint32_t i=0;i<n;i++) {
         const uint8_t *entry=raw+0x108+i*16u;uint64_t address;
         memcpy(&address,entry,sizeof(address));

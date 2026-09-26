@@ -57,7 +57,11 @@ int main(void)
            segments[0].protection==5 && segments[1].address==module+16 && segments[1].protection==3);
     count=5;memcpy(info+0x148,&count,4);
     assert(pw_prx_parse_module_info(info,name,segments,&n)==PW_PRX_ERR_MODULE_INFO);
-    count=1;memcpy(info+0x148,&count,4);size=0x150;memcpy(info,&size,8);
+    /* The console returns the record with its size word cleared. */
+    count=1;memcpy(info+0x148,&count,4);size=0;memcpy(info,&size,8);
+    assert(pw_prx_parse_module_info(info,name,segments,&n)==PW_PRX_OK && n==1 &&
+           segments[0].address==module);
+    size=0x150;memcpy(info,&size,8);
     assert(pw_prx_parse_module_info(info,name,segments,&n)==PW_PRX_ERR_MODULE_INFO);
     size=PW_PRX_MODULE_INFO_BYTES;memcpy(info,&size,8);bytes=0;memcpy(info+0x110,&bytes,4);
     assert(pw_prx_parse_module_info(info,name,segments,&n)==PW_PRX_ERR_MODULE_INFO);
