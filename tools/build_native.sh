@@ -25,7 +25,8 @@
 #                          and verifies its artifacts instead of rebuilding
 #                          its dependencies, which would mutate a tree the
 #                          laboratory's other projects share (default 0)
-#   PW_NATIVE_MODE         runtime (default), gate, or wine bootstrap
+#   PW_NATIVE_MODE         runtime (default), gate, wine bootstrap, or wine64
+#                          (Wine's own ntdll.prx started in-process)
 #   PW_WINE_PS5_PRX_DIR    gate mode: directory holding ntdll.prx and
 #                          win32u.prx (tools/build_wine_ps5.sh), packaged in
 #                          win/wine for the gate's Wine Unix-side probe
@@ -79,8 +80,9 @@ if [[ $native_mode == wine && -z $app_profile ]]; then
 fi
 [[ $compat32_transfer == 0 || $compat32_transfer == 1 ]] || {
     echo "PW_COMPAT32_TRANSFER must be 0 or 1" >&2; exit 2; }
-[[ $native_mode == runtime || $native_mode == gate || $native_mode == wine ]] || {
-    echo "PW_NATIVE_MODE must be runtime, gate or wine" >&2; exit 2; }
+[[ $native_mode == runtime || $native_mode == gate || $native_mode == wine ||
+   $native_mode == wine64 ]] || {
+    echo "PW_NATIVE_MODE must be runtime, gate, wine or wine64" >&2; exit 2; }
 if [[ -n $wine_ps5_prx_dir ]]; then
     [[ $native_mode == gate ]] || {
         echo "PW_WINE_PS5_PRX_DIR requires PW_NATIVE_MODE=gate" >&2; exit 2; }
@@ -319,6 +321,9 @@ common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
 entry=native/runtime_main.c
 [[ $native_mode == gate ]] && entry=native/main.c
 [[ $native_mode == wine ]] && entry=native/wine_main.c
+# wine64: Wine's own Unix side (ntdll.prx) started in-process; the guest
+# inputs are staged like gate mode and are not read by this entry.
+[[ $native_mode == wine64 ]] && entry=native/wine64_main.c
 sources=(
     "$entry" native/pw_file_ps5.c native/pw_prefix_ps5.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_state_ps5.c native/pw_agc_ps5.c native/pw_agc_submit_lifecycle.c native/pw_videoout_ps5.c native/pw_compat32_ps5.c
     native/pw_lowmem_ps5.c native/pw_wine_platform_ps5.c native/pw_ucontext_map_ps5.c native/pw_vmspace_ps5.c
@@ -347,6 +352,8 @@ sources=(
 )
 (( present_vk )) && sources+=(native/pw_present_vk_ps5.c native/pw_psbc_absent_ps5.c)
 [[ $native_mode == gate ]] && sources+=(wine/ps5/pw_wine_unix_probe.c)
+# wine64 requests the /data mount before starting Wine.
+[[ $native_mode == wine64 ]] && sources+=(native/pw_data_mount.c)
 objects=()
 for source in "${sources[@]}"; do
     object="$build/obj/${source//\//_}.o"

@@ -266,6 +266,28 @@ which the prefix lives at `/data/prospero-win/prefix`. The request is
 best-effort — if the helper is not running, the title keeps using
 `/download0/prospero-win/prefix`.
 
+## Starting Wine in the title
+
+`PW_NATIVE_MODE=wine64` builds the title around `native/wine64_main.c`:
+
+1. It requests the `/data` mount (`native/pw_data_mount.c`) and uses
+   `/data/prospero-win/prefix`, or `/download0/prospero-win/prefix` when
+   `/data` does not appear.
+2. It loads `ntdll.prx` from `/app0/win/wine/lib/wine/x86_64-unix`.
+3. It registers ntdll's stderr sink (patch 0560), which turns Wine's debug
+   channels into `WINE ...` ps5log lines.
+4. It enters `__wine_main` for `C:\Games\Pinball\PINBALL.EXE` on its own
+   thread (`src/pw_wine_start.c`).
+
+Until Wine installs its own handlers, a fault is reported with its RIP
+(read at ucontext +224) and the ntdll segment it falls in. The main thread
+logs a heartbeat and ntdll's address-space counters for up to 30 s.
+
+The runtime is staged beside the title:
+- `ntdll.prx`, `win32u.prx` and `wineserver.prx` under
+  `win/wine/lib/wine/x86_64-unix`;
+- Wine's NLS files under `win/wine/share/wine/nls`.
+
 ## Measured result
 
 With the series above, all three targets compile and link (host run on
