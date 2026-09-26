@@ -355,3 +355,6 @@ native/pw_wine_platform_ps5.h
 tests/test_build_wine_ps5.py
 tools/build_wine_ps5.sh
 wine/patches/0100-ntdll-no-fstab-device-on-ps5.patch
+tests/test_pw_wine_heap.c
+wine/ps5/pw_wine_heap.c
+wine/ps5/pw_wine_heap.h

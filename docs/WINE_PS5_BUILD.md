@@ -46,6 +46,22 @@ of the port never collide:
 | --- | --- |
 | 0100 | `ntdll`: a PS5 title has no fstab and no `getfsent`; report no default device |
 
+## Allocator
+
+The title's libc `malloc` stops near 13 MiB, far below what Wine's Unix side
+needs. `wine/ps5/pw_wine_heap.c` is a thread-safe heap over anonymous
+mappings: power-of-two classes from 16 bytes to 64 KiB carved from 1 MiB
+spans, and one mapping per larger block, unmapped on free. It keeps the live
+and peak requested bytes, the mapped and peak mapped bytes, and counts of
+allocations, frees, failures and foreign frees. Ownership is decided only
+from its own sorted span and large-block registries, so a pointer it did not
+return (for example one that libc's `strdup`, `realpath` or `getcwd`
+allocated internally) is counted and left alone rather than read or freed.
+The host test checks classes, reuse, large mappings, `realloc` in place and
+across classes, zeroed `calloc`, overflow refusal, foreign and double frees,
+and eight threads of mixed traffic under AddressSanitizer and
+ThreadSanitizer. Binding Wine's `malloc` family to it is a separate step.
+
 ## Measured result
 
 With the series above, all three targets compile and link (host run on
