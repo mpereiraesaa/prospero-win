@@ -16,7 +16,8 @@
 #
 # Two links follow. The ELF link builds Wine's own targets against the
 # payload SDK and reports, rather than fails on, unresolved symbols. The PRX
-# link is what the console loads: ntdll and win32u linked against the
+# link is what the console loads: ntdll, win32u and the in-process
+# wineserver (patch 0110) linked against the
 # title's stub libraries with the PS5 shims in wine/ps5 and a generated
 # export descriptor, then converted and signed with ps5-native-tool into
 # <work>/prx/sce_module. Both are measured in <work>/report.json. Module
@@ -209,7 +210,8 @@ link_prx() {
 }
 if [ "$prx_status" = 0 ]; then
     shims=""
-    for unit in pw_wine_prx pw_wine_dl pw_wine_dl_libc pw_wine_compat pw_wine_compat_libc; do
+    for unit in pw_wine_prx pw_wine_dl pw_wine_dl_libc pw_wine_compat pw_wine_compat_libc \
+            pw_wine_threads pw_wine_threads_libc; do
         "$sdk/bin/prospero-clang" -std=gnu11 -O2 -Wall -Wextra -Werror -fPIC \
             -c "$root/wine/ps5/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
         shims="$shims $prx/obj/$unit.o"
@@ -218,12 +220,19 @@ if [ "$prx_status" = 0 ]; then
         __wine_main pw_wine_dl_adopt dlopen dlsym dlerror \
         pw_wine_heap_stats pw_wine_heap_malloc pw_wine_heap_free
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/win32u_desc.c" __wine_unix_lib_init
-    for unit in ntdll_desc win32u_desc; do
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \
+        pw_wineserver_connect pw_wine_thread_register
+    for unit in ntdll_desc win32u_desc wineserver_desc; do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
     link_prx ntdll dlls/ntdll/ntdll.so "$heap $shims $prx/obj/ntdll_desc.o"
     link_prx win32u dlls/win32u/win32u.so "$prx/obj/win32u_desc.o" "$prx/ntdll.shared.elf"
+    # ntdll loads it with its own dlopen; it has its own heap, needs no
+    # dlfcn of its own, and signals threads through the registry ntdll fills.
+    link_prx wineserver server/wineserver "$heap $prx/obj/pw_wine_compat.o \
+        $prx/obj/pw_wine_compat_libc.o $prx/obj/pw_wine_threads.o \
+        $prx/obj/pw_wine_threads_libc.o $prx/obj/wineserver_desc.o"
 fi
 
 python3 - "$build" "$work/make.log" "$work/report.json" "$sdk" "$WINE_COMMIT" "$prx" "$prx_status" \
@@ -271,7 +280,7 @@ result["errors"] = sorted(set(re.findall(r"error: (.+)", text)))
 # modules it imports from, and its data imports, since a data import
 # between application PRXs faults on the console (measured, FW 12.02).
 result["prx"] = {"status": prx_status, "modules": {}}
-for name in ("ntdll", "win32u") if not prx_status.startswith("skipped") else ():
+for name in ("ntdll", "win32u", "wineserver") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
     link_text = link_log.read_text(errors="replace") if link_log.is_file() else ""

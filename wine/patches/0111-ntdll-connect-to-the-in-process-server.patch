@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 13:40:00 +0200
+Subject: [PATCH] ntdll: Connect to the in-process server on PS5.
+
+With WINE_INPROCESS_SERVER (set for __PROSPERO__, see patch 0110) there
+is no server socket and no server process to start. server_connect()
+still sets up the configuration directory, then loads wineserver.so
+beside ntdll (server/ in a build tree; on PS5 dlopen maps it to
+wineserver.prx), calls pw_wineserver_connect() with ntdll's NLS
+directory and uses the returned socket as the connection to the server.
+ntdll locates itself with dladdr, falling back to WINE_PS5_NTDLL_DIR as
+patch 0520 does. Each thread registers its kernel id with the server
+module (pw_wine_thread_register, when the module has it), which is how
+wineserver.prx signals threads on PS5. The configuration directory
+ownership check is skipped on PS5, whose file systems keep no unix owners.
+---
+ dlls/ntdll/unix/server.c | 91 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 91 insertions(+)
+
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index 06eb740914..1bcf453ee8 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -24,8 +24,16 @@
+ 
+ #include "config.h"
+ 
++#if defined(__PROSPERO__) && !defined(WINE_INPROCESS_SERVER)
++/* A PS5 title cannot create processes: the server runs in-process. */
++#define WINE_INPROCESS_SERVER 1
++#endif
++
+ #include <assert.h>
+ #include <ctype.h>
++#ifdef WINE_INPROCESS_SERVER
++#include <dlfcn.h>
++#endif
+ #include <errno.h>
+ #include <fcntl.h>
+ #ifdef HAVE_LWP_H
+@@ -1343,7 +1351,9 @@ static int setup_config_dir(void)
+     }
+ 
+     if (stat( ".", &st ) == -1) fatal_perror( "stat %s", config_dir );
++#ifndef __PROSPERO__  /* one user; its file systems do not keep unix owners */
+     if (st.st_uid != getuid()) fatal_error( "'%s' is not owned by you\n", config_dir );
++#endif
+ 
+     server_dir = init_server_dir( st.st_dev, st.st_ino );
+ 
+@@ -1394,6 +1404,73 @@ static void server_connect_error( const char *serverdir )
+ }
+ 
+ 
++#ifdef WINE_INPROCESS_SERVER
++/* the in-process server signals threads through this table on PS5 */
++static int (*register_server_thread)( long tid, pthread_t thread );
++
++/***********************************************************************
++ *           connect_inprocess_server
++ *
++ * Load the server module beside ntdll (server/ in a build tree), start it
++ * on first use and get a new client connection from it.
++ */
++static int connect_inprocess_server(void)
++{
++    Dl_info info;
++    char *dir = NULL, *module_path, *nls_dir, *p;
++    void *module;
++    int (*connect_server)( const char * );
++    int fd;
++
++    if (dladdr( connect_inprocess_server, &info ) && info.dli_fname) dir = strdup( info.dli_fname );
++    if (dir && (p = strrchr( dir, '/' ))) *p = 0;
++    else
++    {
++        const char *env = getenv( "WINE_PS5_NTDLL_DIR" );
++        free( dir );
++        if (!env) fatal_error( "cannot locate ntdll to load the in-process server\n" );
++        dir = strdup( env );
++    }
++    if (build_dir)
++    {
++        if (asprintf( &module_path, "%s/server/wineserver.so", build_dir ) == -1) module_path = NULL;
++        if (asprintf( &nls_dir, "%s/nls", build_dir ) == -1) nls_dir = NULL;
++    }
++    else
++    {
++        if (asprintf( &module_path, "%s/wineserver.so", dir ) == -1) module_path = NULL;
++        if (asprintf( &nls_dir, "%s/nls", data_dir ? data_dir : dir ) == -1) nls_dir = NULL;
++    }
++    if (!module_path || !nls_dir) fatal_error( "out of memory\n" );
++
++    if (!(module = dlopen( module_path, RTLD_NOW )))
++        fatal_error( "cannot load the in-process server %s: %s\n", module_path, dlerror() );
++    if (!(connect_server = dlsym( module, "pw_wineserver_connect" )))
++        fatal_error( "%s has no pw_wineserver_connect\n", module_path );
++    register_server_thread = dlsym( module, "pw_wine_thread_register" );
++    if ((fd = connect_server( nls_dir )) == -1)
++        fatal_error( "the in-process server %s did not start\n", module_path );
++    TRACE( "connected to the in-process server %s\n", module_path );
++    free( dir );
++    free( module_path );
++    free( nls_dir );
++    return fd;
++}
++
++
++/***********************************************************************
++ *           register_inprocess_thread
++ *
++ * Let the in-process server reach this thread by its kernel id.
++ */
++static void register_inprocess_thread( int tid )
++{
++    if (register_server_thread && register_server_thread( tid, pthread_self() ))
++        ERR( "cannot register thread %d with the in-process server\n", tid );
++}
++#endif
++
++
+ /***********************************************************************
+  *           server_connect
+  *
+@@ -1407,6 +1484,14 @@ static int server_connect(void)
+ 
+     initial_cwd = setup_config_dir();
+ 
++#ifdef WINE_INPROCESS_SERVER
++    /* no socket file and no server process: ask the in-process server */
++    s = connect_inprocess_server();
++    fchdir( initial_cwd );  /* switch back to the starting directory */
++    fcntl( s, F_SETFD, FD_CLOEXEC );
++    return s;
++#endif
++
+     /* chdir to the server directory */
+     if (chdir( server_dir ) == -1)
+     {
+@@ -1678,6 +1763,9 @@ size_t server_init_process(void)
+ 
+     reply_pipe = init_thread_pipe( data );
+ 
++#ifdef WINE_INPROCESS_SERVER
++    register_inprocess_thread( get_unix_tid() );
++#endif
+     SERVER_START_REQ( init_first_thread )
+     {
+         req->unix_pid    = getpid();
+@@ -1795,6 +1883,9 @@ void server_init_thread( struct thread_data *data )
+     pthread_setspecific( thread_data_key, data );
+ 
+     reply_pipe = init_thread_pipe( data );
++#ifdef WINE_INPROCESS_SERVER
++    register_inprocess_thread( get_unix_tid() );
++#endif
+     SERVER_START_REQ( init_thread )
+     {
+         req->unix_tid  = get_unix_tid();
+-- 
+2.43.0

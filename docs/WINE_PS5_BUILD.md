@@ -54,6 +54,7 @@ of the port never collide:
 | 0101 | `server`: resolve file names into server-owned memory instead of `realpath(path, NULL)` |
 | 0102 | `server`: size the user shared data section to a whole host page; with 16 KiB pages that page also holds the syscall dispatcher pointer at `0x7ffe1000` (patch 0530) |
 | 0110 | `server`: run in-process (`WINE_INPROCESS_SERVER`, set on PS5): `pw_wineserver_connect()` starts the server on a thread and returns a client socket; see [In-process server](#in-process-server) |
+| 0111 | `ntdll`: connect through `pw_wineserver_connect()` from `wineserver.so` beside ntdll (`wineserver.prx` on PS5) instead of the socket file, and register each thread's kernel id with the server module |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
 | 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
 | 0520 | `ntdll`: name the ntdll directory with `WINE_PS5_NTDLL_DIR` when `dladdr` cannot (PRX) |
@@ -150,8 +151,41 @@ the host with `WINE_INPROCESS_SERVER` and links them into
 test process and receives the protocol version and request pipe over two
 connections, dropping the first one before it initialises. It passes on the
 host with protocol 961. It needs the host Wine build, so it is not part of
-`make test`. ntdll's side (connecting through this entry instead of the
-socket file) and the `wineserver.prx` link come next.
+`make test`.
+
+On the ntdll side, patch 0111 keeps `server_connect()`'s configuration
+directory setup. Instead of the socket file and `start_server()`, it:
+
+1. `dlopen`s `wineserver.so` from ntdll's directory (`server/` in a build
+   tree). On PS5, `pw_wine_dl` loads `wineserver.prx` for it.
+2. Calls `pw_wineserver_connect()` with ntdll's NLS directory.
+3. Before each thread's first request, registers the thread's kernel id
+   with `pw_wine_thread_register`.
+
+The title libraries have no `thr_kill2`, `thr_kill` or `syscall`, so
+`wineserver.prx` signals threads with `pthread_kill` through that registry
+(`wine/ps5/pw_wine_threads.c`).
+
+A full host run exercised both patches:
+- Host Wine was built with `WINE_INPROCESS_SERVER` for ntdll and the
+  server, with the server objects linked into `server/wineserver.so`.
+- The prefix was initialised by an ordinary build.
+- `reg query "HKLM\Software\Microsoft\Windows NT\CurrentVersion" /v
+  CurrentVersion` then printed `REG_SZ 6.3` and exited 0.
+- The `+server` trace shows `connected to the in-process server`, and no
+  `wineserver` process existed during the run.
+- Helper processes that Wine spawns on Linux (explorer, winedevice) each
+  get a server of their own and fail as expected; on PS5, patch 0550 stops
+  process creation.
+- `pw_wineserver_connect` is `DECLSPEC_EXPORT`, because Wine compiles its
+  unix code with `-fvisibility=hidden`.
+
+The PRX stage links `wineserver.prx` from the server objects:
+- its own heap copy;
+- the compat shims, whose `posix_fadvise` and `if_nametoindex` are needed
+  only by the server;
+- the thread registry;
+- a descriptor with `pw_wineserver_connect` and `pw_wine_thread_register`.
 
 ## Measured result
 
@@ -174,8 +208,9 @@ The PRX link of the same objects (host run on 2026-09-26, foundation
 
 | Module | Size | Unresolved | Needs | Data imports |
 | --- | --- | --- | --- | --- |
-| `ntdll.prx` | 654,537 bytes | none | `libSceLibcInternal`, `libkernel`, `libkernel_sys` | `__stderrp`, `__stdoutp` (libc), `environ` (libkernel) |
+| `ntdll.prx` | 648,921 bytes | none | `libSceLibcInternal`, `libkernel`, `libkernel_sys` | `__stderrp`, `__stdoutp` (libc), `environ` (libkernel) |
 | `win32u.prx` | 2,217,250 bytes | none | `ntdll.prx`, `libSceLibcInternal`, `libkernel` | none |
+| `wineserver.prx` | 723,874 bytes | none | `libSceLibcInternal`, `libkernel`, `libkernel_sys` | `__stderrp`, `__stdoutp` (libc) |
 
 - The data imports come from system modules the title already loads, not
   from another application PRX.

@@ -79,7 +79,7 @@ index 46419a09cb..34f51cbae4 100644
 +/* Start the server on first use and return a new client connection, which
 + * ntdll uses in place of connecting to the server socket. Initialisation
 + * runs on the caller's thread, so it completes before the first request. */
-+int pw_wineserver_connect( const char *nls_dir )
++DECLSPEC_EXPORT int pw_wineserver_connect( const char *nls_dir )
 +{
 +    static pthread_once_t once = PTHREAD_ONCE_INIT;
 +
