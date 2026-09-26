@@ -381,6 +381,10 @@ static void image_to_fp(const uint8_t *image, PwGuestFp *fp)
 
 /* ---- cache and execution ---------------------------------------------- */
 
+/* Stubs never start at the region's first byte: an instrumented indirect
+ * call (clang -fsanitize=function) reads the bytes just before its target. */
+enum { FIRST_STUB = 16 };
+
 int pw_x86_hostexec_init(PwX86HostExec *h, const PwVmBackend *backend, size_t code_bytes)
 {
     int status;
@@ -394,6 +398,7 @@ int pw_x86_hostexec_init(PwX86HostExec *h, const PwVmBackend *backend, size_t co
     status = backend->commit(backend->context, &h->code, 0, h->code.bytes, PW_PROT_READ);
     if (status != PW_OK) { backend->release(backend->context, &h->code); return status; }
     h->backend = backend;
+    h->cursor = FIRST_STUB;
     h->initialized = 1;
     return PW_OK;
 }
@@ -402,7 +407,7 @@ int pw_x86_hostexec_reset(PwX86HostExec *h)
 {
     if (!h || !h->initialized) return PW_ERR_PRECONDITION;
     memset(h->slots, 0, sizeof(h->slots));
-    h->cursor = 0;
+    h->cursor = FIRST_STUB;
     return PW_OK;
 }
 

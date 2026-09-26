@@ -198,7 +198,7 @@ static void test_refusals_and_cache(void)
     s.eip = 0x2000;
     assert(run(&s, (const uint8_t[]){0x99}, 1) == PW_OK);
     assert(hx.compiled == compiled + 2);
-    assert(pw_x86_hostexec_reset(&hx) == PW_OK && hx.cursor == 0);
+    assert(pw_x86_hostexec_reset(&hx) == PW_OK && hx.cursor == 16);
 }
 
 int main(void)
