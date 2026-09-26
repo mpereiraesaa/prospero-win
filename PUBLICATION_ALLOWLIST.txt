@@ -364,6 +364,8 @@ wine/patches/0101-server-realpath-into-server-memory.patch
 wine/patches/0102-server-user-shared-data-fills-a-host-page.patch
 wine/patches/0110-server-run-in-process-on-ps5.patch
 wine/patches/0111-ntdll-connect-to-the-in-process-server.patch
+wine/patches/0400-win32u-ps5-user-driver.patch
+tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
 wine/ps5/pw_wine_heap_libc.c

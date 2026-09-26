@@ -55,6 +55,7 @@ of the port never collide:
 | 0102 | `server`: size the user shared data section to a whole host page; with 16 KiB pages that page also holds the syscall dispatcher pointer at `0x7ffe1000` (patch 0530) |
 | 0110 | `server`: run in-process (`WINE_INPROCESS_SERVER`, set on PS5): `pw_wineserver_connect()` starts the server on a thread and returns a client socket; see [In-process server](#in-process-server) |
 | 0111 | `ntdll`: connect through `pw_wineserver_connect()` from `wineserver.so` beside ntdll (`wineserver.prx` on PS5) instead of the socket file, and register each thread's kernel id with the server module |
+| 0400 | `win32u`: in-process PS5 user driver (`WINE_PS5_USER_DRIVER`, set on PS5); see [User driver](#user-driver) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
 | 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
 | 0520 | `ntdll`: name the ntdll directory with `WINE_PS5_NTDLL_DIR` when `dladdr` cannot (PRX) |
@@ -186,6 +187,44 @@ The PRX stage links `wineserver.prx` from the server objects:
   only by the server;
 - the thread registry;
 - a descriptor with `pw_wineserver_connect` and `pw_wine_thread_register`.
+
+## User driver
+
+A title has no explorer, no display server and no driver dll, so patch 0400
+gives win32u its own driver (`dlls/win32u/ps5drv.c`). `load_display_driver()`
+installs it, and `get_desktop_window()` takes the desktop the server creates
+instead of starting explorer. The driver:
+
+- **Display.** It reports one virtual monitor: 800x600, or `WINE_PS5_DESKTOP=WxH`.
+  It sizes the server's desktop window to that monitor and publishes the
+  monitor once, so the server bounds the cursor by it even when the prefix
+  holds another driver's display config.
+- **Presentation.** Each window gets a 32-bpp surface. On flush, the pixels
+  of visible top-level windows are composed into one screen buffer and
+  handed to `pw_wine_present()`, the title's single sink
+  (`wine/ps5/pw_wine_sink.c` in ntdll.prx). A window that has just been
+  shown is redrawn, since it may have painted before it had this surface.
+- **Input.** `ProcessEvents` drains `pw_wine_next_input()` into hardware
+  input:
+  - keys;
+  - the absolute pointer, in screen pixels;
+  - buttons.
+
+  `pw_wine_input_fd()` becomes each GUI thread's queue fd, so an idle
+  thread is woken when input is posted. When no window is in the
+  foreground, the newest shown window is brought there, because no window
+  manager does that here.
+
+Host check (2026-09-26): a host Wine was built with `WINE_INPROCESS_SERVER`
+and `WINE_PS5_USER_DRIVER`, with `tests/wine_ps5_driver_sink.c` preloaded as
+the sink. The fixture writes the latest frame as a PPM and replays scripted
+input.
+- winemine and notepad appear in the 800x600 frames, with caption, borders,
+  board and edit area.
+- A scripted click at (40,200) opened winemine's board and started its timer.
+- Typed `HI` reached notepad's edit control as `WM_KEYDOWN`/`WM_CHAR` (`h`, `i`).
+- No text is drawn, because the build has no fonts (`--without-freetype`,
+  as on PS5). Fonts for the console are still open.
 
 ## Measured result
 
