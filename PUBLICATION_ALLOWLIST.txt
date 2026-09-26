@@ -104,6 +104,8 @@ src/pw_user32.h
 src/pw_gdi.c
 src/pw_launcher_model.c
 src/pw_launcher_model.h
+src/pw_launcher_render.c
+src/pw_launcher_render.h
 src/pw_prefix_registry.c
 src/pw_prefix_registry.h
 src/pw_gdi.h
@@ -160,6 +162,7 @@ tests/test_pw_x86_lazyflags.c
 tests/test_pw_x87.c
 tests/test_pw_user32.c
 tests/test_launcher_model.c
+tests/test_pw_launcher_render.c
 tests/test_prefix_launcher.c
 tests/test_pw_gdi.c
 tests/test_pw_gdi_abi.c
