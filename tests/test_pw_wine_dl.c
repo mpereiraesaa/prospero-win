@@ -78,6 +78,22 @@ int main(void)
     assert(pw_wine_dl_sym(PW_WINE_DL_DEFAULT,"__wine_unix_call_funcs")==image+128);
     unload_fail=1;assert(pw_wine_dl_close(other)==-1 && !strcmp(pw_wine_dl_error(),"unload failed"));
     assert(!pw_wine_dl_sym(PW_WINE_DL_DEFAULT,"__wine_unix_call_funcs"));
+    /* A module the title loaded itself is adopted, named by dladdr and
+     * never unloaded here; addresses outside every module are not named. */
+    before=unloads;int starts_before=starts;
+    void *ntdll=pw_wine_dl_adopt("/app0/sce_module/ntdll.prx",9);
+    assert(!ntdll && !strcmp(pw_wine_dl_error(),"module has no export descriptor") && unloads==before);
+    ntdll=pw_wine_dl_adopt("/app0/sce_module/ntdll.prx",7);
+    assert(ntdll && starts==starts_before);
+    PwWineDlInfo info;
+    assert(pw_wine_dl_addr(image+700,&info) && !strcmp(info.path,"/app0/sce_module/ntdll.prx") &&
+           info.base==image);
+    assert(pw_wine_dl_addr((const void *)(uintptr_t)module_start,&info) && info.base==image);
+    int local;assert(!pw_wine_dl_addr(&local,&info) &&
+                     !strcmp(pw_wine_dl_error(),"address not in any module"));
+    assert(pw_wine_dl_adopt("/app0/sce_module/ntdll.prx",7)==ntdll);
+    assert(!pw_wine_dl_close(ntdll) && !pw_wine_dl_close(ntdll) && unloads==before);
+    assert(!pw_wine_dl_addr(image+700,&info) && !pw_wine_dl_adopt(NULL,7));
     /* A reopened module starts again. */
     unload_fail=0;void *again=pw_wine_dl_open("/app0/win/lib/win32u.so");
     assert(again && starts==3);assert(!pw_wine_dl_close(again));

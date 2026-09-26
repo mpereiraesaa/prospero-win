@@ -3,7 +3,9 @@
  * dlopen of a unix library (and win32u's, through the ntdll.so import) loads
  * a PRX through pw_wine_dl instead of the firmware's dynamic linker, which
  * cannot resolve an application module's exports. dlopen(NULL) and the
- * RTLD_* pseudo-handles search every loaded module. */
+ * RTLD_* pseudo-handles search every loaded module. dladdr names the loaded
+ * or adopted module containing an address, which is how ntdll finds its own
+ * directory. */
 #include "pw_wine_dl.h"
 #include <dlfcn.h>
 #include <pthread.h>
@@ -47,4 +49,12 @@ int dlclose(void *handle)
 char *dlerror(void)
 {
     return (char *)pw_wine_dl_error();
+}
+int dladdr(const void *address,Dl_info *info)
+{
+    PwWineDlInfo found;
+    if(!info || !pw_wine_dl_addr(address,&found))return 0;
+    info->dli_fname=found.path;info->dli_fbase=(void *)(uintptr_t)found.base;
+    info->dli_sname=NULL;info->dli_saddr=NULL;
+    return 1;
 }

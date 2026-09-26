@@ -19,12 +19,21 @@ typedef struct PwWineDlOps {
                        const void *option,int *result);
 } PwWineDlOps;
 #define PW_WINE_DL_DEFAULT ((void *)0)
+typedef struct PwWineDlInfo {
+    const char *path;          /* the path the module was opened or adopted as */
+    const void *base;          /* its first segment */
+} PwWineDlInfo;
 
 void pw_wine_dl_configure(const PwWineDlOps *ops,const char *module_dir);
 void *pw_wine_dl_open(const char *path);
 /* handle PW_WINE_DL_DEFAULT searches every loaded module in load order. */
 void *pw_wine_dl_sym(void *handle,const char *name);
 int pw_wine_dl_close(void *handle);
+/* Registers a module the title loaded itself (ntdll.prx, for instance) so
+ * that dladdr can name it; returns a handle like pw_wine_dl_open. */
+void *pw_wine_dl_adopt(const char *path,int32_t module_handle);
+/* The module whose segments contain address, as dladdr reports it. */
+int pw_wine_dl_addr(const void *address,PwWineDlInfo *info);
 /* The last failure of this thread, cleared once read, as dlerror does. */
 const char *pw_wine_dl_error(void);
 

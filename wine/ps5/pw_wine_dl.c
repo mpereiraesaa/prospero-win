@@ -6,7 +6,9 @@
 
 typedef struct Module {
     char path[PW_WINE_DL_MAX_PATH];
-    int32_t handle;uint32_t references;
+    int32_t handle;uint32_t references,segment_count;
+    int owned;                 /* loaded here, so unloaded here */
+    PwPrxSegment segments[PW_PRX_MAX_SEGMENTS];
     const PwPrxDescriptor *descriptor;
 } Module;
 
@@ -54,6 +56,27 @@ static int32_t try_load(const char *path)
 {
     int result=0;return ops.load_start?ops.load_start(path,0,NULL,0,NULL,&result):-1;
 }
+/* Describes a loaded module and enters it in the registry; on failure the
+ * module is unloaded only when this loader loaded it. */
+static Module *register_module(const char *path,int32_t handle,int owned)
+{
+    uint8_t info[PW_PRX_MODULE_INFO_BYTES];PwPrxSegment segments[PW_PRX_MAX_SEGMENTS];
+    uint32_t count=0;const PwPrxDescriptor *descriptor=NULL;int result=0;
+    memset(info,0,sizeof(info));
+    {uint64_t size=PW_PRX_MODULE_INFO_BYTES;memcpy(info,&size,sizeof(size));}
+    if(!ops.module_info || ops.module_info(handle,info)<0 ||
+       pw_prx_parse_module_info(info,NULL,segments,&count)!=PW_PRX_OK ||
+       pw_prx_find_descriptor(segments,count,&descriptor)!=PW_PRX_OK) {
+        if(owned && ops.stop_unload)(void)ops.stop_unload(handle,0,NULL,0,NULL,&result);
+        last_error="module has no export descriptor";return NULL;
+    }
+    uint32_t slot=0;while(modules[slot].references)slot++;
+    Module *module=&modules[slot];
+    strcpy(module->path,path);module->handle=handle;module->references=1;module->owned=owned;
+    module->segment_count=count;memcpy(module->segments,segments,sizeof(segments));
+    module->descriptor=descriptor;order[loaded++]=slot;
+    return module;
+}
 static void *open_locked(const char *path)
 {
     Module *module=find(path);
@@ -63,22 +86,9 @@ static void *open_locked(const char *path)
     if(prx_path(path,NULL,candidate))handle=try_load(candidate);
     if(handle<0 && module_dir[0] && prx_path(path,module_dir,candidate))handle=try_load(candidate);
     if(handle<0){last_error="module not found";return NULL;}
-    uint8_t info[PW_PRX_MODULE_INFO_BYTES];PwPrxSegment segments[PW_PRX_MAX_SEGMENTS];
-    uint32_t count=0;const PwPrxDescriptor *descriptor=NULL;int result=0;
-    memset(info,0,sizeof(info));
-    {uint64_t size=PW_PRX_MODULE_INFO_BYTES;memcpy(info,&size,sizeof(size));}
-    if(!ops.module_info || ops.module_info(handle,info)<0 ||
-       pw_prx_parse_module_info(info,NULL,segments,&count)!=PW_PRX_OK ||
-       pw_prx_find_descriptor(segments,count,&descriptor)!=PW_PRX_OK) {
-        if(ops.stop_unload)(void)ops.stop_unload(handle,0,NULL,0,NULL,&result);
-        last_error="module has no export descriptor";return NULL;
-    }
-    uint32_t slot=0;while(modules[slot].references)slot++;
-    module=&modules[slot];
-    strcpy(module->path,path);module->handle=handle;module->references=1;
-    module->descriptor=descriptor;order[loaded++]=slot;
+    if(!(module=register_module(path,handle,1)))return NULL;
     int (*start)(size_t,const void *)=(int (*)(size_t,const void *))
-        (uintptr_t)pw_prx_lookup(descriptor,"module_start");
+        (uintptr_t)pw_prx_lookup(module->descriptor,"module_start");
     if(start)(void)start(0,NULL);
     return module;
 }
@@ -113,7 +123,8 @@ int pw_wine_dl_close(void *handle)
         last_error="invalid handle";status=-1;
     } else if(!--module->references) {
         int result=0;
-        if(ops.stop_unload && ops.stop_unload(module->handle,0,NULL,0,NULL,&result)<0) {
+        if(module->owned && ops.stop_unload &&
+           ops.stop_unload(module->handle,0,NULL,0,NULL,&result)<0) {
             last_error="unload failed";status=-1;
         }
         uint32_t slot=(uint32_t)(module-modules),i=0;
@@ -123,4 +134,34 @@ int pw_wine_dl_close(void *handle)
     }
     pthread_mutex_unlock(&lock);
     return status;
+}
+
+void *pw_wine_dl_adopt(const char *path,int32_t module_handle)
+{
+    if(!path || !*path || strlen(path)>=PW_WINE_DL_MAX_PATH){last_error="invalid path";return NULL;}
+    pthread_mutex_lock(&lock);
+    Module *module=find(path);
+    if(module)module->references++;
+    else if(loaded==PW_WINE_DL_MAX_MODULES)last_error="too many modules";
+    else module=register_module(path,module_handle,0);
+    pthread_mutex_unlock(&lock);
+    return module;
+}
+int pw_wine_dl_addr(const void *address,PwWineDlInfo *info)
+{
+    int found=0;
+    if(!info)return 0;
+    pthread_mutex_lock(&lock);
+    for(uint32_t i=0;i<loaded && !found;i++) {
+        const Module *module=&modules[order[i]];
+        for(uint32_t s=0;s<module->segment_count && !found;s++) {
+            uintptr_t base=(uintptr_t)module->segments[s].address;
+            if((uintptr_t)address>=base && (uintptr_t)address-base<module->segments[s].size) {
+                *info=(PwWineDlInfo){module->path,module->segments[0].address};found=1;
+            }
+        }
+    }
+    pthread_mutex_unlock(&lock);
+    if(!found)last_error="address not in any module";
+    return found;
 }
