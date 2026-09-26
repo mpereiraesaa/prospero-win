@@ -380,3 +380,4 @@ tests/test_pw_wine_compat.c
 wine/ps5/pw_wine_compat.c
 wine/ps5/pw_wine_compat.h
 wine/ps5/pw_wine_compat_libc.c
+wine/patches/0540-ntdll-count-host-vm-calls-and-skip-unchanged-mprotect.patch

@@ -1,0 +1,226 @@
+From 25dd0b9fe13e0a1bf05d7c03c76a6d28060dc77d Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 12:19:12 +0200
+Subject: [PATCH] ntdll: Count host address-space calls and skip unchanged
+ mprotect.
+
+Every mmap/munmap/mprotect in virtual.c goes through counting wrappers
+that also remember the protection each host page was last given. An
+mprotect that would leave every page of its range unchanged is skipped:
+with host pages larger than Windows pages most Windows-level protection
+changes leave the host page, the union of its Windows pages, as it was.
+Pages last changed elsewhere are unknown and never skipped.
+
+__wine_virtual_stats exposes the counters (host calls, mprotect bytes,
+skipped calls, resolved faults, images and their per-image cost), and
+WINEDEBUG=+module reports each image's host calls.
+
+Measured starting real Pinball on the host (35 images): 1,810 mprotect
+calls become 749 with 16 KiB host pages (1,061 skipped) and 730 with
+4 KiB pages (313 skipped).
+---
+ dlls/ntdll/unix/virtual.c | 167 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 164 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 6af3b9fb40..0a83dfd251 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -95,6 +95,145 @@ WINE_DEFAULT_DEBUG_CHANNEL(virtual);
+ WINE_DECLARE_DEBUG_CHANNEL(module);
+ WINE_DECLARE_DEBUG_CHANNEL(virtual_ranges);
+ 
++/* Host address-space accounting. Every mmap/munmap/mprotect issued by this
++ * file goes through the wrappers below, which count them and remember the
++ * protection each host page was last given. An mprotect that would leave
++ * every page of its range as it already is gets skipped: with host pages
++ * larger than Windows pages (16 KiB on PS5) most Windows-level protection
++ * changes do not change the host page, whose protection is the union of its
++ * Windows pages. Pages last touched by anything else are "unknown" and
++ * never skipped. Counters are readable through __wine_virtual_stats. */
++enum { VM_STAT_MMAP, VM_STAT_MUNMAP, VM_STAT_MPROTECT, VM_STAT_MPROTECT_BYTES,
++       VM_STAT_MPROTECT_SKIPPED, VM_STAT_FAULTS, VM_STAT_IMAGES, VM_STAT_IMAGE_MMAP,
++       VM_STAT_IMAGE_MPROTECT, VM_STAT_COUNT };
++static ULONG64 vm_stats[VM_STAT_COUNT];
++
++static inline void vm_stat_add( unsigned int index, ULONG64 value )
++{
++    __atomic_add_fetch( &vm_stats[index], value, __ATOMIC_RELAXED );
++}
++
++/* Known host protection, one byte per host page: 0 = unknown, else prot | 0x80.
++ * Two levels over the 47-bit user range, leaves of 64k pages mapped on demand. */
++enum { HOST_PROT_LEAF_SHIFT = 16, HOST_PROT_KNOWN = 0x80 };
++static unsigned char **host_prot_leaves;
++static size_t host_prot_leaf_count;
++
++static size_t host_prot_page_size(void)
++{
++    static size_t size;
++
++    if (!size) size = sysconf( _SC_PAGESIZE );
++    return size;
++}
++
++static unsigned char *host_prot_entry( size_t host_page, int create )
++{
++    size_t leaf = host_page >> HOST_PROT_LEAF_SHIFT;
++    unsigned char *ptr;
++
++    if (!host_prot_leaves)
++    {
++        size_t shift = __builtin_ctzl( host_prot_page_size() );
++        void *top;
++
++        if (!create) return NULL;
++        host_prot_leaf_count = ((size_t)1 << 47 >> shift) >> HOST_PROT_LEAF_SHIFT;
++        top = mmap( NULL, host_prot_leaf_count * sizeof(*host_prot_leaves), PROT_READ | PROT_WRITE,
++                    MAP_PRIVATE | MAP_ANON, -1, 0 );
++        if (top == MAP_FAILED) return NULL;
++        host_prot_leaves = top;
++    }
++    if (leaf >= host_prot_leaf_count) return NULL;
++    if (!(ptr = host_prot_leaves[leaf]))
++    {
++        if (!create) return NULL;
++        ptr = mmap( NULL, (size_t)1 << HOST_PROT_LEAF_SHIFT, PROT_READ | PROT_WRITE,
++                    MAP_PRIVATE | MAP_ANON, -1, 0 );
++        if (ptr == MAP_FAILED) return NULL;
++        host_prot_leaves[leaf] = ptr;
++    }
++    return ptr + (host_page & (((size_t)1 << HOST_PROT_LEAF_SHIFT) - 1));
++}
++
++static void host_prot_record( const void *addr, size_t len, unsigned char value )
++{
++    const size_t size = host_prot_page_size();
++    size_t first = (size_t)addr / size, last = ((size_t)addr + len + size - 1) / size;
++
++    for (; first < last; first++)
++    {
++        unsigned char *entry = host_prot_entry( first, value != 0 );
++        if (entry) *entry = value;
++    }
++}
++
++static BOOL host_prot_unchanged( const void *addr, size_t len, int prot )
++{
++    const size_t size = host_prot_page_size();
++    size_t first = (size_t)addr / size, last = ((size_t)addr + len + size - 1) / size;
++
++    if (!len) return FALSE;
++    for (; first < last; first++)
++    {
++        unsigned char *entry = host_prot_entry( first, 0 );
++        if (!entry || *entry != (unsigned char)(prot | HOST_PROT_KNOWN)) return FALSE;
++    }
++    return TRUE;
++}
++
++static inline void *counted_mmap( void *addr, size_t len, int prot, int flags, int fd, off_t off )
++{
++    void *ret = mmap( addr, len, prot, flags, fd, off );
++
++    vm_stat_add( VM_STAT_MMAP, 1 );
++    if (ret != MAP_FAILED) host_prot_record( ret, len, prot | HOST_PROT_KNOWN );
++    return ret;
++}
++
++static inline int counted_munmap( void *addr, size_t len )
++{
++    vm_stat_add( VM_STAT_MUNMAP, 1 );
++    host_prot_record( addr, len, 0 );
++    return munmap( addr, len );
++}
++
++static inline int counted_mprotect( void *addr, size_t len, int prot )
++{
++    int ret;
++
++    if (host_prot_unchanged( addr, len, prot ))
++    {
++        vm_stat_add( VM_STAT_MPROTECT_SKIPPED, 1 );
++        return 0;
++    }
++    vm_stat_add( VM_STAT_MPROTECT, 1 );
++    vm_stat_add( VM_STAT_MPROTECT_BYTES, len );
++    if (!(ret = mprotect( addr, len, prot ))) host_prot_record( addr, len, prot | HOST_PROT_KNOWN );
++    else host_prot_record( addr, len, 0 );
++    return ret;
++}
++
++#define mmap counted_mmap
++#define munmap counted_munmap
++#define mprotect counted_mprotect
++
++/***********************************************************************
++ *           __wine_virtual_stats
++ *
++ * Copy up to count counters (mmap, munmap, mprotect, mprotect bytes, skipped
++ * mprotect, resolved faults, images, image mmap, image mprotect); returns how
++ * many counters exist.
++ */
++DECLSPEC_EXPORT unsigned int __wine_virtual_stats( ULONG64 *out, unsigned int count )
++{
++    unsigned int i;
++
++    for (i = 0; out && i < count && i < VM_STAT_COUNT; i++)
++        out[i] = __atomic_load_n( &vm_stats[i], __ATOMIC_RELAXED );
++    return VM_STAT_COUNT;
++}
++
+ struct preload_info
+ {
+     void  *addr;
+@@ -3047,9 +3186,9 @@ static IMAGE_BASE_RELOCATION *process_relocation_block( char *page, IMAGE_BASE_R
+  * Map an executable (PE format) image into an existing view.
+  * virtual_mutex must be held by caller.
+  */
+-static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRING *nt_name, int fd,
+-                                     struct pe_image_info *image_info, USHORT machine,
+-                                     int shared_fd, BOOL removable )
++static NTSTATUS map_image_into_view_impl( struct file_view *view, const UNICODE_STRING *nt_name, int fd,
++                                          struct pe_image_info *image_info, USHORT machine,
++                                          int shared_fd, BOOL removable )
+ {
+     IMAGE_DOS_HEADER *dos;
+     IMAGE_NT_HEADERS *nt;
+@@ -3287,6 +3426,27 @@ done:
+     return status;
+ }
+ 
++/* Account the host calls one image mapping costs (reported per image with
++ * WINEDEBUG=+module). */
++static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRING *nt_name, int fd,
++                                     struct pe_image_info *image_info, USHORT machine,
++                                     int shared_fd, BOOL removable )
++{
++    const ULONG64 mmaps = __atomic_load_n( &vm_stats[VM_STAT_MMAP], __ATOMIC_RELAXED );
++    const ULONG64 protects = __atomic_load_n( &vm_stats[VM_STAT_MPROTECT], __ATOMIC_RELAXED );
++    NTSTATUS status = map_image_into_view_impl( view, nt_name, fd, image_info, machine,
++                                                shared_fd, removable );
++    const ULONG64 image_mmaps = __atomic_load_n( &vm_stats[VM_STAT_MMAP], __ATOMIC_RELAXED ) - mmaps;
++    const ULONG64 image_protects = __atomic_load_n( &vm_stats[VM_STAT_MPROTECT], __ATOMIC_RELAXED ) - protects;
++
++    vm_stat_add( VM_STAT_IMAGES, 1 );
++    vm_stat_add( VM_STAT_IMAGE_MMAP, image_mmaps );
++    vm_stat_add( VM_STAT_IMAGE_MPROTECT, image_protects );
++    TRACE_(module)( "mapped %s: status %#x, %s host mmap, %s mprotect\n", debugstr_us(nt_name),
++                    (int)status, wine_dbgstr_longlong( image_mmaps ), wine_dbgstr_longlong( image_protects ) );
++    return status;
++}
++
+ 
+ /***********************************************************************
+  *             free_pe_mapping_info
+@@ -4629,6 +4789,7 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec,
+ 
+     mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
+     vprot = get_host_page_vprot( page );
++    vm_stat_add( VM_STAT_FAULTS, 1 );
+ 
+ #ifdef __APPLE__
+     /* Rosetta on Apple Silicon misreports certain write faults as read faults. */
+-- 
+2.43.0
+
