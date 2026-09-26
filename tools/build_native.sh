@@ -31,6 +31,10 @@
 #   PW_DBT_CHAINING        1 enables direct block chaining (default 1)
 #   PW_DBT_RESIDENCY       1 enables cross-block guest GPR residency (default 1)
 #   PW_DBT_LAZY_FLAGS      1 enables cross-block RAW flag deferral (default 1)
+#   PW_LAUNCHER            1 boots into the native launcher; requires
+#                          PW_APP_PROFILE, which becomes a package profile
+#   PW_LAUNCHER_EXTRA_PROFILES  extra package profiles, listed but not staged
+#   PW_LAUNCHER_SCRIPT     1 replaces pad reads with the validation timeline
 #   PW_PRESENT_BACKEND     agc (default) or vk: present GDI frames through
 #                          ps5-vulkan WSI; requires PS5VK_SDK (a dist-sdk dir)
 set -euo pipefail
@@ -54,6 +58,9 @@ dbt_residency=${PW_DBT_RESIDENCY:-1}
 dbt_lazy_flags=${PW_DBT_LAZY_FLAGS:-1}
 output_suffix=${PW_OUTPUT_SUFFIX:-}
 present_backend=${PW_PRESENT_BACKEND:-agc}
+launcher=${PW_LAUNCHER:-0}
+launcher_script=${PW_LAUNCHER_SCRIPT:-0}
+launcher_extra=${PW_LAUNCHER_EXTRA_PROFILES:-}
 ps5vk_sdk=${PS5VK_SDK:-}
 
 [[ $use_sample == 0 || $use_sample == 1 ]] || {
@@ -96,6 +103,14 @@ if [[ -n $app_profile ]]; then
         echo "PW_APP_PROFILE must be between 1 and 8192 bytes" >&2; exit 2; }
     use_app_profile=1
 fi
+[[ $launcher == 0 || $launcher == 1 ]] && [[ $launcher_script == 0 || $launcher_script == 1 ]] || {
+    echo "PW_LAUNCHER and PW_LAUNCHER_SCRIPT must be 0 or 1" >&2; exit 2; }
+if (( launcher )); then
+    [[ $native_mode == runtime && -n $app_profile ]] || {
+        echo "PW_LAUNCHER=1 requires PW_NATIVE_MODE=runtime and PW_APP_PROFILE" >&2; exit 2; }
+fi
+(( launcher_script == 0 || launcher )) || {
+    echo "PW_LAUNCHER_SCRIPT=1 requires PW_LAUNCHER=1" >&2; exit 2; }
 [[ $present_backend == agc || $present_backend == vk ]] || {
     echo "PW_PRESENT_BACKEND must be agc or vk" >&2; exit 2; }
 present_vk=0
@@ -228,6 +243,19 @@ if (( use_app_profile )) && [[ $native_mode != wine ]]; then
         "$root/tools/validate_profile_stage.c" "$root/src/pw_app_profile.c" \
         -o "$build/validate_profile_stage"
     "$build/validate_profile_stage" "$dist/win/app.profile" "$dist/win"
+    if (( launcher )); then
+        # The application image cannot be listed on the console, so the
+        # package's profiles are named by an index the launcher reads.
+        mkdir -p "$dist/win/profiles"
+        : > "$dist/win/profiles/profiles.lst"
+        for profile in "$app_profile" $launcher_extra; do
+            name=$(basename -- "$profile")
+            [[ -f $profile && $name =~ ^[a-z0-9_-]+\.profile$ ]] || {
+                echo "launcher profile $profile must be a lower-case .profile file" >&2; exit 2; }
+            cp -- "$profile" "$dist/win/profiles/$name"
+            echo "$name" >> "$dist/win/profiles/profiles.lst"
+        done
+    fi
 elif [[ $native_mode != wine ]]; then
     [[ -f $dist/win/$root_module ]] || {
         echo "root module $root_module is not staged in $dist/win" >&2; exit 2; }
@@ -272,7 +300,8 @@ common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -DPW_DBT_RESIDENCY="$dbt_residency"
         -DPW_DBT_LAZY_FLAGS="$dbt_lazy_flags"
         -DPW_COMPAT32_TRANSFER="$compat32_transfer"
-        -DPW_PRESENT_VK="$present_vk")
+        -DPW_PRESENT_VK="$present_vk"
+        -DPW_LAUNCHER="$launcher" -DPW_LAUNCHER_SCRIPT="$launcher_script")
 (( present_vk )) && common+=(-I"$ps5vk_sdk/include")
 
 entry=native/runtime_main.c

@@ -216,7 +216,14 @@ def test_runtime_entry_owns_execution_services() -> None:
                    "pw_gdi_target_view", "pw_audio_ps5_submit",
                    "pw_pad_ps5_poll", "pw_user32_post_quit"):
         assert symbol in text, symbol
-    assert "pad.core.pressed_edges&PAD_CREATE" in text
+    assert "pad->core.pressed_edges&PAD_CREATE" in text
+    # The launcher closes with a held combo, keeps pad and display across
+    # sessions and never opens the display from inside a launched session.
+    assert "const uint32_t combo=PAD_OPTIONS|PAD_CREATE;" in text
+    assert "now-combo_since>=1000000000ull" in text
+    assert 'PW_PAD_QUIT schema=1 source=combo action=WM_QUIT' in text
+    assert "host->launcher?PW_OK:pw_pad_ps5_close(" in text
+    assert "if(!host->launcher && (status=host_open_display(host))!=PW_OK)" in text
     assert 'PW_PAD_QUIT schema=1 source=create action=WM_QUIT' in text
     assert 'PAD_CREATE,0x1b' not in text
     assert "PW_RUNTIME_READY" in text

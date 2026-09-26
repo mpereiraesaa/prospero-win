@@ -23,6 +23,9 @@
 #endif
 #include "../src/pw_app_profile.h"
 #include "../src/pw_runtime_supervisor.h"
+#include "../src/pw_launcher_model.h"
+#include "../src/pw_launcher_render.h"
+#include "../src/pw_profile_catalog.h"
 #include "ps5log/ps5log.h"
 #include <errno.h>
 #include <signal.h>
@@ -243,8 +246,10 @@ static int sleep_ms(void *opaque,uint32_t milliseconds)
 static int audio_open(void *opaque,uint32_t rate,uint16_t channels,uint16_t bits)
 {
     int status=pw_audio_ps5_open(((NativeServices *)opaque)->audio,rate,channels,bits);
-    PS5LOG_LOG("PW_AUDIO_OPEN status=%s rate=%u channels=%u bits=%u",
-               pw_result_name(status),rate,channels,bits);return status;
+    const PwAudioPs5 *audio=((NativeServices *)opaque)->audio;
+    PS5LOG_LOG("PW_AUDIO_OPEN status=%s rate=%u channels=%u bits=%u init_rc=0x%08x open_rc=0x%08x",
+               pw_result_name(status),rate,channels,bits,(uint32_t)audio->init_rc,
+               (uint32_t)audio->open_rc);return status;
 }
 static int audio_submit(void *opaque,const void *pcm,uint32_t bytes,uint32_t token)
 {
@@ -261,28 +266,36 @@ static void abort_runtime(const char *stage,int status)
     ps5log_close(stage);_exit(1);
 }
 
-static int app_profile_load(PwFilePs5 *files, uint8_t *buffer,
-                            PwAppProfile *profile)
+/* Reads a whole small file; a file larger than capacity is refused. */
+static int read_small_file(PwFilePs5 *files,const char *name,uint8_t *buffer,
+                           uint32_t capacity,uint32_t *bytes)
 {
     uint32_t handle=0,total=0;
-    int status=pw_file_ps5_stream_open(files,"app.profile","rb",&handle);
+    int status=pw_file_ps5_stream_open(files,name,"rb",&handle);
     if(status!=PW_OK)return status;
-    while(total<PW_APP_PROFILE_MAX_BYTES) {
+    while(total<capacity) {
         uint32_t got=0;
-        status=pw_file_ps5_stream_read(files,handle,buffer+total,
-            PW_APP_PROFILE_MAX_BYTES-total,&got);
+        status=pw_file_ps5_stream_read(files,handle,buffer+total,capacity-total,&got);
         if(status!=PW_OK || !got)break;
         total+=got;
     }
-    if(status==PW_OK && total==PW_APP_PROFILE_MAX_BYTES) {
+    if(status==PW_OK && total==capacity) {
         uint8_t extra;uint32_t got=0;
         status=pw_file_ps5_stream_read(files,handle,&extra,1,&got);
         if(status==PW_OK && got)status=PW_ERR_LIMIT;
     }
     int close_status=pw_file_ps5_stream_close(files,handle);
     if(status==PW_OK && close_status!=PW_OK)status=close_status;
-    if(status!=PW_OK)return status;
-    return pw_app_profile_parse(buffer,total,profile);
+    if(status==PW_OK)*bytes=total;
+    return status;
+}
+
+static int app_profile_load(PwFilePs5 *files,const char *name,uint8_t *buffer,
+                            PwAppProfile *profile)
+{
+    uint32_t total=0;
+    int status=read_small_file(files,name,buffer,PW_APP_PROFILE_MAX_BYTES,&total);
+    return status==PW_OK?pw_app_profile_parse(buffer,total,profile):status;
 }
 
 static int prefix_registry_path(const PwPrefixLayout *prefix,char *out,
@@ -358,19 +371,79 @@ static uint32_t presentation_window(const PwUser32 *user,const PwGdi *gdi,
     return owner;
 }
 
-int main(int argc,char **argv)
-{
-    (void)argc;(void)argv;ps5log_config config;const char *config_path=NULL;
-    ps5log_config_defaults(&config);int config_rc=ps5log_load_config(ps5log_default_conf_paths,
-        ps5log_default_conf_path_count,&config,&config_path);
-    int log_rc=config_rc==0?ps5log_init(&config,PW_TITLE_ID,PW_APP_NAME,now_ns()):config_rc;
-    install_signals();PS5LOG_LOG("PW_RUNTIME_BEGIN schema=1 title=%s profile_mode=%u fallback_root=%s config=%d log=%d",
-        PW_TITLE_ID,(unsigned)PW_USE_APP_PROFILE,PW_ROOT_MODULE,config_rc,log_rc);
+#ifndef PW_LAUNCHER
+#define PW_LAUNCHER 0
+#endif
+#if PW_PRESENT_VK
+typedef PwPresentVkPs5 RuntimeDisplay;
+#define PW_DISPLAY_BACKEND "vk-wsi"
+#else
+typedef PwVideoOutPs5 RuntimeDisplay;
+#define PW_DISPLAY_BACKEND "agc-dma"
+#endif
+/* Process-lifetime state.  A single-application title opens the pad and
+ * display inside its one session, at the historical points; the launcher
+ * opens them once and lends them to every session. */
+typedef struct RuntimeHost {
+    PwFilePs5 *files;PwFileProvider provider;
+    PwPadPs5 pad;RuntimeDisplay video;
+#if PW_PRESENT_VK
+    PwPresentSink present_sink;
+#endif
+    unsigned launcher;
+    uint32_t display_opens;
+    uint64_t validation_deadline;
+} RuntimeHost;
+typedef struct SessionResult {
+    const char *exit_reason;uint32_t exit_code;int cleanup_status;
+    uint64_t events,retired,flips,audio_blocks;
+} SessionResult;
 
-    PwFilePs5 *files=scratch(sizeof(*files));PwFileProvider provider;PwFileSpan root={0};
-    if(!files)abort_runtime("files-scratch",PW_ERR_VM);
-    int status=pw_file_ps5_init(files,PW_STAGE_DIR);if(status!=PW_OK)abort_runtime("files",status);
-    (void)pw_file_ps5_provider(files,&provider);
+static int host_open_pad(RuntimeHost *host,const PwPadPs5Ops *ops)
+{
+    int status=pw_pad_ps5_open(&host->pad,ops,pinball_pad_map,
+        sizeof(pinball_pad_map)/sizeof(pinball_pad_map[0]));
+    PwPadPs5 *pad=&host->pad;
+    if(status==PW_OK)
+        PS5LOG_LOG("PW_PAD_OPEN schema=1 user_service_rc=%d owns_user_service=%u user=%d pad_init_rc=%d handle=%d read=scePadRead batch=%u",
+            pad->user_initialize_rc,pad->owns_user_service,pad->user_id,pad->pad_init_rc,
+            pad->pad_handle,PW_PAD_PS5_BATCH);
+    return status;
+}
+static int host_open_display(RuntimeHost *host)
+{
+#if PW_PRESENT_VK
+    /* ps5-vulkan owns VideoOut and AGC for this process; pw_videoout_ps5 is
+     * never opened alongside it. */
+    RuntimeDisplay *video=&host->video;
+    int status=pw_present_vk_ps5_open(video,&host->present_sink);
+    PS5LOG_LOG("PW_PRESENT_OPEN schema=1 backend=vk-wsi status=%s width=%u height=%u "
+               "images=2 format=bgra8 usage=transfer-dst mode=fifo failed_call=%s failed_rc=%d",
+               pw_result_name(status),(unsigned)PW_PRESENT_VK_WIDTH,(unsigned)PW_PRESENT_VK_HEIGHT,
+               video->failed_call?video->failed_call:"none",video->failed_result);
+#else
+    int status=pw_videoout_ps5_open(&host->video);
+#endif
+    if(status==PW_OK)host->display_opens++;
+    return status;
+}
+static int host_close_display(RuntimeHost *host)
+{
+#if PW_PRESENT_VK
+    return pw_present_vk_ps5_close(&host->video);
+#else
+    return pw_videoout_ps5_close(&host->video);
+#endif
+}
+
+/* One guest from mapping to teardown.  launched and launcher_supervisor are
+ * the launcher's parsed profile and session owner; both NULL select the
+ * single-application path, which reads app.profile itself. */
+static void run_session(RuntimeHost *host,const PwAppProfile *launched,
+                        PwRuntimeSupervisor *launcher_supervisor,SessionResult *result)
+{
+    PwFilePs5 *files=host->files;PwFileProvider provider=host->provider;PwFileSpan root={0};
+    int status;
     PwAppProfile app_profile;memset(&app_profile,0,sizeof(app_profile));
     const char *root_module=PW_ROOT_MODULE;
     const char *registry_path=PW_REGISTRY_PATH;
@@ -379,10 +452,14 @@ int main(int argc,char **argv)
     PwPrefixLayout *prefix_layout=NULL;
     PwRuntimeSupervisor *supervisor=NULL;
     if(PW_USE_APP_PROFILE) {
-        uint8_t *profile_bytes=scratch(PW_APP_PROFILE_MAX_BYTES);
-        if(!profile_bytes)abort_runtime("profile-scratch",PW_ERR_VM);
-        status=app_profile_load(files,profile_bytes,&app_profile);
-        if(status!=PW_OK)abort_runtime("app-profile",status);
+        if(launched)app_profile=*launched;
+        else {
+            uint8_t *profile_bytes=scratch(PW_APP_PROFILE_MAX_BYTES);
+            if(!profile_bytes)abort_runtime("profile-scratch",PW_ERR_VM);
+            status=app_profile_load(files,"app.profile",profile_bytes,&app_profile);
+            (void)munmap(profile_bytes,PW_APP_PROFILE_MAX_BYTES);
+            if(status!=PW_OK)abort_runtime("app-profile",status);
+        }
         if(app_profile.architecture!=PW_APP_ARCH_PE32 ||
            app_profile.graphics!=PW_APP_GRAPHICS_GDI)
             abort_runtime("profile-capability",PW_ERR_UNSUPPORTED);
@@ -392,7 +469,7 @@ int main(int argc,char **argv)
         root_module=profile_module;
         PwPrefixIo prefix_io;PwPrefixService prefix_service;
         prefix_layout=scratch(sizeof(*prefix_layout));
-        supervisor=scratch(sizeof(*supervisor));
+        supervisor=launcher_supervisor?launcher_supervisor:scratch(sizeof(*supervisor));
         if(!prefix_layout || !supervisor)abort_runtime("profile-state-scratch",PW_ERR_VM);
         if((status=pw_prefix_ps5_io(&prefix_io))!=PW_OK ||
            (status=pw_prefix_service_init(&prefix_service,
@@ -404,10 +481,13 @@ int main(int argc,char **argv)
             sizeof(profile_registry_path)))!=PW_OK)
             abort_runtime("prefix-registry-path",status);
         registry_path=profile_registry_path;
-        pw_runtime_supervisor_init(supervisor);
-        if((status=pw_runtime_supervisor_begin(supervisor,&app_profile,
-            prefix_layout))!=PW_OK)
-            abort_runtime("runtime-session-begin",status);
+        /* The launcher's model has already begun this session. */
+        if(!launcher_supervisor) {
+            pw_runtime_supervisor_init(supervisor);
+            if((status=pw_runtime_supervisor_begin(supervisor,&app_profile,
+                prefix_layout))!=PW_OK)
+                abort_runtime("runtime-session-begin",status);
+        }
         PS5LOG_LOG("PW_PREFIX_OPEN schema=1 id=%s root=%s registry=%s",
             prefix_layout->id,prefix_layout->root,registry_path);
         PS5LOG_LOG("PW_APP_PROFILE schema=1 id=%s runtime=%s prefix=%s exe=%s cwd=%s arch=pe32 graphics=gdi arguments=%u",
@@ -477,14 +557,12 @@ int main(int argc,char **argv)
        (status=pw_audio_ps5_init(&audio,&audio_ops,audio_queue,
                                  PW_AUDIO_PS5_QUEUE_BLOCKS))!=PW_OK)
         abort_runtime("audio",status);
-    PwPadPs5 pad;PwPadPs5Ops pad_ops;
-    if((status=pw_pad_ps5_platform_ops(&pad_ops))!=PW_OK ||
-       (status=pw_pad_ps5_open(&pad,&pad_ops,pinball_pad_map,
-        sizeof(pinball_pad_map)/sizeof(pinball_pad_map[0])))!=PW_OK)
-        abort_runtime("pad",status);
-    PS5LOG_LOG("PW_PAD_OPEN schema=1 user_service_rc=%d owns_user_service=%u user=%d pad_init_rc=%d handle=%d read=scePadRead batch=%u",
-        pad.user_initialize_rc,pad.owns_user_service,pad.user_id,pad.pad_init_rc,
-        pad.pad_handle,PW_PAD_PS5_BATCH);
+    PwPadPs5 *pad=&host->pad;
+    if(!host->launcher) {
+        PwPadPs5Ops pad_ops;
+        if((status=pw_pad_ps5_platform_ops(&pad_ops))!=PW_OK ||
+           (status=host_open_pad(host,&pad_ops))!=PW_OK)abort_runtime("pad",status);
+    }
     NativeServices services={.image=&image,.layout=&layout,.files=files,
         .app_profile=PW_USE_APP_PROFILE?&app_profile:NULL,.audio=&audio,
         .user32=&user32,.profile_buffer=profile_buffer,.profile_capacity=64u*1024u,
@@ -541,20 +619,13 @@ int main(int argc,char **argv)
        pw_x86_engine_set_residency(&engine,PW_DBT_RESIDENCY)!=PW_OK ||
        pw_x86_engine_set_lazy_flags(&engine,PW_DBT_LAZY_FLAGS)!=PW_OK)
         abort_runtime("dbt-mode",PW_ERR_STATE);
+    RuntimeDisplay *video=&host->video;
 #if PW_PRESENT_VK
-    /* ps5-vulkan owns VideoOut and AGC for this process; pw_videoout_ps5 is
-     * never opened alongside it. */
-    PwPresentVkPs5 video;PwPresentSink present_sink;
-    status=pw_present_vk_ps5_open(&video,&present_sink);
-    PS5LOG_LOG("PW_PRESENT_OPEN schema=1 backend=vk-wsi status=%s width=%u height=%u "
-               "images=2 format=bgra8 usage=transfer-dst mode=fifo failed_call=%s failed_rc=%d",
-               pw_result_name(status),(unsigned)PW_PRESENT_VK_WIDTH,(unsigned)PW_PRESENT_VK_HEIGHT,
-               video.failed_call?video.failed_call:"none",video.failed_result);
-    if(status!=PW_OK)abort_runtime("present-open",status);
-#else
-    PwVideoOutPs5 video;
-    if((status=pw_videoout_ps5_open(&video))!=PW_OK)abort_runtime("videoout",status);
+    PwPresentSink *present_sink=&host->present_sink;
 #endif
+    if(!host->launcher && (status=host_open_display(host))!=PW_OK)
+        abort_runtime(PW_PRESENT_VK?"present-open":"videoout",status);
+    const uint64_t flips_at_start=video->flips;
     if(supervisor &&
        (status=pw_runtime_supervisor_guest_started(supervisor))!=PW_OK)
         abort_runtime("runtime-session-start",status);
@@ -569,8 +640,8 @@ int main(int argc,char **argv)
     uint64_t saved_generation=registry.generation,last_save_attempt=0;
     unsigned window_inventory_logged=0;
     uint32_t last_frame_hash=0;
-    const uint64_t validation_deadline=PW_TEST_EXIT_AFTER_MS?
-        now_ns()+(uint64_t)PW_TEST_EXIT_AFTER_MS*1000000ull:0;
+    const uint64_t validation_deadline=host->validation_deadline;
+    uint64_t combo_since=0;unsigned quit_posted=0;
     const char *exit_reason="guest-return";uint32_t exit_code=0;
     for(;;events++) {
         uint64_t loop_now=now_ns();
@@ -625,19 +696,33 @@ int main(int argc,char **argv)
         if(now-last_pad_poll>=4166667ull) {
             PwGdiTargetView input_view;uint32_t input_window=presentation_window(&user32,&gdi,&input_view);
             if(input_window) {
-                uint64_t before=pad.core.stats.events;
-                if((status=pw_pad_ps5_poll(&pad,&user32,input_window))!=PW_OK)
+                uint64_t before=pad->core.stats.events;
+                if((status=pw_pad_ps5_poll(pad,&user32,input_window))!=PW_OK)
                     abort_runtime("pad-read",status);
-                if(pad.core.pressed_edges&PAD_CREATE) {
+                if(!host->launcher && (pad->core.pressed_edges&PAD_CREATE)) {
                     if((status=pw_user32_post_quit(&user32,0))!=PW_OK)
                         abort_runtime("pad-quit",status);
                     PS5LOG_LOG("PW_PAD_QUIT schema=1 source=create action=WM_QUIT");
                 }
-                if(pad.core.stats.events!=before)
+                /* Under the launcher, Options+Create held for one second
+                 * closes the application and returns to the library. */
+                const uint32_t combo=PAD_OPTIONS|PAD_CREATE;
+                if(host->launcher) {
+                    if((pad->core.previous_buttons&combo)!=combo)combo_since=0;
+                    else if(!combo_since)combo_since=now;
+                    else if(!quit_posted && now-combo_since>=1000000000ull) {
+                        if((status=pw_user32_post_quit(&user32,0))!=PW_OK)
+                            abort_runtime("pad-quit",status);
+                        quit_posted=1;
+                        PS5LOG_LOG("PW_PAD_QUIT schema=1 source=combo action=WM_QUIT held_ms=%llu",
+                            (unsigned long long)((now-combo_since)/1000000ull));
+                    }
+                }
+                if(pad->core.stats.events!=before)
                     PS5LOG_LOG("PW_PAD_EVENT schema=1 events=%llu presses=%llu releases=%llu generation=%u timestamp_source=scePadRead",
-                        (unsigned long long)pad.core.stats.events,
-                        (unsigned long long)pad.core.stats.presses,
-                        (unsigned long long)pad.core.stats.releases,pad.core.generation);
+                        (unsigned long long)pad->core.stats.events,
+                        (unsigned long long)pad->core.stats.presses,
+                        (unsigned long long)pad->core.stats.releases,pad->core.generation);
             }
             last_pad_poll=now;
         }
@@ -653,34 +738,34 @@ int main(int argc,char **argv)
 #if PW_PRESENT_VK
                     PwPresentFrame frame;PwPresentPlacement placement;
                     if((status=pw_present_frame_from_gdi(&best,&frame))==PW_OK)
-                        status=pw_present_frame(&present_sink,&frame,80,3,0x00101018u,
-                                                video.flips+1,&placement);
+                        status=pw_present_frame(present_sink,&frame,80,3,0x00101018u,
+                                                video->flips+1,&placement);
                     if(status!=PW_OK) {
                         PS5LOG_LOG("PW_PRESENT_FAIL schema=1 backend=vk-wsi status=%s flips=%llu failed_call=%s failed_rc=%d",
-                            pw_result_name(status),(unsigned long long)video.flips,
-                            video.failed_call?video.failed_call:"none",video.failed_result);
+                            pw_result_name(status),(unsigned long long)video->flips,
+                            video->failed_call?video->failed_call:"none",video->failed_result);
                         abort_runtime("present",status);
                     }
                     last_frame_hash=hash;
-                    if(video.flips<=3 || !(video.flips%120)) {
+                    if(video->flips<=3 || !(video->flips%120)) {
                         /* Hash of the exact linear frame the copy consumed. */
                         uint32_t staging_hash=2166136261u;
                         for(size_t i=0;i<(size_t)PW_PRESENT_VK_WIDTH*PW_PRESENT_VK_HEIGHT*4u;i++)
-                            {staging_hash^=video.mapped[i];staging_hash*=16777619u;}
+                            {staging_hash^=video->mapped[i];staging_hash*=16777619u;}
                         PS5LOG_LOG("PW_VIDEO_FRAME flips=%llu width=%u height=%u owner=0x%08x focus=0x%08x hash=0x%08x backend=vk-wsi submits=%llu fence=zero slot=%u token=%llu scale=%u left=%u top=%u staging_hash=0x%08x",
-                            (unsigned long long)video.flips,best.width,best.height,owner,user32.focus_window,hash,
-                            (unsigned long long)video.submits,video.last_slot,
-                            (unsigned long long)video.last_sequence,placement.scale,
+                            (unsigned long long)video->flips,best.width,best.height,owner,user32.focus_window,hash,
+                            (unsigned long long)video->submits,video->last_slot,
+                            (unsigned long long)video->last_sequence,placement.scale,
                             placement.left,placement.top,staging_hash);
                     }
 #else
-                    if((status=pw_videoout_ps5_present(&video,&best))!=PW_OK)
+                    if((status=pw_videoout_ps5_present(video,&best))!=PW_OK)
                         abort_runtime("present",status);
                     last_frame_hash=hash;
-                    if(video.flips==1 || !(video.flips%120))
+                    if(video->flips==1 || !(video->flips%120))
                         PS5LOG_LOG("PW_VIDEO_FRAME flips=%llu width=%u height=%u owner=0x%08x focus=0x%08x hash=0x%08x backend=agc-dma submits=%llu fence=zero",
-                            (unsigned long long)video.flips,best.width,best.height,owner,user32.focus_window,hash,
-                            (unsigned long long)video.agc.submits);
+                            (unsigned long long)video->flips,best.width,best.height,owner,user32.focus_window,hash,
+                            (unsigned long long)video->agc.submits);
 #endif
                 }
             }
@@ -743,7 +828,7 @@ int main(int argc,char **argv)
                 (unsigned long long)engine.reg_spills,
                 (unsigned long long)engine.flags_safepoint_commits,
                 window_count,
-                counts.target_surfaces,presented,(unsigned long long)video.flips,
+                counts.target_surfaces,presented,(unsigned long long)video->flips,
                 (unsigned long long)audio_stats.blocks,
                 (unsigned long long)audio_stats.input_bytes,
                 (unsigned long long)audio_stats.output_frames,audio_stats.input_hash,
@@ -751,9 +836,9 @@ int main(int argc,char **argv)
                 (unsigned long long)audio_completion_events,audio_stats.queue_depth,
                 audio_stats.queue_high_water,(unsigned long long)audio_stats.queue_full,
                 (unsigned long long)audio_stats.output_errors,
-                (unsigned long long)pad.polls,(unsigned long long)pad.core.stats.samples,
-                (unsigned long long)pad.core.stats.events,(unsigned long long)pad.connected_samples,
-                (unsigned long long)pad.intercepted_samples,(unsigned long long)pad.read_errors,
+                (unsigned long long)pad->polls,(unsigned long long)pad->core.stats.samples,
+                (unsigned long long)pad->core.stats.events,(unsigned long long)pad->connected_samples,
+                (unsigned long long)pad->intercepted_samples,(unsigned long long)pad->read_errors,
                 (unsigned long long)services.profile_lookups,
                 (unsigned long long)services.profile_missing,
                 (unsigned long long)services.profile_errors,
@@ -788,7 +873,7 @@ int main(int argc,char **argv)
                (int32_t)exit_code))!=PW_OK)
             abort_runtime("runtime-session-exit",status);
     }
-    const uint64_t final_retired=engine.retired_instructions,final_flips=video.flips;
+    const uint64_t final_retired=engine.retired_instructions,final_flips=video->flips-flips_at_start;
     PwAudioPs5Stats final_audio_stats;
     if(pw_audio_ps5_stats(&audio,&final_audio_stats)!=PW_OK)
         abort_runtime("audio-final-stats",PW_ERR_STATE);
@@ -798,14 +883,12 @@ int main(int argc,char **argv)
         state_close=pw_state_ps5_save_registry(&registry,registry_path,state_buffer,
             PW_STATE_PS5_MAX_BYTES,&final_state_written);
     PwGdiTargetView close_view;uint32_t close_window=presentation_window(&user32,&gdi,&close_view);
-    int pad_close=pw_pad_ps5_close(&pad,&user32,close_window);
+    /* The launcher keeps the pad: the guest is gone, and the held buttons
+     * it tracked are what the library must see next, never a replay. */
+    int pad_close=host->launcher?PW_OK:pw_pad_ps5_close(pad,&user32,close_window);
     int audio_close=pw_audio_ps5_close(&audio);
     int gdi_close=pw_gdi_reset(&gdi);
-#if PW_PRESENT_VK
-    int video_close=pw_present_vk_ps5_close(&video);
-#else
-    int video_close=pw_videoout_ps5_close(&video);
-#endif
+    int video_close=host->launcher?PW_OK:host_close_display(host);
     int dbt_close=pw_x86_engine_destroy(&engine);
     int image_close=pw_map_release(&mapped,&vm);
     provider.close(provider.context,&root);
@@ -841,42 +924,40 @@ int main(int argc,char **argv)
         "pad=%s pad_close_rc=%d user_terminate_rc=%d audio=%s gdi=%s "
         "video=%s agc=%s present_backend=vk-wsi present_flips=%llu present_submits=%llu "
         "present_failed_call=%s present_failed_rc=%d dbt=%s image=%s stack=%s thread=%s crt=%s heap=%s"
-        " session=%u outcome=%u supervisor_state=%u supervisor_cleanup=%s",
+        " session=%u outcome=%u supervisor_state=%u supervisor_cleanup=%s devices=%s",
         exit_reason,exit_code,pw_result_name(state_close),final_state_written,
-        pw_result_name(pad_close),pad.close_rc,pad.terminate_rc,pw_result_name(audio_close),
+        pw_result_name(pad_close),pad->close_rc,pad->terminate_rc,pw_result_name(audio_close),
         pw_result_name(gdi_close),pw_result_name(video_close),pw_result_name(video_close),
-        (unsigned long long)video.flips,(unsigned long long)video.submits,
-        video.failed_call?video.failed_call:"none",video.failed_result,
+        (unsigned long long)video->flips,(unsigned long long)video->submits,
+        video->failed_call?video->failed_call:"none",video->failed_result,
         pw_result_name(dbt_close),pw_result_name(image_close),
         pw_result_name(stack_close),pw_result_name(thread_close),pw_result_name(crt_close),
         pw_result_name(heap_close),supervisor?supervisor->last_result.session_id:0u,
         supervisor?(unsigned)supervisor->last_result.outcome:0u,
         supervisor?(unsigned)supervisor->state:(unsigned)PW_RUNTIME_IDLE,
-        pw_result_name(supervisor_cleanup));
+        pw_result_name(supervisor_cleanup),host->launcher?"retained":"closed");
 #else
     PS5LOG_LOG("PW_RUNTIME_TEARDOWN schema=2 reason=%s exit_code=%u state=%s state_bytes=%u "
         "pad=%s pad_close_rc=%d user_terminate_rc=%d audio=%s gdi=%s "
         "video=%s unregister_rc=0x%08x video_close_rc=0x%08x video_munmap_rc=0x%08x "
         "video_release_rc=0x%08x agc=%s agc_unmap_rc=0x%08x agc_release_rc=0x%08x "
         "agc_munmap_rc=0x%08x agc_unload_rc=0x%08x dbt=%s image=%s stack=%s thread=%s crt=%s heap=%s"
-        " session=%u outcome=%u supervisor_state=%u supervisor_cleanup=%s",
+        " session=%u outcome=%u supervisor_state=%u supervisor_cleanup=%s devices=%s",
         exit_reason,exit_code,pw_result_name(state_close),final_state_written,
-        pw_result_name(pad_close),pad.close_rc,pad.terminate_rc,pw_result_name(audio_close),
-        pw_result_name(gdi_close),pw_result_name(video_close),(uint32_t)video.unregister_rc,
-        (uint32_t)video.close_rc,(uint32_t)video.munmap_rc,(uint32_t)video.release_rc,
-        pw_result_name(video.agc_close_rc),(uint32_t)video.agc.unmap_rc,
-        (uint32_t)video.agc.release_rc,(uint32_t)video.agc.munmap_rc,
-        (uint32_t)video.agc.unload_rc,pw_result_name(dbt_close),pw_result_name(image_close),
+        pw_result_name(pad_close),pad->close_rc,pad->terminate_rc,pw_result_name(audio_close),
+        pw_result_name(gdi_close),pw_result_name(video_close),(uint32_t)video->unregister_rc,
+        (uint32_t)video->close_rc,(uint32_t)video->munmap_rc,(uint32_t)video->release_rc,
+        pw_result_name(video->agc_close_rc),(uint32_t)video->agc.unmap_rc,
+        (uint32_t)video->agc.release_rc,(uint32_t)video->agc.munmap_rc,
+        (uint32_t)video->agc.unload_rc,pw_result_name(dbt_close),pw_result_name(image_close),
         pw_result_name(stack_close),pw_result_name(thread_close),pw_result_name(crt_close),
         pw_result_name(heap_close),supervisor?supervisor->last_result.session_id:0u,
         supervisor?(unsigned)supervisor->last_result.outcome:0u,
         supervisor?(unsigned)supervisor->state:(unsigned)PW_RUNTIME_IDLE,
-        pw_result_name(supervisor_cleanup));
+        pw_result_name(supervisor_cleanup),host->launcher?"retained":"closed");
 #endif
-    PS5LOG_LOG("PW_RUNTIME_END schema=1 reason=%s exit_code=%u events=%llu retired=%llu flips=%llu audio_blocks=%llu",
-        exit_reason,exit_code,(unsigned long long)events,
-        (unsigned long long)final_retired,(unsigned long long)final_flips,
-        (unsigned long long)final_audio_blocks);
+    *result=(SessionResult){exit_reason,exit_code,cleanup_status,events,final_retired,
+        final_flips,final_audio_blocks};
     (void)munmap(workspace,sizeof(*workspace));
     (void)munmap(audio_queue,PW_AUDIO_PS5_QUEUE_BLOCKS*sizeof(*audio_queue));
     (void)munmap(cache,8192u*sizeof(*cache));
@@ -888,8 +969,250 @@ int main(int argc,char **argv)
     (void)munmap(profile_buffer,64u*1024u);
     (void)munmap(registry_values,128u*sizeof(*registry_values));
     (void)munmap(registry_keys,32u*sizeof(*registry_keys));
-    (void)munmap(heap_blocks,131072u*sizeof(*heap_blocks));(void)munmap(files,sizeof(*files));
-    if(supervisor)(void)munmap(supervisor,sizeof(*supervisor));
+    (void)munmap(heap_blocks,131072u*sizeof(*heap_blocks));
+    if(supervisor && !launcher_supervisor)(void)munmap(supervisor,sizeof(*supervisor));
     if(prefix_layout)(void)munmap(prefix_layout,sizeof(*prefix_layout));
-    ps5log_close(exit_reason);return (int)exit_code;
+}
+
+#if PW_LAUNCHER
+#ifndef PW_LAUNCHER_SCRIPT
+#define PW_LAUNCHER_SCRIPT 0
+#endif
+enum { PAD_DOWN=0x00000040u,LAUNCHER_ITEMS=PW_PROFILE_CATALOG_MAX*2 };
+#define PW_LAUNCHER_USER_PROFILES PW_PREFIX_PS5_DEFAULT_ROOT "/profiles"
+
+#if PW_LAUNCHER_SCRIPT
+/* Validation-only input: scePadRead is replaced by a fixed timeline of
+ * button states so an unattended run exercises the same edge, launch and
+ * close-combo code as a player.  The real pad is still opened and closed. */
+typedef struct ScriptStep { uint32_t from_ms,to_ms,buttons; } ScriptStep;
+static const ScriptStep script[]={
+    {3000,3300,PAD_RIGHT},{4000,4300,PAD_LEFT},{5000,5300,PAD_CROSS},
+    {11000,11800,PAD_CROSS},{17000,18500,PAD_OPTIONS|PAD_CREATE},
+    {22000,22300,PAD_CROSS},{28000,28800,PAD_CROSS},{34000,35500,PAD_OPTIONS|PAD_CREATE},
+    {39000,39300,PAD_CROSS},{45000,45800,PAD_CROSS},{51000,52500,PAD_OPTIONS|PAD_CREATE},
+};
+static uint64_t script_origin;
+static int script_pad_read(int32_t handle,PwPadPs5Data *data,int32_t count)
+{
+    (void)handle;if(count<1)return 0;
+    uint64_t now=now_ns();if(!script_origin)script_origin=now;
+    uint64_t ms=(now-script_origin)/1000000ull;uint32_t buttons=0;
+    for(size_t i=0;i<sizeof(script)/sizeof(script[0]);i++)
+        if(ms>=script[i].from_ms && ms<script[i].to_ms)buttons|=script[i].buttons;
+    memset(data,0,sizeof(*data));
+    data->buttons=buttons;data->connected=1;data->connected_count=1;data->timestamp=now/1000u;
+    return 1;
+}
+#endif
+
+/* Bounded concatenation for the status line; truncates, always terminated. */
+static void status_join(char *out,size_t capacity,const char *a,const char *b,const char *c)
+{
+    size_t used=0;const char *parts[3]={a,b,c};
+    for(unsigned i=0;i<3;i++)for(const char *p=parts[i];p && *p && used+1<capacity;p++)
+        out[used++]=*p;
+    out[used]=0;
+}
+
+typedef struct LauncherEntry {
+    PwAppProfile profile;PwPrefixLayout prefix;const char *source;unsigned launchable;
+} LauncherEntry;
+
+/* Reads one profiles.lst directory into entries; a missing index is an
+ * empty directory, anything malformed is reported and skipped. */
+static void load_profiles(const char *directory,const char *source,uint8_t *buffer,
+                          PwPrefixService *prefixes,LauncherEntry *entries,uint32_t *count)
+{
+    PwFilePs5 *dir=scratch(sizeof(*dir));
+    if(!dir)abort_runtime("launcher-dir-scratch",PW_ERR_VM);
+    uint32_t bytes=0;PwProfileCatalog catalog;
+    int status=pw_file_ps5_init(dir,directory);
+    if(status==PW_OK)status=read_small_file(dir,"profiles.lst",buffer,PW_APP_PROFILE_MAX_BYTES,&bytes);
+    if(status==PW_OK)status=pw_profile_catalog_parse(buffer,bytes,&catalog);
+    PS5LOG_LOG("PW_LAUNCHER_INDEX schema=1 source=%s directory=%s status=%s entries=%u",
+        source,directory,pw_result_name(status),status==PW_OK?catalog.count:0u);
+    for(uint32_t i=0;status==PW_OK && i<catalog.count && *count<LAUNCHER_ITEMS;i++) {
+        LauncherEntry *entry=&entries[*count];memset(entry,0,sizeof(*entry));
+        int profile_status=app_profile_load(dir,catalog.names[i],buffer,&entry->profile);
+        if(profile_status==PW_OK)
+            profile_status=pw_prefix_open(prefixes,entry->profile.prefix,&entry->prefix);
+        entry->source=source;
+        entry->launchable=profile_status==PW_OK && pw_profile_catalog_launchable(&entry->profile);
+        PS5LOG_LOG("PW_LAUNCHER_PROFILE schema=1 source=%s file=%s status=%s id=%s runtime=%s launchable=%u",
+            source,catalog.names[i],pw_result_name(profile_status),
+            profile_status==PW_OK?entry->profile.id:"-",
+            profile_status==PW_OK?entry->profile.runtime:"-",entry->launchable);
+        if(profile_status==PW_OK)(*count)++;
+    }
+    (void)munmap(dir,sizeof(*dir));
+}
+
+static void launcher_present(RuntimeHost *host,const PwLauncherScene *scene,uint8_t *frame)
+{
+    int status;
+#if PW_PRESENT_VK
+    (void)frame;
+    PwPresentTarget target;
+    if((status=host->present_sink.acquire(host->present_sink.context,&target))!=PW_OK)
+        abort_runtime("launcher-acquire",status);
+    status=pw_launcher_render(scene,&target);
+    int submit=host->present_sink.submit(host->present_sink.context,host->video.flips+1,
+                                         status==PW_OK);
+    if(status==PW_OK)status=submit;
+#else
+    const PwPresentTarget target={frame,PW_LAUNCHER_RENDER_WIDTH,PW_LAUNCHER_RENDER_HEIGHT,
+        PW_LAUNCHER_RENDER_WIDTH*4u,(uint64_t)PW_LAUNCHER_RENDER_WIDTH*PW_LAUNCHER_RENDER_HEIGHT*4u};
+    status=pw_launcher_render(scene,&target);
+    if(status==PW_OK) {
+        const PwGdiTargetView view={frame,target.width,target.height,target.stride,
+            (uint32_t)target.bytes};
+        status=pw_videoout_ps5_present(&host->video,&view);
+    }
+#endif
+    if(status!=PW_OK)abort_runtime("launcher-present",status);
+}
+
+/* The library: list, navigate, launch, and take each session back. */
+static int run_launcher(RuntimeHost *host)
+{
+    PwPadPs5Ops pad_ops;int status=pw_pad_ps5_platform_ops(&pad_ops);
+#if PW_LAUNCHER_SCRIPT
+    pad_ops.pad_read=script_pad_read;
+#endif
+    if(status!=PW_OK || (status=host_open_pad(host,&pad_ops))!=PW_OK)abort_runtime("pad",status);
+    if((status=host_open_display(host))!=PW_OK)abort_runtime("display",status);
+
+    uint8_t *buffer=scratch(PW_APP_PROFILE_MAX_BYTES);
+    LauncherEntry *entries=scratch(LAUNCHER_ITEMS*sizeof(*entries));
+    PwLauncherModel *model=scratch(sizeof(*model));
+    uint8_t *frame=scratch((size_t)PW_LAUNCHER_RENDER_WIDTH*PW_LAUNCHER_RENDER_HEIGHT*4u);
+    if(!buffer || !entries || !model || !frame)abort_runtime("launcher-scratch",PW_ERR_VM);
+    PwPrefixIo prefix_io;PwPrefixService prefixes;
+    if((status=pw_prefix_ps5_io(&prefix_io))!=PW_OK ||
+       (status=pw_prefix_service_init(&prefixes,PW_PREFIX_PS5_DEFAULT_ROOT,&prefix_io))!=PW_OK)
+        abort_runtime("launcher-prefix",status);
+    uint32_t count=0;
+    load_profiles(PW_STAGE_DIR "/profiles","package",buffer,&prefixes,entries,&count);
+    load_profiles(PW_LAUNCHER_USER_PROFILES,"user",buffer,&prefixes,entries,&count);
+    pw_launcher_model_init(model);
+    PwLauncherItem items[LAUNCHER_ITEMS];uint32_t listed=0;
+    uint32_t item_entry[LAUNCHER_ITEMS];
+    for(uint32_t i=0;i<count;i++) {
+        /* The model refuses duplicate ids; the first source wins. */
+        if(listed>=PW_LAUNCHER_MAX_PROFILES ||
+           pw_launcher_model_add(model,&entries[i].profile,&entries[i].prefix)!=PW_OK)continue;
+        item_entry[listed]=i;
+        items[listed++]=(PwLauncherItem){entries[i].profile.name,entries[i].profile.runtime,
+            entries[i].launchable};
+    }
+    PS5LOG_LOG("PW_LAUNCHER_OPEN schema=1 profiles=%u listed=%u backend=%s display_opens=%u input=%s",
+        count,listed,PW_DISPLAY_BACKEND,host->display_opens,PW_LAUNCHER_SCRIPT?"script":"pad");
+
+    char status_text[160]="Ready";
+    uint32_t sessions=0,returns=0;uint64_t total_flips=0,total_retired=0,total_audio=0;
+    unsigned dirty=1,armed=0;const char *reason="host-signal";
+    for(;;) {
+        if(shutdown_requested){reason="host-signal";break;}
+        if(host->validation_deadline && now_ns()>=host->validation_deadline) {
+            reason="validation-deadline";break;
+        }
+        if(dirty) {
+            PwLauncherView view;(void)pw_launcher_model_view(model,&view);
+            const PwLauncherScene scene={items,listed,
+                listed?view.selected_index:PW_LAUNCHER_RENDER_NONE,status_text};
+            launcher_present(host,&scene,frame);dirty=0;
+        }
+        (void)usleep(16667);
+        if((status=pw_pad_ps5_read(&host->pad))!=PW_OK)abort_runtime("launcher-pad",status);
+        const uint32_t held=host->pad.core.previous_buttons,pressed=host->pad.core.pressed_edges;
+        /* After a launch or a return, act only once every button is up. */
+        if(!armed){armed=!held;continue;}
+        if(!listed || !pressed)continue;
+        uint32_t selected=model->selected_index,next=selected;
+        if(pressed&PAD_RIGHT && selected+1<listed)next=selected+1;
+        if(pressed&PAD_LEFT && selected>0)next=selected-1;
+        if(pressed&PAD_DOWN && selected+3<listed)next=selected+3;
+        if(pressed&PAD_UP && selected>=3)next=selected-3;
+        if(next!=selected && pw_launcher_model_select(model,next)==PW_OK) {
+            PS5LOG_LOG("PW_LAUNCHER_NAV schema=1 selected=%u id=%s",next,items[next].title);
+            dirty=1;
+        }
+        if(!(pressed&PAD_CROSS))continue;
+        const LauncherEntry *entry=&entries[item_entry[model->selected_index]];
+        if(!entry->launchable) {
+            status_join(status_text,sizeof(status_text),"Not available yet: ",
+                        entry->profile.name,NULL);
+            PS5LOG_LOG("PW_LAUNCHER_REFUSED schema=1 id=%s runtime=%s",entry->profile.id,
+                       entry->profile.runtime);
+            dirty=1;continue;
+        }
+        if((status=pw_launcher_model_request_launch(model))!=PW_OK)abort_runtime("launcher-launch",status);
+        sessions++;armed=0;
+        PS5LOG_LOG("PW_LAUNCHER_LAUNCH schema=1 session=%u id=%s source=%s backend=%s display_opens=%u",
+            sessions,entry->profile.id,entry->source,PW_DISPLAY_BACKEND,host->display_opens);
+        SessionResult result;
+        run_session(host,&entry->profile,&model->supervisor,&result);
+        total_flips+=result.flips;total_retired+=result.retired;total_audio+=result.audio_blocks;
+        PS5LOG_LOG("PW_SESSION_END schema=1 session=%u id=%s reason=%s exit_code=%u cleanup=%s "
+            "events=%llu retired=%llu flips=%llu audio_blocks=%llu",
+            sessions,entry->profile.id,result.exit_reason,result.exit_code,
+            pw_result_name(result.cleanup_status),(unsigned long long)result.events,
+            (unsigned long long)result.retired,(unsigned long long)result.flips,
+            (unsigned long long)result.audio_blocks);
+        PwLauncherView view;(void)pw_launcher_model_view(model,&view);
+        const int completed=view.status==PW_LAUNCHER_STATUS_COMPLETE;
+        if((status=pw_launcher_model_return_to_catalogue(model))!=PW_OK)
+            abort_runtime("launcher-return",status);
+        returns++;
+        PS5LOG_LOG("PW_LAUNCHER_RETURN schema=1 session=%u status=%s cleanup=%s backend=%s display_opens=%u held=0x%08x",
+            sessions,completed?"complete":"failed",pw_result_name(result.cleanup_status),
+            PW_DISPLAY_BACKEND,host->display_opens,host->pad.core.previous_buttons);
+        status_join(status_text,sizeof(status_text),entry->profile.name," closed",NULL);
+        dirty=1;
+        if(!strcmp(result.exit_reason,"validation-deadline")){reason=result.exit_reason;break;}
+        if(result.cleanup_status!=PW_OK){reason="session-cleanup";break;}
+    }
+    int pad_close=pw_pad_ps5_close(&host->pad,NULL,0);
+    int video_close=host_close_display(host);
+    PS5LOG_LOG("PW_LAUNCHER_TEARDOWN schema=1 reason=%s sessions=%u returns=%u pad=%s video=%s agc=%s display_opens=%u",
+        reason,sessions,returns,pw_result_name(pad_close),pw_result_name(video_close),
+        pw_result_name(video_close),host->display_opens);
+    PS5LOG_LOG("PW_RUNTIME_END schema=1 reason=%s exit_code=0 events=%u retired=%llu flips=%llu audio_blocks=%llu",
+        reason,sessions,(unsigned long long)total_retired,(unsigned long long)total_flips,
+        (unsigned long long)total_audio);
+    (void)munmap(frame,(size_t)PW_LAUNCHER_RENDER_WIDTH*PW_LAUNCHER_RENDER_HEIGHT*4u);
+    (void)munmap(model,sizeof(*model));(void)munmap(entries,LAUNCHER_ITEMS*sizeof(*entries));
+    (void)munmap(buffer,PW_APP_PROFILE_MAX_BYTES);
+    ps5log_close(reason);
+    return pad_close==PW_OK && video_close==PW_OK?0:1;
+}
+#endif
+
+int main(int argc,char **argv)
+{
+    (void)argc;(void)argv;ps5log_config config;const char *config_path=NULL;
+    ps5log_config_defaults(&config);int config_rc=ps5log_load_config(ps5log_default_conf_paths,
+        ps5log_default_conf_path_count,&config,&config_path);
+    int log_rc=config_rc==0?ps5log_init(&config,PW_TITLE_ID,PW_APP_NAME,now_ns()):config_rc;
+    install_signals();PS5LOG_LOG("PW_RUNTIME_BEGIN schema=1 title=%s profile_mode=%u fallback_root=%s config=%d log=%d launcher=%u",
+        PW_TITLE_ID,(unsigned)PW_USE_APP_PROFILE,PW_ROOT_MODULE,config_rc,log_rc,(unsigned)PW_LAUNCHER);
+    RuntimeHost *host=scratch(sizeof(*host));
+    PwFilePs5 *files=scratch(sizeof(*files));
+    if(!host || !files)abort_runtime("files-scratch",PW_ERR_VM);
+    memset(host,0,sizeof(*host));host->files=files;host->launcher=PW_LAUNCHER;
+    int status=pw_file_ps5_init(files,PW_STAGE_DIR);if(status!=PW_OK)abort_runtime("files",status);
+    (void)pw_file_ps5_provider(files,&host->provider);
+    host->validation_deadline=PW_TEST_EXIT_AFTER_MS?
+        now_ns()+(uint64_t)PW_TEST_EXIT_AFTER_MS*1000000ull:0;
+#if PW_LAUNCHER
+    return run_launcher(host);
+#else
+    SessionResult result;run_session(host,NULL,NULL,&result);
+    PS5LOG_LOG("PW_RUNTIME_END schema=1 reason=%s exit_code=%u events=%llu retired=%llu flips=%llu audio_blocks=%llu",
+        result.exit_reason,result.exit_code,(unsigned long long)result.events,
+        (unsigned long long)result.retired,(unsigned long long)result.flips,
+        (unsigned long long)result.audio_blocks);
+    ps5log_close(result.exit_reason);return (int)result.exit_code;
+#endif
 }
