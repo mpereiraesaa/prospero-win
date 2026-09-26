@@ -432,8 +432,46 @@ each):
     `fopen`, so the relative open uses the process's real directory and
     fails silently.
   - With no `Wow64\x86` value, WoW64 uses its default CPU, `wow64cpu.dll`.
-    The next step is resolving registry paths through the shim, then the
-    `wowprospero` start of `PINBALL.EXE`'s i386 code.
+    The shim now resolves `fopen` through the working directory (#96).
+
+Runs 11–12 (FW 12.02, 2026-09-26, main at `a509f5e` with the fixed
+converter; baseline restored and runtime removed after each):
+
+- **Run 11** (`+seh`, 30 s, ps5log `20260926T184446169Z`).
+  - The registry loads, and WoW64 takes its CPU from it: `wowprospero.dll`
+    loads after `wow64.dll`, and `PINBALL.EXE` is mapped at `0x1000000`.
+  - `PINBALL.EXE`'s i386 code runs through `wowprospero`: the i386 ntdll
+    loads its imports, from `kernel32.dll` to `winmm.dll`, `imm32.dll` and
+    `uxtheme.dll`.
+  - The 67 `RtlUnwindEx code=80000026` records are
+    `STATUS_UNWIND_CONSOLIDATE` unwinds into `wow64.dll`, WoW64's normal
+    return from a user callback, not faults.
+  - The title's heartbeat reported `faults=0` throughout, and the run ended
+    at the title's deadline with `status=0`.
+- **Run 12** (`+loaddll,+process`, 120 s, ps5log `20260926T184852813Z`).
+  - By 33 s, `PINBALL.EXE` has loaded `oleaut32.dll`, `version.dll` and
+    `mmdevapi.dll`, found no audio driver
+    (`No driver from L"pulse,alsa,oss,coreaudio"`), and failed to open its
+    music (`Couldn't load driver for type L"PINBALL.MID"`).
+  - From 35 s to the 120 s deadline, the mapping counters and output stop
+    changing (`mmap=139 mprotect=448 images=34`), with `faults=0`. The game
+    is waiting in its message loop.
+  - Other errors: `Wine was built without Vulkan support` and
+    `wgl: Failed to create internal thread context`.
+
+What the integrated runs establish:
+
+- **Signals.** Runs 7–8 delivered 68,786 SIGSEGVs from Unix code as
+  `c0000005` exceptions. Their fault addresses and the RIP read from the
+  context at `ucontext+224` matched the libkernel disassembly. Runs 11–12
+  took no faults.
+- **Per-thread TEB.** GS holds the TEB, and patch 0590 restores FS on each
+  Unix entry. With both, Wine's x86_64 and i386 PE code ran for 120 s on
+  thread `0024` with no segment fault.
+
+The wine64 title does not yet install the present sink or input source, so
+the game's window is not shown. The next step is connecting the user
+driver's present sink and input to the title, plus an audio driver.
 
 ## Measured result
 
