@@ -317,3 +317,8 @@ tests/test_pw_wine_thread.c
 tests/test_pw_wine_continue.c
 tests/test_pw_wine_vm_transactions.c
 tools/stage_app_files.py
+tests/test_wowprospero_contract.py
+wine/wowprospero/cpu.c
+wine/wowprospero/unix.c
+wine/wowprospero/wowprospero.h
+wine/wowprospero/wowprospero.spec
