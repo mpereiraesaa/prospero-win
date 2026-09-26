@@ -15,6 +15,9 @@ classifies cleanup or failure without depending on a screenshot.
 | `PW_STATE_LOAD` / `PW_STATE_SAVE` | persistent state bytes, generation and atomic-write results |
 | `PW_PAD_OPEN` / `PW_PAD_EVENT` / `PW_PAD_QUIT` | Pad ownership, physical edges and explicit quit |
 | `PW_VIDEO_FRAME` | dimensions, changing frame hash, flips, submits and fence state; with `backend=vk-wsi` also swapchain slot, present token, placement and staging hash |
+| `PW_LAUNCHER_INDEX` / `PW_LAUNCHER_PROFILE` / `PW_LAUNCHER_OPEN` | profile indexes read, each profile's runtime and launchability, backend, display opens and input source |
+| `PW_LAUNCHER_NAV` / `PW_LAUNCHER_LAUNCH` / `PW_LAUNCHER_REFUSED` | selection, a started session with its display identity, a refused unavailable runtime |
+| `PW_SESSION_END` / `PW_LAUNCHER_RETURN` / `PW_LAUNCHER_TEARDOWN` | per-session result and cleanup, return to the library, final device release |
 | `PW_PRESENT_OPEN` / `PW_PRESENT_FAIL` | ps5-vulkan WSI backend, status, fixed extent and first failing Vulkan call |
 | `PW_AUDIO_OPEN` / `PW_AUDIO_QUEUE` | PCM format, worker ownership, queue depth and completion |
 | `PW_RUNTIME_HEARTBEAT` | DBT, pacing, adapter, renderer, audio and input counters |
@@ -42,7 +45,12 @@ Renderer acceptance requires changing frame hashes, advancing flips/submits
 and completed fence ownership. Audio acceptance requires advancing byte,
 frame, block and completion counters; a successful port open is insufficient.
 Physical input acceptance requires native Pad ownership and observed press and
-release edges. A `PW_PRESENT_BACKEND=vk` run additionally requires
+release edges. A native launcher run is validated with `--launcher-cycles N`: one display for
+the whole process, and at least N sessions each launched on that display,
+closed by `PW_PAD_QUIT source=combo`, torn down with every subsystem `ok` and
+`devices=retained`, ended with frames, audio and clean cleanup, and returned
+to the library; the launcher teardown and `BYE` must then be clean. A
+`PW_PRESENT_BACKEND=vk` run additionally requires
 `--present-backend vk-wsi`: an open `PW_PRESENT_OPEN`, no `PW_PRESENT_FAIL`,
 every sampled frame on `vk-wsi` with strictly increasing tokens over both
 swapchain images and, for finite runs, a clean backend teardown whose flip

@@ -150,6 +150,74 @@ def validate_vk_wsi(records, names, teardown, counters) -> None:
             raise ValueError("vk-wsi teardown flips do not match the end record")
 
 
+TEARDOWN_KEYS = ("state", "pad", "audio", "gdi", "video", "agc", "dbt",
+                 "image", "stack", "thread", "crt", "heap")
+
+
+def validate_launcher(path: Path, min_cycles: int, min_seconds: float) -> None:
+    """Native launcher: one display for the whole process and at least
+    min_cycles launch -> combo close -> clean teardown -> return cycles."""
+    records, bye = parse(path)
+    names = [item[2] for item in records]
+    if "PW_RUNTIME_ABORT" in names or "PW_RUNTIME_SIGNAL" in names:
+        raise ValueError("runtime abort/signal present")
+    opened = latest(records, "PW_LAUNCHER_OPEN")[3]
+    backend = opened.get("backend")
+    if number(opened.get("display_opens", "0")) != 1 or not backend:
+        raise ValueError("launcher did not open exactly one display")
+    if number(opened.get("listed", "0")) < 1:
+        raise ValueError("launcher listed no profiles")
+    cycles, session, current = 0, 0, None
+    for _, _, name, fields in records:
+        if name == "PW_LAUNCHER_LAUNCH":
+            if current is not None:
+                raise ValueError("launch while a session is active")
+            session += 1
+            if number(fields.get("session", "0")) != session:
+                raise ValueError("launcher sessions are not consecutive")
+            if fields.get("backend") != backend or number(fields.get("display_opens", "0")) != 1:
+                raise ValueError("launch did not reuse the launcher display")
+            current = {"quit": False, "teardown": False, "end": False}
+        elif current is None:
+            continue
+        elif name == "PW_PAD_QUIT":
+            current["quit"] = current["quit"] or fields.get("source") == "combo"
+        elif name == "PW_RUNTIME_TEARDOWN":
+            if any(fields.get(key) != "ok" for key in TEARDOWN_KEYS):
+                raise ValueError(f"session {session} teardown is not clean")
+            if fields.get("devices") != "retained" or fields.get("supervisor_cleanup") != "ok":
+                raise ValueError(f"session {session} did not retain the launcher devices")
+            current["teardown"] = True
+        elif name == "PW_SESSION_END":
+            if number(fields.get("session", "0")) != session or fields.get("cleanup") != "ok":
+                raise ValueError(f"session {session} cleanup failed")
+            if number(fields.get("flips", "0")) <= 0 or number(fields.get("audio_blocks", "0")) <= 0:
+                raise ValueError(f"session {session} presented or played nothing")
+            current["end"] = True
+        elif name == "PW_LAUNCHER_RETURN":
+            if number(fields.get("session", "0")) != session or fields.get("status") != "complete" or \
+                    fields.get("cleanup") != "ok" or fields.get("backend") != backend or \
+                    number(fields.get("display_opens", "0")) != 1:
+                raise ValueError(f"session {session} did not return cleanly")
+            if not (current["quit"] and current["teardown"] and current["end"]):
+                raise ValueError(f"session {session} was not closed by the combo and torn down")
+            cycles += 1
+            current = None
+    if cycles < min_cycles:
+        raise ValueError("insufficient launch/close/return cycles")
+    teardown = latest(records, "PW_LAUNCHER_TEARDOWN")[3]
+    if any(teardown.get(key) != "ok" for key in ("pad", "video", "agc")) or \
+            number(teardown.get("display_opens", "0")) != 1 or \
+            number(teardown.get("returns", "-1")) != cycles or \
+            number(teardown.get("sessions", "-1")) != session:
+        raise ValueError("launcher teardown is not clean")
+    end = latest(records, "PW_RUNTIME_END")[3]
+    if bye is None or f"reason={end.get('reason')}" not in bye:
+        raise ValueError("missing/mismatched BYE")
+    if len(records) < 2 or (records[-1][1] - records[0][1]) < int(min_seconds * 1e9):
+        raise ValueError("run too short")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("transcript", type=Path)
@@ -160,8 +228,14 @@ def main() -> int:
     parser.add_argument("--min-pad-events", type=int, default=0)
     parser.add_argument("--require-pad-quit", action="store_true")
     parser.add_argument("--present-backend", choices=("vk-wsi",))
+    parser.add_argument("--launcher-cycles", type=int, default=0,
+                        help="validate a native launcher run with at least N cycles")
     args = parser.parse_args()
     try:
+        if args.launcher_cycles:
+            validate_launcher(args.transcript, args.launcher_cycles, args.min_seconds)
+            print("launcher evidence accepted")
+            return 0
         validate(args.transcript, args.continuous, args.min_seconds,
                  args.min_flips, args.min_audio_blocks, args.min_pad_events,
                  args.require_pad_quit, args.present_backend)

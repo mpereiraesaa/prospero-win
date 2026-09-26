@@ -84,7 +84,62 @@ def check_vk(text: str, accepted: bool) -> None:
             assert accepted
 
 
+TEARDOWN_OK = ("state=ok pad=ok audio=ok gdi=ok video=ok agc=ok dbt=ok image=ok stack=ok "
+               "thread=ok crt=ok heap=ok supervisor_cleanup=ok devices=retained")
+
+
+def launcher_transcript(cycles: int = 2) -> str:
+    body = ["PW_RUNTIME_BEGIN schema=1 launcher=1",
+            "PW_LAUNCHER_OPEN schema=1 profiles=2 listed=2 backend=vk-wsi display_opens=1 input=script"]
+    for session in range(1, cycles + 1):
+        body += [f"PW_LAUNCHER_LAUNCH schema=1 session={session} id=pinball backend=vk-wsi display_opens=1",
+                 "PW_PAD_QUIT schema=1 source=combo action=WM_QUIT held_ms=1013",
+                 f"PW_RUNTIME_TEARDOWN schema=2 reason=crt-exit {TEARDOWN_OK}",
+                 f"PW_SESSION_END schema=1 session={session} reason=crt-exit cleanup=ok flips=90 audio_blocks=900",
+                 f"PW_LAUNCHER_RETURN schema=1 session={session} status=complete cleanup=ok backend=vk-wsi display_opens=1"]
+    body += [f"PW_LAUNCHER_TEARDOWN schema=1 reason=validation-deadline sessions={cycles} returns={cycles} "
+             "pad=ok video=ok agc=ok display_opens=1",
+             "PW_RUNTIME_END schema=1 reason=validation-deadline"]
+    lines = ["HELLO ps5log/1 title=PPSA99995 app=prospero-win boot=0x1 tag=test"]
+    lines += [f"{i}\t{1000000000 + i * 1000000000}\tINFO\t{record}" for i, record in enumerate(body, 1)]
+    lines.append(f"BYE seq={len(body)} reason=validation-deadline")
+    return "\n".join(lines) + "\n"
+
+
+def check_launcher(text: str, accepted: bool, cycles: int = 2) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "launcher.log"; path.write_text(text)
+        try:
+            MODULE.validate_launcher(path, cycles, 1)
+        except ValueError:
+            assert not accepted
+        else:
+            assert accepted
+
+
 def main() -> int:
+    check_launcher(launcher_transcript(), True)
+    check_launcher(launcher_transcript(3), True, 3)
+    check_launcher(launcher_transcript(1), False)
+    check_launcher(transcript(True), False)
+    check_launcher(launcher_transcript().replace("display_opens=1 input", "display_opens=2 input"), False)
+    check_launcher(launcher_transcript().replace(
+        "session=2 id=pinball backend=vk-wsi display_opens=1", "session=2 id=pinball backend=vk-wsi display_opens=2"), False)
+    check_launcher(launcher_transcript().replace("session=2 id=pinball backend=vk-wsi",
+                                                 "session=2 id=pinball backend=agc-dma"), False)
+    check_launcher(launcher_transcript().replace("source=combo", "source=create"), False)
+    check_launcher(launcher_transcript().replace("devices=retained", "devices=closed", 1), False)
+    check_launcher(launcher_transcript().replace("heap=ok", "heap=state", 1), False)
+    check_launcher(launcher_transcript().replace("cleanup=ok flips", "cleanup=state flips", 1), False)
+    check_launcher(launcher_transcript().replace("flips=90", "flips=0", 1), False)
+    check_launcher(launcher_transcript().replace("status=complete", "status=failed", 1), False)
+    check_launcher(launcher_transcript().replace("session=2 id", "session=3 id"), False)
+    check_launcher(launcher_transcript().replace("returns=2", "returns=1"), False)
+    check_launcher(launcher_transcript().replace("video=ok agc=ok display_opens=1\n", "video=state agc=ok display_opens=1\n"), False)
+    text = launcher_transcript()
+    check_launcher(text[:text.rindex("BYE ")] + "BYE seq=14 reason=other\n", False)
+    check_launcher(text.replace("PW_RUNTIME_BEGIN schema=1 launcher=1", "PW_RUNTIME_ABORT stage=x"), False)
+    check_launcher(text.replace("\t4000000000\t", "\t4000000001\t").replace("3\t4000000001", "4\t4000000001"), False)
     check_vk(vk_transcript(), True)
     check_vk(transcript(True), False)
     check_vk(vk_transcript().replace("status=ok failed_call", "status=state failed_call"), False)

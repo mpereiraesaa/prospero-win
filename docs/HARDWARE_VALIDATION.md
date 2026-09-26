@@ -102,6 +102,49 @@ This validates presentation of the direct runner's GDI surfaces through
 ps5-vulkan WSI. It does not validate Wine-produced surfaces, DXVK, or the
 default AGC build, which is unchanged.
 
+## Native launcher
+
+A `PW_LAUNCHER=1` build boots into the title's own native launcher instead of
+a single application. It reads `profiles.lst` indexes from the package
+(`/app0/win/profiles`) and from `/download0/prospero-win/profiles`, lists every
+profile, and starts only `runtime = prospero-win-direct` PE32/GDI profiles;
+any other runtime is shown as "Not available yet". The D-pad moves the
+selection, Cross launches, and holding Options+Create for one second posts
+`WM_QUIT` to the running application. The pad and the display are opened once
+per process and lent to every session; a session releases everything else it
+created before the library is drawn again.
+
+The accepted bounded run (58-second validation build) used:
+
+- linked ELF SHA-256
+  `ffd201c8c9940ce947ce7e85ac269168023a6e75407c0cf7070b06f2a60325cd`;
+- fSELF SHA-256
+  `ac10d7afd0548cd1bd0741e201386fa1a4ad5f0a03f14ed8289f8333bfdd2caf`;
+- the ps5-vulkan WSI display backend (with ps5-vulkan PR #562);
+- the privately supplied Pinball installation plus a listed Wine sample
+  profile;
+- `PW_LAUNCHER_SCRIPT=1`, which replaces `scePadRead` samples with a fixed
+  timeline so the unattended run goes through the same edge, launch and
+  close-combo code as a player. The physical pad is still opened and closed.
+
+It completed three consecutive launch, play, combo-close and return cycles
+of Space Cadet Pinball in one process. Every session reached `crt-exit`
+after `PW_PAD_QUIT source=combo`, tore down with every owned subsystem `ok`
+and `devices=retained`, presented 89–97 frames and completed at least 921
+audio blocks. The display was opened once for the whole run, and the final
+teardown reported the pad, video and AGC `ok`. The `ps5log/1` stream had
+3,756 gap-free records and ended with `BYE reason=validation-deadline`
+(transcript SHA-256
+`1c1a3d17651173f73cd8f577b2a38e6850ce022b6dbcbd1c7f4c1006e8b5f2c8`).
+`tools/validate_runtime_evidence.py --launcher-cycles 3` accepts it. Private
+Remote Play captures show the library, the running table and the library
+again with the closed-application status.
+
+Two defects were found and fixed on the way: `DispatchMessageA` refused the
+windowless `WM_QUIT`, and a second session could not reinitialise
+SceAudioOut. The validated input is the scripted timeline; a run driven by a
+physical controller remains an operator check.
+
 ## Evidence rules
 
 A screenshot or video proves appearance only. Runtime acceptance requires:
