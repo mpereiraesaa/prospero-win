@@ -118,10 +118,11 @@ script links `ntdll` and `win32u` again as PRX modules into
 4. `ps5-native-tool link --module` converts each module (using
    `ntdll.shared.elf` as the stub for `win32u`), then `self --sign` signs it.
 
-Module conversion publishes exports only from foundation commit
-`5bd0887e983abbf2f8a2eb762da8d4501b543179` onward. That commit is on the
-foundation's `exp/prx-module` branch, and the title's pinned foundation
-predates it. `PS5_PRX_FOUNDATION` (or `--prx-foundation`) names a checkout
+Module conversion publishes exports from foundation commit `5bd0887`
+onward, and binds imports between application PRXs from
+`30597512539e7edfde079cbcaf4a626bc0a948c5` (the name-form export hash) onward. The
+build requires the second. Both are on the foundation's `exp/prx-module`
+branch, and the title's pinned foundation predates them. `PS5_PRX_FOUNDATION` (or `--prx-foundation`) names a checkout
 that has it; otherwise the PRX link is skipped and the report says why.
 
 `report.json` gains a `prx` section. For each module it lists whether the
@@ -428,8 +429,8 @@ each):
     the same bucket.
   - Hashing the name form for module imports and exports fixes it: with
     the fixed converter, all 129 of `win32u.prx`'s import slots are bound.
-    Until that fix is on the foundation's module branch, build with
-    `PS5_PRX_FOUNDATION` naming a checkout that has it.
+    The fix is foundation commit `3059751` on `exp/prx-module`, which the
+    build now requires.
 - **Run 9** (ps5log `20260926T183138315Z`, #94 and the fixed converter).
   - No system call faults (run 7 had 68,786).
   - `win32u`'s `__wine_unix_lib_init` runs, and `wow64.dll`, `win32u.dll`

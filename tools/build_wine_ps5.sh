@@ -21,9 +21,9 @@
 # title's stub libraries with the PS5 shims in wine/ps5 and a generated
 # export descriptor, then converted and signed with ps5-native-tool into
 # <work>/prx/sce_module. Both are measured in <work>/report.json. Module
-# conversion needs a foundation with module export publishing (its branch
-# exp/prx-module, MODULE_EXPORTS_COMMIT); the title's pinned foundation
-# predates it, so --prx-foundation names that checkout, and without it the
+# conversion needs a foundation with module export publishing and name-form
+# export hashes (its branch exp/prx-module, MODULE_EXPORTS_COMMIT); the
+# title's pinned foundation predates it, so --prx-foundation names that checkout, and without it the
 # PRX link is skipped and says why.
 #
 # Usage:
@@ -33,7 +33,7 @@
 set -eu
 
 WINE_COMMIT=490f6d5dcbb2a5047345b8af88d114bbcaad69a8
-MODULE_EXPORTS_COMMIT=5bd0887e983abbf2f8a2eb762da8d4501b543179
+MODULE_EXPORTS_COMMIT=30597512539e7edfde079cbcaf4a626bc0a948c5
 TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver"
 # Everything optional is off: the console has none of these libraries, and a
 # configure-time probe against the payload SDK must not pick up host headers.
