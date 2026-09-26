@@ -355,6 +355,41 @@ Run 2 (FW 12.02, 2026-09-26, ps5log `20260926T161550691Z` and klog):
    until they are emulated; imports that bind only to `libkernel_sys` are
    now fatal.
 
+Runs 3–7 (FW 12.02, 2026-09-26; the baseline eboot `d9361fcc` was restored
+and the temporary runtime removed after each):
+
+- **Virtual symbolic links** (#91). A prefix whose `dosdevices/` already
+  exists gets `dosdevices/.pw-symlinks` with `c:` and `z:`.
+- **Server connection.** `server_init_process` connects to the in-process
+  server (`connected to the in-process server …/wineserver.so`).
+  - A title has no `pipe()`, so the first client thread got no request pipe
+    and Wine exited with 1 (klog `exit_value=1`).
+  - The compat layer now makes `pipe()` a socket pair (#92), and the run
+    reaches `server connected`, i.e. `server_init_process_done`.
+  - `wineboot` fails cleanly (`c00000bb`, patch 0550).
+- **fd 2 capture.** The title captures fd 2 with a socket pair, so the
+  in-process server's own output appears as `WINESERVER …` records.
+- **Main executable.** Without `WINEARCH=wow64`, Wine starts the i386
+  `PINBALL.EXE` from `start.exe` in a new process, which the title refuses
+  (`process creation is not supported on PS5`). With it (set by the title):
+  - `PINBALL.EXE` is mapped at `0x1000000` in-process;
+  - Wine's x86_64 PE code runs on the console: ntdll, kernelbase, kernel32,
+    msvcrt, ucrtbase, advapi32, win32u, user32, gdi32, shell32 and imm32
+    load and attach;
+  - `wow64.dll` and `wow64win.dll` load.
+- **Where it stops.** Run 7 (`+seh`, ps5log `20260926T173846694Z`) shows
+  68,786 `handle_syscall_fault c0000005`:
+  - 68,573 at `0x80003dd4b` and 212 at `0x800041570`, both inside
+    libkernel, reading address `0x10`;
+  - each returns to PE `__wine_dbg_output`.
+
+  Unix code reached from a PE system call calls into libkernel (the title's
+  output sink) and finds its thread pointer invalid. Each fault is traced,
+  which faults again, until `virtual_setup_exception stack overflow` and
+  exit 1. The next step is the thread's segment bases while Wine's Unix side
+  runs (GS = TEB, patch 0500), before `wowprospero` can start `PINBALL.EXE`'s
+  i386 code.
+
 ## Measured result
 
 With the series above, all three targets compile and link (host run on

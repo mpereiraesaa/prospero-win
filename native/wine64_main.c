@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -42,7 +43,7 @@ static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 #define PW_WINE64_EXE "C:\\Games\\Pinball\\PINBALL.EXE"
 #endif
 #ifndef PW_WINE64_DEBUG
-#define PW_WINE64_DEBUG "err+all,+loaddll,+module,+server,+process"
+#define PW_WINE64_DEBUG "err+all,+seh,+loaddll,+process"
 #endif
 #ifndef PW_WINE64_SECONDS
 #define PW_WINE64_SECONDS 30
@@ -81,6 +82,59 @@ static void wine_output_sink(const char *str, size_t len)
         sink_line[sink_used++] = str[i];
     }
     pthread_mutex_unlock(&sink_lock);
+}
+
+/* ---- fd 2 -> ps5log ---------------------------------------------------- */
+
+/* The in-process wineserver writes its errors with fprintf(stderr), which a
+ * title does not show: fd 2 becomes one end of a socket pair (pipe() is not
+ * available and dup2 onto fd 2 is refused, measured) whose lines a thread
+ * forwards as "WINESERVER ..." records. */
+static int fd2_reader = -1;
+
+static void *forward_fd2(void *arg)
+{
+    char buffer[1024];
+    size_t used = 0;
+
+    (void)arg;
+    for (;;) {
+        ssize_t got = read(fd2_reader, buffer + used, sizeof(buffer) - 1 - used);
+        if (got <= 0) break;
+        used += (size_t)got;
+        for (;;) {
+            char *newline = memchr(buffer, '\n', used);
+            if (!newline && used < sizeof(buffer) - 1) break;
+            size_t line = newline ? (size_t)(newline - buffer) : used;
+            buffer[line] = 0;
+            PS5LOG_LOG("WINESERVER %s", buffer);
+            line += newline ? 1u : 0u;
+            memmove(buffer, buffer + line, used - line);
+            used -= line;
+        }
+    }
+    return NULL;
+}
+
+/* Close fd 2 first: descriptors are allocated lowest first, so one end of
+ * the new pair takes number 2; keep that one as the writer. */
+static int capture_fd2(void)
+{
+    int pair[2];
+    pthread_t thread;
+
+    close(2);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return -1;
+    if (pair[1] == 2) fd2_reader = pair[0];
+    else if (pair[0] == 2) {
+        fd2_reader = dup(pair[0]);  /* free number 2 for the writer */
+        if (fd2_reader < 0 || dup2(pair[1], 2) != 2) return -2;
+    } else {
+        /* 0 and 1 were free too: move the writer onto the closed 2 */
+        fd2_reader = pair[0];
+        if (dup2(pair[1], 2) != 2) return -3;
+    }
+    return pthread_create(&thread, NULL, forward_fd2, NULL) ? -4 : 0;
 }
 
 /* Wine ends the process with exit(): close the log so it is complete. */
@@ -171,6 +225,9 @@ int main(int argc, char **argv)
 {
     static const PwWineStartEnv extra[] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
+        /* the i386 exe runs in this process through WoW64; otherwise Wine
+         * starts it from start.exe in a new process, which a title cannot */
+        { "WINEARCH", "wow64" },
         { "HOME", PW_WINE64_PREFIX },
         { "USER", "prospero" },
         { "WINE_PS5_TRACE_STARTUP", "1" },  /* patch 0560: name startup steps */
@@ -214,6 +271,8 @@ int main(int argc, char **argv)
     }
     PS5LOG_LOG("PW_WINE64 ntdll=%s prefix=%s exe=%s", config.ntdll_path, config.prefix,
                PW_WINE64_EXE);
+    status = capture_fd2();
+    if (status != 0) PS5LOG_LOG("PW_WINE64 fd2_capture=failed status=%d", status);
 
     status = pw_wine_start_load(&start, &config, &ops);
     PS5LOG_LOG("PW_WINE64 load status=%d stage=%d module=0x%x segments=%u module_start=%d "
