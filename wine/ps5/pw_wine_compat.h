@@ -17,6 +17,10 @@ int pw_compat_no_extattr(void);                               /* -1, errno EOPNO
 /* HOME or the title storage root, USER or "prospero"; one static record. */
 struct passwd *pw_compat_getpwuid(uid_t uid);
 const char *pw_compat_codeset(void);                          /* "UTF-8" */
+/* A title has no terminals: 0, errno ENOTTY for an open descriptor, EBADF
+ * otherwise. The stubs have isatty only in libScePosixForWebKit, which a
+ * game title does not load. */
+int pw_compat_isatty(int fd);
 clock_t pw_compat_times(struct tms *buffer);
 /* Five consecutive fields of field_size bytes, as FreeBSD's struct utsname. */
 int pw_compat_uname(char *fields,size_t field_size);

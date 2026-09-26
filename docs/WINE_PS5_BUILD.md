@@ -141,12 +141,12 @@ The PRX link of the same objects (host run on 2026-09-26, foundation
 
 | Module | Size | Unresolved | Needs | Data imports |
 | --- | --- | --- | --- | --- |
-| `ntdll.prx` | 654,551 bytes | none | `libSceLibcInternal`, `libkernel`, `libkernel_sys`, `libScePosixForWebKit` | `__stderrp`, `__stdoutp` (libc), `environ` (libkernel) |
+| `ntdll.prx` | 654,537 bytes | none | `libSceLibcInternal`, `libkernel`, `libkernel_sys` | `__stderrp`, `__stdoutp` (libc), `environ` (libkernel) |
 | `win32u.prx` | 2,217,250 bytes | none | `ntdll.prx`, `libSceLibcInternal`, `libkernel` | none |
 
 - The data imports come from system modules the title already loads, not
   from another application PRX.
-- `libScePosixForWebKit` is needed only for `isatty`. A game title does not
-  load that module, so the import stays unbound until the compat layer
-  provides it.
+- The stubs have `isatty` only in `libScePosixForWebKit`, which a game title
+  does not load. The compat layer provides it (no descriptor is a terminal),
+  so ntdll needs only the libc and libkernel modules.
 - Nothing in this note has run on the console.

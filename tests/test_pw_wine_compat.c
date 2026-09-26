@@ -57,6 +57,13 @@ int main(void)
     assert(!strcmp(pw->pw_dir,"/download0/prospero-win") && !strcmp(pw->pw_name,"prospero"));
     assert(!strcmp(pw_compat_codeset(),"UTF-8"));
 
+    /* No descriptor is a terminal; a closed one is a bad descriptor. */
+    int pipe_fds[2];assert(!pipe(pipe_fds));
+    errno=0;assert(pw_compat_isatty(pipe_fds[0])==0 && errno==ENOTTY);
+    close(pipe_fds[0]);close(pipe_fds[1]);
+    errno=0;assert(pw_compat_isatty(pipe_fds[0])==0 && errno==EBADF);
+    errno=0;assert(pw_compat_isatty(-1)==0 && errno==EBADF);
+
     struct tms first,second;clock_t a=pw_compat_times(&first);
     for(volatile unsigned long spin=0;spin<50000000ul;spin++){}
     clock_t b=pw_compat_times(&second);

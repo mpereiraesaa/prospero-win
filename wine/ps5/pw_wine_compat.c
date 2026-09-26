@@ -13,6 +13,12 @@
 #include <time.h>
 #include <unistd.h>
 
+int pw_compat_isatty(int fd)
+{
+    errno=fcntl(fd,F_GETFD)==-1?EBADF:ENOTTY;
+    return 0;
+}
+
 int pw_compat_pipe2(int fds[2],int flags)
 {
     if(flags&~(O_CLOEXEC|O_NONBLOCK)){errno=EINVAL;return -1;}
