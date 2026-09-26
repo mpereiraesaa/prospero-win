@@ -19,6 +19,7 @@
 #include "pw_compat32_ps5.h"
 #include "pw_lowmem_ps5.h"
 #include "pw_wine_platform_ps5.h"
+#include "pw_ucontext_map_ps5.h"
 #include "pw_file_ps5.h"
 #include "ps5log/ps5log.h"
 
@@ -272,6 +273,28 @@ int main(int argc, char **argv)
                    wine.sigsegv_rip_edit_ok, wine.sigsegv_hits, wine.sigsegv_rip_offset,
                    wine.sigsegv_header_offset, wine.sigsegv_measured_edit_ok);
         PS5LOG_LOG("PW_WINE_PLATFORM done");
+        {
+            /* Where each register lives in this console's signal ucontext. */
+            static const char *const names[PW_UC_COUNT] = {
+                "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "r8", "r9", "r10",
+                "r11", "r12", "r13", "r14", "r15", "rsp", "rip" };
+            PwUcontextMap map;
+            int status = pw_ucontext_map_ps5(&map);
+
+            PS5LOG_LOG("PW_UCONTEXT status=%d signal=%d scanned=%d duplicates=%d "
+                       "header_size=%d header_rax=%d header_rsp=%d header_rip=%d",
+                       status, map.signal, map.scanned, map.duplicates, map.header_size,
+                       map.header_rax, map.header_rsp, map.header_rip);
+            for (unsigned r = 0; r < PW_UC_COUNT; r++)
+                PS5LOG_LOG("PW_UCONTEXT reg=%s offset=%d", names[r], map.offset[r]);
+            {
+                PwFsGsBaseProbe fsgs;
+                pw_fsgsbase_ps5_probe(&fsgs);
+                PS5LOG_LOG("PW_FSGSBASE rdfsbase=%d rdgsbase=%d wrgsbase=%d fs=0x%llx gs=0x%llx",
+                           fsgs.rdfsbase, fsgs.rdgsbase, fsgs.wrgsbase,
+                           (unsigned long long)fsgs.fs_value, (unsigned long long)fsgs.gs_value);
+            }
+        }
     }
 
     {
