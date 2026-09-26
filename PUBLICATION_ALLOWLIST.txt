@@ -101,6 +101,8 @@ src/pw_x87.h
 src/pw_user32.c
 src/pw_user32.h
 src/pw_gdi.c
+src/pw_launcher_model.c
+src/pw_launcher_model.h
 src/pw_gdi.h
 src/pw_present.c
 src/pw_present.h
@@ -154,6 +156,7 @@ tests/test_pw_x86_residency.c
 tests/test_pw_x86_lazyflags.c
 tests/test_pw_x87.c
 tests/test_pw_user32.c
+tests/test_launcher_model.c
 tests/test_pw_gdi.c
 tests/test_pw_gdi_abi.c
 tests/test_pw_present.c
