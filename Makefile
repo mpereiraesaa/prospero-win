@@ -181,6 +181,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/inspect_pe $(BUILD)/trace_x86_ent
 	python3 tests/test_unix_call_table.py
 	python3 tests/test_unixlib_table.py
 	python3 tests/test_wowprospero_contract.py
+	python3 tests/test_build_wine_ps5.py
 	python3 tests/test_nt_handler_ledger.py
 	python3 tests/test_reentrancy_contract.py
 	python3 tests/test_test_reachability.py

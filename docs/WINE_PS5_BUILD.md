@@ -1,0 +1,67 @@
+# Wine's Unix side for PS5
+
+Wine's PE modules already run through the IA-32 DBT and the WoW64 backend.
+Its Unix side (`ntdll.so`, `win32u.so` and `wineserver`) is what runs Wine's
+system services, and on the console it has to be native PS5 code. This note
+records how it is built and what the console's libraries lack.
+
+## Build
+
+`tools/build_wine_ps5.sh` copies the pinned revision
+(`490f6d5dcbb2a5047345b8af88d114bbcaad69a8`) into `.deps/wine-ps5/source`,
+applies `wine/patches/*.patch` in numeric order and configures it out of
+tree for `x86_64-unknown-freebsd11` with the PS5 payload SDK's
+`prospero-clang`. The PS5 compiler defines `__FreeBSD__` and the SDK ships
+FreeBSD headers, so Wine selects its FreeBSD paths (kqueue instead of epoll,
+sysctl), and `__PROSPERO__` selects the PS5 patches. PE modules are not built
+here; winebuild and widl come from the host build that
+`tools/build_wine_runtime.sh` produces.
+
+~~~sh
+tools/build_wine_ps5.sh --check-patches   # validate and print the series
+PROSPERO_WINE_SOURCE=<pinned checkout> PROSPERO_WINE_BUILD=<host build> \
+PS5_PAYLOAD_SDK=<ps5-payload-sdk> tools/build_wine_ps5.sh
+~~~
+
+The link is made against the SDK's stub libraries with unresolved symbols
+reported instead of fatal, so every run writes an exact list of what the
+console does not provide to `.deps/wine-ps5/report.json`, per target, with
+sizes, hashes and needed libraries. The SDK has no separate `libm`; its libc
+carries the math functions, so the build supplies an empty `libm.a` for the
+`-lm` that win32u requests, and links LLVM `libunwind` for
+`_Unwind_Find_FDE`.
+
+## Patch series
+
+`wine/patches/NNNN-name.patch` files are mail-formatted patches applied with
+`git apply` in numeric order. Numbers are owned by range so the two halves
+of the port never collide:
+
+| Range | Area |
+| --- | --- |
+| 0100–0499 | Unix services: unixlib loading as PRX, allocator, in-process wineserver transport, user driver, build |
+| 0500–0899 | Execution core: signals, TEB/GS, virtual memory, process startup |
+
+| Patch | Effect |
+| --- | --- |
+| 0100 | `ntdll`: a PS5 title has no fstab and no `getfsent`; report no default device |
+
+## Measured result
+
+With the series above, all three targets compile and link (host run on
+2026-09-26):
+
+| Target | Size | Unresolved against the SDK |
+| --- | --- | --- |
+| `ntdll.so` | 3.06 MB | `amd64_get_fsbase`, `amd64_get_gsbase`, `amd64_set_gsbase` |
+| `win32u.so` | 8.51 MB | none |
+| `wineserver` | 3.54 MB | none |
+
+The three remaining symbols are FreeBSD `sysarch` wrappers used by
+`dlls/ntdll/unix/signal_x86_64.c` to read and switch the GS/FS bases for the
+TEB, which belongs to the execution-core range. Everything else Wine's Unix
+side calls exists in the console's libc, libkernel and SceNet stubs. The
+objects are linked as ordinary shared objects and an executable; turning
+them into PRX modules (PRXDESC1 descriptors, dependency-ordered loading,
+no cross-module data imports) is the next step and is not measured here.
+Nothing in this note has run on the console.

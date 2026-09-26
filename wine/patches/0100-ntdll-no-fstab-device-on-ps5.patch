@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 11:34:24 +0200
+Subject: [PATCH] ntdll: Report no fstab device on PS5.
+
+A PS5 title has no /etc/fstab and its libc has no getfsent; the drive
+lookup reports no default device, as it does when nothing matches.
+---
+ dlls/ntdll/unix/file.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 2a00ad5b32..46064fc40b 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -813,7 +813,14 @@ static char *parse_mount_entries( FILE *f, dev_t dev, ino_t ino )
+ }
+ #endif
+ 
+-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || defined(__DragonFly__)
++#if defined(__PROSPERO__)
++/* A PS5 title has no fstab and no device nodes for its drives, and its libc
++ * does not provide getfsent: there is never a default device to report. */
++static char *parse_mount_entries( FILE *f, dev_t dev, ino_t ino )
++{
++    return NULL;
++}
++#elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || defined(__DragonFly__)
+ #include <fstab.h>
+ static char *parse_mount_entries( FILE *f, dev_t dev, ino_t ino )
+ {
