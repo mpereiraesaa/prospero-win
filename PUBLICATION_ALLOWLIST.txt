@@ -336,3 +336,5 @@ tools/dbt_differential.c
 tests/fixtures/dbt_differential_forms.txt
 tools/build_wowprospero.sh
 tools/run_wine_dbt_host.sh
+native/pw_wine_platform_ps5.c
+native/pw_wine_platform_ps5.h

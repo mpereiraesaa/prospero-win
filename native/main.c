@@ -18,6 +18,7 @@
 #include "../src/pw_exec_probe.h"
 #include "pw_compat32_ps5.h"
 #include "pw_lowmem_ps5.h"
+#include "pw_wine_platform_ps5.h"
 #include "pw_file_ps5.h"
 #include "ps5log/ps5log.h"
 
@@ -230,6 +231,47 @@ int main(int argc, char **argv)
                        lowmem.write_read_ok, lowmem.mprotect_rx,
                        lowmem.mprotect_rwx);
         }
+    }
+
+    {
+        /*
+         * Facts Wine's native side needs before its x86_64 PE modules, Unix
+         * libraries and an in-process wineserver can run on the console.
+         */
+        PwWinePlatformReport wine;
+        uint64_t gs_value = 0;
+        int rc, os_errno = 0;
+
+        memset(&wine, 0, sizeof(wine));
+        PS5LOG_LOG("PW_WINE_PLATFORM step=sockets");
+        pw_wine_platform_ps5_sockets(&wine);
+        PS5LOG_LOG("PW_WINE_PLATFORM socketpair=%d scm_rights=%d sock_errno=%d "
+                   "kqueue=%d kevent=%d kq_errno=%d",
+                   wine.socketpair_rc, wine.scm_rights_ok, wine.socket_errno,
+                   wine.kqueue_rc, wine.kevent_ready, wine.kqueue_errno);
+        PS5LOG_LOG("PW_WINE_PLATFORM step=malloc");
+        pw_wine_platform_ps5_malloc(&wine);
+        PS5LOG_LOG("PW_WINE_PLATFORM malloc_ceiling=%llu limit=%llu",
+                   (unsigned long long)wine.malloc_ceiling_bytes,
+                   (unsigned long long)wine.malloc_limit_bytes);
+        rc = pw_wine_platform_ps5_gsbase_get(&gs_value, &os_errno);
+        PS5LOG_LOG("PW_WINE_PLATFORM gs_get=%d errno=%d value=0x%llx", rc, os_errno,
+                   (unsigned long long)gs_value);
+        rc = pw_wine_platform_ps5_gsbase_same(&os_errno);
+        PS5LOG_LOG("PW_WINE_PLATFORM gs_set_same=%d errno=%d", rc, os_errno);
+        PS5LOG_LOG("PW_WINE_PLATFORM step=gsbase");
+        pw_wine_platform_ps5_gsbase(&wine);
+        PS5LOG_LOG("PW_WINE_PLATFORM gsbase_set=%d errno=%d gs_read=%d gs_thread=%d",
+                   wine.gsbase_set_rc, wine.gsbase_errno, wine.gsbase_read_ok,
+                   wine.gsbase_thread_ok);
+        PS5LOG_LOG("PW_WINE_PLATFORM step=sigsegv");
+        pw_wine_platform_ps5_sigsegv(&wine);
+        PS5LOG_LOG("PW_WINE_PLATFORM sigsegv_rc=%d recovered=%d altstack=%d rip_edit=%d hits=%d "
+                   "rip_offset=%d header_offset=%d measured_edit=%d",
+                   wine.sigsegv_rc, wine.sigsegv_recovered, wine.sigsegv_on_altstack,
+                   wine.sigsegv_rip_edit_ok, wine.sigsegv_hits, wine.sigsegv_rip_offset,
+                   wine.sigsegv_header_offset, wine.sigsegv_measured_edit_ok);
+        PS5LOG_LOG("PW_WINE_PLATFORM done");
     }
 
     {
