@@ -205,6 +205,7 @@ The platform facts this port depends on have been measured on the console
 | Recoverable SIGSEGV on an alternate stack | delivered on the `sigaltstack`; recoverable |
 | Editing the saved RIP in the signal context | works at `ucontext` offset 224; the SDK header's `mc_rip` (offset 176) is not the live slot, so Wine's signal-context accessors need a PS5 layout |
 | Signal `ucontext` layout (`native/pw_ucontext_map_ps5.c`, every GPR located by sentinel) | the FreeBSD amd64 `mcontext_t`, unchanged, at `ucontext` offset 64 instead of the header's 16; a non-canonical load arrives as SIGBUS |
+| Host page size and low address space (`native/pw_vmspace_ps5.c`) | 16 KiB pages; 64 KiB-aligned fixed reservations are honoured, 4 KiB-aligned ones are not; every 16 MiB slot from 16 MiB to 4 GiB is free at title start, but the whole range cannot be reserved in one mapping |
 | User-mode FSGSBASE (`rdfsbase`/`rdgsbase`/`wrgsbase`) | disabled (SIGILL): segment bases change only through `sysarch`, so the port keeps GS = TEB per thread and never switches FS on a syscall transition |
 | `socketpair` with `SCM_RIGHTS`, `kqueue`/`kevent` | work (in-process wineserver transport) |
 | Title libc `malloc` | about 13 MiB; Wine's native side needs its own `mmap`-backed allocator |

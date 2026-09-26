@@ -20,6 +20,7 @@
 #include "pw_lowmem_ps5.h"
 #include "pw_wine_platform_ps5.h"
 #include "pw_ucontext_map_ps5.h"
+#include "pw_vmspace_ps5.h"
 #include "pw_file_ps5.h"
 #include "ps5log/ps5log.h"
 
@@ -293,6 +294,21 @@ int main(int argc, char **argv)
                 PS5LOG_LOG("PW_FSGSBASE rdfsbase=%d rdgsbase=%d wrgsbase=%d fs=0x%llx gs=0x%llx",
                            fsgs.rdfsbase, fsgs.rdgsbase, fsgs.wrgsbase,
                            (unsigned long long)fsgs.fs_value, (unsigned long long)fsgs.gs_value);
+            }
+            {
+                PwVmSpaceReport vm;
+                pw_vmspace_ps5_probe(&vm);
+                PS5LOG_LOG("PW_VMSPACE page=%ld low_free=%llu ranges=%u largest=0x%llx+%llu "
+                           "largest_single=%d gran64k=%d gran4k=%d errno=%d",
+                           vm.page_size, (unsigned long long)vm.low_free_bytes, vm.range_count,
+                           (unsigned long long)vm.largest_run_base,
+                           (unsigned long long)vm.largest_run_bytes, vm.largest_single_ok,
+                           vm.granularity_64k_ok, vm.granularity_4k_ok, vm.first_errno);
+                for (uint32_t i = 0; i < vm.range_count; i++)
+                    PS5LOG_LOG("PW_VMSPACE range=0x%llx+%llu",
+                               (unsigned long long)vm.ranges[i].base,
+                               (unsigned long long)vm.ranges[i].bytes);
+                PS5LOG_LOG("PW_VMSPACE done");
             }
         }
     }
