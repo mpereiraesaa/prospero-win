@@ -58,7 +58,8 @@ dbt="src/pw_x86_engine.c src/pw_x86_block.c src/pw_x86_cache.c src/pw_x86_hostex
 (cd "$root" && gcc -m64 -O2 -g -fPIC -shared -Wl,-Bsymbolic -Wl,-soname,wowprospero.so \
     -Wl,-z,defs -D__WINESRC__ -DWINE_UNIX_LIB -D_REENTRANT \
     -I"$module" -I"$build_dir/include" -I"$source_dir/include" -Isrc -Iinclude \
-    "$module/unix.c" $dbt -o "$out/wowprospero.so") || fail "Unix library build failed"
+    "$module/unix.c" $dbt "$build_dir/dlls/ntdll/ntdll.so" -o "$out/wowprospero.so") ||
+    fail "Unix library build failed"
 
 x86_64-w64-mingw32-gcc -c -o "$out/x86_64-windows/cpu.o" "$module/cpu.c" \
     -I"$module" -I"$build_dir/include" -I"$source_dir/include" -I"$source_dir/include/msvcrt" \

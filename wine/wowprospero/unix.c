@@ -13,7 +13,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/uio.h>
 #include <unistd.h>
 #include <stdio.h>
 
@@ -43,6 +42,11 @@ struct pw_thread
     uint32_t prefer_host;    /* PW_WOW_HOSTEXEC_ALL: reference execution */
     uint32_t ring[64], ring_pos;
     PwX86HostExec hostexec;  /* single-instruction fallback */
+    /* Last committed, readable region NtQueryVirtualMemory reported, valid
+     * for readable_generation: consecutive blocks rarely leave it. */
+    uintptr_t readable_low, readable_high;
+    uint64_t readable_generation;
+    uint64_t readable_queries, readable_hits;
     PwX86CacheEntry entries[CACHE_ENTRIES];
 };
 
@@ -50,14 +54,37 @@ static __thread struct pw_thread *self;
 static volatile uint64_t code_generation = 1;
 
 /* Translation reads source bytes straight from the identity-mapped guest.
- * A span never extends into an unreadable page. process_vm_readv is the
- * Linux host probe; a PS5 adapter needs its own page-readability query. */
+ * A span never extends into an unreadable page. Readability comes from
+ * Wine's own view of the address space (NtQueryVirtualMemory is resolved in
+ * process, without a kernel call), which is the same on every host; the
+ * last readable region is cached per thread until the next code flush,
+ * because memory frees and protection changes bump code_generation. */
 static int readable( uintptr_t address )
 {
-    char byte;
-    struct iovec local = { &byte, 1 }, remote = { (void *)address, 1 };
+    struct pw_thread *thread = self;
+    MEMORY_BASIC_INFORMATION info;
+    const ULONG readable_mask = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                                PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
 
-    return process_vm_readv( getpid(), &local, 1, &remote, 1, 0 ) == 1;
+    if (thread && thread->readable_generation == code_generation &&
+        address >= thread->readable_low && address < thread->readable_high)
+    {
+        thread->readable_hits++;
+        return 1;
+    }
+    if (thread) thread->readable_queries++;
+    if (NtQueryVirtualMemory( NtCurrentProcess(), (void *)address, MemoryBasicInformation,
+                              &info, sizeof(info), NULL ))
+        return 0;
+    if (info.State != MEM_COMMIT || !(info.Protect & readable_mask) || (info.Protect & PAGE_GUARD))
+        return 0;
+    if (thread)
+    {
+        thread->readable_low = (uintptr_t)info.BaseAddress;
+        thread->readable_high = (uintptr_t)info.BaseAddress + info.RegionSize;
+        thread->readable_generation = code_generation;
+    }
+    return 1;
 }
 
 static int source_view( void *opaque, uint32_t pc, const uint8_t **source, size_t *bytes )

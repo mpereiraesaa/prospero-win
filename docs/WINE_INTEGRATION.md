@@ -214,9 +214,10 @@ needs, in this order: native execution of Wine's x86_64 PE modules (`ntdll`,
 `wow64`, `wow64win`, `wowprospero`), which is the PE64 ABI work; Wine's Unix
 side (`ntdll.so`, `win32u.so`) and an in-process `wineserver` on the PS5
 platform adapters, since titles cannot fork or exec; a user driver that hands
-`win32u` window surfaces to `pw_present`; and a page-readability probe in
-place of the host's `process_vm_readv`. Until then the direct and bootstrap
-paths below remain the console evidence.
+`win32u` window surfaces to `pw_present`. (The backend's page-readability
+check already uses Wine's own `NtQueryVirtualMemory`, with a per-thread cache
+of the last readable region, so it needs no host-specific kernel call.)
+Until then the direct and bootstrap paths below remain the console evidence.
 
 ## Native boundary
 
