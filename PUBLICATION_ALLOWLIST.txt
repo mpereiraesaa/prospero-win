@@ -362,3 +362,6 @@ wine/patches/0101-server-realpath-into-server-memory.patch
 wine/ps5/pw_wine_heap_libc.c
 native/pw_ucontext_map_ps5.c
 native/pw_ucontext_map_ps5.h
+tests/test_pw_wine_prx.c
+wine/ps5/pw_wine_prx.c
+wine/ps5/pw_wine_prx.h
