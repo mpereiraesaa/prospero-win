@@ -1,0 +1,114 @@
+From 7b73576c80334afd50b76371ef8c44e8cf47d0b0 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 19:59:16 +0200
+Subject: [PATCH] ntdll: Repair a null %fs on each Unix entry on PS5.
+
+Measured on PS5 FW 12.02 (integrated run 8): after a signal handler
+returns, the thread can come back with a null %fs selector while the
+kernel still holds the right base, so libkernel's %fs:0x10 thread
+pointer reads address 0x10 on every later Unix call. The syscall and
+Unix call dispatchers now check the selector and, when it is null, have
+libkernel's sysarch(AMD64_SET_FSBASE) set the base kept in pthread_teb
+again; the kernel reloads the selector and the base together. A title
+may not issue the system call itself and user-mode wrfsbase is
+disabled, so FreeBSD's own restore cannot be used.
+---
+ dlls/ntdll/unix/signal_x86_64.c | 58 ++++++++++++++++++++++++++++-----
+ 1 file changed, 50 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index b1d9e49..fbd0847 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -215,8 +215,53 @@ __ASM_GLOBAL_FUNC( modify_ldt,
+ #  define AMD64_GET_GSBASE 130
+ #  define AMD64_SET_GSBASE 131
+ # endif
++# ifndef AMD64_GET_FSBASE
++#  define AMD64_GET_FSBASE 128
++#  define AMD64_SET_FSBASE 129
++# endif
++# define amd64_get_fsbase(base) sysarch( AMD64_GET_FSBASE, (base) )
+ # define amd64_get_gsbase(base) sysarch( AMD64_GET_GSBASE, (base) )
+ # define amd64_set_gsbase(base) ({ void *pw_base = (base); sysarch( AMD64_SET_GSBASE, &pw_base ); })
++/* Measured on PS5 FW 12.02: after a signal handler returns, the thread can
++ * come back to user mode with a null %fs selector, so %fs reads address 0
++ * although the kernel still holds the right base (AMD64_GET_FSBASE reports
++ * it). libkernel reaches its thread through %fs:0x10, so every Unix entry
++ * checks the selector and, when it is null, has libkernel's sysarch() set the
++ * base again: the kernel then reloads the selector and the base together. A
++ * title may not issue the system call itself (PPRBUG-22859), and user-mode
++ * wrfsbase is disabled. %rsi is clobbered; %rbx keeps the stack pointer. */
++# define PW_RESTORE_FS \
++    "movw %fs,%si\n\t" \
++    "testw %si,%si\n\t" \
++    "jnz 7f\n\t" \
++    "pushq %rax\n\t" \
++    "pushq %rbx\n\t" \
++    "pushq %rcx\n\t" \
++    "pushq %rdx\n\t" \
++    "pushq %rdi\n\t" \
++    "pushq %r8\n\t" \
++    "pushq %r9\n\t" \
++    "pushq %r10\n\t" \
++    "pushq %r11\n\t" \
++    "movq %rsp,%rbx\n\t" \
++    "andq $~15,%rsp\n\t" \
++    "subq $16,%rsp\n\t" \
++    "movq 0x320(%r13),%rax\n\t"     /* amd64_thread_data()->pthread_teb: the FS base */ \
++    "movq %rax,(%rsp)\n\t" \
++    "movq %rsp,%rsi\n\t" \
++    "movl $129,%edi\n\t"            /* AMD64_SET_FSBASE */ \
++    "call sysarch@PLT\n\t" \
++    "movq %rbx,%rsp\n\t" \
++    "popq %r11\n\t" \
++    "popq %r10\n\t" \
++    "popq %r9\n\t" \
++    "popq %r8\n\t" \
++    "popq %rdi\n\t" \
++    "popq %rdx\n\t" \
++    "popq %rcx\n\t" \
++    "popq %rbx\n\t" \
++    "popq %rax\n" \
++    "7:\n\t"
+ #else
+ # define UCONTEXT_MC(context) ((context)->uc_mcontext)
+ #endif
+@@ -2951,15 +2996,8 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
+         WARN_(seh)( "could not enable syscall user dispatch\n" );
+ #elif defined (__FreeBSD__) || defined (__FreeBSD_kernel__)
+     amd64_set_gsbase( teb );
+-#ifndef __PROSPERO__
++    /* On PS5 the dispatcher only uses it to repair a null %fs (PW_RESTORE_FS). */
+     amd64_get_fsbase( &thread_data->pthread_teb );
+-#else
+-    /* PE code never loads %fs here (no 32-bit compatibility mode: i386 code
+-     * runs in the WoW64 CPU backend), so FS stays the libc TLS base and
+-     * pthread_teb stays 0, which makes the syscall dispatcher skip its FS
+-     * restore: no sysarch call on every Windows-to-Unix transition. */
+-    thread_data->pthread_teb = NULL;
+-#endif
+ #elif defined(__NetBSD__)
+     sysarch( X86_64_SET_GSBASE, &teb );
+ #elif defined (__APPLE__)
+@@ -3174,6 +3212,8 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
+                    "syscall\n\t"
+                    "leaq -0x98(%rbp),%rcx\n"
+                    "2:\n\t"
++#elif defined(__PROSPERO__)
++                   PW_RESTORE_FS
+ #elif defined(__FreeBSD__)
+                    "movq 0x320(%r13),%rsi\n\t"     /* amd64_thread_data()->pthread_teb */
+                    "testq %rsi,%rsi\n\t"
+@@ -3491,6 +3531,8 @@ __ASM_GLOBAL_FUNC( __wine_unix_call_dispatcher,
+                    "mov $158,%eax\n\t"             /* SYS_arch_prctl */
+                    "syscall\n\t"
+                    "2:\n\t"
++#elif defined(__PROSPERO__)
++                   PW_RESTORE_FS
+ #elif defined(__FreeBSD__)
+                    "movq 0x320(%r13),%rsi\n\t"     /* amd64_thread_data()->pthread_teb */
+                    "testq %rsi,%rsi\n\t"
+-- 
+2.43.0
+

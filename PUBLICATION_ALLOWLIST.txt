@@ -368,6 +368,7 @@ wine/patches/0400-win32u-ps5-user-driver.patch
 wine/patches/0560-ntdll-stderr-output-sink.patch
 wine/patches/0570-ntdll-ps5-reserve-virtual-range.patch
 wine/patches/0580-ntdll-ps5-config-dir-parent-ownership.patch
+wine/patches/0590-ntdll-ps5-repair-null-fs-on-unix-entry.patch
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
