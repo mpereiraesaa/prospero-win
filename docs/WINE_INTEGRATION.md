@@ -139,6 +139,71 @@ DXVK DLLs use the same runtime-distribution mechanism. Per-application DLL
 overrides will be an explicit policy entry, not an accidental filename search
 order.
 
+## Wine WoW64 with the DBT as its i386 CPU
+
+Wine already separates "which CPU runs i386 code" from everything else: its
+`wow64.dll` loads an i386 CPU backend named by
+`HKLM\Software\Microsoft\Wow64\x86` through the `BTCpu*` contract that
+`wow64cpu.dll`, `xtajit.dll` and third-party emulators implement. The
+`wine/wowprospero` module is that backend for prospero-win:
+
+```text
+PE32 application + Wine i386 PE modules          (guest, IA-32)
+  -> prospero-win DBT, host-exec fallback         (wowprospero.so)
+     -> syscall / Unix-call BOP
+        -> wow64.dll + wow64win.dll thunks        (Wine, x86_64 PE)
+           -> ntdll.so, win32u.so, wineserver     (Wine, native)
+```
+
+The PE side keeps the canonical `I386_CONTEXT` where Wine expects it
+(`TlsSlots[WOW64_TLS_CPURESERVED]`) and services the two BOP addresses exactly
+as `wow64cpu`'s thunks do. The Unix side owns one engine per host thread.
+Every Windows service - NT calls, USER/GDI (`win32u` with its DIB engine),
+the object server - is Wine's own, so a compatibility gap is an
+instruction-coverage gap, not a missing `NtUser*`/`NtGdi*` reimplementation.
+
+Instruction coverage is handled as a finite, measurable problem rather than a
+per-application frontier:
+
+- `pw_x86_hostexec` executes a non-control, non-stack instruction the
+  translator does not cover by rewriting it for the x86-64 host (0x67 prefix,
+  effective address in ESI/EDI including the FS base, no ESP register
+  operand) inside a stub that loads and stores the guest GPRs, flags, x87,
+  SSE and MXCSR state.
+- `tools/dbt_differential` compares each encoding as a translated block with
+  host execution from randomized state. Over the 203,843 distinct encodings in
+  the Wine i386 modules Pinball loads, the 92,536 both paths accept match; the
+  run found and fixed a 16-bit `ALU r16, m16` result drop, an `FST ST(i)`
+  false stack fault and missing x87 NaN propagation.
+  `tests/fixtures/dbt_differential_forms.txt` keeps those as a `make test`
+  gate. The [Box86 opcode catalog](BOX86_OPCODE_CATALOG.md) is the
+  checklist for forms these images do not yet exercise.
+
+Host reproduction, from a pinned WoW64 Wine tree
+(`tools/build_wine_runtime.sh` configures one under `.deps/wine`) and the
+staged application tree described by its profile:
+
+```sh
+tools/build_wowprospero.sh
+tools/run_wine_dbt_host.sh --profile examples/profiles/pinball.profile \
+    --stage /path/to/staged/pinball --screenshot pinball.png
+tools/run_wine_dbt_host.sh ... --cpu native   # identical control run
+```
+
+On a Linux host the unmodified Pinball executable initialises, creates its
+window, renders the table and starts a game with all of its i386 code and
+Wine's executed by prospero-win; the window matches the `wow64cpu` control
+run except for animated lights. This is host evidence only.
+
+A console run is not yet meaningful for this path. Its runtime contract still
+needs, in this order: native execution of Wine's x86_64 PE modules (`ntdll`,
+`wow64`, `wow64win`, `wowprospero`), which is the PE64 ABI work; Wine's Unix
+side (`ntdll.so`, `win32u.so`) and an in-process `wineserver` on the PS5
+platform adapters, since titles cannot fork or exec; a user driver that hands
+`win32u` window surfaces to `pw_present`; and a page-readability probe in
+place of the host's `process_vm_readv`. Until then the direct and bootstrap
+paths below remain the console evidence.
+
 ## Native boundary
 
 Wine's Unix side assumes facilities that must be deliberately adapted to PS5:
