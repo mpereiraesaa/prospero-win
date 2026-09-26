@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">prospero-win mark</title>
+  <rect x="4" y="4" width="120" height="120" rx="27" fill="#101827" stroke="#26364b" stroke-width="4"/>
+  <path d="M34 91V37h25c16 0 25 8 25 22S75 81 59 81H48v10H34Zm14-23h11c7 0 11-3 11-9s-4-9-11-9H48v18Z" fill="#59d5ff"/>
+  <path d="m72 92 12-32h13l-6 16 11-16h13L98 92H85l7-18-9 13-2 5H72Z" fill="#f2f6ff"/>
+  <path d="M29 106h70" stroke="#6784ff" stroke-width="5" stroke-linecap="round"/>
+</svg>

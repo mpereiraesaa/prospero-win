@@ -14,7 +14,8 @@ classifies cleanup or failure without depending on a screenshot.
 | `PW_RUNTIME_READY` | bound imports, guest entry and mapped bytes |
 | `PW_STATE_LOAD` / `PW_STATE_SAVE` | persistent state bytes, generation and atomic-write results |
 | `PW_PAD_OPEN` / `PW_PAD_EVENT` / `PW_PAD_QUIT` | Pad ownership, physical edges and explicit quit |
-| `PW_VIDEO_FRAME` | dimensions, changing frame hash, flips, submits and fence state |
+| `PW_VIDEO_FRAME` | dimensions, changing frame hash, flips, submits and fence state; with `backend=vk-wsi` also swapchain slot, present token, placement and staging hash |
+| `PW_PRESENT_OPEN` / `PW_PRESENT_FAIL` | ps5-vulkan WSI backend, status, fixed extent and first failing Vulkan call |
 | `PW_AUDIO_OPEN` / `PW_AUDIO_QUEUE` | PCM format, worker ownership, queue depth and completion |
 | `PW_RUNTIME_HEARTBEAT` | DBT, pacing, adapter, renderer, audio and input counters |
 | `PW_RUNTIME_TEARDOWN` | ordered release result plus RuntimeSupervisor session, outcome and cleanup state |
@@ -41,7 +42,11 @@ Renderer acceptance requires changing frame hashes, advancing flips/submits
 and completed fence ownership. Audio acceptance requires advancing byte,
 frame, block and completion counters; a successful port open is insufficient.
 Physical input acceptance requires native Pad ownership and observed press and
-release edges. Screenshots and videos are supporting evidence only.
+release edges. A `PW_PRESENT_BACKEND=vk` run additionally requires
+`--present-backend vk-wsi`: an open `PW_PRESENT_OPEN`, no `PW_PRESENT_FAIL`,
+every sampled frame on `vk-wsi` with strictly increasing tokens over both
+swapchain images and, for finite runs, a clean backend teardown whose flip
+count matches `PW_RUNTIME_END`. Screenshots and videos are supporting evidence only.
 
 The asynchronous audio contract additionally requires an active worker,
 advancing enqueue/completion counts, zero output errors and bounded queue

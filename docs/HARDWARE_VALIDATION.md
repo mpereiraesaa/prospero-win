@@ -73,6 +73,35 @@ difference. Controlled host benchmarks are near-neutral. The accepted claim is
 correctness, real target use of deferred state and no observed hardware
 regression.
 
+## GDI presentation through ps5-vulkan WSI
+
+The opt-in `PW_PRESENT_BACKEND=vk` build presents the same GDI frames through
+ps5-vulkan's display-plane surface and a transfer-only two-image swapchain
+instead of the direct AGC DMA path (see [GDI presentation](GDI_PRESENTATION.md)).
+Two bounded 60-second Pinball runs used:
+
+- linked ELF SHA-256
+  `82700ef60d5655233dfdd601a96ee1b3024d71acf5588b70a9abb44918c23b8c`;
+- fSELF SHA-256
+  `15e1433095be4f4a3f1f339a0f1fd8f91640d1fa89f3794ff0162d1f4e59430c`;
+- a ps5-vulkan SDK that includes the native present-layout barrier fix
+  (ps5-vulkan PR #562).
+
+They presented 555 and 580 frames. Every frame retired a fence and a matching
+VideoOut flip event inside ps5-vulkan (`PS5VK_VIDEO_PRESENTED`), alternated
+between both swapchain images with strictly increasing tokens, and changed
+its GDI and staging hashes. The 640×480 window was shown at scale 2 at
+(320,60). Teardown reported every subsystem `ok`; the `ps5log/1` streams were
+gap-free and ended with `BYE reason=validation-deadline`. The validator accepts
+both with `--present-backend vk-wsi`, and a private Remote Play capture shows
+the upright table with correct colours. The first attempts are recorded
+failures, not accepted runs: a 15.6 MiB image overlapped Pinball's fixed base,
+and ps5-vulkan's native queue refused the present-layout barriers.
+
+This validates presentation of the direct runner's GDI surfaces through
+ps5-vulkan WSI. It does not validate Wine-produced surfaces, DXVK, or the
+default AGC build, which is unchanged.
+
 ## Evidence rules
 
 A screenshot or video proves appearance only. Runtime acceptance requires:

@@ -6,6 +6,7 @@ docs/CASE_STUDY_PINBALL.md
 docs/DEVELOPMENT.md
 docs/HARDWARE_VALIDATION.md
 docs/GDI.md
+docs/GDI_PRESENTATION.md
 docs/WINE_INTEGRATION.md
 docs/SUPPORT_MATRIX.json
 docs/README.md
@@ -31,6 +32,10 @@ native/pw_audio_ps5.c
 native/pw_audio_ps5.h
 native/pw_pad_ps5.c
 native/pw_pad_ps5.h
+native/pw_videoout_layout.h
+native/pw_present_vk_ps5.c
+native/pw_present_vk_ps5.h
+native/pw_psbc_absent_ps5.c
 native/pw_state_ps5.c
 native/pw_prefix_ps5.c
 native/pw_prefix_ps5.h
@@ -97,6 +102,8 @@ src/pw_user32.c
 src/pw_user32.h
 src/pw_gdi.c
 src/pw_gdi.h
+src/pw_present.c
+src/pw_present.h
 src/pw_ini.c
 src/pw_ini.h
 src/pw_app_profile.c
@@ -149,6 +156,7 @@ tests/test_pw_x87.c
 tests/test_pw_user32.c
 tests/test_pw_gdi.c
 tests/test_pw_gdi_abi.c
+tests/test_pw_present.c
 tests/test_pw_window.c
 tests/test_pw_x86_reference.S
 tests/test_x86_differential.py
@@ -217,6 +225,7 @@ src/pw_registry_store.h
 tests/test_pw_registry_store.c
 tests/test_pw_state_ps5.c
 tests/test_pw_agc_submit_lifecycle.c
+tests/test_pw_videoout_layout.c
 tools/bench_dynarec.c
 tests/test_dynarec_bench.py
 tests/test_docs_links.py
@@ -313,3 +322,10 @@ docs/BOX86_OPCODE_CATALOG.md
 tests/test_box86_opcode_catalog.py
 tools/box86_opcode_catalog.py
 tools/pw_x86_decode_probe.c
+assets/prospero-win-logo.svg
+assets/prospero-win-banner.svg
+tests/test_wowprospero_contract.py
+wine/wowprospero/cpu.c
+wine/wowprospero/unix.c
+wine/wowprospero/wowprospero.h
+wine/wowprospero/wowprospero.spec

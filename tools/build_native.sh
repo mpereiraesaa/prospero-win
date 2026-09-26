@@ -31,6 +31,8 @@
 #   PW_DBT_CHAINING        1 enables direct block chaining (default 1)
 #   PW_DBT_RESIDENCY       1 enables cross-block guest GPR residency (default 1)
 #   PW_DBT_LAZY_FLAGS      1 enables cross-block RAW flag deferral (default 1)
+#   PW_PRESENT_BACKEND     agc (default) or vk: present GDI frames through
+#                          ps5-vulkan WSI; requires PS5VK_SDK (a dist-sdk dir)
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -51,6 +53,8 @@ dbt_chaining=${PW_DBT_CHAINING:-1}
 dbt_residency=${PW_DBT_RESIDENCY:-1}
 dbt_lazy_flags=${PW_DBT_LAZY_FLAGS:-1}
 output_suffix=${PW_OUTPUT_SUFFIX:-}
+present_backend=${PW_PRESENT_BACKEND:-agc}
+ps5vk_sdk=${PS5VK_SDK:-}
 
 [[ $use_sample == 0 || $use_sample == 1 ]] || {
     echo "PW_SAMPLE must be 0 or 1" >&2; exit 2; }
@@ -91,6 +95,20 @@ if [[ -n $app_profile ]]; then
     (( profile_bytes > 0 && profile_bytes <= 8192 )) || {
         echo "PW_APP_PROFILE must be between 1 and 8192 bytes" >&2; exit 2; }
     use_app_profile=1
+fi
+[[ $present_backend == agc || $present_backend == vk ]] || {
+    echo "PW_PRESENT_BACKEND must be agc or vk" >&2; exit 2; }
+present_vk=0
+if [[ $present_backend == vk ]]; then
+    [[ $native_mode == runtime ]] || {
+        echo "PW_PRESENT_BACKEND=vk requires PW_NATIVE_MODE=runtime" >&2; exit 2; }
+    for artifact in include/ps5vk/ps5vk.h lib/libps5vk.a lib/app-symbols.map \
+                    lib/libSceAgc.so lib/libSceAgcDriver.so; do
+        [[ -n $ps5vk_sdk && -e $ps5vk_sdk/$artifact ]] || {
+            echo "PW_PRESENT_BACKEND=vk requires PS5VK_SDK with $artifact" >&2; exit 2; }
+    done
+    ps5vk_sdk=$(cd -- "$ps5vk_sdk" && pwd)
+    present_vk=1
 fi
 if [[ $native_mode == wine && -z $wine_runtime_dir ]]; then
     echo "PW_WINE_RUNTIME_DIR is required for PW_NATIVE_MODE=wine" >&2; exit 2
@@ -253,7 +271,9 @@ common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -DPW_DBT_CHAINING="$dbt_chaining"
         -DPW_DBT_RESIDENCY="$dbt_residency"
         -DPW_DBT_LAZY_FLAGS="$dbt_lazy_flags"
-        -DPW_COMPAT32_TRANSFER="$compat32_transfer")
+        -DPW_COMPAT32_TRANSFER="$compat32_transfer"
+        -DPW_PRESENT_VK="$present_vk")
+(( present_vk )) && common+=(-I"$ps5vk_sdk/include")
 
 entry=native/runtime_main.c
 [[ $native_mode == gate ]] && entry=native/main.c
@@ -282,8 +302,9 @@ sources=(
     src/pw_unix_call.c
     src/pw_compat32.c src/pw_gate.c src/pw_loader.c src/pw_map.c
     src/pw_module_name.c src/pw_result.c src/pw_segment.c src/pw_vm.c src/pw_ini.c
-    src/pw_vm_posix.c src/pw_exec_probe.c src/pw_x86_block.c src/pw_x86_cache.c src/pw_x86_engine.c src/pw_x87.c src/pw_guest_call.c src/pw_import_bind.c src/pw_win32.c src/pw_user32.c src/pw_pad.c src/pw_gdi.c src/pw_crt_format.c src/pw_registry.c src/pw_registry_store.c src/pw_guest_fp.c src/pw_guest_args.c src/pe_resource.c src/pw_app_profile.c src/pw_prefix.c src/pw_runtime_supervisor.c
+    src/pw_vm_posix.c src/pw_exec_probe.c src/pw_x86_block.c src/pw_x86_cache.c src/pw_x86_engine.c src/pw_x87.c src/pw_guest_call.c src/pw_import_bind.c src/pw_win32.c src/pw_user32.c src/pw_pad.c src/pw_gdi.c src/pw_present.c src/pw_crt_format.c src/pw_registry.c src/pw_registry_store.c src/pw_guest_fp.c src/pw_guest_args.c src/pe_resource.c src/pw_app_profile.c src/pw_prefix.c src/pw_runtime_supervisor.c
 )
+(( present_vk )) && sources+=(native/pw_present_vk_ps5.c native/pw_psbc_absent_ps5.c)
 objects=()
 for source in "${sources[@]}"; do
     object="$build/obj/${source//\//_}.o"
@@ -303,6 +324,18 @@ objects+=("$build/obj/pw_win64_call.o")
     -o "$build/obj/app_crt.o"
 objects+=("$build/obj/ps5log.o" "$build/obj/ps5log_ps5_net.o")
 
+static_libs=()
+if (( present_vk )); then
+    # ps5-vulkan's AGC facades cover every symbol of the local stubs. Its
+    # archive also carries a byte-identical ps5log client; the title's own
+    # copy is linked first, so the archive member is never pulled. The
+    # compiler is replaced by native/pw_psbc_absent_ps5.c, and unreachable
+    # sections are dropped so the image stays clear of the fixed low range
+    # PE32 executables occupy. Archive symbols must not become exports.
+    cp "$ps5vk_sdk/lib/libSceAgc.so" "$ps5vk_sdk/lib/libSceAgcDriver.so" "$build/import-stubs/"
+    static_libs=(--gc-sections --version-script "$ps5vk_sdk/lib/app-symbols.map"
+                 "$ps5vk_sdk/lib/libps5vk.a")
+else
 "${cc[@]}" -std=c11 -O2 -fPIC -c "$root/native/stubs/libSceAgc.c" \
     -o "$build/obj/agc-import.o"
 "$sdk/bin/prospero-lld" --shared -soname libSceAgc.prx \
@@ -311,9 +344,11 @@ objects+=("$build/obj/ps5log.o" "$build/obj/ps5log_ps5_net.o")
     -o "$build/obj/agc-driver-import.o"
 "$sdk/bin/prospero-lld" --shared -soname libSceAgcDriver.prx \
     -o "$build/import-stubs/libSceAgcDriver.so" "$build/obj/agc-driver-import.o"
+fi
 
 "$sdk/bin/prospero-lld" -T "$native/ps5-pie.ld" --eh-frame-hdr -e _start \
     -o "$build/llvm-pie.elf" "$build/obj/app_crt.o" "${objects[@]}" \
+    ${static_libs[@]+"${static_libs[@]}"} \
     --as-needed "$sdk"/target/lib/*.so "$build/import-stubs/libSceAgc.so" \
     "$build/import-stubs/libSceAgcDriver.so"
 "$tool" link --in "$build/llvm-pie.elf" --out "$build/eboot.elf" \

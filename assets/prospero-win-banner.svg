@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+  <title id="title">prospero-win</title>
+  <desc id="desc">Experimental Windows compatibility runtime for native PlayStation 5 homebrew</desc>
+  <rect width="1200" height="300" rx="24" fill="#101827"/>
+  <rect x="76" y="73" width="154" height="154" rx="34" fill="#101827" stroke="#26364b" stroke-width="4"/>
+  <path d="M111 188v-68h31c20 0 31 10 31 27s-11 27-31 27h-13v14h-18Zm18-29h13c9 0 14-4 14-12s-5-12-14-12h-13v24Z" fill="#59d5ff"/>
+  <path d="m158 189 15-40h16l-7 20 14-20h17l-21 40h-17l9-22-12 16-2 6h-12Z" fill="#f2f6ff"/>
+  <path d="M108 206h90" stroke="#6784ff" stroke-width="6" stroke-linecap="round"/>
+  <text x="270" y="137" fill="#f2f6ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="58" font-weight="700" letter-spacing="1">prospero-win</text>
+  <text x="274" y="183" fill="#b7c7dc" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="23" letter-spacing="2">WINDOWS COMPATIBILITY RUNTIME</text>
+  <text x="274" y="220" fill="#8ea6c2" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="20">for native PlayStation 5 homebrew</text>
+  <rect x="0" y="288" width="420" height="12" rx="6" fill="#49c8f4"/>
+  <rect x="420" y="288" width="390" height="12" fill="#637df5"/>
+  <rect x="810" y="288" width="390" height="12" rx="6" fill="#a66cff"/>
+</svg>

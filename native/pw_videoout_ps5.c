@@ -6,6 +6,7 @@
  * scalar presenter, not a copy of the SDL video driver.
  */
 #include "pw_videoout_ps5.h"
+#include "pw_videoout_layout.h"
 #include <string.h>
 
 enum { WIDTH=1920,HEIGHT=1080,FRAME_BYTES=0x1000000,MEMORY_BYTES=0x3000000 };
@@ -111,17 +112,20 @@ int pw_videoout_ps5_present(PwVideoOutPs5 *video,const PwGdiTargetView *view)
     uint32_t background=0xff101018u;
     for(uint32_t y=0;y<HEIGHT;y++)for(uint32_t x=0;x<WIDTH;x++)
         output[tile_pixel(x,y)]=background;
-    uint32_t scale_x=(WIDTH-80u)/view->width,scale_y=(HEIGHT-80u)/view->height;
-    uint32_t scale=scale_x<scale_y?scale_x:scale_y;if(!scale)scale=1;if(scale>3)scale=3;
-    uint32_t shown_w=view->width*scale,shown_h=view->height*scale;
-    uint32_t left=(WIDTH-shown_w)/2u,top=(HEIGHT-shown_h)/2u;
-    for(uint32_t sy=0;sy<view->height;sy++) {
+    /* A target larger than the scanout is cropped, never placed at an
+     * underflowed offset: the old centring wrote outside the scratch frame. */
+    PwVideoOutLayout layout;
+    int status=pw_videoout_layout(view->width,view->height,WIDTH,HEIGHT,80u,3u,&layout);
+    if(status!=PW_OK)return status;
+    const uint32_t scale=layout.scale;
+    for(uint32_t sy=0;sy<layout.source_height;sy++) {
         const uint32_t *source=(const uint32_t *)(view->pixels+(size_t)sy*view->stride);
-        for(uint32_t sx=0;sx<view->width;sx++)for(uint32_t yy=0;yy<scale;yy++)
+        for(uint32_t sx=0;sx<layout.source_width;sx++)for(uint32_t yy=0;yy<scale;yy++)
             for(uint32_t xx=0;xx<scale;xx++)
-                output[tile_pixel(left+sx*scale+xx,top+sy*scale+yy)]=source[sx]|0xff000000u;
+                output[tile_pixel(layout.left+sx*scale+xx,layout.top+sy*scale+yy)]=
+                    source[sx]|0xff000000u;
     }
-    int status=pw_agc_ps5_copy_flip(&video->agc,video->handle,(int)index,output,
+    status=pw_agc_ps5_copy_flip(&video->agc,video->handle,(int)index,output,
                                     scanout,(uint32_t)video->frame_bytes,video->flips+1);
     if(status!=PW_OK)return status;
     (void)sceVideoOutWaitVblank(video->handle);video->index=index;video->flips++;return PW_OK;

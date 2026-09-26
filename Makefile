@@ -67,6 +67,7 @@ $(eval $(call test_rule,test_pw_prefix_ps5,tests/test_pw_prefix_ps5.c native/pw_
 $(eval $(call test_rule,test_pw_profile_session_flow,tests/test_pw_profile_session_flow.c native/pw_prefix_ps5.c src/pw_prefix.c src/pw_app_profile.c src/pw_registry_store.c src/pw_registry.c src/pw_runtime_supervisor.c,-DPW_PREFIX_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_runtime_supervisor,tests/test_pw_runtime_supervisor.c src/pw_runtime_supervisor.c src/pw_app_profile.c src/pw_prefix.c,))
 $(eval $(call test_rule,test_pw_gdi,tests/test_pw_gdi.c src/pw_gdi.c,))
+$(eval $(call test_rule,test_pw_present,tests/test_pw_present.c src/pw_present.c src/pw_gdi.c,))
 $(eval $(call test_rule,test_pw_gdi_abi,tests/test_pw_gdi_abi.c src/pw_win32.c src/pw_user32.c src/pw_gdi.c src/pw_crt_format.c src/pw_registry.c src/pw_guest_heap.c src/pw_guest_args.c src/pw_x87.c src/pw_guest_fp.c src/pw_guest_call.c src/pw_module_name.c src/pw_vm.c src/pw_vm_posix.c,))
 $(eval $(call test_rule,test_pw_crt_format,tests/test_pw_crt_format.c src/pw_crt_format.c,))
 $(eval $(call test_rule,test_pw_user32,tests/test_pw_user32.c src/pw_user32.c,))
@@ -122,6 +123,7 @@ $(eval $(call test_rule,test_pw_guest_fp,tests/test_pw_guest_fp.c src/pw_guest_f
 $(eval $(call test_rule,test_pw_x87,tests/test_pw_x87.c src/pw_x87.c src/pw_guest_fp.c,))
 $(eval $(call test_rule,test_pw_audio_ps5,tests/test_pw_audio_ps5.c native/pw_audio_ps5.c,-DPW_AUDIO_PS5_HOST_TEST -pthread))
 $(eval $(call test_rule,test_pw_agc_submit_lifecycle,tests/test_pw_agc_submit_lifecycle.c native/pw_agc_submit_lifecycle.c,))
+$(eval $(call test_rule,test_pw_videoout_layout,tests/test_pw_videoout_layout.c,))
 $(eval $(call test_rule,test_pw_pad_ps5,tests/test_pw_pad_ps5.c native/pw_pad_ps5.c src/pw_pad.c src/pw_user32.c,-DPW_PAD_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_state_ps5,tests/test_pw_state_ps5.c native/pw_state_ps5.c src/pw_registry_store.c src/pw_registry.c,-DPW_STATE_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_initterm,tests/test_pw_initterm.c src/pw_win32.c src/pw_user32.c src/pw_gdi.c src/pw_crt_format.c src/pw_registry.c src/pw_guest_heap.c src/pw_guest_args.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c src/pw_guest_call.c src/pw_module_name.c src/pw_vm.c src/pw_vm_posix.c,))
@@ -143,10 +145,10 @@ box86-catalog: $(BUILD)/pw_x86_decode_probe
 		--json-output data/box86_opcode_catalog.json \
 		--markdown-output docs/BOX86_OPCODE_CATALOG.md
 
-TESTS := test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_pw_gdi test_pw_gdi_abi test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
+TESTS := test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_pw_gdi test_pw_gdi_abi test_pw_present test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
 	test_pe_export \
 	test_pw_module_name test_pw_file_posix test_pw_file_ps5 test_pw_vm test_pw_map test_pw_loader \
-	test_pw_segment test_pw_compat32 test_pw_guest_vm test_pw_guest_process test_pw_nt_handle test_pw_unixlib test_pw_wine_runner test_pw_wine_seed_services test_pw_wine_unixlib test_pw_wine_handle test_pw_wine_path test_pw_gate test_pw_win64 test_pw_x86_block test_pw_x86_cache test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_lazyflags test_pw_guest_call test_pw_tls test_pw_import_bind test_pw_export test_pw_wine_gate test_pw_wine_gate_bridge test_pw_wine_file_service test_pw_wine_registry test_pw_wine_objects test_pw_wine_process_info test_pw_wine_virtual_memory test_pw_wine_section test_pw_wine_thread test_pw_wine_continue test_pw_wine_vm_transactions test_pw_wine_teardown test_pw_win32 test_pw_x87 test_pw_audio_ps5 test_pw_agc_submit_lifecycle test_pw_pad_ps5 test_pw_state_ps5
+	test_pw_segment test_pw_compat32 test_pw_guest_vm test_pw_guest_process test_pw_nt_handle test_pw_unixlib test_pw_wine_runner test_pw_wine_seed_services test_pw_wine_unixlib test_pw_wine_handle test_pw_wine_path test_pw_gate test_pw_win64 test_pw_x86_block test_pw_x86_cache test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_lazyflags test_pw_guest_call test_pw_tls test_pw_import_bind test_pw_export test_pw_wine_gate test_pw_wine_gate_bridge test_pw_wine_file_service test_pw_wine_registry test_pw_wine_objects test_pw_wine_process_info test_pw_wine_virtual_memory test_pw_wine_section test_pw_wine_thread test_pw_wine_continue test_pw_wine_vm_transactions test_pw_wine_teardown test_pw_win32 test_pw_x87 test_pw_audio_ps5 test_pw_agc_submit_lifecycle test_pw_videoout_layout test_pw_pad_ps5 test_pw_state_ps5
 
 # The Python suites drive the built binaries: the evidence validator is
 # tested against a transcript the real gate produced, and the Python PE
@@ -171,6 +173,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/inspect_pe $(BUILD)/trace_x86_ent
 	python3 tests/test_wine_ntdll_evidence.py
 	python3 tests/test_unix_call_table.py
 	python3 tests/test_unixlib_table.py
+	python3 tests/test_wowprospero_contract.py
 	python3 tests/test_nt_handler_ledger.py
 	python3 tests/test_reentrancy_contract.py
 	python3 tests/test_test_reachability.py
@@ -196,6 +199,7 @@ wine-check: test
 		{ echo "wine-check: no pinned Wine source at $(WINE_SOURCE)" >&2; exit 2; }
 	PROSPERO_WINE_SOURCE="$(WINE_SOURCE)" python3 tests/test_unix_call_table.py
 	PROSPERO_WINE_SOURCE="$(WINE_SOURCE)" python3 tests/test_unixlib_table.py
+	PROSPERO_WINE_SOURCE="$(WINE_SOURCE)" python3 tests/test_wowprospero_contract.py
 	@test -f .deps/wine-runtime/lib/i386-windows/ntdll.dll || \
 		{ echo "wine-check: no staged runtime (tools/build_wine_runtime.sh)" >&2; exit 2; }
 	python3 tests/test_wine_runtime_manifest.py
