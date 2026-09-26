@@ -273,6 +273,21 @@ int main(void)
         while ((entry = readdir(dir))) seen += !strcmp(entry->d_name, "drive_c");
         assert(seen == 1 && !closedir(dir));
     }
+    /* fopen() as wineserver loads the registry: relative to the prefix, and
+     * through a link. */
+    {
+        FILE *file;
+        char line[16];
+        assert((file = fopen("system.reg", "w")) && fputs("WINE REGISTRY\n", file) >= 0 && !fclose(file));
+        assert((file = fopen(at_root("prefix/system.reg"), "r")) && fgets(line, sizeof(line), file));
+        assert(!strcmp(line, "WINE REGISTRY\n") && !fclose(file));
+        assert((file = fopen("dosdevices/c:/../system.reg", "r")) && !fclose(file));
+        errno = 0;
+        assert(!fopen("missing.reg", "r") && errno == ENOENT);
+        errno = 0;
+        assert(!fopen("", "r") && errno == ENOENT);
+        assert(!unlink("system.reg"));
+    }
     /* Files reached through a link, and renamed across one. */
     assert((fd = open("dosdevices/c:/sys.ini", O_CREAT | O_WRONLY, 0644)) >= 0 && !close(fd));
     assert(!chmod("dosdevices/c:/sys.ini", 0600) && !truncate("dosdevices/c:/sys.ini", 0));

@@ -44,6 +44,7 @@ int __real_chmod(const char *path, mode_t mode);
 int __real_truncate(const char *path, off_t length);
 int __real_utimes(const char *path, const struct timeval times[2]);
 char *__real_realpath(const char *path, char *resolved);
+FILE *__real_fopen(const char *path, const char *mode);
 DIR *__real_opendir(const char *path);
 
 /* A path as the caller named it (absolute, links unresolved) and as the
@@ -267,6 +268,18 @@ int __wrap_openat(int dirfd, const char *path, int flags, ...)
         va_end(args);
     }
     return resolve_at(&r, dirfd, path, 1) ? -1 : open_resolved(&r, flags, mode);
+}
+
+/* The C library opens by itself: wineserver loads the registry with
+ * fopen("system.reg") after entering the prefix. */
+FILE *__wrap_fopen(const char *path, const char *mode)
+{
+    struct resolved r;
+    FILE *file;
+
+    if (resolve(&r, path, 1)) return NULL;
+    while (!(file = __real_fopen(r.full, mode)) && reload(&r)) {}
+    return file;
 }
 
 int __wrap_close(int fd)
