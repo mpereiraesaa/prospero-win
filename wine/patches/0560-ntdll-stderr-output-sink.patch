@@ -1,0 +1,211 @@
+From d0cf9b29427f4c9793fc9cd59995ae42b9c598ac Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 12:57:26 +0200
+Subject: [PATCH] ntdll: Let a PS5 title receive Wine's stderr output.
+
+A PS5 title cannot give Wine a usable file descriptor 2 (dup2 onto it is
+refused), so debug channels and fatal errors were lost. All stderr output
+from the Unix side now goes through wine_write_stderr, which calls a sink
+the title registers with __wine_ps5_set_output_sink and otherwise writes
+to fd 2 as before. fatal_error and fatal_perror format into a local buffer
+instead of stdio's stderr.
+---
+ dlls/ntdll/unix/debug.c        | 41 +++++++++++++++++++++++++++++++---
+ dlls/ntdll/unix/loader.c       | 30 ++++++++++++++++++++++---
+ dlls/ntdll/unix/server.c       | 12 +++++-----
+ dlls/ntdll/unix/unix_private.h |  2 ++
+ 4 files changed, 74 insertions(+), 11 deletions(-)
+
+diff --git a/dlls/ntdll/unix/debug.c b/dlls/ntdll/unix/debug.c
+index cfa57c5088..fe747fe055 100644
+--- a/dlls/ntdll/unix/debug.c
++++ b/dlls/ntdll/unix/debug.c
+@@ -267,6 +267,41 @@ const char * __cdecl __wine_dbg_strdup( const char *str )
+     return memcpy( info->strings + pos, str, n );
+ }
+ 
++/* Where Wine's stderr output goes. A PS5 title cannot give Wine a usable
++ * file descriptor 2, so it registers a sink (its log transport) instead;
++ * without one, output is written to fd 2 as everywhere else. */
++static void (*output_sink)( const char *str, size_t len );
++
++DECLSPEC_EXPORT void __wine_ps5_set_output_sink( void (*sink)( const char *str, size_t len ) )
++{
++    output_sink = sink;
++}
++
++ssize_t wine_write_stderr( const void *buf, size_t len )
++{
++    if (output_sink)
++    {
++        output_sink( buf, len );
++        return len;
++    }
++    return write( 2, buf, len );
++}
++
++void wine_vprint_stderr( const char *prefix, const char *format, va_list args )
++{
++    char buffer[1024];
++    int len = snprintf( buffer, sizeof(buffer), "%s", prefix );
++
++    if (len < 0) len = 0;
++    if ((size_t)len < sizeof(buffer))
++    {
++        int more = vsnprintf( buffer + len, sizeof(buffer) - len, format, args );
++        if (more > 0) len += more;
++    }
++    if ((size_t)len >= sizeof(buffer)) len = sizeof(buffer) - 1;
++    wine_write_stderr( buffer, len );
++}
++
+ /***********************************************************************
+  *		unixcall_wine_dbg_write
+  */
+@@ -274,7 +309,7 @@ NTSTATUS unixcall_wine_dbg_write( void *args )
+ {
+     struct wine_dbg_write_params *params = args;
+ 
+-    return write( 2, params->str, params->len );
++    return wine_write_stderr( params->str, params->len );
+ }
+ 
+ #ifdef _WIN64
+@@ -289,7 +324,7 @@ NTSTATUS wow64_wine_dbg_write( void *args )
+         unsigned int len;
+     } const *params32 = args;
+ 
+-    return write( 2, ULongToPtr(params32->str), params32->len );
++    return wine_write_stderr( ULongToPtr(params32->str), params32->len );
+ }
+ #endif
+ 
+@@ -305,7 +340,7 @@ int __cdecl __wine_dbg_output( const char *str )
+     if (end)
+     {
+         ret += append_output( info, str, end + 1 - str );
+-        write( 2, info->output, info->out_pos );
++        wine_write_stderr( info->output, info->out_pos );
+         info->out_pos = 0;
+         str = end + 1;
+     }
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index 9a003ddd00..592889315e 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -132,8 +132,7 @@ static void fatal_error( const char *err, ... )
+     va_list args;
+ 
+     va_start( args, err );
+-    fprintf( stderr, "wine: " );
+-    vfprintf( stderr, err, args );
++    wine_vprint_stderr( "wine: ", err, args );
+     va_end( args );
+     exit(1);
+ }
+@@ -1866,12 +1865,33 @@ static ULONG_PTR get_image_address(void)
+ /***********************************************************************
+  *           start_main_thread
+  */
++/* With WINE_PS5_TRACE_STARTUP set, name each startup step on stderr (the
++ * title's log sink on PS5) before running it, so a silent early exit can be
++ * located. */
++static void startup_mark( const char *step )
++{
++    static int enabled = -1;
++
++    if (enabled < 0) enabled = getenv( "WINE_PS5_TRACE_STARTUP" ) != NULL;
++    if (enabled)
++    {
++        char line[96];
++        int len = snprintf( line, sizeof(line), "wine startup: %s\n", step );
++        if (len > 0) wine_write_stderr( line, len < (int)sizeof(line) ? len : (int)sizeof(line) - 1 );
++    }
++}
++
+ static void start_main_thread(void)
+ {
+-    TEB *teb = virtual_alloc_first_teb();
++    TEB *teb;
+ 
++    startup_mark( "virtual_alloc_first_teb" );
++    teb = virtual_alloc_first_teb();
++    startup_mark( "dbg_init" );
+     dbg_init();
++    startup_mark( "server_init_process" );
+     startup_info_size = server_init_process();
++    startup_mark( "server connected" );
+     virtual_map_user_shared_data();
+     init_cpu_info();
+     init_files();
+@@ -2119,6 +2139,7 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
+     main_argc = argc;
+     main_argv = argv;
+ 
++    startup_mark( "init_paths" );
+     init_paths();
+     if (!getenv( "WINELOADERNOEXEC" ) || argc <= 1) check_command_line( argc, argv );
+     unsetenv( "WINELOADERNOEXEC" );
+@@ -2133,11 +2154,14 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
+     set_max_limit( RLIMIT_NICE );
+ #endif
+ 
++    startup_mark( "virtual_init" );
+     virtual_init();
++    startup_mark( "init_environment" );
+     init_environment();
+ 
+ #ifdef __APPLE__
+     apple_main_thread();
+ #endif
++    startup_mark( "start_main_thread" );
+     start_main_thread();
+ }
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index 1bcf453ee8..9f429e23e3 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -137,8 +137,7 @@ static void fatal_error( const char *err, ... )
+     va_list args;
+ 
+     va_start( args, err );
+-    fprintf( stderr, "wine: " );
+-    vfprintf( stderr, err, args );
++    wine_vprint_stderr( "wine: ", err, args );
+     va_end( args );
+     exit(1);
+ }
+@@ -148,11 +147,14 @@ static void fatal_perror( const char *err, ... )
+ {
+     va_list args;
+ 
++    char reason[128];
++    int error = errno;
++
+     va_start( args, err );
+-    fprintf( stderr, "wine: " );
+-    vfprintf( stderr, err, args );
+-    perror( " " );
++    wine_vprint_stderr( "wine: ", err, args );
+     va_end( args );
++    snprintf( reason, sizeof(reason), ": %s\n", strerror( error ) );
++    wine_write_stderr( reason, strlen( reason ) );
+     exit(1);
+ }
+ 
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index 9a4db8e5d7..3388048ee4 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -348,6 +348,8 @@ extern void signal_disable_syscall_dispatch(void);
+ extern void signal_init_process( TEB *teb );
+ extern void DECLSPEC_NORETURN signal_start_thread( PRTL_THREAD_START_ROUTINE entry, void *arg, TEB *teb );
+ extern SYSTEM_SERVICE_TABLE KeServiceDescriptorTable[4];
++extern ssize_t wine_write_stderr( const void *buf, size_t len );
++extern void wine_vprint_stderr( const char *prefix, const char *format, va_list args );
+ extern void __wine_syscall_dispatcher(void);
+ extern void __wine_syscall_dispatcher_return(void);
+ extern void __wine_unix_call_dispatcher(void);
+-- 
+2.43.0
+

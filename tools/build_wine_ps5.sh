@@ -232,7 +232,8 @@ if [ "$prx_status" = 0 ]; then
         __wine_main pw_wine_dl_adopt dlopen dlsym dlerror \
         pw_wine_heap_stats pw_wine_heap_malloc pw_wine_heap_free \
         pw_wine_set_present_sink pw_wine_post_input pw_wine_sink_stats \
-        pw_wine_present pw_wine_next_input pw_wine_input_fd
+        pw_wine_present pw_wine_next_input pw_wine_input_fd \
+        __wine_virtual_stats __wine_ps5_set_output_sink
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/win32u_desc.c" __wine_unix_lib_init
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \
         pw_wineserver_connect pw_wine_thread_register

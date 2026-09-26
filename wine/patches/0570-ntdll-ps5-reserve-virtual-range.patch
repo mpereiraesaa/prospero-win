@@ -1,0 +1,85 @@
+From f569eba2625cecd8f450b1da429b1c7ffb750ed6 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 13:08:55 +0200
+Subject: [PATCH] ntdll: Reserve the PS5 address space with
+ sceKernelReserveVirtualRange.
+
+The PS5 kernel accepts MAP_EXCL but ignores it: MAP_FIXED | MAP_EXCL over
+an existing mapping replaces it without error (measured on FW 12.02), so
+the initial reservations below 0x68000000 unmapped the title's own code.
+The generic hint path is no better: every refused hint lands in the
+mmap( NULL ) region, and the halving in reserve_area fills that region
+until the view heap can no longer be allocated.
+
+A fixed sceKernelReserveVirtualRange with the no-overwrite flag claims a
+free range or fails without touching what is there, so it is the PS5
+anon_mmap_tryfixed; memory is then mapped over the reservation. The
+0x7ffffe000000 heap area is beyond the PS5 user space, so the view heap
+gets a 64 MiB reservation wherever the kernel has room above 4 GiB.
+---
+ dlls/ntdll/unix/virtual.c | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 0a83dfd251..99228f07cb 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -729,6 +729,16 @@ static size_t unmap_area_above_user_limit( void *addr, size_t size )
+ }
+ 
+ 
++#ifdef __PROSPERO__
++/* libkernel: claim address space without committing memory. Unlike
++ * mmap( NULL ), whose placement region fills after a few hundred MiB, a
++ * reservation can cover the whole low 4 GiB that WoW64 needs. */
++extern int sceKernelReserveVirtualRange( void **addr, size_t size, int flags, size_t align );
++#define PS5_MAP_FIXED        0x10
++#define PS5_MAP_NO_OVERWRITE 0x80
++#define PS5_HEAP_RESERVE     0x4000000
++#endif
++
+ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
+ {
+     void *ptr;
+@@ -737,6 +747,20 @@ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
+     ptr = mmap( start, size, prot, MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
+ #elif defined(MAP_TRYFIXED)
+     ptr = mmap( start, size, prot, MAP_TRYFIXED | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
++#elif defined(__PROSPERO__)
++    /* The kernel ignores MAP_EXCL, so claim the range with a reservation
++     * that refuses to overwrite, then map over it if needed. */
++    ptr = start;
++    if (sceKernelReserveVirtualRange( &ptr, size, PS5_MAP_FIXED | PS5_MAP_NO_OVERWRITE, host_page_size ))
++    {
++        errno = EEXIST;
++        return MAP_FAILED;
++    }
++    if (prot != PROT_NONE && anon_mmap_fixed( start, size, prot, flags ) == MAP_FAILED)
++    {
++        munmap( start, size );
++        return MAP_FAILED;
++    }
+ #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+     ptr = mmap( start, size, prot, MAP_FIXED | MAP_EXCL | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
+     if (ptr == MAP_FAILED && errno == EINVAL) errno = EEXIST;
+@@ -893,7 +917,17 @@ static void mmap_init( const struct preload_info *preload_info )
+     /* if we don't have a preloader, try to reserve the space now */
+     reserve_area( (void *)0x000000010000, (void *)0x000068000000 );
+     reserve_area( (void *)0x00007f000000, (void *)0x00007fff0000 );
++#ifdef __PROSPERO__
++    /* User space ends far below 0x7ffffe000000; reserve room for the view
++     * heap wherever the kernel has space above 4 GiB. */
++    {
++        void *heap = NULL;
++        if (!sceKernelReserveVirtualRange( &heap, PS5_HEAP_RESERVE, 0, granularity_mask + 1 ))
++            mmap_add_reserved_area( heap, PS5_HEAP_RESERVE );
++    }
++#else
+     reserve_area( (void *)0x7ffffe000000, (void *)0x7fffffff0000 );
++#endif
+ 
+ #endif
+ }
+-- 
+2.43.0
+
