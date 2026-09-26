@@ -301,6 +301,8 @@ def exports(library, directory=f"{sdk}/target/lib"):
                              capture_output=True, text=True).stdout
     return {line.split()[-1].split("@")[0] for line in listing.splitlines() if line.split()}
 title_exports = exports("libkernel.so") | exports("libSceLibcInternal.so")
+objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{sdk}/bin/llvm-objdump"
+SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
 for name in ("ntdll", "win32u", "wineserver") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
@@ -323,6 +325,19 @@ for name in ("ntdll", "win32u", "wineserver") if not prx_status.startswith("skip
                    if len(fields) >= 8 and fields[6] == "UND"}
         provided = title_exports | (ntdll_exports if name == "win32u" else set())
         entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
+        # The kernel kills a title that executes a syscall instruction outside
+        # libkernel (measured: SYSTEM_ILLEGAL_FUNCTION_CALL). Wine's dispatchers
+        # keep one on the FS-base restore path, which patch 0500 never takes.
+        listing = subprocess.run([objdump, "-d", "--no-show-raw-insn", str(shared)],
+                                 capture_output=True, text=True).stdout
+        function, found = None, set()
+        for line in listing.splitlines():
+            match = re.match(r"[0-9a-f]+ <(.+)>:$", line)
+            if match:
+                function = match.group(1)
+            elif re.search(r"\tsyscall\b", line) and function not in SYSCALL_ALLOWED:
+                found.add(function)
+        entry["raw_syscalls"] = sorted(found)
     if module.is_file():
         data = module.read_bytes()
         entry.update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
@@ -341,13 +356,17 @@ for name, entry in result["prx"]["modules"].items():
         print(f"  error: {error}")
     if entry.get("title_unbound"):
         print(f"  unbound in a title (libkernel_sys only): {','.join(entry['title_unbound'])}")
-sys.exit(3 if any(e.get("title_unbound") for e in result["prx"]["modules"].values()) else 0)
+    if entry.get("raw_syscalls"):
+        print(f"  raw syscall instructions (fatal in a title): {','.join(entry['raw_syscalls'])}")
+modules = result["prx"]["modules"].values()
+sys.exit(3 if any(e.get("title_unbound") for e in modules) else
+         4 if any(e.get("raw_syscalls") for e in modules) else 0)
 PY
 then title_status=0; else title_status=$?; fi
 [ "$status" -eq 0 ] || fail "build failed; see $work/make.log"
-# A warning until the virtual working directory (PR #82) replaces the
-# remaining fchdir/openat/fstatat/symlink calls; then this becomes fatal.
-[ "$title_status" -eq 0 ] ||
-    echo "build_wine_ps5: WARNING: PRX imports only libkernel_sys exports, which a title does not get" >&2
+[ "$title_status" -ne 3 ] || fail "PRX imports only libkernel_sys exports, which a title does not get"
+# A warning until the working-directory shim stops issuing raw syscalls.
+[ "$title_status" -ne 4 ] ||
+    echo "build_wine_ps5: WARNING: PRX executes raw syscalls, which kill a title" >&2
 [ "$prx_status" != 1 ] || fail "PRX link failed; see $prx/*.link.log"
 echo "report: $work/report.json"

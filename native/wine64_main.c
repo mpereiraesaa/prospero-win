@@ -16,6 +16,8 @@
 
 #include <pthread.h>
 #include <signal.h>
+#include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -24,9 +26,13 @@
 #define PW_TITLE_ID "PPSA99995"
 #define PW_APP_NAME "prospero-win-wine64"
 
-#ifndef PW_WINE64_NTDLL_DIR
-#define PW_WINE64_NTDLL_DIR "/app0/win/wine/lib/wine/x86_64-unix"
-#endif
+/* Where the title's Wine runtime can be seen: /app0 inside the sandbox;
+ * once /data is granted the process sees the real root, where /app0 does
+ * not exist (measured), so the sandbox view and the installed title follow. */
+#define PW_WINE64_RUNTIME "/win/wine/lib/wine/x86_64-unix"
+#define PW_SANDBOX_APP0 "/mnt/sandbox/" PW_TITLE_ID "_000/app0"
+#define PW_INSTALLED_TITLE "/data/homebrew/" PW_TITLE_ID
+static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0, PW_INSTALLED_TITLE };
 #ifndef PW_WINE64_PREFIX
 #define PW_WINE64_PREFIX "/download0/prospero-win/prefix"  /* sandbox fallback */
 #endif
@@ -166,16 +172,17 @@ int main(int argc, char **argv)
 {
     static const PwWineStartEnv extra[] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
-        { "HOME", "/app0/win" },
+        { "HOME", PW_WINE64_PREFIX },
         { "USER", "prospero" },
         { "WINE_PS5_TRACE_STARTUP", "1" },  /* patch 0560: name startup steps */
     };
     static const char *const wine_argv[] = { "wine", PW_WINE64_EXE };
+    static char ntdll_dir[256], ntdll_path[288];
     static const PwWineStartOps ops = {
         sceKernelLoadStartModule, sceKernelGetModuleInfo, set_env, start_thread };
     static PwWineStartConfig config = {
-        .ntdll_path = PW_WINE64_NTDLL_DIR "/ntdll.prx",
-        .ntdll_dir = PW_WINE64_NTDLL_DIR,
+        .ntdll_path = ntdll_path,
+        .ntdll_dir = ntdll_dir,
         .prefix = PW_WINE64_PREFIX,
         .extra_env = extra, .extra_env_count = sizeof(extra) / sizeof(extra[0]),
         .argc = 2, .argv = wine_argv, .stack_bytes = 16u << 20,
@@ -198,6 +205,13 @@ int main(int argc, char **argv)
                    "waited_ms=%d prefix=%s",
                    mount.data_before, mount.wrote_request, mount.write_errno,
                    mount.data_after, mount.waited_ms, config.prefix);
+    }
+    for (size_t i = 0; i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
+        struct stat st;
+        snprintf(ntdll_dir, sizeof(ntdll_dir), "%s" PW_WINE64_RUNTIME, runtime_roots[i]);
+        snprintf(ntdll_path, sizeof(ntdll_path), "%s/ntdll.prx", ntdll_dir);
+        if (stat(ntdll_path, &st) == 0) break;
+        PS5LOG_LOG("PW_WINE64 runtime not at %s", ntdll_dir);
     }
     PS5LOG_LOG("PW_WINE64 ntdll=%s prefix=%s exe=%s", config.ntdll_path, config.prefix,
                PW_WINE64_EXE);

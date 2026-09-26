@@ -283,10 +283,56 @@ Until Wine installs its own handlers, a fault is reported with its RIP
 (read at ucontext +224) and the ntdll segment it falls in. The main thread
 logs a heartbeat and ntdll's address-space counters for up to 30 s.
 
+The runtime is found at the first of `/app0`,
+`/mnt/sandbox/PPSA99995_000/app0` and `/data/homebrew/PPSA99995` that holds
+`win/wine/lib/wine/x86_64-unix/ntdll.prx`. Once `/data` is granted, the
+process sees the real root, where `/app0` does not exist.
+
 The runtime is staged beside the title:
 - `ntdll.prx`, `win32u.prx` and `wineserver.prx` under
   `win/wine/lib/wine/x86_64-unix`;
 - Wine's NLS files under `win/wine/share/wine/nls`.
+
+## Console bring-up
+
+The runtime and the prefix used for the integrated runs:
+
+- **Runtime (temporary, removed after each run).** 1,684 files, 515 MiB,
+  uploaded in 67 s:
+  - the three PRXs;
+  - the debug-stripped x86_64 and i386 PE modules of a pinned WoW64 host
+    build (`--enable-archs=i386,x86_64`);
+  - the NLS files.
+- **Prefix (Wine's persistent state at `/data/prospero-win/prefix`).**
+  - Initialised on the host with the same build (`wineboot --init`), because
+    patch 0550 stops wineboot on the console.
+  - Its `system32`, `syswow64` and `winsxs` modules are stripped. Wine needs
+    both these copies and the ones in `lib/wine`: without either,
+    `kernel32.dll` or `start.exe` fails to load.
+  - Pinball is at `drive_c/Games/Pinball/PINBALL.EXE`.
+  - `dosdevices` is left out, so Wine creates it on the console.
+
+Run 2 (FW 12.02, 2026-09-26, ps5log `20260926T161550691Z` and klog):
+
+1. `/data` was granted after 100 ms, and ntdll.prx loaded from the sandbox
+   view of `/app0`.
+2. The stderr sink carried Wine's startup through `init_paths`,
+   `virtual_init`, `init_environment`, `start_main_thread`,
+   `virtual_alloc_first_teb`, `dbg_init` and into `server_init_process`.
+3. The kernel then killed the title. klog:
+   `the process pid=2681 directly issued a syscall 57` and
+   `exception: 0xa002030a (SYSTEM_ILLEGAL_FUNCTION_CALL)`.
+
+   Syscall 57 is `symlink`, issued by the working-directory shim while
+   `setup_config_dir` created `dosdevices/c:`. A title may not execute a
+   `syscall` instruction outside libkernel. The report now lists such
+   instructions per module (`raw_syscalls`).
+
+   Wine's own dispatchers keep one on the FS-base restore path, which patch
+   0500 never takes, and they are allowed. The shim's `link`, `readlink`,
+   `statfs`, `symlink` and `symlinkat` wrappers remain and are a warning
+   until they are emulated; imports that bind only to `libkernel_sys` are
+   now fatal.
 
 ## Measured result
 
