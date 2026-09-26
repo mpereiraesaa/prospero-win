@@ -126,11 +126,26 @@ fi
 # The SDK's libc carries the math functions, but win32u links -lm by name.
 mkdir -p "$work/ps5lib"
 [ -f "$work/ps5lib/libm.a" ] || "$sdk/bin/llvm-ar" rcs "$work/ps5lib/libm.a"
+# The heap (wine/ps5) serves the malloc family. ntdll.so links and exports
+# it, so win32u.so binds to the same instance through its ntdll.so import;
+# the in-process wineserver has its own copy.
+mkdir -p "$work/heap"
+heap=""
+for unit in pw_wine_heap pw_wine_heap_libc; do
+    "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC \
+        -c "$root/wine/ps5/$unit.c" -o "$work/heap/$unit.o" || fail "cannot compile $unit.c"
+    heap="$heap $work/heap/$unit.o"
+done
+base="-L$work/ps5lib -lunwind -Wl,--warn-unresolved-symbols"
 status=0
-# shellcheck disable=SC2086
-make -C "$build" -k -j"$jobs" \
-    LDFLAGS="-L$work/ps5lib -lunwind -Wl,--warn-unresolved-symbols" $TARGETS \
-    > "$work/make.log" 2>&1 || status=$?
+: > "$work/make.log"
+# LDFLAGS is not a make dependency, so relink the three targets every run.
+(cd "$build" && rm -f $TARGETS)
+for step in "dlls/ntdll/ntdll.so|$heap" "dlls/win32u/win32u.so|" "server/wineserver|$heap"; do
+    target=${step%%|*}; objects=${step#*|}
+    make -C "$build" -k -j"$jobs" LDFLAGS="$objects $base" "$target" \
+        >> "$work/make.log" 2>&1 || status=$?
+done
 
 python3 - "$build" "$work/make.log" "$work/report.json" "$sdk" "$WINE_COMMIT" $ordered <<'PY'
 import hashlib, json, re, shutil, subprocess, sys
@@ -165,11 +180,17 @@ for target in owners.values():
         entry.update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
         dynamic = subprocess.run([readelf, "-d", str(path)], capture_output=True, text=True).stdout
         entry["needed"] = re.findall(r"Shared library: \[([^\]]+)\]", dynamic)
+        symbols = subprocess.run([f"{sdk}/bin/llvm-nm", "-D", str(path)],
+                                 capture_output=True, text=True).stdout.split("\n")
+        kinds = {line.split()[-2] for line in symbols
+                 if line.split() and line.split()[-1] == "malloc" and len(line.split()) >= 2}
+        entry["malloc"] = "defines" if kinds & {"T", "t"} else "imports" if "U" in kinds else "absent"
     result["targets"][target] = entry
 result["errors"] = sorted(set(re.findall(r"error: (.+)", text)))
 Path(report).write_text(json.dumps(result, indent=2) + "\n")
 for target, entry in result["targets"].items():
-    print(f"{target}: built={entry['built']} unresolved={','.join(entry['unresolved']) or 'none'}")
+    print(f"{target}: built={entry['built']} malloc={entry.get('malloc', '-')} "
+          f"unresolved={','.join(entry['unresolved']) or 'none'}")
 PY
 [ "$status" -eq 0 ] || fail "build failed; see $work/make.log"
 echo "report: $work/report.json"

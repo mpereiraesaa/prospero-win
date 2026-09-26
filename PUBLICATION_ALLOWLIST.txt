@@ -358,3 +358,5 @@ wine/patches/0100-ntdll-no-fstab-device-on-ps5.patch
 tests/test_pw_wine_heap.c
 wine/ps5/pw_wine_heap.c
 wine/ps5/pw_wine_heap.h
+wine/patches/0101-server-realpath-into-server-memory.patch
+wine/ps5/pw_wine_heap_libc.c

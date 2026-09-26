@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 11:46:35 +0200
+Subject: [PATCH] server: Resolve file names into server-owned memory.
+
+realpath() with a NULL buffer allocates inside the C library. On PS5 the
+server runs with its own heap, which must not receive memory it did not
+hand out; resolve into a local buffer and duplicate it instead.
+---
+ server/fd.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/server/fd.c b/server/fd.c
+index e035719022..1fd3895da7 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -1815,6 +1815,15 @@ void set_fd_user( struct fd *fd, const struct fd_ops *user_ops, struct object *u
+     fd->user   = user;
+ }
+ 
++/* resolve a path into memory the server's own allocator owns; realpath with
++ * a NULL buffer allocates inside the C library instead */
++static char *realpath_dup( const char *path )
++{
++    char resolved[PATH_MAX];
++
++    return realpath( path, resolved ) ? strdup( resolved ) : NULL;
++}
++
+ char *dup_fd_name( struct fd *root, const char *name )
+ {
+     char *ret;
+@@ -1969,7 +1978,7 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+ 
+         if ((path = dup_fd_name( root, name )))
+         {
+-            fd->unix_name = realpath( path, NULL );
++            fd->unix_name = realpath_dup( path );
+             free( path );
+         }
+ 
+@@ -2876,7 +2885,7 @@ static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, da
+     free( fd->nt_name );
+     fd->nt_name = dup_nt_name( root, nt_name, &fd->nt_namelen );
+     free( fd->unix_name );
+-    fd->closed->unix_name = fd->unix_name = realpath( name, NULL );
++    fd->closed->unix_name = fd->unix_name = realpath_dup( name );
+     free( name );
+     if (!fd->unix_name)
+         set_error( STATUS_NO_MEMORY );

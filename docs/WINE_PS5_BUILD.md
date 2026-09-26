@@ -45,6 +45,7 @@ of the port never collide:
 | Patch | Effect |
 | --- | --- |
 | 0100 | `ntdll`: a PS5 title has no fstab and no `getfsent`; report no default device |
+| 0101 | `server`: resolve file names into server-owned memory instead of `realpath(path, NULL)` |
 
 ## Allocator
 
@@ -60,18 +61,28 @@ allocated internally) is counted and left alone rather than read or freed.
 The host test checks classes, reuse, large mappings, `realloc` in place and
 across classes, zeroed `calloc`, overflow refusal, foreign and double frees,
 and eight threads of mixed traffic under AddressSanitizer and
-ThreadSanitizer. Binding Wine's `malloc` family to it is a separate step.
+ThreadSanitizer.
+
+`wine/ps5/pw_wine_heap_libc.c` binds `malloc`, `calloc`, `realloc`, `free`,
+`strdup`, `strndup`, `asprintf` and `vasprintf` to that heap. The build links
+it into `ntdll.so`, which exports it, so `win32u.so` imports the same heap
+through `ntdll.so` and memory can cross between them; `wineserver` links its
+own copy. The report records, per target, whether `malloc` is defined or
+imported. Patch 0101 stops the server from receiving libc-allocated names:
+`realpath(path, NULL)` becomes a resolve into a local buffer and a `strdup`.
+The one-time `realpath(name, NULL)` in `ntdll`'s startup path is left as is
+and appears as a foreign free.
 
 ## Measured result
 
 With the series above, all three targets compile and link (host run on
 2026-09-26):
 
-| Target | Size | Unresolved against the SDK |
+| Target | `malloc` | Unresolved against the SDK |
 | --- | --- | --- |
-| `ntdll.so` | 3.06 MB | `amd64_get_fsbase`, `amd64_get_gsbase`, `amd64_set_gsbase` |
-| `win32u.so` | 8.51 MB | none |
-| `wineserver` | 3.54 MB | none |
+| `ntdll.so` | defines (heap) | `amd64_get_fsbase`, `amd64_get_gsbase`, `amd64_set_gsbase` |
+| `win32u.so` | imports from `ntdll.so` | none |
+| `wineserver` | defines (own heap) | none |
 
 The three remaining symbols are FreeBSD `sysarch` wrappers used by
 `dlls/ntdll/unix/signal_x86_64.c` to read and switch the GS/FS bases for the
