@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 12:40:00 +0200
+Subject: [PATCH] server: Size the user shared data section to a host page.
+
+KUSER_SHARED_DATA is smaller than 4k, so the section is a single Windows
+page. With 16k host pages (PS5) the host page mapped at 0x7ffe0000 also
+covers 0x7ffe1000, where the x64 syscall dispatcher pointer is written
+through this view (patch 0530); a section shorter than the host page
+leaves that part of the mapping beyond the end of its backing object.
+Round the size up to the host page, as the other SEC_COMMIT sections here
+already do. On 4k hosts the size is unchanged.
+---
+ server/mapping.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/server/mapping.c b/server/mapping.c
+index 7446c706ae..65bebaa5df 100644
+--- a/server/mapping.c
++++ b/server/mapping.c
+@@ -1489,7 +1489,10 @@ struct object *create_user_data_mapping( struct object *root, struct unicode_str
+ {
+     void *ptr;
+     struct mapping *mapping;
+-    struct mapping_init_data data = { .size = sizeof(KUSER_SHARED_DATA), .flags = SEC_COMMIT,
++    /* a whole host page: with pages larger than 4k the page also holds the
++     * syscall dispatcher pointer that follows the structure at 0x7ffe1000 */
++    struct mapping_init_data data = { .size = round_size( sizeof(KUSER_SHARED_DATA), host_page_mask ),
++                                      .flags = SEC_COMMIT,
+                                       .file_access = FILE_READ_DATA | FILE_WRITE_DATA };
+     struct object_params params = { .ops = &mapping_ops, .root = root, .name = name,
+                                     .attr = attr, .sd = sd, .init_data = &data };
+-- 
+2.43.0

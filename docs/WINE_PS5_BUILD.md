@@ -46,6 +46,7 @@ of the port never collide:
 | --- | --- |
 | 0100 | `ntdll`: a PS5 title has no fstab and no `getfsent`; report no default device |
 | 0101 | `server`: resolve file names into server-owned memory instead of `realpath(path, NULL)` |
+| 0102 | `server`: size the user shared data section to a whole host page; with 16 KiB pages that page also holds the syscall dispatcher pointer at `0x7ffe1000` (patch 0530) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
 | 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
 | 0520 | `ntdll`: name the ntdll directory with `WINE_PS5_NTDLL_DIR` when `dladdr` cannot (PRX) |
