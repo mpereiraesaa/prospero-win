@@ -316,7 +316,9 @@ Until Wine installs its own handlers, a fault is reported with its RIP
 (read at ucontext +224) and the ntdll segment it falls in. Once a second
 the main thread logs a heartbeat with the frames put and shown and the
 inputs posted, and every five seconds ntdll's address-space counters, for
-up to 30 s (`PW_WINE64_SECONDS`).
+up to 120 s (`PW_WINE64_SECONDS`). Pinball's first frame arrives about
+31 s in. `WINEDEBUG` defaults to `err+all,+loaddll,+process`; `+seh` is left
+out because WoW64 callback returns unwind with `80000026` many times a second.
 
 The runtime is found at `/app0` or, failing that, at
 `/mnt/sandbox/PPSA99995_000/app0`, whichever holds

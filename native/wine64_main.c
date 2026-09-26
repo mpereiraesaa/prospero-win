@@ -49,10 +49,13 @@ static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 #define PW_WINE64_EXE "C:\\Games\\Pinball\\PINBALL.EXE"
 #endif
 #ifndef PW_WINE64_DEBUG
-#define PW_WINE64_DEBUG "err+all,+seh,+loaddll,+process"
+/* No +seh: WoW64 callback returns unwind with 80000026 many times a second
+ * and would flood the sink. */
+#define PW_WINE64_DEBUG "err+all,+loaddll,+process"
 #endif
 #ifndef PW_WINE64_SECONDS
-#define PW_WINE64_SECONDS 30
+/* Pinball presents its first frame about 31 s in (run 13). */
+#define PW_WINE64_SECONDS 120
 #endif
 
 /* The largest desktop shown: Wine's PS5 driver defaults to 800x600
