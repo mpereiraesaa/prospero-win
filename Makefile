@@ -62,6 +62,7 @@ $(eval $(call test_rule,test_pw_registry,tests/test_pw_registry.c src/pw_registr
 $(eval $(call test_rule,test_pw_registry_store,tests/test_pw_registry_store.c src/pw_registry_store.c src/pw_registry.c,))
 $(eval $(call test_rule,test_pw_ini,tests/test_pw_ini.c src/pw_ini.c,))
 $(eval $(call test_rule,test_pw_app_profile,tests/test_pw_app_profile.c src/pw_app_profile.c,))
+$(eval $(call test_rule,test_pw_profile_catalog,tests/test_pw_profile_catalog.c src/pw_profile_catalog.c,))
 $(eval $(call test_rule,test_pw_prefix,tests/test_pw_prefix.c src/pw_prefix.c,))
 $(eval $(call test_rule,test_pw_prefix_ps5,tests/test_pw_prefix_ps5.c native/pw_prefix_ps5.c src/pw_prefix.c,-DPW_PREFIX_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_profile_session_flow,tests/test_pw_profile_session_flow.c native/pw_prefix_ps5.c src/pw_prefix.c src/pw_app_profile.c src/pw_registry_store.c src/pw_registry.c src/pw_runtime_supervisor.c,-DPW_PREFIX_PS5_HOST_TEST))
@@ -150,7 +151,7 @@ box86-catalog: $(BUILD)/pw_x86_decode_probe
 		--json-output data/box86_opcode_catalog.json \
 		--markdown-output docs/BOX86_OPCODE_CATALOG.md
 
-TESTS := test_pw_x86_hostexec test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_launcher_model test_prefix_launcher test_pw_gdi test_pw_gdi_abi test_pw_present test_pw_launcher_render test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
+TESTS := test_pw_x86_hostexec test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_profile_catalog test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_launcher_model test_prefix_launcher test_pw_gdi test_pw_gdi_abi test_pw_present test_pw_launcher_render test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
 	test_pe_export \
 	test_pw_module_name test_pw_file_posix test_pw_file_ps5 test_pw_vm test_pw_map test_pw_loader \
 	test_pw_segment test_pw_compat32 test_pw_guest_vm test_pw_guest_process test_pw_nt_handle test_pw_unixlib test_pw_wine_runner test_pw_wine_seed_services test_pw_wine_unixlib test_pw_wine_handle test_pw_wine_path test_pw_gate test_pw_win64 test_pw_x86_block test_pw_x86_cache test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_lazyflags test_pw_guest_call test_pw_tls test_pw_import_bind test_pw_export test_pw_wine_gate test_pw_wine_gate_bridge test_pw_wine_file_service test_pw_wine_registry test_pw_wine_objects test_pw_wine_process_info test_pw_wine_virtual_memory test_pw_wine_section test_pw_wine_thread test_pw_wine_continue test_pw_wine_vm_transactions test_pw_wine_teardown test_pw_win32 test_pw_x87 test_pw_audio_ps5 test_pw_agc_submit_lifecycle test_pw_videoout_layout test_pw_pad_ps5 test_pw_state_ps5

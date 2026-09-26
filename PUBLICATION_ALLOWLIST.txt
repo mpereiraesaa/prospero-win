@@ -108,6 +108,8 @@ src/pw_launcher_render.c
 src/pw_launcher_render.h
 src/pw_prefix_registry.c
 src/pw_prefix_registry.h
+src/pw_profile_catalog.c
+src/pw_profile_catalog.h
 src/pw_gdi.h
 src/pw_present.c
 src/pw_present.h
@@ -164,6 +166,7 @@ tests/test_pw_user32.c
 tests/test_launcher_model.c
 tests/test_pw_launcher_render.c
 tests/test_prefix_launcher.c
+tests/test_pw_profile_catalog.c
 tests/test_pw_gdi.c
 tests/test_pw_gdi_abi.c
 tests/test_pw_present.c
