@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/times.h>
@@ -43,10 +44,17 @@ mode_t pw_compat_umask(mode_t mask)
     return previous;
 }
 
+int pw_compat_pipe(int fds[2])
+{
+    if(socketpair(AF_UNIX,SOCK_STREAM,0,fds))return -1;
+    shutdown(fds[0],SHUT_WR);shutdown(fds[1],SHUT_RD);
+    return 0;
+}
+
 int pw_compat_pipe2(int fds[2],int flags)
 {
     if(flags&~(O_CLOEXEC|O_NONBLOCK)){errno=EINVAL;return -1;}
-    int pair[2];if(pipe(pair))return -1;
+    int pair[2];if(pw_compat_pipe(pair))return -1;
     for(int i=0;i<2;i++) {
         int status=0;
         if(flags&O_CLOEXEC)status=fcntl(pair[i],F_SETFD,FD_CLOEXEC);

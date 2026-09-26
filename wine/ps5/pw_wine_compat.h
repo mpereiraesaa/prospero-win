@@ -10,6 +10,9 @@
  * pw_wine_compat_libc.c binds the real names to these on the console. */
 struct termios;struct passwd;struct timespec;struct tms;
 
+/* A title cannot create pipes (measured): a socket pair, each end shut
+ * in the direction a pipe end cannot be used. */
+int pw_compat_pipe(int fds[2]);
 int pw_compat_pipe2(int fds[2],int flags);                   /* O_CLOEXEC|O_NONBLOCK only */
 int pw_compat_futimens(int fd,const struct timespec times[2]);/* UTIME_NOW/UTIME_OMIT honoured */
 int pw_compat_posix_fallocate(int fd,off_t offset,off_t length);/* EOPNOTSUPP */

@@ -64,6 +64,12 @@ int main(void)
     assert(pw_compat_posix_fadvise(advised[0],0,4096,0)==EBADF);
     errno=0;assert(pw_compat_if_nametoindex("eth0")==0 && errno==ENXIO);
 
+    /* pipe is a socket pair carrying bytes from the write end to the read end. */
+    int piped[2];char byte='x';
+    assert(!pw_compat_pipe(piped));
+    assert(write(piped[1],&byte,1)==1 && read(piped[0],&byte,1)==1 && byte=='x');
+    close(piped[0]);close(piped[1]);
+
     /* libkernel_sys-only calls fail cleanly; umask is remembered. */
     errno=0;assert(pw_compat_no_fstatfs()==-1 && errno==ENOSYS);
     errno=0;assert(pw_compat_no_link()==-1 && errno==EPERM);

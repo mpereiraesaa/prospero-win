@@ -20,6 +20,7 @@
 #include <termios.h>
 #include <unistd.h>
 
+int pipe(int fds[2]){return pw_compat_pipe(fds);}
 int pipe2(int fds[2],int flags){return pw_compat_pipe2(fds,flags);}
 int futimens(int fd,const struct timespec times[2]){return pw_compat_futimens(fd,times);}
 int posix_fallocate(int fd,off_t offset,off_t length)
