@@ -1,0 +1,154 @@
+From d8f81a4414efb85f838805d47e80316ba59594cd Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 11:41:32 +0200
+Subject: [PATCH] ntdll: Adapt signal context and segment bases to PS5.
+
+The PS5 kernel stores FreeBSD's amd64 mcontext_t at ucontext offset 64,
+not at the header's uc_mcontext (16). Its SDK exports sysarch() but not
+the amd64_{get,set}_gsbase wrappers, so GS is set through sysarch.
+
+FS stays the libc TLS base: PE code runs natively in 64-bit mode and i386
+code runs in the WoW64 CPU backend, so nothing loads %fs. Leaving
+pthread_teb at zero makes the syscall dispatcher skip its FS restore,
+saving a sysarch call on every Windows-to-Unix transition, and WoW64
+threads need no LDT entry (the console refuses i386_set_ldt).
+---
+ dlls/ntdll/unix/signal_x86_64.c | 89 +++++++++++++++++++++++----------
+ 1 file changed, 62 insertions(+), 27 deletions(-)
+
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index e612e5e0d3..4c21268d8e 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -203,36 +203,54 @@ __ASM_GLOBAL_FUNC( modify_ldt,
+ 
+ #elif defined(__FreeBSD__) || defined (__FreeBSD_kernel__)
+ 
++#ifdef __PROSPERO__
++/* Measured on PS5 FW 12.02: the kernel stores FreeBSD's amd64 mcontext_t
++ * unchanged, but at ucontext offset 64 rather than the 16 the SDK header
++ * declares for uc_mcontext. */
++# define UCONTEXT_MC(context) (*(mcontext_t *)((char *)(context) + 64))
++/* The SDK exports sysarch() but not the amd64_{get,set}_{fs,gs}base wrappers,
++ * and its machine/sysarch.h lacks the operation numbers (FreeBSD's values,
++ * verified on the console). */
++# ifndef AMD64_GET_GSBASE
++#  define AMD64_GET_GSBASE 130
++#  define AMD64_SET_GSBASE 131
++# endif
++# define amd64_get_gsbase(base) sysarch( AMD64_GET_GSBASE, (base) )
++# define amd64_set_gsbase(base) ({ void *pw_base = (base); sysarch( AMD64_SET_GSBASE, &pw_base ); })
++#else
++# define UCONTEXT_MC(context) ((context)->uc_mcontext)
++#endif
++
+ #include <machine/segments.h>
+ #include <machine/trap.h>
+ 
+-#define RAX_sig(context)     ((context)->uc_mcontext.mc_rax)
+-#define RBX_sig(context)     ((context)->uc_mcontext.mc_rbx)
+-#define RCX_sig(context)     ((context)->uc_mcontext.mc_rcx)
+-#define RDX_sig(context)     ((context)->uc_mcontext.mc_rdx)
+-#define RSI_sig(context)     ((context)->uc_mcontext.mc_rsi)
+-#define RDI_sig(context)     ((context)->uc_mcontext.mc_rdi)
+-#define RBP_sig(context)     ((context)->uc_mcontext.mc_rbp)
+-#define R8_sig(context)      ((context)->uc_mcontext.mc_r8)
+-#define R9_sig(context)      ((context)->uc_mcontext.mc_r9)
+-#define R10_sig(context)     ((context)->uc_mcontext.mc_r10)
+-#define R11_sig(context)     ((context)->uc_mcontext.mc_r11)
+-#define R12_sig(context)     ((context)->uc_mcontext.mc_r12)
+-#define R13_sig(context)     ((context)->uc_mcontext.mc_r13)
+-#define R14_sig(context)     ((context)->uc_mcontext.mc_r14)
+-#define R15_sig(context)     ((context)->uc_mcontext.mc_r15)
+-#define CS_sig(context)      ((context)->uc_mcontext.mc_cs)
+-#define DS_sig(context)      ((context)->uc_mcontext.mc_ds)
+-#define ES_sig(context)      ((context)->uc_mcontext.mc_es)
+-#define FS_sig(context)      ((context)->uc_mcontext.mc_fs)
+-#define GS_sig(context)      ((context)->uc_mcontext.mc_gs)
+-#define SS_sig(context)      ((context)->uc_mcontext.mc_ss)
+-#define EFL_sig(context)     ((context)->uc_mcontext.mc_rflags)
+-#define RIP_sig(context)     ((context)->uc_mcontext.mc_rip)
+-#define RSP_sig(context)     ((context)->uc_mcontext.mc_rsp)
+-#define TRAP_sig(context)    ((context)->uc_mcontext.mc_trapno)
+-#define ERROR_sig(context)   ((context)->uc_mcontext.mc_err)
+-#define FPU_sig(context)     ((void *)((context)->uc_mcontext.mc_fpstate))
++#define RAX_sig(context)     (UCONTEXT_MC(context).mc_rax)
++#define RBX_sig(context)     (UCONTEXT_MC(context).mc_rbx)
++#define RCX_sig(context)     (UCONTEXT_MC(context).mc_rcx)
++#define RDX_sig(context)     (UCONTEXT_MC(context).mc_rdx)
++#define RSI_sig(context)     (UCONTEXT_MC(context).mc_rsi)
++#define RDI_sig(context)     (UCONTEXT_MC(context).mc_rdi)
++#define RBP_sig(context)     (UCONTEXT_MC(context).mc_rbp)
++#define R8_sig(context)      (UCONTEXT_MC(context).mc_r8)
++#define R9_sig(context)      (UCONTEXT_MC(context).mc_r9)
++#define R10_sig(context)     (UCONTEXT_MC(context).mc_r10)
++#define R11_sig(context)     (UCONTEXT_MC(context).mc_r11)
++#define R12_sig(context)     (UCONTEXT_MC(context).mc_r12)
++#define R13_sig(context)     (UCONTEXT_MC(context).mc_r13)
++#define R14_sig(context)     (UCONTEXT_MC(context).mc_r14)
++#define R15_sig(context)     (UCONTEXT_MC(context).mc_r15)
++#define CS_sig(context)      (UCONTEXT_MC(context).mc_cs)
++#define DS_sig(context)      (UCONTEXT_MC(context).mc_ds)
++#define ES_sig(context)      (UCONTEXT_MC(context).mc_es)
++#define FS_sig(context)      (UCONTEXT_MC(context).mc_fs)
++#define GS_sig(context)      (UCONTEXT_MC(context).mc_gs)
++#define SS_sig(context)      (UCONTEXT_MC(context).mc_ss)
++#define EFL_sig(context)     (UCONTEXT_MC(context).mc_rflags)
++#define RIP_sig(context)     (UCONTEXT_MC(context).mc_rip)
++#define RSP_sig(context)     (UCONTEXT_MC(context).mc_rsp)
++#define TRAP_sig(context)    (UCONTEXT_MC(context).mc_trapno)
++#define ERROR_sig(context)   (UCONTEXT_MC(context).mc_err)
++#define FPU_sig(context)     ((void *)(UCONTEXT_MC(context).mc_fpstate))
+ #define XState_sig(context)  NULL
+ 
+ #elif defined(__NetBSD__)
+@@ -2724,6 +2742,7 @@ NTSTATUS signal_alloc_thread( TEB *teb )
+     struct amd64_thread_data *thread_data = (struct amd64_thread_data *)&teb->GdiTebBatch;
+     WOW_TEB *wow_teb = get_wow_teb( teb );
+ 
++#ifndef __PROSPERO__
+     if (wow_teb)
+     {
+         if (!fs32_sel)
+@@ -2733,6 +2752,12 @@ NTSTATUS signal_alloc_thread( TEB *teb )
+         }
+         else thread_data->fs = fs32_sel;
+     }
++#else
++    /* i386 code runs in the WoW64 CPU backend with its own FS base, so no
++     * 32-bit %fs selector (and no LDT, which the console refuses) is needed. */
++    (void)wow_teb;
++    thread_data->fs = 0;
++#endif
+     thread_data->frame_size = frame_size;
+     return STATUS_SUCCESS;
+ }
+@@ -2745,7 +2770,9 @@ void signal_free_thread( TEB *teb )
+ {
+     struct amd64_thread_data *thread_data = (struct amd64_thread_data *)&teb->GdiTebBatch;
+ 
++#ifndef __PROSPERO__
+     if (teb->WowTebOffset && !fs32_sel) ldt_free_entry( thread_data->fs );
++#endif
+ }
+ 
+ 
+@@ -2909,7 +2936,15 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
+         WARN_(seh)( "could not enable syscall user dispatch\n" );
+ #elif defined (__FreeBSD__) || defined (__FreeBSD_kernel__)
+     amd64_set_gsbase( teb );
++#ifndef __PROSPERO__
+     amd64_get_fsbase( &thread_data->pthread_teb );
++#else
++    /* PE code never loads %fs here (no 32-bit compatibility mode: i386 code
++     * runs in the WoW64 CPU backend), so FS stays the libc TLS base and
++     * pthread_teb stays 0, which makes the syscall dispatcher skip its FS
++     * restore: no sysarch call on every Windows-to-Unix transition. */
++    thread_data->pthread_teb = NULL;
++#endif
+ #elif defined(__NetBSD__)
+     sysarch( X86_64_SET_GSBASE, &teb );
+ #elif defined (__APPLE__)
+-- 
+2.43.0
+

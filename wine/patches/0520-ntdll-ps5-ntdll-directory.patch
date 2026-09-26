@@ -1,0 +1,36 @@
+From 64e66035a009c2df0f7a16ba4e0c2c8a83747130 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 11:47:13 +0200
+Subject: [PATCH] ntdll: Let a PS5 title name the ntdll directory.
+
+A PS5 title starts Wine in-process by loading ntdll as a PRX and calling
+__wine_main; dladdr cannot name a PRX, so when it fails the directory comes
+from WINE_PS5_NTDLL_DIR, which the title sets before entering Wine.
+---
+ dlls/ntdll/unix/loader.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index 0d43c5c65e..9a003ddd00 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -383,8 +383,16 @@ static void init_paths(void)
+ {
+     Dl_info info;
+ 
++#ifdef __PROSPERO__
++    /* A PS5 title loads ntdll as a PRX, which dladdr cannot name; the title
++     * passes the directory it loaded it from. */
++    if ((!dladdr( init_paths, &info ) || !(ntdll_dir = realpath_dirname( info.dli_fname ))) &&
++        !(ntdll_dir = getenv( "WINE_PS5_NTDLL_DIR" )))
++        fatal_error( "cannot get path to ntdll.so (set WINE_PS5_NTDLL_DIR)\n" );
++#else
+     if (!dladdr( init_paths, &info ) || !(ntdll_dir = realpath_dirname( info.dli_fname )))
+         fatal_error( "cannot get path to ntdll.so\n" );
++#endif
+ 
+     if ((build_dir = remove_tail( ntdll_dir, "/dlls/ntdll" )))
+     {
+-- 
+2.43.0
+

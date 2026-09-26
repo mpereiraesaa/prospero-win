@@ -1,0 +1,40 @@
+From 2de7013c6b1407c91f9b04281b19903799649805 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 11:43:56 +0200
+Subject: [PATCH] ntdll: Use the host page size on PS5.
+
+PS5 hosts map memory in 16 KiB pages (measured with sysconf and fixed
+reservations: 64 KiB-aligned requests are honoured, 4 KiB-aligned ones are
+not). Keep 4 KiB Windows pages over the larger host page with the scheme
+16 KiB-page aarch64 hosts already use.
+---
+ dlls/ntdll/unix/virtual.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 1a63f7d97e..6af3b9fb40 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -173,7 +173,9 @@ static const UINT page_shift = 12;
+ static const UINT_PTR page_mask = 0xfff;
+ static const UINT_PTR granularity_mask = 0xffff;
+ 
+-#ifdef __aarch64__
++/* PS5 hosts use 16 KiB pages: keep 4 KiB Windows pages over a larger host
++ * page, the same scheme as 16 KiB-page aarch64 hosts. */
++#if defined(__aarch64__) || defined(__PROSPERO__)
+ static UINT_PTR host_page_size;
+ static UINT_PTR host_page_mask;
+ #else
+@@ -3683,7 +3685,7 @@ void virtual_init(void)
+     pthread_mutex_init( &virtual_mutex, &attr );
+     pthread_mutexattr_destroy( &attr );
+ 
+-#ifdef __aarch64__
++#if defined(__aarch64__) || defined(__PROSPERO__)
+     host_page_size = sysconf( _SC_PAGESIZE );
+     host_page_mask = host_page_size - 1;
+     TRACE( "host page size: %uk\n", (UINT)host_page_size / 1024 );
+-- 
+2.43.0
+

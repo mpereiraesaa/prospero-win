@@ -46,6 +46,9 @@ of the port never collide:
 | --- | --- |
 | 0100 | `ntdll`: a PS5 title has no fstab and no `getfsent`; report no default device |
 | 0101 | `server`: resolve file names into server-owned memory instead of `realpath(path, NULL)` |
+| 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
+| 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
+| 0520 | `ntdll`: name the ntdll directory with `WINE_PS5_NTDLL_DIR` when `dladdr` cannot (PRX) |
 
 ## Allocator
 
@@ -80,14 +83,14 @@ With the series above, all three targets compile and link (host run on
 
 | Target | `malloc` | Unresolved against the SDK |
 | --- | --- | --- |
-| `ntdll.so` | defines (heap) | `amd64_get_fsbase`, `amd64_get_gsbase`, `amd64_set_gsbase` |
+| `ntdll.so` | defines (heap) | none |
 | `win32u.so` | imports from `ntdll.so` | none |
 | `wineserver` | defines (own heap) | none |
 
-The three remaining symbols are FreeBSD `sysarch` wrappers used by
-`dlls/ntdll/unix/signal_x86_64.c` to read and switch the GS/FS bases for the
-TEB, which belongs to the execution-core range. Everything else Wine's Unix
-side calls exists in the console's libc, libkernel and SceNet stubs. The
+Patch 0500 removed the last three unresolved symbols, the FreeBSD
+`amd64_{get,set}_{fs,gs}base` wrappers: GS is set through `sysarch`, and FS is
+never read or switched. Everything Wine's Unix side calls now exists in the
+console's libc, libkernel and SceNet stubs. The
 objects are linked as ordinary shared objects and an executable; turning
 them into PRX modules (PRXDESC1 descriptors, dependency-ordered loading,
 no cross-module data imports) is the next step and is not measured here.
