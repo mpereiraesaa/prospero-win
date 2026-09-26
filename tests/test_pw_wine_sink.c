@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <string.h>
+#include <unistd.h>
 
 static int calls,fail_next;
 static uint32_t seen_w,seen_h,seen_stride,first_pixel;
@@ -68,6 +69,15 @@ int main(void)
     pw_wine_sink_stats(&s);
     assert(s.inputs_posted==2+PW_WINE_INPUT_QUEUE && s.inputs_delivered==s.inputs_posted);
     assert(s.inputs_dropped==sizeof(bad)/sizeof(bad[0])+2);
+
+    /* The wake pipe: readable after a post, empty once drained. */
+    int fd=pw_wine_input_fd();char drain[64];
+    assert(fd>=0 && fd==pw_wine_input_fd());
+    while(read(fd,drain,sizeof(drain))>0){}
+    assert(read(fd,drain,1)==-1);
+    e=(PwWineInput){PW_WINE_INPUT_KEY,0x41,0,0,1};assert(!pw_wine_post_input(&e));
+    assert(read(fd,drain,sizeof(drain))==1 && pw_wine_next_input(&out) && out.code==0x41);
+    assert(pw_wine_post_input(&bad[0])==-1 && read(fd,drain,1)==-1);  /* refused: no wake */
 
     /* A producer thread and this consumer: order kept, nothing lost. */
     pthread_t thread;assert(!pthread_create(&thread,NULL,poster,NULL));

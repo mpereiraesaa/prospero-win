@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_wine_sink.h"
+#include <fcntl.h>
 #include <pthread.h>
 #include <stddef.h>
+#include <unistd.h>
 
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static PwWinePresentSink sink;
@@ -9,6 +11,24 @@ static void *sink_context;
 static PwWineInput queue[PW_WINE_INPUT_QUEUE];
 static uint32_t head,count;
 static PwWineSinkStats stats;
+static pthread_once_t wake_once=PTHREAD_ONCE_INIT;
+static int wake[2]={-1,-1};
+
+static void create_wake_pipe(void)
+{
+    int pair[2];
+    if(pipe(pair))return;
+    for(int i=0;i<2;i++) {
+        fcntl(pair[i],F_SETFL,fcntl(pair[i],F_GETFL)|O_NONBLOCK);
+        fcntl(pair[i],F_SETFD,FD_CLOEXEC);
+    }
+    wake[0]=pair[0];wake[1]=pair[1];
+}
+int pw_wine_input_fd(void)
+{
+    pthread_once(&wake_once,create_wake_pipe);
+    return wake[0];
+}
 
 void pw_wine_set_present_sink(PwWinePresentSink new_sink,void *context)
 {
@@ -48,6 +68,12 @@ int pw_wine_post_input(const PwWineInput *event)
     }
     else stats.inputs_dropped++;
     pthread_mutex_unlock(&lock);
+    if(!status) {
+        char byte=1;
+        pthread_once(&wake_once,create_wake_pipe);
+        /* a full pipe is already readable: nothing is lost */
+        if(wake[1]!=-1 && write(wake[1],&byte,1)<0){}
+    }
     return status;
 }
 int pw_wine_next_input(PwWineInput *event)

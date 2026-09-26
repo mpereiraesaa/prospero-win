@@ -38,5 +38,10 @@ void pw_wine_sink_stats(PwWineSinkStats *stats);
 int pw_wine_present(const void *bgra,uint32_t width,uint32_t height,uint32_t stride);
 /* 1 and the oldest event, or 0 when the queue is empty. */
 int pw_wine_next_input(PwWineInput *event);
+/* A non-blocking pipe that becomes readable when input is posted, so the
+ * driver can have the server wake a thread idle in GetMessage. Readers
+ * drain it before emptying the queue, which loses no wakeup. -1 if no
+ * pipe could be created. */
+int pw_wine_input_fd(void);
 
 #endif
