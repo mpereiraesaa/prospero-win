@@ -1,0 +1,45 @@
+From afbbb016b36da8ebac1352e706dd310875059cf1 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 26 Sep 2026 12:21:37 +0200
+Subject: [PATCH] ntdll: Fail process creation cleanly on PS5.
+
+A PS5 title is a single process that can neither fork nor exec.
+NtCreateUserProcess and __wine_unix_spawnvp return STATUS_NOT_SUPPORTED
+instead of trying to start a loader; the prefix is initialised offline and
+the desktop is created in process, so nothing needs a second process.
+---
+ dlls/ntdll/unix/process.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
+index d234b20481..a11cc77666 100644
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -471,6 +471,10 @@ NTSTATUS WINAPI __wine_unix_spawnvp( char * const argv[], int wait )
+     pid_t pid, wret;
+     int fd[2], status, err;
+ 
++#ifdef __PROSPERO__
++    return STATUS_NOT_SUPPORTED;  /* no fork/exec in a PS5 title */
++#endif
++
+ #ifdef HAVE_PIPE2
+     if (pipe2( fd, O_CLOEXEC ) == -1)
+ #endif
+@@ -706,6 +710,13 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+     data_size_t handles_size, jobs_size;
+     obj_handle_t *handles, *jobs;
+ 
++#ifdef __PROSPERO__
++    /* A PS5 title is a single process: it can neither fork nor exec, so
++     * Windows process creation fails cleanly instead of spawning a loader. */
++    TRACE( "process creation is not supported on PS5\n" );
++    return STATUS_NOT_SUPPORTED;
++#endif
++
+     if (thread_flags & THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER)
+     {
+         WARN( "Invalid thread flags %#x.\n", thread_flags );
+-- 
+2.43.0
+
