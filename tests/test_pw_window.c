@@ -107,5 +107,25 @@ int main(void)
     assert(invoke(code.exec_base,&state)==0 && state.eip==PW_WIN32_WINDOW_CALLBACK);
     assert(pw_win32_dispatch(&runtime,&state)==PW_OK && !runtime.create[0].active && !runtime.create_depth &&
            !state.gpr[0] && !windows[1].used && user.next_object==0x10001 && runtime.calls==6);
+
+    /* WM_QUIT is a thread message: DispatchMessageA has no window procedure
+     * to run and returns 0 without entering a callback. */
+    strcpy(symbol.name,"DispatchMessageA");
+    assert(pw_win32_resolve(&runtime,"user32.dll",&symbol,&target)==PW_OK);
+    const PwUser32QueueEntry quit={.window=0,.message=0x0012};
+    memcpy((void *)(uintptr_t)0x03000200,&quit,sizeof(quit));
+    uint32_t dispatch_frame[]={0x01003000,0x03000200};
+    state.eip=(uint32_t)target.address;state.gpr[4]=state.stack_high-sizeof(dispatch_frame);
+    state.gpr[0]=0xdeadbeefu;
+    memcpy((void *)(uintptr_t)state.gpr[4],dispatch_frame,sizeof(dispatch_frame));
+    assert(pw_win32_dispatch(&runtime,&state)==PW_OK && !state.gpr[0] &&
+           state.eip==0x01003000 && state.gpr[4]==state.stack_high &&
+           !runtime.callback_pending && !runtime.message_dispatch.active);
+    /* A message for a window that does not exist is still refused. */
+    const PwUser32QueueEntry stale={.window=0x10077,.message=0x000f};
+    memcpy((void *)(uintptr_t)0x03000200,&stale,sizeof(stale));
+    state.eip=(uint32_t)target.address;state.gpr[4]=state.stack_high-sizeof(dispatch_frame);
+    memcpy((void *)(uintptr_t)state.gpr[4],dispatch_frame,sizeof(dispatch_frame));
+    assert(pw_win32_dispatch(&runtime,&state)!=PW_OK && !runtime.message_dispatch.active);
     assert(vm.release(NULL,&code)==PW_OK);assert(vm.release(NULL,&memory)==PW_OK);return 0;
 }

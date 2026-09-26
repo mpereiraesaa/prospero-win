@@ -986,6 +986,9 @@ int pw_win32_dispatch(PwWin32 *r,PwX86State *state)
         if((status=pw_guest_call_u32(&call,0,&address))!=PW_OK ||
            (status=range_access(state,address,28,PW_X86_READ))!=PW_OK)return status;
         PwUser32QueueEntry message;memcpy(&message,(const void *)(uintptr_t)address,sizeof(message));
+        /* A thread message such as WM_QUIT has no window and therefore no
+         * procedure to run; DispatchMessage returns 0 for it. */
+        if(!message.window)return pw_guest_call_finish(&call,32,0);
         uint32_t wndproc;
         if((status=pw_user32_window_proc(r->user32,message.window,&wndproc))!=PW_OK)return status;
         uint32_t args[]={message.window,message.message,message.wparam,message.lparam};
