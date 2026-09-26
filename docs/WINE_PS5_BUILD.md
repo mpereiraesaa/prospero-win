@@ -250,6 +250,19 @@ wineserver's `fchdir`. They belong to the virtual working directory
 (`pw_wine_cwd`), which must emulate them with libkernel calls; once it does,
 the warning becomes a failure.
 
+## Data directory
+
+A title can write only its own `/download0` sandbox, where `/data` is absent,
+so the Wine prefix would be limited to that sandbox. Before starting Wine,
+prospero-win (`native/pw_data_mount.c`) writes a request file,
+`/download0/etahen_jailbreak`, carrying its process id, then waits until
+`/data` becomes reachable. This expects the helper daemon from
+<https://github.com/ArkSama/PS5-Lapy-JB-Daemon> to be running on the console:
+it detects the request file and makes `/data` available to the process, after
+which the prefix lives at `/data/prospero-win/prefix`. The request is
+best-effort — if the helper is not running, the title keeps using
+`/download0/prospero-win/prefix`.
+
 ## Measured result
 
 With the series above, all three targets compile and link (host run on

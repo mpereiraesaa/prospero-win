@@ -404,3 +404,7 @@ wine/patches/0550-ntdll-ps5-no-process-creation.patch
 src/pw_wine_start.c
 src/pw_wine_start.h
 tests/test_pw_wine_start.c
+native/pw_data_mount.c
+native/pw_data_mount.h
+tests/test_pw_data_mount.c
+tests/test_pw_data_mount_native.c
