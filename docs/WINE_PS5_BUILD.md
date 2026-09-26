@@ -151,4 +151,25 @@ The PRX link of the same objects (host run on 2026-09-26, foundation
 - The stubs have `isatty` only in `libScePosixForWebKit`, which a game title
   does not load. The compat layer provides it (no descriptor is a terminal),
   so ntdll needs only the libc and libkernel modules.
-- Nothing in this note has run on the console.
+## Console result
+
+The gate build (`PW_NATIVE_MODE=gate`) runs `wine/ps5/pw_wine_unix_probe.c`
+when `PW_WINE_PS5_PRX_DIR` has packaged the two modules under `win/wine`.
+It logs each step as `PW_WINE_UNIX` before running it.
+
+On FW 12.02 (2026-09-26, log `20260926T105641663Z`), every step passed:
+
+| Step | Result |
+| --- | --- |
+| Load `ntdll.prx` with `sceKernelLoadStartModule` | handle `0xd0`, start result 0, about 3 ms |
+| Descriptor and exports | PRXDESC1 found in the module's segments; nothing missing |
+| `module_start` and `pw_wine_dl_adopt` | 0; adopted |
+| Heap | 64 B and 256 KiB allocated, written and freed: allocations 0→2, frees 0→2, one 1 MiB span mapped, no failures |
+| `dlopen` of `win32u.so` through ntdll | `win32u.prx` loaded after ntdll, about 5.5 ms |
+| `dlsym(win32u, "__wine_unix_lib_init")` | resolved |
+
+The PRXs are staged under `win/wine` rather than `sce_module`. On the
+console, `access()` reported the uploaded PRX absent in both places, while
+`open()` succeeds, so the probe's presence check opens the file.
+Wine-level initialisation (`__wine_main`, the wineserver) is not part of
+this probe.

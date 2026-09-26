@@ -26,6 +26,9 @@
 #                          its dependencies, which would mutate a tree the
 #                          laboratory's other projects share (default 0)
 #   PW_NATIVE_MODE         runtime (default), gate, or wine bootstrap
+#   PW_WINE_PS5_PRX_DIR    gate mode: directory holding ntdll.prx and
+#                          win32u.prx (tools/build_wine_ps5.sh), packaged in
+#                          win/wine for the gate's Wine Unix-side probe
 #   PW_OUTPUT_SUFFIX       isolated build/dist suffix, e.g. -wine-smoke
 #   PW_TEST_EXIT_AFTER_MS  validation-only orderly runtime exit; 0 disables it
 #   PW_DBT_CHAINING        1 enables direct block chaining (default 1)
@@ -58,6 +61,7 @@ dbt_residency=${PW_DBT_RESIDENCY:-1}
 dbt_lazy_flags=${PW_DBT_LAZY_FLAGS:-1}
 output_suffix=${PW_OUTPUT_SUFFIX:-}
 present_backend=${PW_PRESENT_BACKEND:-agc}
+wine_ps5_prx_dir=${PW_WINE_PS5_PRX_DIR:-}
 launcher=${PW_LAUNCHER:-0}
 launcher_script=${PW_LAUNCHER_SCRIPT:-0}
 launcher_extra=${PW_LAUNCHER_EXTRA_PROFILES:-}
@@ -77,6 +81,14 @@ fi
     echo "PW_COMPAT32_TRANSFER must be 0 or 1" >&2; exit 2; }
 [[ $native_mode == runtime || $native_mode == gate || $native_mode == wine ]] || {
     echo "PW_NATIVE_MODE must be runtime, gate or wine" >&2; exit 2; }
+if [[ -n $wine_ps5_prx_dir ]]; then
+    [[ $native_mode == gate ]] || {
+        echo "PW_WINE_PS5_PRX_DIR requires PW_NATIVE_MODE=gate" >&2; exit 2; }
+    for module in ntdll.prx win32u.prx; do
+        [[ -f $wine_ps5_prx_dir/$module ]] || {
+            echo "PW_WINE_PS5_PRX_DIR has no $module" >&2; exit 2; }
+    done
+fi
 if [[ -z $root_module ]]; then
     if [[ $native_mode == wine ]]; then root_module=app.exe
     else root_module=sample.exe
@@ -334,6 +346,7 @@ sources=(
     src/pw_vm_posix.c src/pw_exec_probe.c src/pw_x86_block.c src/pw_x86_cache.c src/pw_x86_engine.c src/pw_x86_hostexec.c src/pw_x87.c src/pw_guest_call.c src/pw_import_bind.c src/pw_win32.c src/pw_user32.c src/pw_pad.c src/pw_gdi.c src/pw_present.c src/pw_crt_format.c src/pw_registry.c src/pw_registry_store.c src/pw_guest_fp.c src/pw_guest_args.c src/pe_resource.c src/pw_app_profile.c src/pw_prefix.c src/pw_runtime_supervisor.c src/pw_launcher_model.c src/pw_prefix_registry.c src/pw_launcher_render.c src/pw_profile_catalog.c
 )
 (( present_vk )) && sources+=(native/pw_present_vk_ps5.c native/pw_psbc_absent_ps5.c)
+[[ $native_mode == gate ]] && sources+=(wine/ps5/pw_wine_unix_probe.c wine/ps5/pw_wine_prx.c)
 objects=()
 for source in "${sources[@]}"; do
     object="$build/obj/${source//\//_}.o"
@@ -392,6 +405,10 @@ fi
 [[ -f $root/sce_sys/icon0.png ]] || python3 "$root/tools/make_icon.py"
 cp "$root/sce_sys/param.json" "$root/sce_sys/icon0.png" "$dist/sce_sys/"
 cp "$foundation/runtime/libc.prx" "$dist/sce_module/libc.prx"
+if [[ -n $wine_ps5_prx_dir ]]; then
+    mkdir -p "$dist/win/wine"
+    cp "$wine_ps5_prx_dir/ntdll.prx" "$wine_ps5_prx_dir/win32u.prx" "$dist/win/wine/"
+fi
 if [[ -f $dev_conf ]]; then
     cp "$dev_conf" "$dist/dev.conf"
 fi

@@ -22,8 +22,11 @@
 #include "pw_ucontext_map_ps5.h"
 #include "pw_vmspace_ps5.h"
 #include "pw_file_ps5.h"
+#include "../wine/ps5/pw_wine_unix_probe.h"
 #include "ps5log/ps5log.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -62,6 +65,15 @@ static PwCompat32Platform compat32_platform;
 /* Declared so the fault reporter can express the program counter as an
  * offset from a known symbol. */
 int main(int argc, char **argv);
+
+extern int32_t sceKernelLoadStartModule(const char *, size_t, const void *, uint32_t,
+                                        const void *, int *);
+extern int sceKernelGetModuleInfo(int32_t, void *);
+
+static void log_wine_unix_step(int step)
+{
+    PS5LOG_LOG("PW_WINE_UNIX step=%s", pw_wine_unix_probe_step_name(step));
+}
 
 /*
  * Without this, a fault truncates the transcript and says nothing: the
@@ -177,6 +189,48 @@ int main(int argc, char **argv)
                "log_config=%d log_init=%d loader_bytes=%llu",
                PW_TITLE_ID, stage_dir, root_name, config_result, log_result,
                (unsigned long long)sizeof(*loader));
+
+    {
+        /*
+         * Before the PE staging checks, which it does not need: Wine's
+         * Unix side as PRX modules, when the build packaged them
+         * (PW_WINE_PS5_PRX_DIR): ntdll.prx through the firmware loader, its
+         * descriptor, module_start, adopt and heap, then win32u through
+         * ntdll's own dlopen. Each step is logged before it runs.
+         */
+        /* access() reported the uploaded PRX absent on FW 12.02, so the
+         * check opens it, as the file provider does, and logs errno. */
+        static const char dir[] = "/app0/win/wine";
+        int prx_fd = open("/app0/win/wine/ntdll.prx", O_RDONLY);
+        int prx_errno = prx_fd < 0 ? errno : 0;
+        if (prx_fd >= 0)
+            close(prx_fd);
+        if (prx_fd >= 0) {
+            const PwWineUnixProbeOps ops = {
+                sceKernelLoadStartModule, sceKernelGetModuleInfo, log_wine_unix_step };
+            PwWineUnixProbeReport unix_report;
+            int rc = pw_wine_unix_probe(&ops, dir, &unix_report);
+
+            PS5LOG_LOG("PW_WINE_UNIX rc=%d step=%s handle=0x%x start_result=%d "
+                       "module_start=%d missing=0x%x error=%s",
+                       rc, pw_wine_unix_probe_step_name(unix_report.step),
+                       (unsigned)unix_report.ntdll_handle, unix_report.start_result,
+                       unix_report.module_start_rc, unix_report.missing_exports,
+                       unix_report.error[0] ? unix_report.error : "-");
+            PS5LOG_LOG("PW_WINE_UNIX heap allocations=%llu->%llu frees=%llu->%llu "
+                       "live=%llu mapped=%llu failures=%llu foreign=%llu",
+                       (unsigned long long)unix_report.heap_before.allocations,
+                       (unsigned long long)unix_report.heap_after.allocations,
+                       (unsigned long long)unix_report.heap_before.frees,
+                       (unsigned long long)unix_report.heap_after.frees,
+                       (unsigned long long)unix_report.heap_after.live_bytes,
+                       (unsigned long long)unix_report.heap_after.mapped_bytes,
+                       (unsigned long long)unix_report.heap_after.failures,
+                       (unsigned long long)unix_report.heap_after.foreign_frees);
+        } else {
+            PS5LOG_LOG("PW_WINE_UNIX absent dir=%s errno=%d", dir, prx_errno);
+        }
+    }
 
     status = pw_file_ps5_init(&files, stage_dir);
     if (status != PW_OK) {
