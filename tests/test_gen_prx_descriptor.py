@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "tools"))
 import gen_prx_descriptor  # noqa: E402
 
@@ -22,6 +23,7 @@ MODULE = r"""
 #include <assert.h>
 #include <link.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 
 int answer(void) { return 42; }
@@ -67,13 +69,24 @@ int main(void)
     dl_iterate_phdr(collect, NULL);
     assert(pw_prx_find_descriptor(segments, segment_count, &found) == PW_PRX_OK && found == table);
 
-    /* The host C runtime already ran the constructor; on PS5 nothing does,
-     * so module_start runs .init_array, and only on its first call. */
+#ifdef NO_RUNTIME_INIT
+    /* Nothing ran .init_array: module_start runs it, once. */
+    assert(constructed == 0);
+#else
+    /* The C runtime already ran .init_array: module_start does not repeat it. */
     assert(constructed == 1);
-    assert(module_start(0, NULL) == 0 && constructed == 2);
-    assert(module_start(0, NULL) == 0 && constructed == 2);
+#endif
+    assert(module_start(0, NULL) == 0 && constructed == 1);
+    assert(module_start(0, NULL) == 0 && constructed == 1);
     return 0;
 }
+
+#ifdef NO_RUNTIME_INIT
+/* Linked without start files: the dynamic loader initialises the C library
+ * but nothing runs this executable's .init_array, as on PS5. */
+__attribute__((noreturn)) void test_entry(void) { exit(main()); }
+__asm__(".globl _start\n_start:\n\txor %ebp, %ebp\n\tand $-16, %rsp\n\tcall test_entry\n\thlt\n");
+#endif
 """
 
 
@@ -97,13 +110,15 @@ def main() -> int:
         subprocess.run([sys.executable, str(script), str(work / "descriptor.c"),
                         "answer", "counter_value"], check=True)
         (work / "module.c").write_text(MODULE)
-        binary = work / "module"
         cc = os.environ.get("CC", "cc")
-        subprocess.run([cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
-                        f"-I{ROOT / 'wine/ps5'}", str(work / "module.c"), str(work / "descriptor.c"),
-                        str(ROOT / "wine/ps5/pw_wine_prx.c"), "-o", str(binary)], check=True)
-        subprocess.run([str(binary)], check=True)
-    print("gen_prx_descriptor passed: table validates in a linked image, module_start runs once")
+        for variant, flags in (("runtime-init", []), ("no-runtime-init", ["-DNO_RUNTIME_INIT", "-nostartfiles"])):
+            binary = work / variant
+            subprocess.run([cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", *flags,
+                            f"-I{ROOT / 'wine/ps5'}", str(work / "module.c"), str(work / "descriptor.c"),
+                            str(ROOT / "wine/ps5/pw_wine_prx.c"), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+    print("gen_prx_descriptor passed: table validates in a linked image; constructors run once "
+          "whether or not a runtime ran .init_array")
     return 0
 
 

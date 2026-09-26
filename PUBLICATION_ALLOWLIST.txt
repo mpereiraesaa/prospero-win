@@ -366,6 +366,7 @@ wine/ps5/pw_wine_heap_libc.c
 native/pw_ucontext_map_ps5.c
 native/pw_ucontext_map_ps5.h
 tests/test_pw_wine_prx.c
+wine/ps5/prx_eh_frame.ld
 wine/ps5/pw_wine_prx.c
 wine/ps5/pw_wine_prx.h
 tests/test_pw_wine_dl.c

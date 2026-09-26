@@ -3,13 +3,15 @@
 """Generate the PRXDESC1 export descriptor for one of Wine's Unix modules.
 
 On firmware 12.02 sceKernelDlsym does not resolve an application PRX's
-exports and the kernel does not run module_start, so every Wine PRX links
-one generated unit that carries:
+exports, so every Wine PRX links one generated unit that carries:
 
 - ``pw_prx_exports``: the relocated {name, address} table that
   wine/ps5/pw_wine_prx.c finds by scanning the module's segments;
-- ``module_start``: runs the module's constructors (``.init_array``) once,
-  which the loader in wine/ps5/pw_wine_dl.c calls through the table;
+- ``module_start``: runs the module's constructors (``.init_array``) once.
+  The converter makes it the module's entry, which the firmware loader
+  calls, and wine/ps5/pw_wine_dl.c calls it again through the table; the
+  first constructor marks the module started, so whichever of the firmware,
+  a C runtime or module_start runs the array first, it runs only once;
 - ``module_stop``: a no-op; Wine's Unix modules are never unloaded.
 
 Usage: gen_prx_descriptor.py OUTPUT.c NAME...
@@ -44,7 +46,12 @@ def render(names):
 {externs}extern void (*__init_array_start[])(void) __attribute__((visibility("hidden")));
 extern void (*__init_array_end[])(void) __attribute__((visibility("hidden")));
 
-static int started;
+/* volatile: a compiler may otherwise evaluate the marker below at build
+ * time and start the module already marked, never running its array. */
+static volatile int started;
+
+/* First in .init_array: whoever runs the array marks the module started. */
+__attribute__((constructor(101))) static void pw_prx_mark_started(void) {{ started = 1; }}
 
 int module_start(size_t argc, const void *argv)
 {{

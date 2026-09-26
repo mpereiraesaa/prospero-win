@@ -20,8 +20,14 @@ here; winebuild and widl come from the host build that
 ~~~sh
 tools/build_wine_ps5.sh --check-patches   # validate and print the series
 PROSPERO_WINE_SOURCE=<pinned checkout> PROSPERO_WINE_BUILD=<host build> \
-PS5_PAYLOAD_SDK=<ps5-payload-sdk> tools/build_wine_ps5.sh
+PS5_NATIVE_FOUNDATION=<pinned foundation> \
+PS5_PRX_FOUNDATION=<foundation with module exports> tools/build_wine_ps5.sh
 ~~~
+
+The payload SDK comes from `PS5_NATIVE_FOUNDATION` (the title's pinned
+foundation, `.deps/ps5-native-app-boilerplate` by default) unless
+`PS5_PAYLOAD_SDK` names one. `PS5_PRX_FOUNDATION` is described under
+[PRX modules](#prx-modules).
 
 The link is made against the SDK's stub libraries with unresolved symbols
 reported instead of fatal, so every run writes an exact list of what the
@@ -78,6 +84,42 @@ imported. Patch 0101 stops the server from receiving libc-allocated names:
 The one-time `realpath(name, NULL)` in `ntdll`'s startup path is left as is
 and appears as a foreign free.
 
+## PRX modules
+
+The console does not load ELF shared objects, so after the ELF link the
+script links `ntdll` and `win32u` again as PRX modules into
+`.deps/wine-ps5/prx/sce_module/`:
+
+1. Each module takes the objects of its ELF link, read back from
+   `make.log`. `ntdll` adds the heap and the PS5 shims (`pw_wine_prx`,
+   `pw_wine_dl`, `pw_wine_compat` and their libc bindings).
+2. `tools/gen_prx_descriptor.py` adds the export descriptor and
+   `module_start`. `ntdll` publishes `__wine_main`, `pw_wine_dl_adopt`,
+   `pw_wine_heap_stats`, `dlopen` and `dlsym` for the title, and `win32u`
+   publishes `__wine_unix_lib_init` for ntdll's `dlsym`. The descriptor's
+   first constructor marks the module started, so constructors run once
+   whether the firmware, the loader's entry call or `pw_wine_dl` runs
+   `.init_array` first.
+3. `prospero-lld --shared -Bsymbolic` links against the title's stub
+   libraries, not the payload's static libc, using the foundation's
+   `ps5-pie.ld` plus `wine/ps5/prx_eh_frame.ld`. The second script gives
+   each module's libunwind its own hidden `__eh_frame*` bounds. `win32u`
+   links against `ntdll.shared.elf`, so its 83 ntdll imports, all functions,
+   become PRX-to-PRX function imports; a data import between application
+   PRXs faults on the console.
+4. `ps5-native-tool link --module` converts each module (using
+   `ntdll.shared.elf` as the stub for `win32u`), then `self --sign` signs it.
+
+Module conversion publishes exports only from foundation commit
+`5bd0887e983abbf2f8a2eb762da8d4501b543179` onward. That commit is on the
+foundation's `exp/prx-module` branch, and the title's pinned foundation
+predates it. `PS5_PRX_FOUNDATION` (or `--prx-foundation`) names a checkout
+that has it; otherwise the PRX link is skipped and the report says why.
+
+`report.json` gains a `prx` section. For each module it lists whether the
+PRX was built, what the stub link left unresolved, the tool's refusals, the
+modules it needs, and its data imports.
+
 ## Measured result
 
 With the series above, all three targets compile and link (host run on
@@ -92,8 +134,19 @@ With the series above, all three targets compile and link (host run on
 Patch 0500 removed the last three unresolved symbols, the FreeBSD
 `amd64_{get,set}_{fs,gs}base` wrappers: GS is set through `sysarch`, and FS is
 never read or switched. Everything Wine's Unix side calls now exists in the
-console's libc, libkernel and SceNet stubs. The
-objects are linked as ordinary shared objects and an executable; turning
-them into PRX modules (PRXDESC1 descriptors, dependency-ordered loading,
-no cross-module data imports) is the next step and is not measured here.
-Nothing in this note has run on the console.
+console's libc, libkernel and SceNet stubs.
+
+The PRX link of the same objects (host run on 2026-09-26, foundation
+`1e9b564` for the tool):
+
+| Module | Size | Unresolved | Needs | Data imports |
+| --- | --- | --- | --- | --- |
+| `ntdll.prx` | 654,551 bytes | none | `libSceLibcInternal`, `libkernel`, `libkernel_sys`, `libScePosixForWebKit` | `__stderrp`, `__stdoutp` (libc), `environ` (libkernel) |
+| `win32u.prx` | 2,217,250 bytes | none | `ntdll.prx`, `libSceLibcInternal`, `libkernel` | none |
+
+- The data imports come from system modules the title already loads, not
+  from another application PRX.
+- `libScePosixForWebKit` is needed only for `isatty`. A game title does not
+  load that module, so the import stays unbound until the compat layer
+  provides it.
+- Nothing in this note has run on the console.
