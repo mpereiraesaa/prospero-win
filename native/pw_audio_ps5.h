@@ -41,7 +41,7 @@ typedef struct PwAudioPs5 {
     pthread_mutex_t mutex;
     pthread_cond_t condition;
     pthread_t worker;
-    int handle,worker_error;
+    int handle,worker_error,init_rc,open_rc;
     uint32_t input_rate,phase,generation;
     uint16_t input_channels,input_bits;
     uint64_t input_bytes,output_frames,blocks,enqueues,completions;

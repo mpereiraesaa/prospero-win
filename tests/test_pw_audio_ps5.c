@@ -38,6 +38,7 @@ int main(void)
     PwAudioPs5 audio;PwAudioPs5Ops ops={op_init,op_open,op_volume,op_output,op_close};
     assert(pw_audio_ps5_init(&audio,&ops,queue,PW_AUDIO_PS5_QUEUE_BLOCKS)==PW_OK);
     assert(pw_audio_ps5_open(&audio,11025,1,8)==PW_OK);
+    assert(audio.init_rc==0 && audio.open_rc==7);
 
     uint8_t pcm[256];memset(pcm,255,sizeof(pcm));
     pthread_mutex_lock(&output_mutex);hold_output=1;pthread_mutex_unlock(&output_mutex);

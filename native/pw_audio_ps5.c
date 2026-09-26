@@ -12,7 +12,15 @@ extern int sceAudioOutOpen(int,int,int,uint32_t,uint32_t,uint32_t);
 extern int sceAudioOutSetVolume(int,int,const int32_t *);
 extern int sceAudioOutOutput(int,const void *);
 extern int sceAudioOutClose(int);
-static int platform_init(void){return sceAudioOutInit();}
+/* sceAudioOutInit initialises the library for the whole process; a second
+ * call fails. A launcher opens audio once per session, so the first result
+ * is kept and returned to every later session. */
+static int platform_init(void)
+{
+    static int initialized,result;
+    if(!initialized){result=sceAudioOutInit();initialized=result>=0;}
+    return result;
+}
 static int platform_open(int u,int t,int i,uint32_t g,uint32_t r,uint32_t f)
 {return sceAudioOutOpen(u,t,i,g,r,f);}
 static int platform_volume(int h,int f,const int32_t *v)
@@ -104,11 +112,11 @@ int pw_audio_ps5_open(void *opaque,uint32_t rate,uint16_t channels,uint16_t bits
        (bits!=8 && bits!=16))return PW_ERR_PRECONDITION;
     pthread_mutex_lock(&audio->mutex);unsigned open=audio->opened;
     pthread_mutex_unlock(&audio->mutex);if(open)return PW_ERR_STATE;
-    int result=audio->ops.init();if(result<0)return PW_ERR_STATE;
+    int result=audio->ops.init();audio->init_rc=result;if(result<0)return PW_ERR_STATE;
     result=audio->ops.open(PW_AUDIO_PS5_USER_SYSTEM,PW_AUDIO_PS5_PORT_MAIN,
         PW_AUDIO_PS5_PORT_INDEX,PW_AUDIO_PS5_GRAIN,PW_AUDIO_PS5_RATE,
         PW_AUDIO_PS5_FORMAT_S16_STEREO);
-    if(result<0)return PW_ERR_STATE;
+    audio->open_rc=result;if(result<0)return PW_ERR_STATE;
     for(unsigned i=0;i<8;i++)volumes[i]=PW_AUDIO_PS5_VOLUME_0DB;
     if(audio->ops.volume(result,PW_AUDIO_PS5_VOLUME_FLAGS,volumes)<0) {
         (void)audio->ops.close(result);return PW_ERR_STATE;
