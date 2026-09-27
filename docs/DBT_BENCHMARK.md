@@ -100,6 +100,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Guest EIP stored only before instructions that can stop the block | 617 | 657 | +6% | 13.2% |
 | No statistics counters in translated code (`PW_WOW_STATS` keeps them) | 657 | 726 | +10% | 14.6% |
 | Conditional branches on the producer's flags | 650 | 788 | +21% | 19.5% |
+| Guest addresses with one `lea` | 788 | 804 | +2% | 19.9% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -128,6 +129,10 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   (`test ecx` and at most five instructions). The pending flags stay
   pending, exactly as before. From here the native baseline is taken from
   the same rounds (4032 MIPS, on another core); the ratio uses it.
+- **Addresses.** A guest address was built with `mov eax, disp`, an `add`
+  for the base, and a load, `shl` and `add` for a scaled index. It is now
+  the base (and index) loaded into `eax` (and `edx`) and one `lea`, whose
+  32-bit destination wraps the sum modulo 2^32 exactly as the guest does.
 
 ## Comparison with published numbers
 

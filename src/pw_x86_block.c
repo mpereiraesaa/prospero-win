@@ -805,28 +805,43 @@ static int decode_operand(const uint8_t *p, size_t n, Operand *o)
     o->bytes+=displacement;
     return PW_OK;
 }
+/* host = guest register gpr, for host eax (0) or edx (2). */
+static void load_address_reg(Emitter *e, const PwX86RegContract *c, unsigned gpr, unsigned host)
+{
+    int h = get_resident_host_reg(c, gpr);
+    if (h >= 0) {
+        byte(e, 0x44); byte(e, 0x89); byte(e, (uint8_t)(0xc0 | ((unsigned)h << 3) | host));
+    } else {
+        byte(e, 0x8b); byte(e, (uint8_t)(0x47 | (host << 3))); byte(e, (uint8_t)(gpr * 4));
+    }
+}
 static void effective_address(Emitter *e, const Operand *o, const PwX86RegContract *c)
 {
-    /* EAX arithmetic deliberately wraps at 32 bits; never RIP-relative. */
-    byte(e,0xb8); word(e,o->displacement);
-    if (o->base>=0) {
-        int h = get_resident_host_reg(c, (unsigned)o->base);
-        if (h >= 0) {
-            byte(e, 0x41); byte(e, 0x03); byte(e, (uint8_t)(0xc0 | h));
-        } else {
-            byte(e,0x03); byte(e,0x47); byte(e,(uint8_t)(o->base*4));
-        }
+    /* The address in eax, wrapping at 32 bits: lea with a 32-bit destination
+     * keeps the low half of the 64-bit sum. Never RIP-relative. */
+    if (o->base < 0 && o->index < 0) {
+        byte(e,0xb8); word(e,o->displacement);
+        return;
     }
-    if (o->index>=0) {
-        int h = get_resident_host_reg(c, (unsigned)o->index);
-        if (h >= 0) {
-            byte(e, 0x41); byte(e, 0x8b); byte(e, (uint8_t)(0xd0 | h));
+    if (o->base >= 0) load_address_reg(e, c, (unsigned)o->base, 0);
+    if (o->index < 0) {
+        if (!o->displacement) return;
+        if ((int32_t)o->displacement >= -128 && (int32_t)o->displacement <= 127) {
+            byte(e,0x8d); byte(e,0x40); byte(e,(uint8_t)o->displacement); /* lea eax,[rax+d8] */
         } else {
-            byte(e,0x8b); byte(e,0x57); byte(e,(uint8_t)(o->index*4));
+            byte(e,0x8d); byte(e,0x80); word(e,o->displacement);          /* lea eax,[rax+d32] */
         }
-        byte(e,0xc1); byte(e,0xe2); byte(e,(uint8_t)o->scale);
-        byte(e,0x01); byte(e,0xd0);
+        return;
     }
+    load_address_reg(e, c, (unsigned)o->index, 2);
+    if (o->base >= 0) {
+        /* lea eax,[rax+rdx*scale+disp32] */
+        byte(e,0x8d); byte(e,0x84); byte(e,(uint8_t)((o->scale << 6) | (2u << 3)));
+    } else {
+        /* lea eax,[rdx*scale+disp32] */
+        byte(e,0x8d); byte(e,0x04); byte(e,(uint8_t)((o->scale << 6) | (2u << 3) | 5u));
+    }
+    word(e,o->displacement);
 }
 static void push_imm(Emitter *e, uint32_t value, PwX86RegContract *c)
 {

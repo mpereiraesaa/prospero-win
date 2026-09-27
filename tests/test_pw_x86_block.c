@@ -1824,6 +1824,68 @@ static void comparison_tests(void)
         assert(run(add,2,0x4070)==0 && state.gpr[0]==0 && (state.eflags&0x8d5)==0x55);
     }
 }
+
+/*
+ * Every 32-bit ModRM/SIB address form, through LEA edx: mod 0-2, each rm,
+ * each SIB byte, disp8 and disp32 with both signs, register values that
+ * wrap past 4 GiB, in all four engine modes. The expected address is the
+ * architectural sum modulo 2^32, computed here in C.
+ */
+static void address_form_tests(void)
+{
+    static const uint32_t displacements[] = { 0x7f, 0xffffff80u, 0x12345678u, 0xfffffff0u };
+    static const uint32_t register_sets[][8] = {
+        { 0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u, 0x55555555u, 0x66666666u,
+          0x77777777u, 0x88888888u },
+        { 0xfffffff0u, 0x10u, 0x80000000u, 0x7fffffffu, 0xffffffffu, 1u, 0xc0000000u,
+          0x3fffffffu },
+    };
+    const PwX86State saved = state;
+    unsigned checked = 0;
+
+    for (unsigned mode = 0; mode < 4; mode++)
+    for (unsigned set = 0; set < 2; set++)
+    for (unsigned mod = 0; mod < 3; mod++)
+    for (unsigned rm = 0; rm < 8; rm++)
+    for (unsigned sib = 0; sib < (rm == 4 ? 256u : 1u); sib++)
+    for (unsigned d = 0; d < 4; d++) {
+        const unsigned base = rm == 4 ? (sib & 7) : rm, index = (sib >> 3) & 7, scale = sib >> 6;
+        const int no_base = mod == 0 && base == 5;
+        const unsigned disp_bytes = mod == 1 ? 1 : (mod == 2 || no_base) ? 4 : 0;
+        uint8_t op[8];
+        size_t n = 0;
+        uint32_t displacement = 0, expected = 0;
+
+        if (mod == 1 && d >= 2) continue;          /* disp8 takes the first two */
+        if (!disp_bytes && d) continue;
+        op[n++] = 0x8d;
+        op[n++] = (uint8_t)((mod << 6) | (2u << 3) | rm);  /* lea edx, ... */
+        if (rm == 4) op[n++] = (uint8_t)sib;
+        if (disp_bytes == 1) {
+            displacement = displacements[d];
+            op[n++] = (uint8_t)displacement;
+        } else if (disp_bytes == 4) {
+            displacement = displacements[d];
+            memcpy(op + n, &displacement, 4);
+            n += 4;
+        }
+        memcpy(state.gpr, register_sets[set], sizeof(state.gpr));
+        expected = displacement;
+        if (!no_base) expected += register_sets[set][base];
+        if (rm == 4 && index != 4) expected += register_sets[set][index] << scale;
+        state.eflags = 0x2;
+        assert(run_mode(op, n, 0xd400, mode & 1, mode >> 1) == 0);
+        if (state.gpr[2] != expected) {
+            fprintf(stderr, "lea form mod %u rm %u sib %02x disp %08x mode %u: %08x, want %08x\n",
+                    mod, rm, sib, displacement, mode, state.gpr[2], expected);
+            assert(0);
+        }
+        checked++;
+    }
+    assert(checked > 4000);
+    state = saved;
+}
+
 int main(int argc, char **argv)
 {
     assert(pw_vm_posix_backend(&backend)==PW_OK);
@@ -1839,6 +1901,7 @@ int main(int argc, char **argv)
         return sse_matrix();
     string_tests();
     muldiv_tests();
+    address_form_tests();
     /* Independent reference in test_pw_x86_reference.S executes these
      * operations as 32-bit instructions on the host CPU. */
     const uint8_t input[]={0x6a,0xff,0x68,0x44,0x33,0x22,0x11,0xe8,0,0,0,0};
