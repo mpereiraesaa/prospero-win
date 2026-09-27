@@ -100,6 +100,7 @@ int sceSystemServiceLoadExec(const char *path, char *const argv[]);
 int32_t sceKernelLoadStartModule(const char *path, size_t argc, const void *argv,
                                  uint32_t flags, const void *option, int *result);
 int sceKernelGetModuleInfo(int32_t handle, void *info);
+int sceKernelAvailableFlexibleMemorySize(size_t *bytes);
 
 static uint64_t now_ns(void)
 {
@@ -704,6 +705,19 @@ int main(int argc, char **argv)
                            "faults=%llu images=%llu",
                            (unsigned long long)v[0], (unsigned long long)v[1], (unsigned long long)v[2],
                            (unsigned long long)v[4], (unsigned long long)v[5], (unsigned long long)v[6]);
+            }
+            if (tick % 300 == 0) {
+                uint64_t m[6] = { 0 };
+                size_t flexible = 0;
+
+                if (start.memory_stats) start.memory_stats(m, 6);
+                (void)sceKernelAvailableFlexibleMemorySize(&flexible);
+                PS5LOG_LOG("PW_WINE64 memory flexible_free=%zuK dmem=%lluK dmem_peak=%lluK runs=%llu "
+                           "dmem_failures=%llu heap=%lluK heap_peak=%lluK",
+                           flexible >> 10, (unsigned long long)(m[0] >> 10),
+                           (unsigned long long)(m[1] >> 10), (unsigned long long)m[2],
+                           (unsigned long long)m[3], (unsigned long long)(m[4] >> 10),
+                           (unsigned long long)(m[5] >> 10));
             }
         }
     }

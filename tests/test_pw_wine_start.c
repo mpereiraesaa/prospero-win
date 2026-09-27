@@ -7,7 +7,7 @@
 
 /* A fake ntdll module: segment 0 holds the PRXDESC1 descriptor and its
  * names, segment 1 covers the fake entry points. */
-enum { EXPORTS = 4 };
+enum { EXPORTS = 5 };
 static struct {
     struct { uint64_t magic; uint32_t version, count; PwPrxExport exports[EXPORTS]; } descriptor;
     char names[EXPORTS][32];
@@ -43,6 +43,11 @@ static unsigned int fake_stats(uint64_t *out, unsigned int count)
     if (out && count) out[0] = 42;
     return 9;
 }
+static unsigned int fake_memory_stats(uint64_t *out, unsigned int count)
+{
+    if (out && count) out[0] = 7;
+    return 6;
+}
 
 static int32_t load_result = 0x44;
 static int info_result = 0;
@@ -60,11 +65,11 @@ static int fake_info(int32_t handle, void *info)
     uint32_t count = 2, size, prot = 1;
     uintptr_t low = (uintptr_t)fake_wine_main, high = low;
     const uintptr_t fns[] = { (uintptr_t)fake_module_start, (uintptr_t)fake_adopt,
-                              (uintptr_t)fake_stats };
+                              (uintptr_t)fake_stats, (uintptr_t)fake_memory_stats };
 
     assert(handle == load_result);
     if (info_result) return info_result;
-    for (unsigned i = 0; i < 3; i++) { if (fns[i] < low) low = fns[i]; if (fns[i] > high) high = fns[i]; }
+    for (unsigned i = 0; i < sizeof(fns) / sizeof(fns[0]); i++) { if (fns[i] < low) low = fns[i]; if (fns[i] > high) high = fns[i]; }
     memcpy(raw, &zero, 8);                          /* FW 12.02 clears the size word */
     address = (uint64_t)(uintptr_t)&module_data; size = sizeof(module_data);
     memcpy(raw + 0x108, &address, 8); memcpy(raw + 0x110, &size, 4); memcpy(raw + 0x114, &prot, 4);
@@ -95,9 +100,11 @@ static int fake_thread(void (*entry)(void *), void *arg, size_t stack)
 static void build_module(int with_optional)
 {
     static const char *const names[EXPORTS] = { "__wine_main", "module_start",
-                                                "pw_wine_dl_adopt", "__wine_virtual_stats" };
+                                                "pw_wine_dl_adopt", "__wine_virtual_stats",
+                                                "__wine_ps5_memory_stats" };
     const void *addresses[EXPORTS] = { (const void *)fake_wine_main, (const void *)fake_module_start,
-                                       (const void *)fake_adopt, (const void *)fake_stats };
+                                       (const void *)fake_adopt, (const void *)fake_stats,
+                                       (const void *)fake_memory_stats };
 
     memset(&module_data, 0, sizeof(module_data));
     module_data.descriptor.magic = PW_PRX_MAGIC;
@@ -133,6 +140,7 @@ int main(void)
     assert(calls_module_start == 1 && calls_adopt == 1 && adopt_handle == 0x44 &&
            !strcmp(adopt_path, config.ntdll_path) && start.adopted);
     assert(start.virtual_stats && start.virtual_stats(stats, 1) == 9 && stats[0] == 42);
+    assert(start.memory_stats && start.memory_stats(stats, 1) == 6 && stats[0] == 7);
     assert(pw_wine_start_environment(&start, &config, &ops) == PW_OK);
     assert(!strcmp(env_log, "WINEPREFIX=/data/prospero-win/prefixes/pinball;"
                             "WINE_PS5_NTDLL_DIR=/app0/win/wine/lib/wine/x86_64-unix;"
@@ -148,7 +156,8 @@ int main(void)
     calls_module_start = calls_adopt = 0;
     build_module(0);
     assert(pw_wine_start_load(&start, &config, &ops) == PW_OK);
-    assert(calls_module_start == 0 && calls_adopt == 0 && !start.adopted && !start.virtual_stats);
+    assert(calls_module_start == 0 && calls_adopt == 0 && !start.adopted && !start.virtual_stats &&
+           !start.memory_stats);
 
     /* Failures report the stage they stopped at. */
     load_result = -5;
