@@ -409,7 +409,10 @@ src/pw_wine_start.c
 native/pw_wine_display.c
 native/pw_wine_display.h
 src/pw_wine_start.h
+src/pw_wine_launch.c
+src/pw_wine_launch.h
 tests/test_pw_wine_start.c
+tests/test_pw_wine_launch.c
 tests/test_pw_wine_display.c
 native/pw_data_mount.c
 native/wine64_main.c
