@@ -54,7 +54,7 @@ out=$build_dir/dlls/wowprospero
 mkdir -p "$out/x86_64-windows"
 
 dbt="src/pw_x86_engine.c src/pw_x86_block.c src/pw_x86_cache.c src/pw_x86_hostexec.c
-     src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c"
+     src/pw_x86_reencode.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c"
 (cd "$root" && gcc -m64 -O2 -g -fPIC -shared -Wl,-Bsymbolic -Wl,-soname,wowprospero.so \
     -Wl,-z,defs -D__WINESRC__ -DWINE_UNIX_LIB -D_REENTRANT \
     -I"$module" -I"$build_dir/include" -I"$source_dir/include" -Isrc -Iinclude \

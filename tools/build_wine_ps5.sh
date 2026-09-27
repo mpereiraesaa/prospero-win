@@ -344,8 +344,8 @@ if [ "$prx_status" = 0 ]; then
     # code through the IA-32 DBT and imports ntdll's functions like win32u.
     wow=""
     for unit in wine/wowprospero/unix.c src/pw_x86_engine.c src/pw_x86_block.c \
-            src/pw_x86_cache.c src/pw_x86_hostexec.c src/pw_x87.c src/pw_guest_fp.c \
-            src/pw_vm.c src/pw_vm_posix.c; do
+            src/pw_x86_cache.c src/pw_x86_hostexec.c src/pw_x86_reencode.c src/pw_x87.c \
+            src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c; do
         object=$prx/obj/wow_$(basename "$unit" .c).o
         "$sdk/bin/prospero-clang" -std=gnu11 -O2 -fPIC -D__WINESRC__ -DWINE_UNIX_LIB -D_REENTRANT \
             -I"$root/wine/wowprospero" -I"$build/include" -I"$tree/include" \
