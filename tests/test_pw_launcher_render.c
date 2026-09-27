@@ -41,7 +41,7 @@ int main(void)
     uint32_t hashes[3]={render(&library),render(&unavailable),render(&empty)};
     /* Golden frames: a visual change must update these deliberately, after
      * looking at the new rendering. */
-    const uint32_t golden[3]={0x5be4b81au,0xa5e60446u,0x1155820cu};
+    const uint32_t golden[3]={0x84ed07eau,0x55663296u,0x1155820cu};
     if(memcmp(hashes,golden,sizeof(golden)))
         printf("launcher render hashes 0x%08x 0x%08x 0x%08x\n",hashes[0],hashes[1],hashes[2]);
     assert(!memcmp(hashes,golden,sizeof(golden)));
@@ -60,9 +60,9 @@ int main(void)
     assert((at(10,60)&0xff)>0xc0);                  /* blue title bar */
     assert(at(0,1079)==at(120,1079) && (at(120,1079)>>8&0xff)>0x80); /* green button */
     /* Tiles start at x=140 (three 520-pixel tiles, 40 apart); a selected
-     * tile carries an 8-pixel orange frame. */
+     * tile carries an 8-pixel Microsoft-blue frame. */
     uint32_t selected_edge=at(135,300),plain_edge=at(695,300);
-    assert(selected_edge>>16>0xe0 && (selected_edge&0xff)<0x50);
+    assert((selected_edge&0xff)>0xc0 && (selected_edge>>16)<0x50);
     assert(plain_edge!=selected_edge);
     /* Available bodies are pale blue, unavailable ones neutral grey. */
     uint32_t available_body=at(620,420),unavailable_body=at(1200,420);

@@ -225,7 +225,8 @@ static void title_bar(const Canvas *c)
 }
 static void tile(const Canvas *c,int32_t x,int32_t y,const PwLauncherItem *item,int selected)
 {
-    if(selected)rounded(c,x-8,y-8,TILE_W+16,TILE_H+16,20,rgb(0xff,0xc2,0x4a),rgb(0xe8,0x8a,0x10));
+    /* The selection frame is the familiar Microsoft blue. */
+    if(selected)rounded(c,x-8,y-8,TILE_W+16,TILE_H+16,20,rgb(0x3a,0x9b,0xf0),rgb(0x00,0x78,0xd4));
     uint32_t edge=item->available?rgb(0x6e,0x96,0xd8):rgb(0x98,0x9c,0xa6);
     rounded(c,x,y,TILE_W,TILE_H,14,edge,edge);
     uint32_t top=item->available?rgb(0xff,0xff,0xff):rgb(0xe6,0xe8,0xec);
