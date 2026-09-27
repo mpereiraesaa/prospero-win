@@ -1,0 +1,100 @@
+From 7c1e0d4a2b9f3e5d6a8c0b1f2e3d4c5b6a7f8e9d Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 11:05:00 +0200
+Subject: [PATCH] win32u: Keep the PS5 driver's cursor whole at the frame's
+ edges.
+
+The pointer reaches every pixel of the presented area, as on Windows, so
+at the right and bottom edges the arrow's top-left hotspot left all but
+its one-pixel tip outside the frame, and after the title scaled the
+frame to the TV the cursor seemed to leave the screen there while it
+stopped at the top and left. A pointer steered with a stick needs to
+stay in sight: the drawn cursor is moved just enough to keep its
+visible pixels inside the frame, at every edge, and the pointer keeps
+its position.
+---
+ dlls/win32u/ps5drv.c | 32 +++++++++++++++++++++++++++++++-
+ 1 file changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
+index 965b945..cc3018a 100644
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -83,6 +83,8 @@ static POINT cursor;
+ static UINT32 *cursor_image, *frame;
+ static UINT cursor_width, cursor_height;
+ static POINT cursor_hotspot;
++/* The cursor image's visible (non-transparent) pixels, in image coordinates */
++static RECT cursor_box;
+ /* WINE_PS5_VIEW=window shows only the visible top-level windows' bounding
+  * box, which the title scales to the whole TV, instead of the desktop;
+  * view is what the last frame showed, in screen coordinates. */
+@@ -111,11 +113,17 @@ static void clear_screen_rect( const RECT *rect )
+ }
+ 
+ /* screen_lock held: blend the cursor into out, a width x height copy of
+- * the screen area whose top left is origin */
++ * the screen area whose top left is origin.  The pointer reaches every
++ * pixel, so at the right and bottom edges an arrow's hotspot would leave
++ * all but its tip outside the frame, and a centred hotspot would do so at
++ * every edge; the drawn cursor is moved just enough to stay whole, as a
++ * console's pointer does, while the pointer itself stays where it is. */
+ static void draw_cursor( UINT32 *out, POINT origin, INT width, INT height )
+ {
+     INT left = cursor.x - cursor_hotspot.x - origin.x, top = cursor.y - cursor_hotspot.y - origin.y, x, y;
+ 
++    left = max( min( left, width - cursor_box.right ), -cursor_box.left );
++    top = max( min( top, height - cursor_box.bottom ), -cursor_box.top );
+     for (y = max( top, 0 ); y < min( top + (INT)cursor_height, height ); y++)
+     {
+         const UINT32 *src = cursor_image + (y - top) * cursor_width;
+@@ -544,11 +552,31 @@ failed:
+     return NULL;
+ }
+ 
++/* The bounding box of an image's non-transparent pixels, empty if none */
++static RECT visible_box( const UINT32 *image, UINT width, UINT height )
++{
++    RECT box = {width, height, 0, 0};
++    UINT x, y;
++
++    for (y = 0; y < height; y++)
++        for (x = 0; x < width; x++)
++        {
++            if (!(image[y * width + x] >> 24)) continue;
++            box.left = min( box.left, (LONG)x );
++            box.top = min( box.top, (LONG)y );
++            box.right = max( box.right, (LONG)x + 1 );
++            box.bottom = max( box.bottom, (LONG)y + 1 );
++        }
++    if (box.right <= box.left) SetRectEmpty( &box );
++    return box;
++}
++
+ static void ps5_SetCursor( HWND hwnd, HCURSOR handle )
+ {
+     UINT32 *image = NULL, *old;
+     UINT width = 0, height = 0;
+     ICONINFO info;
++    RECT box = {0, 0, 0, 0};
+ 
+     if (handle && NtUserGetIconInfo( handle, &info, NULL, NULL, NULL, 0 ))
+     {
+@@ -563,12 +591,14 @@ static void ps5_SetCursor( HWND hwnd, HCURSOR handle )
+         if (info.hbmMask) NtGdiDeleteObjectApp( info.hbmMask );
+         if (image && (info.xHotspot >= width || info.yHotspot >= height))
+             info.xHotspot = info.yHotspot = 0;
++        if (image) box = visible_box( image, width, height );
+     }
+     pthread_mutex_lock( &screen_lock );
+     old = cursor_image;
+     cursor_image = image;
+     cursor_width = width;
+     cursor_height = height;
++    cursor_box = box;
+     if (image) cursor_hotspot = (POINT){info.xHotspot, info.yHotspot};
+     if (old || image) present_screen();
+     pthread_mutex_unlock( &screen_lock );
+-- 
+2.43.0
+

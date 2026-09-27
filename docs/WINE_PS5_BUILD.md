@@ -208,6 +208,12 @@ instead of starting explorer. The driver:
   handed to `pw_wine_present()`, the title's single sink
   (`wine/ps5/pw_wine_sink.c` in ntdll.prx). A window that has just been
   shown is redrawn, since it may have painted before it had this surface.
+- **Cursor.** No display server draws the pointer, so the driver blends the
+  application's cursor into a copy of each frame (patch 0420). The pointer
+  reaches every pixel. At the right and bottom edges, an arrow's top-left
+  hotspot used to leave only its one-pixel tip inside the frame. Patch 0440
+  moves the drawn cursor just enough to keep its visible pixels inside the
+  frame at every edge; the pointer itself does not move.
 - **Input.** `ProcessEvents` drains `pw_wine_next_input()` into hardware
   input:
   - keys;
@@ -227,6 +233,12 @@ input.
   board and edit area.
 - A scripted click at (40,200) opened winemine's board and started its timer.
 - Typed `HI` reached notepad's edit control as `WM_KEYDOWN`/`WM_CHAR` (`h`, `i`).
+- Cursor edges (2026-09-27, patches through 0440). The fixture moved
+  winemine's pointer to each edge (`PW_INPUT_MOVES`, `PW_FRAME_DIR`), then to
+  the bottom-right corner (799,599). Every frame showed the whole arrow; at
+  the corner its white pixels covered (785,576)-(797,597). Without 0440,
+  the frames at x=799 and y=599 showed only a one-pixel column or row of the
+  arrow.
 - No text was drawn in that host build (`--without-freetype`). The PS5 build
   now has fonts: see "Fonts" below.
 
