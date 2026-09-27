@@ -108,6 +108,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Same-ISA re-encoder: pinned GPRs, native flags, copied instructions | 987 | 1204 | +22% | 28.6% |
 | Re-encoder: lock, atomic xchg/cmpxchg/xadd/cmpxchg8b, fs: | 1237 | 1212 | noise | 23.0% |
 | Re-encoder: returns and indirect calls stay pinned | 1237 | 1316 | +6% | 24.9% |
+| Chain quantum 64 to 1024 linked blocks per dispatcher return | 1299 | 1416 | +9% | 29.2% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -197,6 +198,20 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   (`movzx`, `lea`, `not`, `xchg`, `jrcxz`), so a hit jumps to the target
   with the state still in registers. Same rounds as above; compression
   gains 16% (1457-1556 against 1105-1290), decompression is unchanged.
+- **Chain quantum.** A chain returned to the dispatcher every 64 linked
+  blocks. wowprospero now allows 1024 (`PW_WOW_QUANTUM` overrides it). The
+  dispatcher return is where a thread notices another thread's code flush
+  or suspension; the longest chain is now 1024 blocks of at most 32
+  instructions, about 25 us at this rate, still far below a scheduler
+  tick. A flush by the thread itself arrives through a syscall, which
+  leaves the chain anyway. Pinball renders and plays with no `err:` lines.
+  Three rounds, native median 4850; decompression +20%.
+
+### After the re-encoder
+
+Main with #164-#170 against native, three interleaved rounds each (the
+rows above), total MIPS: from 956 (20% of native) to 1416 (29.2%), about
+1.5x. Compression is at 26-30% of native and decompression at 34%.
 
 ### After these changes
 
@@ -227,7 +242,7 @@ Published ratios, total rating as a share of native:
 | Rosetta 2 | Apple M1 | 71% | [box86.org, 2022-03][b] |
 | FEX (x86 / x86-64) | Raspberry Pi 400 | 19% / 26% (FEX of 2022) | [box86.org, 2022-03][b] |
 | QEMU user (x86 / x86-64) | Raspberry Pi 400 | 11% / 16% | [box86.org, 2022-03][b] |
-| **prospero-win DBT** | i7-12700H (x86-64) | **20%** (12% before) | this page |
+| **prospero-win DBT** | i7-12700H (x86-64) | **29%** (20%, and 12% before that) | this page |
 
 These are indicative only. The others translate x86 to ARM on other
 hardware, and FEX has improved a lot since 2022. Our host is x86-64, so the
@@ -269,20 +284,21 @@ available on this host), full-fix build:
 
 ### Still open
 
-- **Guest registers in memory.** Most instructions still load and store
-  `[rdi+gpr*4]`. Mapping all eight guest GPRs to host registers for a whole
-  block or chain, with spills at exits, helpers and faults, is the
-  structural step toward box64's ~50%. Residency (three host registers) is
-  the partial version and is now neutral.
+- **What the re-encoder does not take yet** ends its block and goes to the
+  emitter, which stores and reloads the pinned state: SSE and x87 (the
+  largest remaining share in Wine and in 7-Zip's CRC and match finders),
+  string instructions, div/idiv (they fault natively), push/pop of 16-bit
+  operands, pusha/popa, and forms that need REX with ah-bh. Taking SSE and
+  x87 register forms verbatim is the next step.
+- **The guard's flag save.** When flags are live across a memory access,
+  the guard wraps its compare in `lahf`/`seto` and `sahf`; a flag-free
+  bounds check (for example with `bextr`/`lea` and `jrcxz`) would remove
+  that.
 - **The memory guard.** The flat guard is one `lea`, `cmp` and `ja` per
   access. Removing it needs a reserved 4 GiB guest range and a fault
   handler that turns a host fault into the guest's access violation at the
   right EIP. That handler has to live beside Wine's own signal handling on
   the PS5, so it needs the console to validate.
-- **Chain quantum.** A chain yields to the dispatcher every 64 blocks. 1024
-  measured +9% more (974 to 1055 total MIPS); the cost is how long a
-  thread runs before it notices a flush or a signal, which needs measuring
-  with Pinball first.
 - **Flag capture.** Producers still capture flags with `pushfq; pop` when
   the branch is not adjacent.
 

@@ -37,6 +37,8 @@ enum { GUEST_LOW = 0x10000u, GUEST_HIGH = 0xfffff000u };
  * leaving out EDX measured best on 7-Zip (docs/DBT_BENCHMARK.md), unless
  * PW_WOW_RESIDENT names others. */
 enum { GLOBAL_RESIDENT = 0xfb };
+/* Linked blocks per dispatcher return (docs/DBT_BENCHMARK.md). */
+enum { QUANTUM = 1024 };
 
 struct pw_thread
 {
@@ -164,6 +166,14 @@ static struct pw_thread *get_thread(void)
         pw_x86_engine_set_reencode( &thread->engine, digits < 6 || modes[5] != '0' );
         /* Nothing here reads the step statistics; PW_WOW_STATS keeps them. */
         pw_x86_engine_set_counters( &thread->engine, getenv( "PW_WOW_STATS" ) != NULL );
+        /* A chain returns to this loop, which notices code flushes, after
+         * QUANTUM linked blocks: at a few instructions a block that is tens
+         * of microseconds. PW_WOW_QUANTUM overrides it. */
+        {
+            const char *quantum = getenv( "PW_WOW_QUANTUM" );
+            unsigned long value = quantum ? strtoul( quantum, NULL, 10 ) : QUANTUM;
+            pw_x86_engine_set_quantum( &thread->engine, value ? (uint32_t)value : QUANTUM );
+        }
     }
     thread->prefer_host = getenv( "PW_WOW_HOSTEXEC_ALL" ) != NULL;
     if (getenv( "PW_WOW_TRACE" ))
