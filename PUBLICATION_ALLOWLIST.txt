@@ -413,6 +413,7 @@ tests/test_pw_wine_start.c
 tests/test_pw_wine_display.c
 native/pw_data_mount.c
 native/wine64_main.c
+native/relaunch_probe_main.c
 native/pw_data_mount.h
 tests/test_pw_data_mount.c
 tests/test_pw_data_mount_native.c

@@ -25,7 +25,8 @@
 #                          and verifies its artifacts instead of rebuilding
 #                          its dependencies, which would mutate a tree the
 #                          laboratory's other projects share (default 0)
-#   PW_NATIVE_MODE         runtime (default), gate, wine bootstrap, or wine64
+#   PW_NATIVE_MODE         runtime (default), gate, wine bootstrap, wine64, or
+#                          relaunch (self-restart probe)
 #                          (Wine's own ntdll.prx started in-process)
 #   PW_WINE_PS5_PRX_DIR    gate mode: directory holding ntdll.prx and
 #                          win32u.prx (tools/build_wine_ps5.sh), packaged in
@@ -81,8 +82,8 @@ fi
 [[ $compat32_transfer == 0 || $compat32_transfer == 1 ]] || {
     echo "PW_COMPAT32_TRANSFER must be 0 or 1" >&2; exit 2; }
 [[ $native_mode == runtime || $native_mode == gate || $native_mode == wine ||
-   $native_mode == wine64 ]] || {
-    echo "PW_NATIVE_MODE must be runtime, gate, wine or wine64" >&2; exit 2; }
+   $native_mode == wine64 || $native_mode == relaunch ]] || {
+    echo "PW_NATIVE_MODE must be runtime, gate, wine, wine64 or relaunch" >&2; exit 2; }
 if [[ -n $wine_ps5_prx_dir ]]; then
     [[ $native_mode == gate ]] || {
         echo "PW_WINE_PS5_PRX_DIR requires PW_NATIVE_MODE=gate" >&2; exit 2; }
@@ -324,6 +325,8 @@ entry=native/runtime_main.c
 # wine64: Wine's own Unix side (ntdll.prx) started in-process; the guest
 # inputs are staged like gate mode and are not read by this entry.
 [[ $native_mode == wine64 ]] && entry=native/wine64_main.c
+# relaunch: a probe that restarts the title with arguments (launcher design).
+[[ $native_mode == relaunch ]] && entry=native/relaunch_probe_main.c
 sources=(
     "$entry" native/pw_file_ps5.c native/pw_prefix_ps5.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_state_ps5.c native/pw_agc_ps5.c native/pw_agc_submit_lifecycle.c native/pw_videoout_ps5.c native/pw_compat32_ps5.c
     native/pw_lowmem_ps5.c native/pw_wine_platform_ps5.c native/pw_ucontext_map_ps5.c native/pw_vmspace_ps5.c

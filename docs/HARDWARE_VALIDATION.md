@@ -145,6 +145,28 @@ windowless `WM_QUIT`, and a second session could not reinitialise
 SceAudioOut. The validated input is the scripted timeline; a run driven by a
 physical controller remains an operator check.
 
+## Title self-restart with arguments
+
+The planned launcher runs one game per title process: choosing a game
+restarts the title with the game's profile as arguments, and closing it
+restarts the title into the launcher, so every game starts Wine in a clean
+process. `PW_NATIVE_MODE=relaunch` builds the probe
+(`native/relaunch_probe_main.c`).
+
+On firmware 12.02 (2026-09-27, ps5log `20260927T000252036Z`,
+`20260927T000255468Z` and `20260927T000258899Z`, baseline eboot restored):
+
+- `sceSystemServiceLoadExec("/app0/eboot.bin", argv)` restarted the title
+  twice in a row;
+- each generation was a new process (pids 3030, 3031, 3032) and received the
+  arguments intact, including `path=C:\Games\Pinball\PINBALL.EXE`;
+- `argv[0]` is the first argument passed, not a program name; a launch from
+  the system gives `argc=1` with an empty `argv[0]`;
+- the restart took 431 and 430 ms, measured with `CLOCK_REALTIME` stamps
+  passed as an argument.
+
+`sceSystemServiceLaunchApp` on the title's own ID was not needed.
+
 ## Evidence rules
 
 A screenshot or video proves appearance only. Runtime acceptance requires:
