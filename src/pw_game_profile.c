@@ -1,0 +1,311 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#include "pw_game_profile.h"
+#include <string.h>
+
+enum { SET_MODE = 1u << 0, SET_MOUSE = 1u << 1, SET_SPEED = 1u << 2, SET_PRESET = 1u << 3 };
+
+/* DualSense buttons in PW_GAME_BUTTON order, with their scePadRead bits. */
+static const struct { const char *name; uint32_t mask; } buttons[PW_GAME_BUTTON_COUNT] = {
+    { "cross", 0x4000u }, { "circle", 0x2000u }, { "square", 0x8000u }, { "triangle", 0x1000u },
+    { "l1", 0x400u }, { "r1", 0x800u }, { "l2", 0x100u }, { "r2", 0x200u },
+    { "l3", 0x2u }, { "r3", 0x4u }, { "up", 0x10u }, { "down", 0x40u },
+    { "left", 0x80u }, { "right", 0x20u }, { "options", 0x8u }, { "create", 0x1u },
+    { "touchpad", 0x100000u },
+};
+
+/* Windows virtual keys by name. */
+static const struct { const char *name; uint16_t vk; } keys[] = {
+    { "space", 0x20 }, { "enter", 0x0d }, { "escape", 0x1b }, { "tab", 0x09 },
+    { "backspace", 0x08 }, { "shift", 0x10 }, { "ctrl", 0x11 }, { "alt", 0x12 },
+    { "pause", 0x13 }, { "pageup", 0x21 }, { "pagedown", 0x22 }, { "end", 0x23 },
+    { "home", 0x24 }, { "left", 0x25 }, { "up", 0x26 }, { "right", 0x27 }, { "down", 0x28 },
+    { "insert", 0x2d }, { "delete", 0x2e }, { "semicolon", 0xba }, { "equals", 0xbb },
+    { "comma", 0xbc }, { "minus", 0xbd }, { "period", 0xbe }, { "slash", 0xbf },
+    { "backquote", 0xc0 }, { "lbracket", 0xdb }, { "backslash", 0xdc }, { "rbracket", 0xdd },
+    { "quote", 0xde },
+};
+
+static char lower(char c) { return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c; }
+
+/* Case-insensitive match of [text, text+length) against a NUL-terminated word. */
+static int is(const uint8_t *text, size_t length, const char *word)
+{
+    size_t n = strlen(word);
+
+    if (n != length) return 0;
+    for (size_t i = 0; i < n; i++) if (lower((char)text[i]) != word[i]) return 0;
+    return 1;
+}
+
+static void trim(const uint8_t **begin, const uint8_t **end)
+{
+    while (*begin < *end && (**begin == ' ' || **begin == '\t')) ++*begin;
+    while (*end > *begin && ((*end)[-1] == ' ' || (*end)[-1] == '\t')) --*end;
+}
+
+static int number(const uint8_t *text, size_t length, uint32_t *out)
+{
+    uint64_t value = 0;
+
+    if (!length || length > 9) return PW_ERR_MALFORMED;
+    for (size_t i = 0; i < length; i++) {
+        if (text[i] < '0' || text[i] > '9') return PW_ERR_MALFORMED;
+        value = value * 10u + (uint64_t)(text[i] - '0');
+    }
+    *out = (uint32_t)value;
+    return PW_OK;
+}
+
+static int hex_digit(uint8_t c)
+{
+    c = (uint8_t)lower((char)c);
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+/* A key name, a letter, a digit, f1-f24, vk:0xNN, mouse_* or none. */
+static int binding(const uint8_t *v, size_t n, PwGameBinding *out)
+{
+    if (is(v, n, "none")) { out->kind = PW_GAME_BIND_NONE; out->code = 0; return PW_OK; }
+    if (is(v, n, "mouse_left") || is(v, n, "mouse_right") || is(v, n, "mouse_middle")) {
+        out->kind = PW_GAME_BIND_MOUSE;
+        out->code = is(v, n, "mouse_left") ? 0 : is(v, n, "mouse_right") ? 1 : 2;
+        return PW_OK;
+    }
+    out->kind = PW_GAME_BIND_KEY;
+    if (n == 1) {
+        char c = lower((char)v[0]);
+        if (c >= 'a' && c <= 'z') { out->code = (uint16_t)(c - 'a' + 'A'); return PW_OK; }
+        if (c >= '0' && c <= '9') { out->code = (uint16_t)c; return PW_OK; }
+        return PW_ERR_UNSUPPORTED;
+    }
+    if ((n == 2 || n == 3) && lower((char)v[0]) == 'f') {
+        uint32_t f;
+        if (number(v + 1, n - 1, &f) == PW_OK && f >= 1 && f <= 24) {
+            out->code = (uint16_t)(0x70 + f - 1);
+            return PW_OK;
+        }
+        return PW_ERR_UNSUPPORTED;
+    }
+    if (n == 7 && is(v, 5, "vk:0x")) {
+        int high = hex_digit(v[5]), low = hex_digit(v[6]);
+        if (high < 0 || low < 0 || !(high | low)) return PW_ERR_UNSUPPORTED;
+        out->code = (uint16_t)(high * 16 + low);
+        return PW_OK;
+    }
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+        if (is(v, n, keys[i].name)) { out->code = keys[i].vk; return PW_OK; }
+    return PW_ERR_UNSUPPORTED;
+}
+
+static int input_field(PwGameInput *input, const uint8_t *key, size_t key_length,
+                       const uint8_t *v, size_t n, int allow_preset)
+{
+    if (is(key, key_length, "preset")) {
+        if (!allow_preset || (input->set & SET_PRESET)) return PW_ERR_MALFORMED;
+        if (!n || n >= sizeof(input->preset)) return PW_ERR_MALFORMED;
+        for (size_t i = 0; i < n; i++) {
+            char c = (char)v[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
+                return PW_ERR_MALFORMED;
+            input->preset[i] = c;
+        }
+        input->preset[n] = 0;
+        input->set |= SET_PRESET;
+        return PW_OK;
+    }
+    if (is(key, key_length, "mode")) {
+        if (input->set & SET_MODE) return PW_ERR_MALFORMED;
+        if (is(v, n, "keyboard")) input->mode = PW_GAME_INPUT_KEYBOARD;
+        else if (is(v, n, "xinput")) input->mode = PW_GAME_INPUT_XINPUT;
+        else return PW_ERR_UNSUPPORTED;
+        input->set |= SET_MODE;
+        return PW_OK;
+    }
+    if (is(key, key_length, "mouse")) {
+        if (input->set & SET_MOUSE) return PW_ERR_MALFORMED;
+        if (is(v, n, "none")) input->mouse = PW_GAME_STICK_NONE;
+        else if (is(v, n, "left_stick")) input->mouse = PW_GAME_STICK_LEFT;
+        else if (is(v, n, "right_stick")) input->mouse = PW_GAME_STICK_RIGHT;
+        else return PW_ERR_UNSUPPORTED;
+        input->set |= SET_MOUSE;
+        return PW_OK;
+    }
+    if (is(key, key_length, "mouse_speed")) {
+        uint32_t speed;
+        if ((input->set & SET_SPEED) || number(v, n, &speed) != PW_OK || !speed ||
+            speed > PW_GAME_MOUSE_SPEED_MAX)
+            return PW_ERR_MALFORMED;
+        input->mouse_speed = speed;
+        input->set |= SET_SPEED;
+        return PW_OK;
+    }
+    for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++) {
+        if (!is(key, key_length, buttons[i].name)) continue;
+        PwGameBinding parsed = { buttons[i].mask, 0, 0 };
+        if (input->bindings[i].kind != PW_GAME_BIND_UNSET) return PW_ERR_MALFORMED;
+        int status = binding(v, n, &parsed);
+        if (status == PW_OK) input->bindings[i] = parsed;
+        return status;
+    }
+    return PW_ERR_UNSUPPORTED;
+}
+
+static int display_field(PwGameDisplay *display, uint32_t *seen, const uint8_t *key,
+                         size_t key_length, const uint8_t *v, size_t n)
+{
+    if (is(key, key_length, "desktop")) {
+        const uint8_t *x = memchr(v, 'x', n);
+        uint32_t w, h;
+        if ((*seen & 1u) || !x || number(v, (size_t)(x - v), &w) != PW_OK ||
+            number(x + 1, n - (size_t)(x - v) - 1, &h) != PW_OK ||
+            w < PW_GAME_DESKTOP_MIN_W || h < PW_GAME_DESKTOP_MIN_H ||
+            w > PW_GAME_DESKTOP_MAX_W || h > PW_GAME_DESKTOP_MAX_H)
+            return PW_ERR_MALFORMED;
+        display->width = w;
+        display->height = h;
+        *seen |= 1u;
+        return PW_OK;
+    }
+    if (is(key, key_length, "scaling")) {
+        if (*seen & 2u) return PW_ERR_MALFORMED;
+        if (is(v, n, "fit")) display->scaling = PW_GAME_SCALING_FIT;
+        else if (is(v, n, "integer")) display->scaling = PW_GAME_SCALING_INTEGER;
+        else if (is(v, n, "stretch")) display->scaling = PW_GAME_SCALING_STRETCH;
+        else return PW_ERR_UNSUPPORTED;
+        *seen |= 2u;
+        return PW_OK;
+    }
+    return PW_ERR_UNSUPPORTED;
+}
+
+enum { SECTION_NONE, SECTION_APPLICATION, SECTION_DISPLAY, SECTION_INPUT };
+
+/* One line: its trimmed extent and where the next begins. */
+static size_t next_line(const uint8_t *bytes, size_t length, size_t cursor,
+                        const uint8_t **begin, const uint8_t **end)
+{
+    size_t start = cursor;
+
+    while (cursor < length && bytes[cursor] != '\n' && bytes[cursor] != '\r') cursor++;
+    *begin = bytes + start;
+    *end = bytes + cursor;
+    trim(begin, end);
+    while (cursor < length && (bytes[cursor] == '\n' || bytes[cursor] == '\r')) cursor++;
+    return cursor;
+}
+
+static int section_of(const uint8_t *begin, const uint8_t *end)
+{
+    if (end - begin < 3 || end[-1] != ']') return -1;
+    begin++, end--;
+    return is(begin, (size_t)(end - begin), "application") ? SECTION_APPLICATION :
+           is(begin, (size_t)(end - begin), "display") ? SECTION_DISPLAY :
+           is(begin, (size_t)(end - begin), "input") ? SECTION_INPUT : -1;
+}
+
+/* key = value lines of the display/input sections; application lines are
+ * left to pw_app_profile. */
+static int parse_sections(const uint8_t *bytes, size_t length, PwGameProfile *profile,
+                          PwGameInput *input_only, size_t *application_end)
+{
+    int section = SECTION_NONE;
+    uint32_t seen_sections = 0, display_seen = 0;
+    size_t cursor = 0;
+
+    while (cursor < length) {
+        const uint8_t *begin, *end, *equals, *key_end, *value;
+        size_t line = cursor;
+
+        cursor = next_line(bytes, length, cursor, &begin, &end);
+        if (begin == end || *begin == ';' || *begin == '#') continue;
+        if (*begin == '[') {
+            int next = section_of(begin, end);
+            if (next < 0 || (seen_sections & (1u << next))) return PW_ERR_MALFORMED;
+            if (input_only ? next != SECTION_INPUT :
+                (section == SECTION_NONE) != (next == SECTION_APPLICATION))
+                return PW_ERR_MALFORMED;
+            if (section == SECTION_APPLICATION && application_end) *application_end = line;
+            seen_sections |= 1u << next;
+            section = next;
+            continue;
+        }
+        if (section == SECTION_NONE) return PW_ERR_MALFORMED;
+        if (section == SECTION_APPLICATION) continue;
+        for (equals = begin; equals < end && *equals != '='; equals++) {}
+        if (equals == end) return PW_ERR_MALFORMED;
+        key_end = equals;
+        trim(&begin, &key_end);
+        value = equals + 1;
+        trim(&value, &end);
+        if (begin == key_end) return PW_ERR_MALFORMED;
+        int status = section == SECTION_DISPLAY ?
+            display_field(&profile->display, &display_seen, begin, (size_t)(key_end - begin),
+                          value, (size_t)(end - value)) :
+            input_field(input_only ? input_only : &profile->input, begin,
+                        (size_t)(key_end - begin), value, (size_t)(end - value), !input_only);
+        if (status != PW_OK) return status;
+    }
+    if (input_only ? !(seen_sections & (1u << SECTION_INPUT)) :
+        !(seen_sections & (1u << SECTION_APPLICATION)))
+        return PW_ERR_MALFORMED;
+    return PW_OK;
+}
+
+void pw_game_input_init(PwGameInput *input)
+{
+    if (!input) return;
+    memset(input, 0, sizeof(*input));
+    input->mouse_speed = PW_GAME_MOUSE_SPEED_DEFAULT;
+    for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++) input->bindings[i].mask = buttons[i].mask;
+}
+
+int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *profile)
+{
+    PwGameProfile parsed;
+    size_t application_end = length;
+    int status;
+
+    if (!bytes || !profile || !length) return PW_ERR_PRECONDITION;
+    if (length > PW_APP_PROFILE_MAX_BYTES) return PW_ERR_LIMIT;
+    memset(&parsed, 0, sizeof(parsed));
+    pw_game_input_init(&parsed.input);
+    parsed.input.mouse_speed = 0;       /* unset until a line sets it */
+    if ((status = parse_sections(bytes, length, &parsed, NULL, &application_end)) != PW_OK)
+        return status;
+    if ((status = pw_app_profile_parse(bytes, application_end, &parsed.app)) != PW_OK)
+        return status;
+    *profile = parsed;
+    return PW_OK;
+}
+
+int pw_game_input_parse(const uint8_t *bytes, size_t length, PwGameInput *input)
+{
+    PwGameProfile unused;
+    PwGameInput parsed;
+    int status;
+
+    if (!bytes || !input || !length) return PW_ERR_PRECONDITION;
+    if (length > PW_APP_PROFILE_MAX_BYTES) return PW_ERR_LIMIT;
+    memset(&unused, 0, sizeof(unused));
+    pw_game_input_init(&parsed);
+    parsed.mouse_speed = 0;
+    if ((status = parse_sections(bytes, length, &unused, &parsed, NULL)) != PW_OK) return status;
+    pw_game_input_overlay(input, &parsed);
+    return PW_OK;
+}
+
+void pw_game_input_overlay(PwGameInput *base, const PwGameInput *overrides)
+{
+    if (!base || !overrides) return;
+    if (overrides->set & SET_MODE) base->mode = overrides->mode;
+    if (overrides->set & SET_MOUSE) base->mouse = overrides->mouse;
+    if (overrides->set & SET_SPEED) base->mouse_speed = overrides->mouse_speed;
+    base->set |= overrides->set & (SET_MODE | SET_MOUSE | SET_SPEED);
+    for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++)
+        if (overrides->bindings[i].kind != PW_GAME_BIND_UNSET) base->bindings[i] = overrides->bindings[i];
+}
+
+uint32_t pw_game_button_mask(size_t index)
+{
+    return index < PW_GAME_BUTTON_COUNT ? buttons[index].mask : 0u;
+}
