@@ -572,6 +572,90 @@ static void test_wx_backend_spy(void)
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
 }
 
+static const PwX86CacheEntry *entry_at(const PwX86CacheEntry *entries, size_t count, uint32_t pc)
+{
+    for (size_t i = 0; i < count; i++)
+        if (entries[i].used && entries[i].guest_pc == pc) return &entries[i];
+    return NULL;
+}
+
+/* 11. Exits waiting for different targets in one bucket: compiling a target
+ * links exactly the exits waiting for it, in any order, including when the
+ * target is published into the bucket's own slot. */
+static void test_pending_exits_share_a_bucket(void)
+{
+    /* At capacity 8, 0x1060, 0x1070 and 0x11a0 all hash to bucket 0. */
+    static const uint32_t sources[3] = {0x1000, 0x1010, 0x1020};
+    static const uint32_t targets[3] = {0x1060, 0x1070, 0x11a0};
+    uint8_t code[0x1b0];
+    memset(code, 0x90, sizeof(code));
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t *jmp = code + (sources[i] - 0x1000);
+        uint8_t *target = code + (targets[i] - 0x1000);
+        int32_t rel = (int32_t)(targets[i] - (sources[i] + 5));
+        jmp[0] = 0xe9; memcpy(jmp + 1, &rel, 4);             /* jmp target */
+        target[0] = 0xb8; target[1] = (uint8_t)(10 * (i + 1));  /* mov eax, 10*(i+1) */
+        target[2] = target[3] = target[4] = 0; target[5] = 0xc3; /* ret */
+    }
+
+    TestSource src = {0x1000, code, sizeof(code)};
+    PwVmBackend vm;
+    PwX86Engine engine;
+    PwX86CacheEntry entries[8];
+    PwX86State state = {.stack_low = 0x03000000, .stack_high = 0x03010000};
+    PwX86StepReport step;
+
+    assert(pw_vm_posix_backend(&vm) == PW_OK);
+    assert(pw_x86_engine_init(&engine, &vm, entries, 8, 65536, 1, test_source_view, &src) == PW_OK);
+    assert(pw_x86_engine_set_chaining(&engine, 1) == PW_OK);
+
+    /* Compile the three jumps; each exit waits, unlinked. */
+    for (unsigned i = 0; i < 3; i++) {
+        state.eip = sources[i];
+        assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK);
+        assert(state.eip == targets[i]);
+    }
+    assert(engine.successful_links == 0 && entries[0].pending_head != 0);
+
+    /* Compile the targets out of order: each links only its own waiter. */
+    static const unsigned order[3] = {1, 0, 2};
+    for (unsigned n = 0; n < 3; n++) {
+        unsigned i = order[n];
+        state.eip = targets[i];
+        state.gpr[4] = 0x0300ff00;
+        *(uint32_t *)(uintptr_t)state.gpr[4] = 0x44444444;
+        assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK);
+        assert(state.eip == 0x44444444 && state.gpr[0] == 10 * (i + 1));
+        assert(engine.successful_links == n + 1);
+        for (unsigned j = 0; j < 3; j++) {
+            const PwX86CacheEntry *jump = entry_at(entries, 8, sources[j]);
+            unsigned compiled = j == order[0] || (n >= 1 && j == order[1]) || n == 2;
+            assert(jump && jump->link_slots[0].is_linked == compiled);
+        }
+    }
+    /* Nothing is left waiting: 0x1070, compiled first, took slot 0 and kept
+     * the bucket's chain for the other two. A jump now runs through to its
+     * target in one step. */
+    assert(entries[0].used && entries[0].pending_head == 0);
+    assert(entry_at(entries, 8, 0x1070) == &entries[0]);
+    for (unsigned i = 0; i < 3; i++) {
+        state.eip = sources[i];
+        state.gpr[0] = 0;
+        state.gpr[4] = 0x0300ff00;
+        *(uint32_t *)(uintptr_t)state.gpr[4] = 0x44444444;
+        uint64_t transitions = engine.linked_transitions;
+        assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK);
+        assert(state.eip == 0x44444444 && state.gpr[0] == 10 * (i + 1));
+        assert(engine.linked_transitions == transitions + 1);
+    }
+
+    /* A reset forgets every waiter. */
+    assert(pw_x86_engine_reset(&engine, 2) == PW_OK);
+    for (unsigned i = 0; i < 8; i++)
+        assert(!entries[i].pending_head && !entries[i].pending_next[0] && !entries[i].pending_next[1]);
+    assert(pw_x86_engine_destroy(&engine) == PW_OK);
+}
+
 int main(void)
 {
     PwVmBackend vm;
@@ -590,8 +674,9 @@ int main(void)
     test_unchained_operations();
     test_code_arena_exhaustion();
     test_wx_backend_spy();
+    test_pending_exits_share_a_bucket();
 
     assert(vm.release(vm.context, &stack_region) == PW_OK);
-    printf("all 10 direct chaining tests passed successfully\n");
+    printf("all 11 direct chaining tests passed successfully\n");
     return 0;
 }

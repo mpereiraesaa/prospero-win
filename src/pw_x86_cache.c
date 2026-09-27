@@ -69,6 +69,7 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
         slot=(slot+1)%cache->capacity;
     }
     if(!available)return PW_ERR_LIMIT;
+    uint32_t pending_head=cache->entries[slot].pending_head;
     cache->entries[slot]=(PwX86CacheEntry){
         .guest_pc=guest_pc,.generation=cache->generation,.code_offset=code_offset,
         .code_bytes=block->code_bytes,.source_bytes=block->source_bytes,
@@ -77,7 +78,7 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
         .instructions=block->instructions,
         .entry_contract=block->entry_contract,
         .exit_contract=block->exit_contract,
-        .exit=block->exit,.used=1};
+        .exit=block->exit,.pending_head=pending_head,.used=1};
     cache->entries[slot].link_slots[0]=(PwX86LinkSlot){
         .target_pc=block->exit.target_pc,.source_pc=guest_pc,.target_code=NULL,.canonical_code=NULL,.is_linked=0,.is_reconciled=0};
     cache->entries[slot].link_slots[1]=(PwX86LinkSlot){

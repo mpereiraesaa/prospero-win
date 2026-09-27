@@ -21,6 +21,22 @@ static int protection(PwX86Engine *engine,size_t offset,size_t bytes,unsigned va
     return status;
 }
 
+/* The bucket an exit waits in until its target PC is compiled: the target's
+ * home slot in the cache's hash. */
+static uint32_t target_bucket(const PwX86Cache *cache,uint32_t target_pc)
+{
+    uint32_t hash=target_pc*2654435761u;hash^=hash>>16;
+    return hash%cache->capacity;
+}
+
+static void wait_for_target(PwX86Cache *cache,PwX86CacheEntry *entry,unsigned side)
+{
+    if(entry->link_slots[side].is_linked)return;
+    uint32_t *head=&cache->entries[target_bucket(cache,entry->link_slots[side].target_pc)].pending_head;
+    entry->pending_next[side]=*head;
+    *head=(uint32_t)(entry-cache->entries)*2+side+1;
+}
+
 int pw_x86_engine_init(PwX86Engine *engine,const PwVmBackend *backend,
                        PwX86CacheEntry *entries,uint32_t capacity,size_t arena_bytes,
                        uint32_t generation,PwX86SourceView source_view,void *opaque)
@@ -190,41 +206,40 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         }
     }
 
-    /* Backward link: connect existing unlinked exits targeting this PC */
+    /* Backward link: connect existing unlinked exits targeting this PC. Only
+     * the exits waiting in this PC's bucket are visited; scanning the whole
+     * cache on every compile made translation cost grow with cache size. */
+    if(engine->chaining_enabled && best.exit.chainable) {
+        wait_for_target(&engine->cache, e_mut, 0);
+        if(best.exit.kind == PW_X86_EXIT_CONDITIONAL) wait_for_target(&engine->cache, e_mut, 1);
+    }
     if(engine->chaining_enabled) {
-        for(uint32_t i=0; i<engine->cache.capacity; i++) {
-            PwX86CacheEntry *cand = &engine->cache.entries[i];
-            if(cand->used && cand->generation == engine->cache.generation && cand->exit.chainable) {
-                if(cand->link_slots[0].target_pc == pc && !cand->link_slots[0].is_linked) {
-                    engine->attempted_links++;
-                    if(pw_x86_contracts_match(&cand->exit_contract, &e_mut->entry_contract)) {
-                        cand->link_slots[0].target_code = exec_base + e_mut->code_offset + e_mut->chain_entry_offset;
-                        cand->link_slots[0].canonical_code = exec_base + e_mut->code_offset + e_mut->canonical_entry_offset;
-                        cand->link_slots[0].is_reconciled = 0;
-                    } else {
-                        cand->link_slots[0].target_code = exec_base + cand->code_offset + cand->exit.target_reconcile_offset;
-                        cand->link_slots[0].canonical_code = exec_base + e_mut->code_offset + e_mut->canonical_entry_offset;
-                        cand->link_slots[0].is_reconciled = 1;
-                    }
-                    cand->link_slots[0].is_linked = 1;
-                    engine->successful_links++;
+        uint32_t *link = &engine->cache.entries[target_bucket(&engine->cache, pc)].pending_head;
+        while(*link) {
+            unsigned side = (*link - 1) & 1;
+            PwX86CacheEntry *cand = &engine->cache.entries[(*link - 1) >> 1];
+            PwX86LinkSlot *slot = &cand->link_slots[side];
+            uint32_t *next = &cand->pending_next[side];
+
+            if(!slot->is_linked && slot->target_pc != pc) { link = next; continue; }
+            if(!slot->is_linked) {
+                engine->attempted_links++;
+                if(pw_x86_contracts_match(&cand->exit_contract, &e_mut->entry_contract)) {
+                    slot->target_code = exec_base + e_mut->code_offset + e_mut->chain_entry_offset;
+                    slot->canonical_code = exec_base + e_mut->code_offset + e_mut->canonical_entry_offset;
+                    slot->is_reconciled = 0;
+                } else {
+                    slot->target_code = exec_base + cand->code_offset +
+                        (side ? cand->exit.fallthrough_reconcile_offset : cand->exit.target_reconcile_offset);
+                    slot->canonical_code = exec_base + e_mut->code_offset + e_mut->canonical_entry_offset;
+                    slot->is_reconciled = 1;
                 }
-                if(cand->exit.kind == PW_X86_EXIT_CONDITIONAL &&
-                   cand->link_slots[1].target_pc == pc && !cand->link_slots[1].is_linked) {
-                    engine->attempted_links++;
-                    if(pw_x86_contracts_match(&cand->exit_contract, &e_mut->entry_contract)) {
-                        cand->link_slots[1].target_code = exec_base + e_mut->code_offset + e_mut->chain_entry_offset;
-                        cand->link_slots[1].canonical_code = exec_base + e_mut->code_offset + e_mut->canonical_entry_offset;
-                        cand->link_slots[1].is_reconciled = 0;
-                    } else {
-                        cand->link_slots[1].target_code = exec_base + cand->code_offset + cand->exit.fallthrough_reconcile_offset;
-                        cand->link_slots[1].canonical_code = exec_base + e_mut->code_offset + e_mut->canonical_entry_offset;
-                        cand->link_slots[1].is_reconciled = 1;
-                    }
-                    cand->link_slots[1].is_linked = 1;
-                    engine->successful_links++;
-                }
+                slot->is_linked = 1;
+                engine->successful_links++;
             }
+            /* Linked now, or earlier on the dispatch path: stop waiting. */
+            *link = *next;
+            *next = 0;
         }
     }
 

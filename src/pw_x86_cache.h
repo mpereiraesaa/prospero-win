@@ -23,6 +23,12 @@ typedef struct PwX86CacheEntry {
     PwX86RegContract exit_contract;
     PwX86ExitDesc exit;
     PwX86LinkSlot link_slots[2]; /* 0: target, 1: fallthrough */
+    /* Exits still waiting for their target block, chained per bucket of
+     * target PC: an exit is (entry index * 2 + side + 1), 0 ends a chain.
+     * pending_head belongs to the bucket this slot's index names, not to
+     * the block stored here, so publishing into the slot keeps it. */
+    uint32_t pending_next[2];
+    uint32_t pending_head;
     unsigned used;
 } PwX86CacheEntry;
 
