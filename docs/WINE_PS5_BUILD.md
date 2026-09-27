@@ -281,8 +281,12 @@ drivers, the hinters, the two rasterisers and FreeType's own gzip.
   `dlls/win32u/freetype.c` passes to `dlopen`.
 - The PRX stage links `libfreetype.prx`. Its descriptor exports the 31
   functions win32u loads with `dlsym`, so Wine's own `dlopen` loads it
-  through `pw_wine_dl`, like `wineserver.so`. It is staged beside
-  `ntdll.prx`.
+  through `pw_wine_dl`. It is staged beside `ntdll.prx`. The bare soname
+  has no directory, so `pw_wine_dl` looks for it in its module directory,
+  then beside each module already loaded (ntdll.prx). It never tries a bare
+  name as given: the console refuses relative paths.
+- A `dlopen` that fails writes one line to stderr, and so to ps5log:
+  `pw_wine_dl: cannot open <name>, tried <paths>: <reason>`.
 - Wine's 13 fonts (`fonts/*.ttf`: Tahoma, MS Sans Serif, Courier, System,
   Marlett and others) are copied to `<work>/prx/fonts`. They are staged
   under `share/wine/fonts`, where win32u looks for Wine's fonts.

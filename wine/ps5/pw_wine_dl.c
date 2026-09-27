@@ -17,6 +17,9 @@ static Module modules[PW_WINE_DL_MAX_MODULES];
 static uint32_t order[PW_WINE_DL_MAX_MODULES],loaded;
 static PwWineDlOps ops;
 static char module_dir[PW_WINE_DL_MAX_PATH];
+/* The paths the last failed open tried, for the ops' report callback. */
+static char report[PW_WINE_DL_REPORT];
+static size_t report_used;
 /* The per-thread error lives in a pthread key: a PRX has no static TLS
  * block, and _Thread_local would need the C library's emulated TLS. */
 static pthread_once_t error_once=PTHREAD_ONCE_INIT;
@@ -62,6 +65,21 @@ static int prx_path(const char *path,const char *directory,char *out)
     if(stem+4>=PW_WINE_DL_MAX_PATH)return 0;
     memcpy(out,path,stem);memcpy(out+stem,".prx",5);return 1;
 }
+/* Appends text to the report, truncating at its end. */
+static void append(const char *text)
+{
+    size_t length=strlen(text);
+    if(report_used+length>=sizeof(report))length=sizeof(report)-1-report_used;
+    memcpy(report+report_used,text,length);report_used+=length;report[report_used]=0;
+}
+/* The directory of a module's path, for a bare name's lookup beside it. */
+static int directory_of(const char *path,char *out)
+{
+    const char *slash=strrchr(path,'/');
+    if(!slash)return 0;
+    memcpy(out,path,(size_t)(slash-path));out[slash-path]=0;
+    return 1;
+}
 static Module *find(const char *path)
 {
     for(uint32_t i=0;i<loaded;i++)if(!strcmp(modules[order[i]].path,path))return &modules[order[i]];
@@ -69,7 +87,9 @@ static Module *find(const char *path)
 }
 static int32_t try_load(const char *path)
 {
-    int result=0;return ops.load_start?ops.load_start(path,0,NULL,0,NULL,&result):-1;
+    int result=0;
+    append(" ");append(path);
+    return ops.load_start?ops.load_start(path,0,NULL,0,NULL,&result):-1;
 }
 /* Describes a loaded module and enters it in the registry; on failure the
  * module is unloaded only when this loader loaded it. */
@@ -83,6 +103,7 @@ static Module *register_module(const char *path,int32_t handle,int owned)
        pw_prx_parse_module_info(info,NULL,segments,&count)!=PW_PRX_OK ||
        pw_prx_find_descriptor(segments,count,&descriptor)!=PW_PRX_OK) {
         if(owned && ops.stop_unload)(void)ops.stop_unload(handle,0,NULL,0,NULL,&result);
+        append(": loaded, but it has no export descriptor");
         set_error("module has no export descriptor");return NULL;
     }
     uint32_t slot=0;while(modules[slot].references)slot++;
@@ -97,10 +118,18 @@ static void *open_locked(const char *path)
     Module *module=find(path);
     if(module){module->references++;return module;}
     if(loaded==PW_WINE_DL_MAX_MODULES){set_error("too many modules");return NULL;}
-    char candidate[PW_WINE_DL_MAX_PATH];int32_t handle=-1;
-    if(prx_path(path,NULL,candidate))handle=try_load(candidate);
+    char candidate[PW_WINE_DL_MAX_PATH],directory[PW_WINE_DL_MAX_PATH];int32_t handle=-1;
+    int bare=!strchr(path,'/');
+    /* A bare name is never tried as given (the console refuses relative
+     * paths): the module dir first, then beside every module already loaded
+     * or adopted, as a library's RPATH finds a sibling. */
+    if(!bare && prx_path(path,NULL,candidate))handle=try_load(candidate);
     if(handle<0 && module_dir[0] && prx_path(path,module_dir,candidate))handle=try_load(candidate);
-    if(handle<0){set_error("module not found");return NULL;}
+    for(uint32_t i=0;bare && handle<0 && i<loaded;i++)
+        if(directory_of(modules[order[i]].path,directory) && strcmp(directory,module_dir) &&
+           prx_path(path,directory,candidate))
+            handle=try_load(candidate);
+    if(handle<0){append(": not found");set_error("module not found");return NULL;}
     if(!(module=register_module(path,handle,1)))return NULL;
     int (*start)(size_t,const void *)=(int (*)(size_t,const void *))
         (uintptr_t)pw_prx_lookup(module->descriptor,"module_start");
@@ -110,7 +139,15 @@ static void *open_locked(const char *path)
 void *pw_wine_dl_open(const char *path)
 {
     if(!path || !*path || strlen(path)>=PW_WINE_DL_MAX_PATH){set_error("invalid path");return NULL;}
-    pthread_mutex_lock(&lock);void *handle=open_locked(path);pthread_mutex_unlock(&lock);
+    char line[PW_WINE_DL_REPORT];
+    pthread_mutex_lock(&lock);
+    report_used=0;report[0]=0;
+    append("pw_wine_dl: cannot open ");append(path);append(", tried");
+    void *handle=open_locked(path);
+    if(!handle)memcpy(line,report,report_used+1);
+    pthread_mutex_unlock(&lock);
+    /* One line per failure, outside the lock: the report may log. */
+    if(!handle && ops.report)ops.report(line);
     return handle;
 }
 void *pw_wine_dl_sym(void *handle,const char *name)

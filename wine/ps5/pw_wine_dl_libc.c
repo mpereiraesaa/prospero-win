@@ -9,6 +9,7 @@
 #include "pw_wine_dl.h"
 #include <dlfcn.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 extern int32_t sceKernelLoadStartModule(const char *,size_t,const void *,uint32_t,const void *,int *);
@@ -20,9 +21,13 @@ static int self;
 
 /* WINE_PRX_DIR names the fallback directory for modules that are not staged
  * beside the path Wine asks for; the title's sce_module is the default. */
+/* A failed dlopen names what it tried on stderr, which reaches ps5log
+ * through ntdll's output sink (patch 0560). */
+static void report(const char *line){fprintf(stderr,"%s\n",line);}
 static void configure(void)
 {
-    const PwWineDlOps ops={sceKernelLoadStartModule,sceKernelGetModuleInfo,sceKernelStopUnloadModule};
+    const PwWineDlOps ops={sceKernelLoadStartModule,sceKernelGetModuleInfo,
+                           sceKernelStopUnloadModule,report};
     const char *dir=getenv("WINE_PRX_DIR");
     pw_wine_dl_configure(&ops,dir && *dir?dir:"/app0/sce_module");
 }

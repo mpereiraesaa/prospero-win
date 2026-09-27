@@ -18,6 +18,10 @@ static void *fail_symbol(void *arg)
 
 static int module_start(size_t argc,const void *argv){(void)argc;(void)argv;starts++;return 0;}
 
+static char reported[PW_WINE_DL_REPORT];
+static int reports;
+static void report(const char *line){strcpy(reported,line);reports++;}
+
 static int32_t load_start(const char *path,size_t argc,const void *argv,uint32_t flags,
                           const void *option,int *result)
 {
@@ -25,6 +29,8 @@ static int32_t load_start(const char *path,size_t argc,const void *argv,uint32_t
     if(!strcmp(path,"/app0/win/lib/win32u.prx"))return 7;
     if(!strcmp(path,"/app0/sce_module/other.prx"))return 8;
     if(!strcmp(path,"/app0/win/lib/bare.prx"))return 9;
+    if(!strcmp(path,"/mnt/app0/unix/libfreetype.prx"))return 10;
+    if(!strcmp(path,"/mnt/app0/unix/nodesc.prx"))return 9;
     return (int32_t)0x80020002;
 }
 static int module_info(int32_t handle,void *info)
@@ -54,7 +60,7 @@ int main(void)
     d->magic=PW_PRX_MAGIC;d->version=1;d->count=2;
     d->exports[0]=(PwPrxExport){n1,image+128};
     d->exports[1]=(PwPrxExport){n2,(const void *)(uintptr_t)module_start};
-    const PwWineDlOps ops={load_start,module_info,stop_unload};
+    const PwWineDlOps ops={load_start,module_info,stop_unload,report};
     pw_wine_dl_configure(&ops,"/app0/sce_module");
 
     /* dir/name.so loads dir/name.prx, starts it once and resolves names. */
@@ -108,5 +114,34 @@ int main(void)
     /* A reopened module starts again. */
     unload_fail=0;void *again=pw_wine_dl_open("/app0/win/lib/win32u.so");
     assert(again && starts==3);assert(!pw_wine_dl_close(again));
+
+    /* A bare soname (win32u's dlopen("libfreetype.so")) is looked up in the
+     * module dir, then beside the adopted ntdll; never as a relative path,
+     * which the console refuses. */
+    assert(!pw_wine_dl_open("libfreetype.so") && reports==3);
+    assert(!strcmp(reported,"pw_wine_dl: cannot open libfreetype.so, tried "
+                            "/app0/sce_module/libfreetype.prx: not found"));
+    ntdll=pw_wine_dl_adopt("/mnt/app0/unix/ntdll.prx",7);
+    assert(ntdll);
+    loads=0;void *freetype=pw_wine_dl_open("libfreetype.so");
+    assert(freetype && loads==2 && !strcmp(last_path,"/mnt/app0/unix/libfreetype.prx"));
+    assert(pw_wine_dl_sym(freetype,"__wine_unix_call_funcs")==image+128 && reports==3);
+    /* The module dir itself is not tried twice; the report names each try. */
+    assert(!pw_wine_dl_open("absent.so") && reports==4);
+    assert(!strcmp(reported,"pw_wine_dl: cannot open absent.so, tried /app0/sce_module/absent.prx "
+                            "/mnt/app0/unix/absent.prx: not found"));
+    assert(!pw_wine_dl_open("nodesc.so") && reports==5);
+    assert(!strcmp(reported,"pw_wine_dl: cannot open nodesc.so, tried /app0/sce_module/nodesc.prx "
+                            "/mnt/app0/unix/nodesc.prx: loaded, but it has no export descriptor"));
+    assert(!strcmp(pw_wine_dl_error(),"module has no export descriptor"));
+    /* A path with a directory is tried as given first, as before. */
+    assert(!pw_wine_dl_open("/opt/lib/absent.so") && reports==6);
+    assert(!strcmp(reported,"pw_wine_dl: cannot open /opt/lib/absent.so, tried "
+                            "/opt/lib/absent.prx /app0/sce_module/absent.prx: not found"));
+    /* Without a report callback a failure is still only dlerror. */
+    const PwWineDlOps quiet={load_start,module_info,stop_unload,NULL};
+    pw_wine_dl_configure(&quiet,"/app0/sce_module");
+    assert(!pw_wine_dl_open("absent.so") && reports==6);
+    assert(!pw_wine_dl_close(freetype) && !pw_wine_dl_close(ntdll));
     return 0;
 }
