@@ -197,7 +197,7 @@ static int run_host(PwX86HostExec *hx, PwX86State *h, size_t len, int *status)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     static PwX86CacheEntry entries[ENTRIES];
     static PwX86Engine engine;
@@ -222,6 +222,10 @@ int main(void)
     if (pw_vm_posix_backend(&vm) != PW_OK ||
         pw_x86_engine_init(&engine, &vm, entries, ENTRIES, 1u << 22, generation, source_view, NULL) != PW_OK ||
         pw_x86_hostexec_init(&hx, &vm, 1u << 24) != PW_OK)
+        return 2;
+    /* "global": the guest GPRs in fixed host registers, as wowprospero runs. */
+    if (argc > 1 && !strcmp(argv[1], "global") &&
+        pw_x86_engine_set_global_resident(&engine, 0xfb) != PW_OK)
         return 2;
 
     while (fgets(line, sizeof(line), stdin)) {

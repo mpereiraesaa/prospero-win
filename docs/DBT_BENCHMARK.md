@@ -104,6 +104,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Shifts and rotates by a constant as the host instruction | 797 | 872 | +9% | 18.5% |
 | Flat-guard misses out of line, after the block | 872 | 960 | +10% | 20.4% |
 | RCL/RCR and 16-bit rotates by a constant (and the 16-bit count fix) | 958 | 977 | +2% | 20.0% |
+| Global residency: seven guest GPRs in the same host registers in every block | 956 | 1006 | +5% | 21.3% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -148,6 +149,21 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   exit, which calls the table and jumps back, so the hit falls through and
   the hot code is a quarter the size. A refused push or pop shares the same
   mechanism.
+- **Global residency.** The per-block allocator gave each block its own three
+  resident registers, so nearly every linked exit met a different contract
+  and went through reconciliation (store, then reload). Now every block
+  without a helper call holds the same guest GPRs in the same host
+  registers, r8-r10 and the callee-saved r12-r15, so linked blocks hand
+  them over in place; a block with a helper keeps an empty contract. Seven
+  fit (r11 is the emitter's scratch); leaving out EDX measured best (1004
+  and 1009 total MIPS against 971 and 972 for leaving out EDI), and
+  `PW_WOW_RESIDENT=<hex mask>` picks others. Generated code is entered
+  through `pw_x86_run_block`, which saves the callee-saved registers. Two
+  interleaved rounds, native not in these rounds (4731 above); the gain is
+  in decompression (+15%), while compression is 5% slower, because this
+  emitter still copies a resident value through `eax` for most operations
+  and stores every resident register before each instruction that can
+  fault. `PW_WOW_MODES` residency `2` keeps the per-block allocator.
 
 ### After these changes
 

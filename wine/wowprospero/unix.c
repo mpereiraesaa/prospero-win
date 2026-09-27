@@ -33,6 +33,10 @@
 enum { CACHE_ENTRIES = 65536, ARENA_BYTES = 128u * 1024u * 1024u };
 /* The guest range every translated access is checked against (load_state). */
 enum { GUEST_LOW = 0x10000u, GUEST_HIGH = 0xfffff000u };
+/* The guest GPRs held in host registers across linked blocks: seven fit, and
+ * leaving out EDX measured best on 7-Zip (docs/DBT_BENCHMARK.md), unless
+ * PW_WOW_RESIDENT names others. */
+enum { GLOBAL_RESIDENT = 0xfb };
 
 struct pw_thread
 {
@@ -132,13 +136,23 @@ static struct pw_thread *get_thread(void)
         /* PW_WOW_MODES=<chaining><residency><lazy-flags>[<indirect>[<flat>]],
          * e.g. "00000" for the plainest translation; used to bisect
          * optimisation defects. Digits left out stay on; indirect targets
-         * take effect only with chaining. */
+         * take effect only with chaining; residency 2 is the per-block
+         * allocator instead of the global one. */
         const char *modes = getenv( "PW_WOW_MODES" );
         size_t digits = modes ? strlen( modes ) : 0;
 
         if (digits < 3 || digits > 5) { modes = "11111"; digits = 5; }
         pw_x86_engine_set_chaining( &thread->engine, modes[0] == '1' );
-        pw_x86_engine_set_residency( &thread->engine, modes[1] == '1' );
+        /* Residency '1': the guest GPRs in fixed host registers across
+         * linked blocks (PW_WOW_RESIDENT=<hex mask> picks which); '2': the
+         * older per-block allocator; '0': none. */
+        pw_x86_engine_set_residency( &thread->engine, modes[1] != '0' );
+        if (modes[1] == '1')
+        {
+            const char *mask = getenv( "PW_WOW_RESIDENT" );
+            pw_x86_engine_set_global_resident( &thread->engine,
+                                               mask ? (uint8_t)strtoul( mask, NULL, 16 ) : GLOBAL_RESIDENT );
+        }
         pw_x86_engine_set_lazy_flags( &thread->engine, modes[2] == '1' );
         /* Without the table the dynamic exits simply return. */
         (void)pw_x86_engine_set_indirect( &thread->engine, digits < 4 || modes[3] != '0' );
