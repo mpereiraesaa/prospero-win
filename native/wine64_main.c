@@ -18,13 +18,15 @@
  * the main thread shows the frames Wine's user driver presents (patch 0400)
  * on VideoOut, turns DualSense buttons into Wine key events, and reports
  * Wine's address-space counters until Wine exits the process or the run
- * deadline passes.
+ * deadline passes. Wine's audio driver plays its mix on the console's main
+ * audio port through the title's audio sink.
  */
 #include "ps5log/ps5log.h"
 #include "../src/pw_wine_start.h"
 #include "../src/pw_launcher_render.h"
 #include "../src/pw_wine_launch.h"
 #include "pw_data_mount.h"
+#include "pw_audio_ps5.h"
 #include "pw_pad_ps5.h"
 #include "pw_videoout_ps5.h"
 #include "pw_wine_library.h"
@@ -149,6 +151,23 @@ static int wine_present(void *context, const void *bgra, uint32_t width, uint32_
 {
     (void)context;
     return pw_wine_frame_box_put(&frames, bgra, width, height, stride);
+}
+
+/* ---- sound -------------------------------------------------------------- */
+
+/* Wine's audio driver (wine/wineps5) mixes every stream a game plays into
+ * one grain at a time and hands it to this sink, which plays it on the
+ * console's main port. sceAudioOutOutput returns once the port has taken
+ * the grain, so the port clocks the driver. */
+_Static_assert(PW_WINE_AUDIO_GRAIN == PW_AUDIO_PS5_GRAIN && PW_WINE_AUDIO_RATE == PW_AUDIO_PS5_RATE,
+               "Wine's audio grain is the port's");
+static PwAudioPs5Ops audio_ops;
+static int audio_port = -1;
+
+static int wine_audio(void *context, const int16_t *frames)
+{
+    (void)context;
+    return audio_ops.output(audio_port, frames) < 0 ? -1 : 0;
 }
 
 /* Scale a frame onto the whole 1920x1080 screen as the profile asks (fit
@@ -602,6 +621,15 @@ int main(int argc, char **argv)
                    set_present != NULL, frame_shown != NULL, post_input != NULL,
                    pw_result_name(video_status),
                    pw_result_name(pad_status));
+        {
+            void (*set_audio)(PwWineAudioSink, void *) = (void (*)(PwWineAudioSink, void *))
+                (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_audio_sink");
+            int audio_status = set_audio ? pw_audio_ps5_platform_ops(&audio_ops) : PW_ERR_NOT_FOUND;
+            if (audio_status == PW_OK) audio_status = pw_audio_ps5_open_port(&audio_ops, &audio_port);
+            if (audio_status == PW_OK) set_audio(wine_audio, NULL);
+            PS5LOG_LOG("PW_WINE64 audio sink=%d port=%d status=%s", set_audio != NULL, audio_port,
+                       pw_result_name(audio_status));
+        }
         status = pw_wine_start_environment(&start, &config, &ops);
         PS5LOG_LOG("PW_WINE64 environment status=%d", status);
     }

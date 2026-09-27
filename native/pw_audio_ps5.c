@@ -105,22 +105,43 @@ int pw_audio_ps5_init(PwAudioPs5 *audio,const PwAudioPs5Ops *ops,
     pthread_mutex_unlock(&audio->mutex);return PW_OK;
 }
 
+/* Initialise the library, open the main port and set unity volume; the
+ * library's results go to init_rc and open_rc. */
+static int open_port(const PwAudioPs5Ops *ops,int *init_rc,int *open_rc)
+{
+    int32_t volumes[8];
+    int result=ops->init();*init_rc=result;if(result<0)return PW_ERR_STATE;
+    result=ops->open(PW_AUDIO_PS5_USER_SYSTEM,PW_AUDIO_PS5_PORT_MAIN,
+        PW_AUDIO_PS5_PORT_INDEX,PW_AUDIO_PS5_GRAIN,PW_AUDIO_PS5_RATE,
+        PW_AUDIO_PS5_FORMAT_S16_STEREO);
+    *open_rc=result;if(result<0)return PW_ERR_STATE;
+    for(unsigned i=0;i<8;i++)volumes[i]=PW_AUDIO_PS5_VOLUME_0DB;
+    if(ops->volume(result,PW_AUDIO_PS5_VOLUME_FLAGS,volumes)<0) {
+        (void)ops->close(result);return PW_ERR_STATE;
+    }
+    return PW_OK;
+}
+
+int pw_audio_ps5_open_port(const PwAudioPs5Ops *ops,int *handle)
+{
+    int init_rc,open_rc;
+    if(!ops || !handle || !ops->init || !ops->open || !ops->volume || !ops->close)
+        return PW_ERR_PRECONDITION;
+    int status=open_port(ops,&init_rc,&open_rc);
+    if(status==PW_OK)*handle=open_rc;
+    return status;
+}
+
 int pw_audio_ps5_open(void *opaque,uint32_t rate,uint16_t channels,uint16_t bits)
 {
-    PwAudioPs5 *audio=opaque;int32_t volumes[8];
+    PwAudioPs5 *audio=opaque;
     if(!audio || !audio->initialized || !rate || (channels!=1 && channels!=2) ||
        (bits!=8 && bits!=16))return PW_ERR_PRECONDITION;
     pthread_mutex_lock(&audio->mutex);unsigned open=audio->opened;
     pthread_mutex_unlock(&audio->mutex);if(open)return PW_ERR_STATE;
-    int result=audio->ops.init();audio->init_rc=result;if(result<0)return PW_ERR_STATE;
-    result=audio->ops.open(PW_AUDIO_PS5_USER_SYSTEM,PW_AUDIO_PS5_PORT_MAIN,
-        PW_AUDIO_PS5_PORT_INDEX,PW_AUDIO_PS5_GRAIN,PW_AUDIO_PS5_RATE,
-        PW_AUDIO_PS5_FORMAT_S16_STEREO);
-    audio->open_rc=result;if(result<0)return PW_ERR_STATE;
-    for(unsigned i=0;i<8;i++)volumes[i]=PW_AUDIO_PS5_VOLUME_0DB;
-    if(audio->ops.volume(result,PW_AUDIO_PS5_VOLUME_FLAGS,volumes)<0) {
-        (void)audio->ops.close(result);return PW_ERR_STATE;
-    }
+    int status=open_port(&audio->ops,&audio->init_rc,&audio->open_rc);
+    if(status!=PW_OK)return status;
+    int result=audio->open_rc;
     pthread_mutex_lock(&audio->mutex);
     audio->handle=result;audio->input_rate=rate;audio->input_channels=channels;
     audio->input_bits=bits;audio->phase=0;audio->paused=0;audio->opened=1;

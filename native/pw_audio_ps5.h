@@ -61,5 +61,11 @@ int pw_audio_ps5_control(void *,PwAudioControl);
 int pw_audio_ps5_stats(PwAudioPs5 *,PwAudioPs5Stats *);
 int pw_audio_ps5_close(PwAudioPs5 *);
 int pw_audio_ps5_platform_ops(PwAudioPs5Ops *);
+/* The main port for a caller that mixes and clocks itself (Wine's audio
+ * sink): the library initialised, PW_AUDIO_PS5_GRAIN frames of 16-bit
+ * stereo at PW_AUDIO_PS5_RATE per output call, unity volume. The caller
+ * then calls ops->output(*handle, grain) and ops->close(*handle).
+ * PW_ERR_STATE when the library refuses. */
+int pw_audio_ps5_open_port(const PwAudioPs5Ops *ops,int *handle);
 
 #endif
