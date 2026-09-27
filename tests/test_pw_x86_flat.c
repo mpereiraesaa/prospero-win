@@ -205,6 +205,34 @@ int main(void)
     same_everywhere(pop, sizeof(pop), 4, 1);
     assert(accepted && refused);
     stops_name_their_instruction();
+    /* A miss the region table accepts resumes after the check: here the flat
+     * range is only the first page, so the second page takes the table's
+     * slow path and must still load and store correctly. (The stack is
+     * checked against the flat range alone, which is why the contract has
+     * them equal; it stays in the first page here.) */
+    for (unsigned mode = 0; mode < 4; mode++) {
+        const PwX86TranslateOptions half = {
+            .residency_enabled = mode & 1, .lazy_flags_enabled = mode >> 1,
+            .flat_low = LOW, .flat_high = LOW + 4096 };
+        /* mov eax,[ebx]; mov [ebx+4],eax; push eax; pop edx */
+        static const uint8_t block_source[] = { 0x8b, 0x03, 0x89, 0x43, 0x04, 0x50, 0x5a };
+        PwX86Block block;
+        uint32_t value;
+
+        reset_state();
+        state.gpr[3] = LOW + 6000;
+        state.gpr[4] = LOW + 4000;
+        memcpy(&value, (const uint8_t *)guest.write_base + 6000, 4);
+        assert(backend.protect(NULL, &code, 0, code.bytes, PW_PROT_READ | PW_PROT_WRITE) == PW_OK);
+        assert(pw_x86_translate_opts(block_source, sizeof(block_source), 0x1000, code.write_base,
+                                     code.bytes, &block, &half) == PW_OK);
+        assert(backend.protect(NULL, &code, 0, code.bytes, PW_PROT_READ | PW_PROT_EXEC) == PW_OK);
+        assert(invoke((BlockFn)code.exec_base, &state) == 0);
+        pw_x86_commit_canonical_flags(&state);
+        assert(state.gpr[0] == value && state.gpr[2] == value && state.gpr[4] == LOW + 4000);
+        assert(!memcmp((const uint8_t *)guest.write_base + 6004, &value, 4));
+        assert(state.eip == 0x1000 + sizeof(block_source));
+    }
 
     /* A refused access names itself, as the table guard does. */
     {
@@ -236,7 +264,7 @@ int main(void)
     assert(pw_x86_translate_opts(load32, sizeof(load32), 0x1000, scratch, sizeof(scratch),
                                  &block, &inverted) == PW_OK && block.code_bytes == reference_bytes);
     printf("x86 flat guard passed: %u comparisons (%u accepted, %u refused), 8 forms, "
-           "4 modes, both ends, fault record, shorter code, stops name their instruction\n",
+           "4 modes, both ends, fault record, shorter code, stops name their instruction, cold path resumes\n",
            compared, accepted, refused);
     return 0;
 }

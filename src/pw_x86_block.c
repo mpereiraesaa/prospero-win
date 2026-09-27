@@ -23,6 +23,11 @@ typedef struct Emitter {
     size_t rcx_flags_end; uint32_t rcx_flags_mask;
     /* Likewise when the host flags themselves are still the producer's. */
     size_t host_flags_end;
+    /* Flat-guard misses, emitted after the block (emit_cold_paths): the
+     * rel32 of the branch to patch, where to resume, and the access; a
+     * width of 0 is a refused push or pop. */
+    struct { size_t patch, resume; uint8_t write, width; } cold[48];
+    unsigned cold_count;
 } Emitter;
 static void byte(Emitter *e, uint8_t value)
 {
@@ -84,9 +89,28 @@ static size_t flat_range_check(Emitter *e,unsigned width)
     byte(e,0x76);                                                   /* jbe fast_ok */
     return e->n++;
 }
+/* The same check with the miss out of line: ja to a cold path emitted after
+ * the block, which resumes here. 0 when there is no room for one more. */
+static int flat_range_cold(Emitter *e,unsigned width,unsigned write,unsigned cold_width)
+{
+    if (e->cold_count >= sizeof(e->cold) / sizeof(e->cold[0])) return 0;
+    byte(e,0x8d); byte(e,0x90); word(e,(uint32_t)0u-e->flat_low);   /* lea edx,[rax-low] */
+    byte(e,0x81); byte(e,0xfa); word(e,e->flat_span-width);         /* cmp edx,span-width */
+    byte(e,0x0f); byte(e,0x87);                                     /* ja cold */
+    e->cold[e->cold_count].patch = e->n;
+    word(e,0);
+    e->cold[e->cold_count].resume = e->n;
+    e->cold[e->cold_count].write = (uint8_t)write;
+    e->cold[e->cold_count].width = (uint8_t)cold_width;
+    e->cold_count++;
+    /* The cold path can stop the block, so this instruction needs EIP. */
+    e->exits++;
+    return 1;
+}
 static void stack_bounds(Emitter *e)
 {
     if (e->flat_span) {
+        if (flat_range_cold(e,4,0,0)) return;
         size_t ok=flat_range_check(e,4);
         e->exits++;
         byte(e,0xb8); word(e,0xffffffffu); byte(e,0xc3);
@@ -140,6 +164,7 @@ static void memory_address_width(Emitter *e,unsigned write,unsigned width)
     if (e->flat_span) {
         /* Inside the flat range the access is valid, as the region table
          * says; outside it the slow helper decides and records the fault. */
+        if (flat_range_cold(e,width,write,width)) return;
         size_t ok=flat_range_check(e,width);
         memory_slow_path(e,write,width);
         if (!e->failed) e->p[ok]=(uint8_t)(e->n-(ok+1));
@@ -224,6 +249,38 @@ static void memory_address_width(Emitter *e,unsigned write,unsigned width)
     /* fast_ok: */
     e->p[patch_jbe_stack] = (uint8_t)(e->n - (patch_jbe_stack + 1));
     e->p[patch_jbe_mem] = (uint8_t)(e->n - (patch_jbe_mem + 1));
+}
+static void memory_slow_path(Emitter *e,unsigned write,unsigned width);
+/* The flat guard's misses, after the block's last exit: each asks the
+ * region table (or refuses a push or pop) and jumps back. */
+static void emit_cold_paths(Emitter *e)
+{
+    for (unsigned i = 0; i < e->cold_count; i++) {
+        const size_t start = e->n;
+        const uint32_t to_cold = (uint32_t)(start - (e->cold[i].patch + 4));
+        size_t back;
+
+        if (e->failed) return;
+        e->p[e->cold[i].patch] = (uint8_t)to_cold;
+        e->p[e->cold[i].patch + 1] = (uint8_t)(to_cold >> 8);
+        e->p[e->cold[i].patch + 2] = (uint8_t)(to_cold >> 16);
+        e->p[e->cold[i].patch + 3] = (uint8_t)(to_cold >> 24);
+        if (!e->cold[i].width) {
+            byte(e,0xb8); word(e,0xffffffffu); byte(e,0xc3);          /* refused */
+            continue;
+        }
+        memory_slow_path(e, e->cold[i].write, e->cold[i].width);
+        byte(e,0xe9); back = e->n; word(e,0);                         /* jmp resume */
+        if (e->failed) return;
+        {
+            const uint32_t to_resume = (uint32_t)(e->cold[i].resume - (back + 4));
+            e->p[back] = (uint8_t)to_resume;
+            e->p[back + 1] = (uint8_t)(to_resume >> 8);
+            e->p[back + 2] = (uint8_t)(to_resume >> 16);
+            e->p[back + 3] = (uint8_t)(to_resume >> 24);
+        }
+    }
+    e->cold_count = 0;
 }
 /* Ask memory_pointer for the host address of eax, or stop the block. */
 static void memory_slow_path(Emitter *e,unsigned write,unsigned width)
@@ -1477,7 +1534,7 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
                           uint8_t *output, size_t capacity, PwX86Block *block,
                           const PwX86TranslateOptions *options)
 {
-    Emitter e = {output,0,capacity,0,0,0,0,0,0,0,0};
+    Emitter e = {output,0,capacity,0,0,0,0,0,0,0,0,{{0,0,0,0}},0};
     size_t cursor = 0;
     unsigned count = 0;
     if (!source || !bytes || !output || !capacity || !block || !options)
@@ -2222,6 +2279,7 @@ analyze_and_emit:
         e.exits = 0;
         e.rcx_flags_end = 0;
         e.host_flags_end = 0;
+        e.cold_count = 0;
         indirect_exit = 0;
     }
     block->canonical_entry_offset = e.n;
@@ -3378,6 +3436,7 @@ analyze_and_emit:
         byte(&e, 0x48); byte(&e, 0xc7); byte(&e, 0x47); byte(&e, offsetof(PwX86State, last_exit_slot)); word(&e, 0);
         success(&e);
     }
+    emit_cold_paths(&e);
     }
     if (e.failed) return PW_ERR_LIMIT;
     block->source_bytes = insts[count-1].cursor + insts[count-1].length;

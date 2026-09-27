@@ -102,6 +102,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Conditional branches on the producer's flags | 650 | 788 | +21% | 19.5% |
 | Guest addresses with one `lea` | 788 | 804 | +2% | 19.9% |
 | Shifts and rotates by a constant as the host instruction | 797 | 872 | +9% | 18.5% |
+| Flat-guard misses out of line, after the block | 872 | 960 | +10% | 20.4% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -140,6 +141,12 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   a nonzero constant count the defined flags are known when translating, so
   the host instruction runs as is and its defined flags are deferred like
   any producer's (native baseline 4712 MIPS in these rounds).
+- **Cold paths.** Each guarded access carried its miss path inline: a call
+  to the region table with five register saves, about sixty bytes that the
+  hit jumped over. The miss is now a `ja` to a stub after the block's last
+  exit, which calls the table and jumps back, so the hit falls through and
+  the hot code is a quarter the size. A refused push or pop shares the same
+  mechanism.
 
 ## Comparison with published numbers
 
