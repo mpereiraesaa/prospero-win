@@ -516,6 +516,7 @@ int main(int argc, char **argv)
     int scaling = PW_PRESENT_SCALE_FIT;
     PwWinePointer pointer = { 0, 0, 0, 0 };
     int (*post_input)(const PwWineInput *) = NULL;
+    void (*set_pad)(const PwWinePad *) = NULL;
     uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
     ps5log_config log_config;
     PwPadPs5Ops pad_ops;
@@ -563,8 +564,6 @@ int main(int argc, char **argv)
                    scaling, view, pw_result_name(input_status),
                    game->input.preset[0] ? game->input.preset : "-",
                    game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse);
-        if (game_input.mode == PW_GAME_INPUT_XINPUT)
-            PS5LOG_LOG("PW_WINE64 xinput is not available yet: the profile's bindings are used");
     }
 
     for (size_t i = 0; i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
@@ -595,6 +594,11 @@ int main(int argc, char **argv)
             (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_present_sink");
         post_input = (int (*)(const PwWineInput *))
             (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_post_input");
+        /* xinput mode: the DualSense is also the game's XInput controller
+         * 0, read by Wine's xinput (patch 0470); bindings still apply. */
+        if (game_input.mode == PW_GAME_INPUT_XINPUT)
+            set_pad = (void (*)(const PwWinePad *))
+                (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_pad");
         video_status = pw_videoout_ps5_open(&video);
         pad_status = pw_pad_ps5_platform_ops(&pad_ops);
         if (pad_status == PW_OK)
@@ -609,8 +613,9 @@ int main(int argc, char **argv)
                 if (set_present) set_present(wine_present, NULL);
             }
         }
-        PS5LOG_LOG("PW_WINE64 display present_sink=%d frames=%d post_input=%d video=%s pad=%s",
-                   set_present != NULL, frame_shown != NULL, post_input != NULL,
+        PS5LOG_LOG("PW_WINE64 display present_sink=%d frames=%d post_input=%d xinput=%d video=%s "
+                   "pad=%s", set_present != NULL, frame_shown != NULL, post_input != NULL,
+                   set_pad != NULL,
                    pw_result_name(video_status),
                    pw_result_name(pad_status));
         {
@@ -656,6 +661,10 @@ int main(int argc, char **argv)
             for (size_t i = 0; i < count; i++) {
                 if (post_input(&events[i]) == 0) posted++;
                 else refused++;
+            }
+            if (set_pad) {
+                PwWinePad state;
+                set_pad(pw_wine_game_pad(&pad, &state) ? &state : NULL);
             }
         }
         if (video_status == PW_OK && frame_shown &&

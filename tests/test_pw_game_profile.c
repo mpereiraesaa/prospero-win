@@ -201,6 +201,15 @@ static void test_examples(void)
     assert(pw_game_input_parse(text, length, &input) == PW_OK);
     assert(input.mouse == PW_GAME_STICK_LEFT && input.bindings[CROSS].kind == PW_GAME_BIND_MOUSE);
     assert(input.bindings[CIRCLE].code == 1 && input.bindings[SQUARE].code == 2);
+
+    /* The gamepad preset: XInput, no pointer, nothing bound. */
+    assert((file = fopen("examples/wine/input/gamepad.input", "rb")));
+    length = fread(text, 1, sizeof(text), file);
+    assert(!fclose(file) && length < sizeof(text));
+    pw_game_input_init(&input);
+    assert(pw_game_input_parse(text, length, &input) == PW_OK);
+    assert(input.mode == PW_GAME_INPUT_XINPUT && input.mouse == PW_GAME_STICK_NONE);
+    for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++) assert(input.bindings[i].kind == PW_GAME_BIND_UNSET);
 }
 
 int main(void)

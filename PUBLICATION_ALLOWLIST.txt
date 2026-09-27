@@ -144,6 +144,7 @@ tests/test_pw_app_profile.c
 examples/profiles/pinball.profile
 examples/profiles/paint.profile
 examples/profiles/wine-sample.profile
+examples/wine/input/gamepad.input
 examples/wine/input/mouse.input
 examples/wine/input/pinball.input
 examples/wine/profiles/minesweeper.profile

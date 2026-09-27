@@ -455,8 +455,18 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     game fills the screen; `view = desktop` shows the whole Wine desktop;
   - `[input]` binds each DualSense button to a key or a mouse button, and a
     stick moves the pointer. `preset = <name>` shares a mapping from
-    `<root>/input/<name>.input`. `mode = xinput` is accepted but not wired
-    yet, so the bindings are used instead.
+    `<root>/input/<name>.input`.
+  - `mode = xinput` also makes the DualSense the game's XInput controller
+    0 (see [XInput controller](#xinput-controller)).
+    - Cross, Circle, Square and Triangle are A, B, X and Y. L1/R1 are the
+      shoulders, L2/R2 the analog triggers and L3/R3 the stick clicks.
+      Options is Start, Create is Back and the touchpad is Guide.
+    - The sticks are scaled to XInput's range, with y up.
+    - Bindings and the pointer stick still apply, so a preset can add a key.
+      `examples/wine/input/gamepad.input` binds nothing and moves no
+      pointer.
+    - The game log's `PW_WINE64 display` line shows `xinput=1` when the
+      runtime's ntdll has the gamepad slot.
 - **Closing.** Holding Options+Create for a second sends the game Alt+F4. When
   Wine exits, the title restarts into the launcher. If the game has not
   closed after 5 s, the title restarts into the launcher anyway.

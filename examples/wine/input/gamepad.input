@@ -1,0 +1,9 @@
+; A game played with an Xbox controller: the DualSense is the game's
+; XInput controller 0. Cross, Circle, Square and Triangle are A, B, X and
+; Y; L1/R1 the shoulders, L2/R2 the analog triggers, L3/R3 the stick
+; clicks, Options Start and Create Back. No stick moves the pointer, and
+; Options+Create held for a second still closes the game. Share it with
+; any profile whose game reads XInput.
+[input]
+mode = xinput
+mouse = none
