@@ -182,6 +182,20 @@ static void test_examples(void)
     assert(input.bindings[L1].code == 'Z' && input.bindings[R1].code == 0xbf);
     assert(input.bindings[CROSS].code == 0x20 && input.mouse == PW_GAME_STICK_RIGHT);
     assert(input.bindings[R2].kind == PW_GAME_BIND_MOUSE && input.bindings[R2].code == 0);
+
+    /* Minesweeper shares the generic mouse preset: left stick, Cross clicks. */
+    assert((file = fopen("examples/wine/profiles/minesweeper.profile", "rb")));
+    length = fread(text, 1, sizeof(text), file);
+    assert(!fclose(file) && length < sizeof(text));
+    assert(pw_game_profile_parse(text, length, &p) == PW_OK && !strcmp(p.input.preset, "mouse"));
+    assert(p.app.architecture == PW_APP_ARCH_PE64);
+    assert((file = fopen("examples/wine/input/mouse.input", "rb")));
+    length = fread(text, 1, sizeof(text), file);
+    assert(!fclose(file) && length < sizeof(text));
+    pw_game_input_init(&input);
+    assert(pw_game_input_parse(text, length, &input) == PW_OK);
+    assert(input.mouse == PW_GAME_STICK_LEFT && input.bindings[CROSS].kind == PW_GAME_BIND_MOUSE);
+    assert(input.bindings[CIRCLE].code == 1 && input.bindings[SQUARE].code == 2);
 }
 
 int main(void)

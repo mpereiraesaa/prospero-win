@@ -1,0 +1,12 @@
+; A mouse-only game on the DualSense: the left stick moves the pointer,
+; Cross clicks, Circle right-clicks and Square middle-clicks. Share it with
+; any profile whose game is played with the mouse alone.
+[input]
+mode = keyboard
+mouse = left_stick
+mouse_speed = 900
+cross = mouse_left
+circle = mouse_right
+square = mouse_middle
+r2 = mouse_left
+l2 = mouse_right
