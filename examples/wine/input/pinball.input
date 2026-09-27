@@ -1,0 +1,17 @@
+; Space Cadet Pinball on the DualSense: L1/R1 flip, Cross plunges, the
+; d-pad nudges, Options pauses and Square starts a new game. The right
+; stick moves the pointer and R2 clicks, for the menus.
+[input]
+mode = keyboard
+l1 = z
+r1 = slash
+cross = space
+left = x
+right = period
+up = up
+options = f3
+square = f2
+mouse = right_stick
+mouse_speed = 900
+r2 = mouse_left
+l2 = mouse_right

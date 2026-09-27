@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = ROOT / "PUBLICATION_ALLOWLIST.txt"
 TEXT_SUFFIXES = {
-    "", ".c", ".s", ".example", ".h", ".json", ".ld", ".md", ".patch", ".profile", ".py", ".sh", ".spec", ".svg", ".txt", ".yml",
+    "", ".c", ".s", ".example", ".h", ".input", ".json", ".ld", ".md", ".patch", ".profile", ".py", ".sh", ".spec", ".svg", ".txt", ".yml",
 }
 # Generated or vendored files that require an explicit provenance update.
 # They are pinned by digest and exempt from the text scan so an accidental

@@ -158,8 +158,35 @@ static void test_presets(void)
     assert(pw_game_button_mask(PW_GAME_BUTTON_COUNT) == 0);
 }
 
+/* The shipped Wine examples parse, and the preset gives Pinball its keys. */
+static void test_examples(void)
+{
+    static uint8_t text[PW_APP_PROFILE_MAX_BYTES + 1];
+    PwGameProfile p;
+    PwGameInput input;
+    FILE *file;
+    size_t length;
+
+    assert((file = fopen("examples/wine/profiles/pinball.profile", "rb")));
+    length = fread(text, 1, sizeof(text), file);
+    assert(!fclose(file) && length < sizeof(text));
+    assert(pw_game_profile_parse(text, length, &p) == PW_OK);
+    assert(!strcmp(p.app.id, "pinball") && !strcmp(p.input.preset, "pinball"));
+    assert(p.display.width == 800 && p.display.height == 600 && p.display.scaling == PW_GAME_SCALING_FIT);
+    assert((file = fopen("examples/wine/input/pinball.input", "rb")));
+    length = fread(text, 1, sizeof(text), file);
+    assert(!fclose(file) && length < sizeof(text));
+    pw_game_input_init(&input);
+    assert(pw_game_input_parse(text, length, &input) == PW_OK);
+    pw_game_input_overlay(&input, &p.input);
+    assert(input.bindings[L1].code == 'Z' && input.bindings[R1].code == 0xbf);
+    assert(input.bindings[CROSS].code == 0x20 && input.mouse == PW_GAME_STICK_RIGHT);
+    assert(input.bindings[R2].kind == PW_GAME_BIND_MOUSE && input.bindings[R2].code == 0);
+}
+
 int main(void)
 {
+    test_examples();
     test_profile();
     test_refusals();
     test_presets();

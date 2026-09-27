@@ -140,6 +140,8 @@ tests/test_pw_app_profile.c
 examples/profiles/pinball.profile
 examples/profiles/paint.profile
 examples/profiles/wine-sample.profile
+examples/wine/input/pinball.input
+examples/wine/profiles/pinball.profile
 tests/test_pw_prefix.c
 tests/test_pw_prefix_ps5.c
 tests/test_pw_profile_session_flow.c
