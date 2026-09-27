@@ -1,0 +1,147 @@
+From 3f4cee953f16533f0dcf89b907fce914587ec61a Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 10:20:19 +0200
+Subject: [PATCH] win32u: Let the PS5 user driver present the visible windows
+ only.
+
+A game with a small window showed as a patch in the corner of a black
+800x600 desktop once the title scaled the frame to the TV. With
+WINE_PS5_VIEW=window the driver presents the bounding box of the
+visible top-level windows instead, so the title scales the game rather
+than the desktop; a bounding box keeps menus and dialogs from
+re-framing the view. The pointer the title moves is relative to the
+presented area, and the cursor is drawn and clamped within it.
+---
+ dlls/win32u/ps5drv.c | 66 ++++++++++++++++++++++++++++++++------------
+ 1 file changed, 48 insertions(+), 18 deletions(-)
+
+diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
+index bc12bbd..965b945 100644
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -83,6 +83,11 @@ static POINT cursor;
+ static UINT32 *cursor_image, *frame;
+ static UINT cursor_width, cursor_height;
+ static POINT cursor_hotspot;
++/* WINE_PS5_VIEW=window shows only the visible top-level windows' bounding
++ * box, which the title scales to the whole TV, instead of the desktop;
++ * view is what the last frame showed, in screen coordinates. */
++static BOOL view_windows;
++static RECT view;
+ static BOOL display_published;
+ static DWORD input_threads[PS5_MAX_WINDOWS];
+ static UINT input_thread_count;
+@@ -105,39 +110,60 @@ static void clear_screen_rect( const RECT *rect )
+         memset( screen + y * screen_width + clip.left, 0, (clip.right - clip.left) * 4 );
+ }
+ 
+-/* screen_lock held: blend the cursor into frame at the pointer */
+-static void draw_cursor(void)
++/* screen_lock held: blend the cursor into out, a width x height copy of
++ * the screen area whose top left is origin */
++static void draw_cursor( UINT32 *out, POINT origin, INT width, INT height )
+ {
+-    INT left = cursor.x - cursor_hotspot.x, top = cursor.y - cursor_hotspot.y, x, y;
++    INT left = cursor.x - cursor_hotspot.x - origin.x, top = cursor.y - cursor_hotspot.y - origin.y, x, y;
+ 
+-    for (y = max( top, 0 ); y < min( top + (INT)cursor_height, (INT)screen_height ); y++)
++    for (y = max( top, 0 ); y < min( top + (INT)cursor_height, height ); y++)
+     {
+         const UINT32 *src = cursor_image + (y - top) * cursor_width;
+-        UINT32 *dst = frame + y * screen_width;
+-        for (x = max( left, 0 ); x < min( left + (INT)cursor_width, (INT)screen_width ); x++)
++        UINT32 *dst = out + y * width;
++        for (x = max( left, 0 ); x < min( left + (INT)cursor_width, width ); x++)
+         {
+-            UINT32 s = src[x - left], d = dst[x], a = s >> 24, out = 0;
++            UINT32 s = src[x - left], d = dst[x], a = s >> 24, blended = 0;
+             UINT shift;
+             if (!a) continue;
+             for (shift = 0; shift < 24; shift += 8)
+-                out |= ((((s >> shift) & 0xff) * a + ((d >> shift) & 0xff) * (255 - a)) / 255) << shift;
+-            dst[x] = out | 0xff000000;
++                blended |= ((((s >> shift) & 0xff) * a + ((d >> shift) & 0xff) * (255 - a)) / 255) << shift;
++            dst[x] = blended | 0xff000000;
+         }
+     }
+ }
+ 
++/* screen_lock held: the part of the screen a frame shows */
++static RECT view_rect(void)
++{
++    RECT screen_rect = {0, 0, screen_width, screen_height}, box = {0, 0, 0, 0};
++    UINT i;
++
++    if (!view_windows) return screen_rect;
++    for (i = 0; i < window_count; i++)
++        if (windows[i].shown) union_rect( &box, &box, &windows[i].visible );
++    if (!intersect_rect( &box, &box, &screen_rect )) return screen_rect;
++    return box;
++}
++
+ /* screen_lock held */
+ static void present_screen(void)
+ {
++    INT width, height, y;
++
+     if (!present_frame) return;
+-    if (cursor_image && frame)
++    view = view_rect();
++    width = view.right - view.left;
++    height = view.bottom - view.top;
++    if ((!cursor_image || !frame) && width == (INT)screen_width && height == (INT)screen_height)
+     {
+-        memcpy( frame, screen, (size_t)screen_width * screen_height * 4 );
+-        draw_cursor();
+-        present_frame( frame, screen_width, screen_height, screen_width * 4 );
++        present_frame( screen, screen_width, screen_height, screen_width * 4 );
+         return;
+     }
+-    present_frame( screen, screen_width, screen_height, screen_width * 4 );
++    if (!frame) return;
++    for (y = 0; y < height; y++)
++        memcpy( frame + y * width, screen + (view.top + y) * screen_width + view.left, width * 4 );
++    if (cursor_image) draw_cursor( frame, (POINT){view.left, view.top}, width, height );
++    present_frame( frame, width, height, width * 4 );
+ }
+ 
+ /***********************************************************************
+@@ -419,8 +445,9 @@ static BOOL ps5_ProcessEvents( DWORD mask )
+             break;
+         case 2:
+             pthread_mutex_lock( &screen_lock );
+-            cursor.x = min( max( event.x, 0 ), (INT)screen_width - 1 );
+-            cursor.y = min( max( event.y, 0 ), (INT)screen_height - 1 );
++            /* the title's pointer moves over what the last frame showed */
++            cursor.x = view.left + min( max( event.x, 0 ), (INT)(view.right - view.left) - 1 );
++            cursor.y = view.top + min( max( event.y, 0 ), (INT)(view.bottom - view.top) - 1 );
+             if (cursor_image) present_screen();     /* the pointer moved on screen */
+             pthread_mutex_unlock( &screen_lock );
+             /* hardware input from a driver is absolute in screen pixels */
+@@ -582,11 +609,12 @@ static const struct user_driver_funcs ps5_user_driver =
+ /***********************************************************************
+  *           ps5_install_user_driver
+  *
+- * WINE_PS5_DESKTOP=WxH overrides the 800x600 desktop.
++ * WINE_PS5_DESKTOP=WxH overrides the 800x600 desktop; WINE_PS5_VIEW=window
++ * presents the visible windows rather than the whole desktop.
+  */
+ void ps5_install_user_driver(void)
+ {
+-    const char *size = getenv( "WINE_PS5_DESKTOP" );
++    const char *size = getenv( "WINE_PS5_DESKTOP" ), *mode = getenv( "WINE_PS5_VIEW" );
+     unsigned int width, height;
+ 
+     if (size && sscanf( size, "%ux%u", &width, &height ) == 2 &&
+@@ -595,6 +623,8 @@ void ps5_install_user_driver(void)
+         screen_width = width;
+         screen_height = height;
+     }
++    view_windows = mode && !strcmp( mode, "window" );
++    SetRect( &view, 0, 0, screen_width, screen_height );
+     if (!(screen = calloc( (size_t)screen_width * screen_height, sizeof(*screen) )) ||
+         !(frame = malloc( (size_t)screen_width * screen_height * sizeof(*frame) )))
+     {
+-- 
+2.43.0
+
