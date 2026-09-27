@@ -551,6 +551,16 @@ launcher (#104):
     Alt+F4, and Wine exits 1.25 s later (`reason=wine-exit`), inside the
     5 s wait before a forced close.
 
+- **Run 16** (main at `eb548ef`, played by hand with a DualSense; ps5log
+  `20260927T063212997Z` to `20260927T063351187Z`).
+  - Cross in the launcher chose Pinball.
+  - The player started a game (Square), launched the ball (Cross) and used
+    the flippers (L1/R1). All 25 pad events reached Wine (`inputs=25
+    refused=0`), and the game responded on screen.
+  - 2,444 frames were shown at 60 Hz, with `rejected=0`.
+  - Holding Options+Create requested the close (`by=combo`). Wine exited
+    1.3 s later, and the title returned to the launcher.
+
 When a game exits, the launcher restarts the title with `LoadExec`. A test
 script must therefore close the title until it stays closed before
 restoring the eboot; otherwise the upload fails with `550 Text file busy`.
