@@ -11,7 +11,7 @@
 enum { SPAN = 0x40000, CODE = 0x1000, DATA = 0x20000, STACK_TOP = 0x3f000 };
 
 static uint8_t *guest;          /* identity-mapped: guest address == host address */
-static uint32_t low;
+static uint32_t low, fs_offset;  /* fs base: low + fs_offset, or 0 */
 
 static int view(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes)
 {
@@ -37,6 +37,7 @@ static void initial(PwX86State *s)
     s->gpr[6] = low + DATA;          /* esi */
     s->gpr[7] = low + DATA + 0x100;  /* edi */
     s->eflags = 0x2 | 0x040 | 0x001; /* ZF CF */
+    s->fs_base = fs_offset ? low + fs_offset : 0;
 }
 
 typedef struct Run {
@@ -105,8 +106,8 @@ static void compare(const uint8_t *code, size_t bytes)
 static void test_options(void)
 {
     static const uint8_t mov[] = { 0x89, 0xc8, 0xc3 };           /* mov eax, ecx; ret */
-    static const uint8_t lock[] = { 0xf0, 0x01, 0x06, 0xc3 };    /* lock add [esi], eax */
-    static const uint8_t tail[] = { 0x40, 0xf0, 0x01, 0x06 };    /* inc eax; lock add */
+    static const uint8_t lock[] = { 0xf0, 0x01, 0xc0, 0xc3 };    /* lock add eax, eax: #UD */
+    static const uint8_t tail[] = { 0x40, 0xf3, 0xa4 };          /* inc eax; rep movsb */
     PwX86TranslateOptions o = { .flat_low = 0x10000, .flat_high = 0xfffff000u, .no_counters = 1 };
     uint8_t out[16384];
     PwX86Block block;
@@ -171,6 +172,48 @@ static void test_xchg(void)
     assert(r.state.gpr[3] == low + DATA + 0x100 && r.state.gpr[0] == 0x44442244u);
     assert(r.state.gpr[7] == 0x11111111u && r.state.gpr[1] == 0x22222244u);
     assert(r.state.gpr[4] == low + STACK_TOP + 4);
+}
+
+static uint32_t pattern(uint32_t offset)
+{
+    uint32_t v = 0;
+    for (unsigned k = 0; k < 4; k++) v |= (uint32_t)(uint8_t)((offset + k) * 7 + 3) << (8 * k);
+    return v;
+}
+
+/* Atomic read-modify-writes with lock, xchg, cmpxchg, xadd and cmpxchg8b
+ * on memory, and fs and the flat segment overrides. */
+static void test_atomic_and_segments(void)
+{
+    static const uint8_t code[] = {
+        0xf0, 0x01, 0x06,                   /* lock add [esi], eax */
+        0xf0, 0x0f, 0xc1, 0x4e, 0x04,       /* lock xadd [esi+4], ecx */
+        0x87, 0x56, 0x08,                   /* xchg [esi+8], edx */
+        0x8b, 0x46, 0x0c,                   /* mov eax, [esi+12] */
+        0xf0, 0x0f, 0xb1, 0x5e, 0x0c,       /* lock cmpxchg [esi+12], ebx: equal */
+        0xf0, 0x0f, 0xc7, 0x4e, 0x10,       /* lock cmpxchg8b [esi+16]: not equal */
+        0x64, 0xa1, 0, 0, 0, 0,             /* mov eax, fs:[0] */
+        0x64, 0x89, 0x0d, 4, 0, 0, 0,       /* mov fs:[4], ecx */
+        0x2e, 0x8b, 0x5e, 0x20,             /* mov ebx, cs:[esi+0x20] */
+        0xc3,
+    };
+    const uint32_t *data;
+    Run r;
+
+    fs_offset = DATA + 0x200;
+    r = run(code, sizeof(code), 1);
+    fs_offset = 0;
+    data = (const uint32_t *)(const void *)r.data;
+    assert(r.status == PW_OK && r.state.eip == 0xdead0000u);
+    assert(data[0] == pattern(0) + 0x11111111u);
+    assert(data[1] == pattern(4) + 0x22222222u);
+    assert(data[2] == 0x33333333u && data[3] == 0x44444444u);
+    assert(data[4] == pattern(16) && data[5] == pattern(20));
+    assert(data[0x204 / 4] == pattern(4));
+    assert(r.state.gpr[0] == pattern(0x200) && r.state.gpr[1] == pattern(4));
+    assert(r.state.gpr[2] == pattern(20) && r.state.gpr[3] == pattern(0x20));
+    assert(!(r.state.eflags & 0x040));
+    assert(r.reencoded);
 }
 
 /* Memory operands through the guard: loads, stores, read-modify-write,
@@ -294,11 +337,12 @@ int main(void)
     test_options();
     test_registers();
     test_xchg();
+    test_atomic_and_segments();
     test_memory();
     test_control();
     test_mixed_and_indirect();
     test_fault();
-    printf("reencode passed: options, register remapping, xchg, memory operands, flags across links, "
+    printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
            "stack and calls, emitter hand-over, indirect targets, fault state\n");
     return 0;
 }

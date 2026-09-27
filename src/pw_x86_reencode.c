@@ -159,6 +159,7 @@ typedef struct Inst {
     uint32_t def, use;
     uint32_t target, imm_value;
     uint8_t cond;
+    uint8_t lock, fs;               /* prefixes */
     const uint8_t *bytes;
 } Inst;
 
@@ -220,6 +221,23 @@ static int encodable(const Inst *in)
     return !(rex && high8);
 }
 
+/* The instructions a lock prefix may carry, all with a memory destination:
+ * the ALU group, not/neg, inc/dec, xchg, cmpxchg, xadd, bts/btr/btc by an
+ * immediate, and cmpxchg8b. */
+static int lockable(const Inst *in)
+{
+    uint8_t op = in->op[0], x = in->op[1];
+    if (in->kind != K_RM || in->mod == 3) return 0;
+    if (in->op_len == 1) {
+        if (op < 0x40) return (op & 7) < 2 && (op >> 3) != 7;
+        if (op >= 0x80 && op <= 0x83) return in->reg != 7;
+        if (op == 0xf6 || op == 0xf7) return in->reg == 2 || in->reg == 3;
+        if (op == 0xfe || op == 0xff) return in->reg <= 1;
+        return op == 0x86 || op == 0x87;
+    }
+    return x == 0xb0 || x == 0xb1 || x == 0xc0 || x == 0xc1 || x == 0xc7 || (x == 0xba && in->reg >= 5);
+}
+
 /* Decode one instruction this backend takes; 0 for anything else. */
 static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in)
 {
@@ -229,7 +247,14 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in)
 
     memset(in, 0, sizeof(*in));
     in->bytes = s;
-    if (avail && s[0] == 0x66) { in->opsize16 = 1; i = 1; }
+    /* Operand size, lock, fs, and the segment overrides that name the flat
+     * segments (cs ds es ss, and the branch hints on jcc). */
+    for (; i < avail && i < 4; i++) {
+        if (s[i] == 0x66 && !in->opsize16) in->opsize16 = 1;
+        else if (s[i] == 0xf0 && !in->lock) in->lock = 1;
+        else if (s[i] == 0x64 && !in->fs) in->fs = 1;
+        else if (s[i] != 0x2e && s[i] != 0x3e && s[i] != 0x26 && s[i] != 0x36) break;
+    }
     if (i >= avail) return 0;
     op = s[i++];
     z = in->opsize16 ? 2 : 4;
@@ -284,7 +309,7 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in)
         in->def = ALL_FLAGS;
     } else if (op == 0x86 || op == 0x87) {
         RM(op == 0x86 ? REG8 : REG32, op == 0x86 ? RM8 : RMW, op == 0x86);
-        if (in->mod != 3) return 0;               /* xchg with memory is locked */
+        in->write = 2;                            /* with memory: atomic, as on the guest */
     } else if (op >= 0x88 && op <= 0x8b) {
         RM(op & 1 ? REG32 : REG8, op & 1 ? RMW : RM8, !(op & 1));
         in->write = op & 2 ? 0 : 1;
@@ -400,6 +425,16 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in)
             in->rm_kind = (x & 1) ? RMW : RM8;
             in->width = (x & 1) ? 2 : 1;
             if ((x & 1) && in->mod == 3 && in->opsize16) return 0;
+        } else if (x == 0xb0 || x == 0xb1 || x == 0xc0 || x == 0xc1) {
+            /* cmpxchg (eax implied) and xadd, as the host instruction */
+            in->kind = K_RM; in->reg_kind = (x & 1) ? REG32 : REG8; in->rm_kind = (x & 1) ? RMW : RM8;
+            if (!(x & 1)) in->width = 1;
+            MODRM();
+            in->write = 2; in->def = ALL_FLAGS;
+        } else if (x == 0xc7) {
+            in->kind = K_RM; in->reg_kind = EXT; in->rm_kind = RMW; MODRM();
+            if (in->mod == 3 || in->reg != 1 || in->opsize16) return 0;
+            in->width = 8; in->write = 2; in->def = 0x040;     /* cmpxchg8b: edx:eax, ecx:ebx */
         } else if (x >= 0xc8 && x <= 0xcf) {
             if (in->opsize16) return 0;
             in->kind = K_BSWAP; in->reg = x & 7;
@@ -413,6 +448,9 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in)
 #undef NEED
     if (i > 15) return 0;
     in->len = (uint8_t)i;
+    /* fs only on a memory operand; lock only on a read-modify-write of one. */
+    if (in->fs && !(in->kind == K_RM && in->mod != 3)) return 0;
+    if (in->lock && !lockable(in)) return 0;
     return encodable(in);
 }
 
@@ -451,12 +489,17 @@ static void restore_flags(Out *o)
 /* r11 = the guest address of e, checked against the flat range; a miss
  * stops the block as a refused access (the cold paths after the block).
  * The flags survive when keep is set. */
-static void guard(Ctx *c, const Ea *e, unsigned width, unsigned write, unsigned keep)
+static void guard_fs(Ctx *c, const Ea *e, unsigned fs, unsigned width, unsigned write, unsigned keep)
 {
     Out *o = &c->o;
     Cold *cold;
 
     ea_lea(o, R11, e);
+    if (fs) {
+        /* The guest's fs is a base in PwX86State; add it without flags. */
+        load_state(o, R9, offsetof(PwX86State, fs_base));
+        b(o, 0x47); b(o, 0x8d); b(o, 0x1c); b(o, 0x0b);                  /* lea r11d, [r11+r9] */
+    }
     if (c->cold_count >= MAX_COLD) { o->failed = 1; return; }
     if (keep) save_flags(o);
     b(o, 0x45); b(o, 0x8d); b(o, 0x8b); w32(o, 0u - c->flat_low);    /* lea r9d, [r11-low] */
@@ -467,6 +510,10 @@ static void guard(Ctx *c, const Ea *e, unsigned width, unsigned write, unsigned 
     cold->width = (uint8_t)width; cold->write = (uint8_t)write; cold->saved = (uint8_t)keep;
     if (keep) restore_flags(o);
 }
+static void guard(Ctx *c, const Ea *e, unsigned width, unsigned write, unsigned keep)
+{
+    guard_fs(c, e, 0, width, write, keep);
+}
 
 /* An instruction's opcode and ModRM with the memory operand at [r11]. */
 static void emit_rm(Ctx *c, const Inst *in)
@@ -475,6 +522,7 @@ static void emit_rm(Ctx *c, const Inst *in)
     uint8_t rex = 0;
     unsigned regf = in->reg, rmf = in->rm;
 
+    if (in->lock) b(o, 0xf0);
     if (in->opsize16) b(o, 0x66);
     if (in->reg_kind == REG32 && host_of[in->reg] >= 8) rex |= 4;
     if (in->reg_kind == REG32) regf = host_of[in->reg] & 7;
@@ -676,7 +724,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         if (can_fault(in)) store_state_imm(o, offsetof(PwX86State, eip), here);
         switch (in->kind) {
         case K_RM:
-            if (in->mod != 3) guard(&c, &in->ea, in->width, in->write, keep);
+            if (in->mod != 3) guard_fs(&c, &in->ea, in->fs, in->width, in->write, keep);
             emit_rm(&c, in);
             break;
         case K_PLAIN:

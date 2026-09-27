@@ -106,6 +106,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | RCL/RCR and 16-bit rotates by a constant (and the 16-bit count fix) | 958 | 977 | +2% | 20.0% |
 | Global residency: seven guest GPRs in the same host registers in every block | 956 | 1006 | +5% | 21.3% |
 | Same-ISA re-encoder: pinned GPRs, native flags, copied instructions | 987 | 1204 | +22% | 28.6% |
+| Re-encoder: lock, atomic xchg/cmpxchg/xadd/cmpxchg8b, fs: | 1237 | 1212 | noise | 23.0% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -181,6 +182,12 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   meet through their canonical entries. `PW_WOW_MODES` 6th digit `0` turns
   it off. Three interleaved rounds with native (median 4210 MIPS under
   this machine's load); compression +27%, decompression +13%.
+- **Atomics and fs.** Wine's own code ended many re-encoded blocks at a lock
+  prefix or an `fs:` access to the TEB. The lock forms, xchg with memory,
+  cmpxchg, xadd and cmpxchg8b now run as the host instruction on `[r11]`,
+  and an `fs:` operand adds the guest's fs base before the guard. 7-Zip's
+  hot loops use neither, so its rating does not move (three rounds,
+  native median 5281); the gain is in how much of Wine stays re-encoded.
 
 ### After these changes
 
