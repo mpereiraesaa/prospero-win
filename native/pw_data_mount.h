@@ -30,6 +30,12 @@
 #ifndef PW_DATA_MOUNT_POLL_MS
 #define PW_DATA_MOUNT_POLL_MS 100           /* between checks */
 #endif
+#ifndef PW_DATA_MOUNT_SETTLE_MS
+/* Once /data appears after a request, the helper may still be changing the
+ * process: wait this long before the title goes on. All three console
+ * power-offs of 2026-09-27 came within milliseconds of an escape. */
+#define PW_DATA_MOUNT_SETTLE_MS 1000
+#endif
 enum { PW_DATA_MOUNT_REQUEST_MAX = 32 };    /* room for the request line */
 
 typedef struct PwDataMountOps {
@@ -46,6 +52,7 @@ typedef struct PwDataMountResult {
     int write_errno;   /* errno if the write failed, else 0 */
     int data_after;    /* /data became reachable */
     int waited_ms;     /* time spent waiting for it */
+    int settled_ms;    /* time waited after it appeared (a new grant only) */
 } PwDataMountResult;   /* what one request reached, for logging */
 
 /* Format the request line carrying pid into buf. Returns its length, or -1 if
@@ -53,7 +60,8 @@ typedef struct PwDataMountResult {
 int pw_data_mount_format_request(char *buf, size_t size, int32_t pid);
 
 /* Request /data for pid, waiting up to max_wait_ms for it to appear. Returns 0
- * once /data is reachable (already, or after the request), -1 otherwise.
+ * once /data is reachable (already, or after the request, then
+ * PW_DATA_MOUNT_SETTLE_MS later), -1 otherwise.
  * detail, when non-NULL, is always filled. */
 int pw_data_mount_request_with(const PwDataMountOps *ops, int32_t pid, int max_wait_ms,
                                PwDataMountResult *detail);

@@ -276,8 +276,8 @@ static void open_library(void)
 
     if (pw_data_mount_request(&mount) == 0) library_root = PW_WINE64_ROOT_DATA;
     PS5LOG_LOG("PW_WINE64 data_mount data_before=%d wrote=%d write_errno=%d data_after=%d "
-               "waited_ms=%d root=%s", mount.data_before, mount.wrote_request, mount.write_errno,
-               mount.data_after, mount.waited_ms, library_root);
+               "waited_ms=%d settled_ms=%d root=%s", mount.data_before, mount.wrote_request,
+               mount.write_errno, mount.data_after, mount.waited_ms, mount.settled_ms, library_root);
     status = pw_wine_library_load(&library, library_root);
     catalog_count = 0;
     for (uint32_t i = 0; i < library.count; i++) {

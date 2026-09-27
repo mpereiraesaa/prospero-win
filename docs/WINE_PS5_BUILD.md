@@ -425,7 +425,11 @@ prospero-win (`native/pw_data_mount.c`) writes a request file,
 `/data` becomes reachable. This expects the helper daemon from
 <https://github.com/ArkSama/PS5-Lapy-JB-Daemon> to be running on the console:
 it detects the request file and makes `/data` available to the process, after
-which the prefix lives at `/data/prospero-win/prefix`. The request is
+which the prefix lives at `/data/prospero-win/prefix`. Once `/data`
+appears after a request, the title waits another second
+(`PW_DATA_MOUNT_SETTLE_MS`) before it goes on. All three console
+power-offs seen on 2026-09-27 came within milliseconds of an escape: a game
+starting to load Wine, and twice `rfork_thread`. The request is
 best-effort — if the helper is not running, the title keeps using
 `/download0/prospero-win/prefix`.
 

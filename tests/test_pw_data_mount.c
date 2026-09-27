@@ -48,7 +48,9 @@ int main(void)
     assert(pw_data_mount_request_with(&ops, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
     assert(r.data_before == 0 && r.wrote_request == 1 && r.write_errno == 0);
     /* one check before the write, two sleeps, visible on the third loop check */
-    assert(r.data_after == 1 && r.waited_ms == 2 * PW_DATA_MOUNT_POLL_MS && sleep_total == r.waited_ms);
+    assert(r.data_after == 1 && r.waited_ms == 2 * PW_DATA_MOUNT_POLL_MS);
+    /* a new grant waits to settle before the title goes on */
+    assert(r.settled_ms == PW_DATA_MOUNT_SETTLE_MS && sleep_total == r.waited_ms + r.settled_ms);
     assert(!strcmp(written_path, PW_DATA_MOUNT_REQUEST_PATH) && !strcmp(written_bytes, "{\"PID\":\"2595\"}"));
     assert(write_calls == 1);
 
@@ -56,11 +58,12 @@ int main(void)
     write_calls = poll_calls = sleep_total = 0; visible_in = 0;
     assert(pw_data_mount_request_with(&ops, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
     assert(r.data_before == 1 && r.data_after == 1 && r.wrote_request == 0 && write_calls == 0);
+    assert(r.settled_ms == 0 && sleep_total == 0);
 
     /* Never granted: fail after the deadline, request still recorded. */
     write_calls = poll_calls = sleep_total = 0; visible_in = 1000000;
     assert(pw_data_mount_request_with(&ops, 7, 300, &r) == -1);
-    assert(r.wrote_request == 1 && r.data_after == 0 && r.waited_ms == 300);
+    assert(r.wrote_request == 1 && r.data_after == 0 && r.waited_ms == 300 && r.settled_ms == 0);
 
     /* Write failure is reported but the wait still runs. */
     write_calls = poll_calls = sleep_total = 0; write_fail = 1; visible_in = 2;
@@ -70,6 +73,6 @@ int main(void)
     /* Missing ops are rejected. */
     assert(pw_data_mount_request_with(NULL, 7, 100, &r) == -1);
 
-    printf("data mount passed: request line, wait, already-present, timeout, write failure\n");
+    printf("data mount passed: request line, wait, already-present, timeout, write failure, settle after a grant\n");
     return 0;
 }

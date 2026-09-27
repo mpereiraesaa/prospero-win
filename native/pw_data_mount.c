@@ -26,7 +26,7 @@ int pw_data_mount_request_with(const PwDataMountOps *ops, int32_t pid, int max_w
 
     if (!detail) detail = &local;
     detail->data_before = detail->wrote_request = detail->write_errno = 0;
-    detail->data_after = detail->waited_ms = 0;
+    detail->data_after = detail->waited_ms = detail->settled_ms = 0;
     if (!ops || !ops->write_request || !ops->data_visible || !ops->sleep_ms) return -1;
 
     /* Already reachable (e.g. a re-launch): nothing to request. */
@@ -40,7 +40,12 @@ int pw_data_mount_request_with(const PwDataMountOps *ops, int32_t pid, int max_w
         detail->write_errno = errno;
 
     for (;;) {
-        if (ops->data_visible()) { detail->data_after = 1; return 0; }
+        if (ops->data_visible()) {
+            detail->data_after = 1;
+            ops->sleep_ms(PW_DATA_MOUNT_SETTLE_MS);
+            detail->settled_ms = PW_DATA_MOUNT_SETTLE_MS;
+            return 0;
+        }
         if (detail->waited_ms >= max_wait_ms) return -1;
         ops->sleep_ms(PW_DATA_MOUNT_POLL_MS);
         detail->waited_ms += PW_DATA_MOUNT_POLL_MS;
