@@ -109,6 +109,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Re-encoder: lock, atomic xchg/cmpxchg/xadd/cmpxchg8b, fs: | 1237 | 1212 | noise | 23.0% |
 | Re-encoder: returns and indirect calls stay pinned | 1237 | 1316 | +6% | 24.9% |
 | Chain quantum 64 to 1024 linked blocks per dispatcher return | 1299 | 1416 | +9% | 29.2% |
+| Fault markers instead of the flat guard in re-encoded blocks | 1607 | 1881 | +17% | 32.3% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -190,6 +191,17 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   and an `fs:` operand adds the guest's fs base before the guard. 7-Zip's
   hot loops use neither, so its rating does not move (three rounds,
   native median 5281); the gain is in how much of Wine stays re-encoded.
+- **Fault markers.** A re-encoded access no longer runs the flat guard
+  (`lea`, `cmp`, `ja`, and `lahf`/`seto`/`sahf` around them when the flags
+  are live). An 8-byte `nopl` before the access points at its
+  refused-access path instead; the access itself faults when it falls
+  outside the guest range, and wowprospero's SIGSEGV handler moves the RIP
+  there, so the guest gets the access violation the guard reported, now
+  with its real flags too. Only faults outside the guest range are taken:
+  one inside it (a guard page, a write watch) stays Wine's. Three rounds
+  each, medians 1607/1607/1627 against 1881/1961/1877, native 5819 in the
+  same session; compression gains 24% to 30%.
+  `PW_WOW_FAULT_MARKERS=0` keeps the guard.
 - **Pinned returns.** A ret or indirect call left the pinned state, looked
   the target up and re-entered it through its canonical entry: about a
   hundred instructions. The dispatcher now also records each re-encoded
@@ -294,11 +306,6 @@ available on this host), full-fix build:
   the guard wraps its compare in `lahf`/`seto` and `sahf`; a flag-free
   bounds check (for example with `bextr`/`lea` and `jrcxz`) would remove
   that.
-- **The memory guard.** The flat guard is one `lea`, `cmp` and `ja` per
-  access. Removing it needs a reserved 4 GiB guest range and a fault
-  handler that turns a host fault into the guest's access violation at the
-  right EIP. That handler has to live beside Wine's own signal handling on
-  the PS5, so it needs the console to validate.
 - **Flag capture.** Producers still capture flags with `pushfq; pop` when
   the branch is not adjacent.
 

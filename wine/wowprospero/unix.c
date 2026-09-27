@@ -9,12 +9,16 @@
 #endif
 
 #define _GNU_SOURCE
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+#if defined(__linux__)
+#include <ucontext.h>
+#endif
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -62,6 +66,19 @@ struct pw_thread
 C_ASSERT( sizeof(((I386_CONTEXT *)0)->ExtendedRegisters) == PW_GUEST_FXSAVE_BYTES );
 
 static __thread struct pw_thread *self;
+
+/* Fault markers (pw_x86_block.h): re-encoded blocks do not check their
+ * accesses against the guest range; an access outside it faults on the
+ * host, and the SIGSEGV handler below resumes the block at the path that
+ * reports it to the guest, as the check did. Only such faults are taken:
+ * one inside the guest range (a guard page, a write watch, memory Wine has
+ * not mapped) stays Wine's, as before. The handler reads the translators'
+ * code ranges from this table rather than thread-local storage. */
+enum { MAX_ARENAS = 1024 };
+static struct { uintptr_t low, high; } arenas[MAX_ARENAS];
+static struct sigaction wine_segv;
+static int fault_markers;
+static void register_arena( struct pw_thread *thread, int add );
 static PwWowHostMemory host_memory;
 /* Set once a thread has its DBT: the threads after it take the smaller
  * budget (thread_budget.h). */
@@ -227,6 +244,12 @@ static struct pw_thread *get_thread(void)
         /* The same-ISA re-encoder where it takes a block (it needs the flat
          * range and no counters); the emitter elsewhere. */
         pw_x86_engine_set_reencode( &thread->engine, digits < 6 || modes[5] != '0' );
+        /* Accesses outside the flat range fault instead of being checked. */
+        if (fault_markers && (digits < 5 || modes[4] != '0'))
+        {
+            register_arena( thread, 1 );
+            pw_x86_engine_set_fault_markers( &thread->engine, 1 );
+        }
         /* Nothing here reads the step statistics; PW_WOW_STATS keeps them. */
         pw_x86_engine_set_counters( &thread->engine, getenv( "PW_WOW_STATS" ) != NULL );
         /* A chain returns to this loop, which notices code flushes, after
@@ -305,6 +328,66 @@ static void store_state( const PwX86State *state, I386_CONTEXT *ctx )
     ctx->EFlags = (ctx->EFlags & ~0x00000cd5) | (state->eflags & 0x00000cd5);
 }
 
+/* The saved RIP in a signal context, or NULL where it is not known. */
+static uintptr_t *context_rip( void *context )
+{
+#if defined(__PROSPERO__)
+    return (uintptr_t *)((char *)context + 224);  /* the live slot (WINE_INTEGRATION.md) */
+#elif defined(__linux__)
+    return (uintptr_t *)&((ucontext_t *)context)->uc_mcontext.gregs[REG_RIP];
+#elif defined(__FreeBSD__)
+    return (uintptr_t *)&((ucontext_t *)context)->uc_mcontext.mc_rip;
+#else
+    (void)context;
+    return NULL;
+#endif
+}
+
+static void segv_handler( int signal, siginfo_t *info, void *context )
+{
+    const uintptr_t address = (uintptr_t)info->si_addr;
+    uintptr_t *rip = context_rip( context ), target = 0;
+
+    if (address < GUEST_LOW || address >= GUEST_HIGH)
+    {
+        for (unsigned int i = 0; i < MAX_ARENAS && !target; i++)
+        {
+            uintptr_t low = __atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE );
+            uintptr_t high = __atomic_load_n( &arenas[i].high, __ATOMIC_ACQUIRE );
+            if (low && *rip >= low && *rip < high) target = pw_x86_fault_redirect( *rip, low, high );
+        }
+    }
+    if (target)
+    {
+        *rip = target;
+        return;
+    }
+    if (wine_segv.sa_flags & SA_SIGINFO) wine_segv.sa_sigaction( signal, info, context );
+    else if (wine_segv.sa_handler != SIG_DFL && wine_segv.sa_handler != SIG_IGN) wine_segv.sa_handler( signal );
+    else sigaction( SIGSEGV, &wine_segv, NULL );  /* the default action on the retry */
+}
+
+static void register_arena( struct pw_thread *thread, int add )
+{
+    const uintptr_t low = (uintptr_t)thread->engine.code.exec_base;
+
+    for (unsigned int i = 0; i < MAX_ARENAS; i++)
+    {
+        if (add)
+        {
+            uintptr_t none = 0;
+            __atomic_store_n( &arenas[i].high, low + thread->engine.code.bytes, __ATOMIC_RELEASE );
+            if (__atomic_compare_exchange_n( &arenas[i].low, &none, low, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ))
+                return;
+        }
+        else if (__atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE ) == low)
+        {
+            __atomic_store_n( &arenas[i].low, 0, __ATOMIC_RELEASE );
+            return;
+        }
+    }
+}
+
 static NTSTATUS process_init( void *args )
 {
     long page = sysconf( _SC_PAGESIZE );
@@ -313,6 +396,21 @@ static NTSTATUS process_init( void *args )
     host_memory.release = release;
     host_memory.page = page > 0 ? (size_t)page : 0x1000;
     host_memory.alignment = 0x10000;  /* the allocation granularity */
+    {
+        /* PW_WOW_FAULT_MARKERS=0 keeps the checks. */
+        const char *markers = getenv( "PW_WOW_FAULT_MARKERS" );
+        struct sigaction action;
+
+        memset( &action, 0, sizeof(action) );
+        if ((!markers || strcmp( markers, "0" )) && context_rip( &action ) &&
+            !sigaction( SIGSEGV, NULL, &wine_segv ))
+        {
+            action.sa_sigaction = segv_handler;
+            action.sa_mask = wine_segv.sa_mask;
+            action.sa_flags = wine_segv.sa_flags | SA_SIGINFO | SA_ONSTACK;
+            fault_markers = !sigaction( SIGSEGV, &action, NULL );
+        }
+    }
     return STATUS_SUCCESS;
 }
 
@@ -441,6 +539,7 @@ static NTSTATUS thread_term( void *args )
 
     if (!thread) return STATUS_SUCCESS;
     self = NULL;
+    if (thread->engine.fault_markers) register_arena( thread, 0 );
     pw_x86_hostexec_destroy( &thread->hostexec );
     pw_x86_engine_destroy( &thread->engine );
     release( thread->entries, 0 );
