@@ -299,9 +299,9 @@ static int open_library(int with_data)
                                               catalog_detail[catalog_count], game->app.executable };
         catalog_count++;
     }
-    PS5LOG_LOG("PW_WINE64 library status=%s listed_by=%d entries=%u games=%u root=%s",
-               pw_result_name(status), library.listed_by, (unsigned)library.count,
-               (unsigned)catalog_count, library_root);
+    PS5LOG_LOG("PW_WINE64 library status=%s listed_by=%d scan_errno=%d entries=%u games=%u "
+               "root=%s", pw_result_name(status), library.listed_by, library.scan_error,
+               (unsigned)library.count, (unsigned)catalog_count, library_root);
     return status;
 }
 

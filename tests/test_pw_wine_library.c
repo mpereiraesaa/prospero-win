@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "../native/pw_wine_library.h"
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +33,7 @@ static void test_load(void)
     assert(mkdtemp(root));
     /* No profiles directory, no index: nothing to offer. */
     assert(pw_wine_library_load(&library, root) == PW_ERR_NOT_FOUND && !library.count);
+    assert(library.scan_error == ENOENT && !library.listed_by);
 
     snprintf(directory, sizeof(directory), "%s/profiles", root);
     assert(!mkdir(directory, 0755));
@@ -47,7 +49,7 @@ static void test_load(void)
     write_file("input/pinball.input", "[input]\nl1 = z\nr1 = slash\ncross = space\n");
 
     assert(pw_wine_library_load(&library, root) == PW_OK);
-    assert(library.listed_by == PW_WINE_LIBRARY_SCANNED && library.count == 3);
+    assert(library.listed_by == PW_WINE_LIBRARY_SCANNED && library.count == 3 && !library.scan_error);
     assert(!strcmp(library.entries[0].file, "broken.profile") && library.entries[0].status != PW_OK);
     assert(!strcmp(library.entries[1].file, "pinball.profile") && library.entries[1].status == PW_OK);
     assert(!strcmp(library.entries[2].file, "solitaire.profile") && library.entries[2].status == PW_OK);

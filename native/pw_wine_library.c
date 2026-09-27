@@ -8,9 +8,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#ifdef __linux__
 #include <dirent.h>
-#else
+#ifndef __linux__
 int getdents(int fd, char *buffer, int size);
 #endif
 
@@ -91,11 +90,9 @@ int pw_wine_library_dirents(const uint8_t *buffer, size_t length,
     return records;
 }
 
-/* List the directory's names into the library; 0, or -1. */
-static int scan(PwWineLibrary *library, const char *directory)
+/* Names through libc's readdir; 0, or -1 with errno. */
+static int scan_readdir(PwWineLibrary *library, const char *directory)
 {
-#ifdef __linux__
-    /* The host tests' file system; the console path is getdents below. */
     DIR *dir = opendir(directory);
     struct dirent *entry;
 
@@ -103,15 +100,46 @@ static int scan(PwWineLibrary *library, const char *directory)
     while ((entry = readdir(dir))) add_name(entry->d_name, strlen(entry->d_name), library);
     closedir(dir);
     return 0;
-#else
+}
+
+#ifndef __linux__
+/* Names through getdents; 0, or -1 with errno (EINVAL for a malformed
+ * buffer). */
+static int scan_getdents(PwWineLibrary *library, const char *directory)
+{
     uint8_t buffer[4096];
-    int fd = open(directory, O_RDONLY | O_DIRECTORY), got;
+    int fd = open(directory, O_RDONLY | O_DIRECTORY), got, error;
 
     if (fd < 0) return -1;
     while ((got = getdents(fd, (char *)buffer, sizeof(buffer))) > 0)
-        if (pw_wine_library_dirents(buffer, (size_t)got, add_name, library) < 0) { got = -1; break; }
+        if (pw_wine_library_dirents(buffer, (size_t)got, add_name, library) < 0) {
+            errno = EINVAL;
+            got = -1;
+            break;
+        }
+    error = errno;
     close(fd);
+    errno = error;
     return got < 0 ? -1 : 0;
+}
+#endif
+
+/* List the directory's names into the library; 0, or -1. On the console
+ * getdents is tried first (a title in the sandbox gets EPERM from opendir),
+ * then readdir; scan_error keeps the first failure's errno for the log. */
+static int scan(PwWineLibrary *library, const char *directory)
+{
+#ifndef __linux__
+    if (scan_getdents(library, directory) == 0) return 0;
+    library->scan_error = errno;
+    library->count = 0;
+    if (scan_readdir(library, directory) == 0) return 0;
+    return -1;
+#else
+    /* The host tests' file system. */
+    if (scan_readdir(library, directory) == 0) return 0;
+    library->scan_error = errno;
+    return -1;
 #endif
 }
 

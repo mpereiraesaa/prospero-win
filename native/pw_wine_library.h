@@ -12,7 +12,7 @@
  * <root> is /data/prospero-win on the console. Nothing is built in: a game
  * appears by adding its profile. An index, when present, says exactly what
  * is offered; otherwise the directory is listed with getdents (a title gets
- * EPERM from opendir). Files are read with open/read.
+ * EPERM from opendir), then with readdir. Files are read with open/read.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -32,6 +32,7 @@ typedef struct PwWineLibraryEntry {
 typedef struct PwWineLibrary {
     uint32_t count;                     /* entries, valid or refused, sorted by file */
     int listed_by;                      /* SCANNED, INDEXED, or 0: no profiles directory */
+    int scan_error;                     /* errno of the first failed listing, or 0 */
     PwWineLibraryEntry entries[PW_WINE_LIBRARY_MAX];
 } PwWineLibrary;
 
