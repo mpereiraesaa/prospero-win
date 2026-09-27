@@ -130,6 +130,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_startup_x87_contract.py
 	python3 tests/test_build_source_oracle.py
 	python3 tests/test_dynarec_bench.py
+	python3 tests/test_bench_7zip.py
 	rm -rf tools/__pycache__ tests/__pycache__
 
 # Release evidence. `make test` skips the checks that need the pinned Wine

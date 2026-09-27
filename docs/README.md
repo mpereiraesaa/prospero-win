@@ -20,6 +20,8 @@ planning stay outside the standalone repository.
 - [Pinball case study](CASE_STUDY_PINBALL.md): the first playable PE32 target.
 - [Box86 opcode catalog](BOX86_OPCODE_CATALOG.md): generated DBT coverage
   checklist.
+- [DBT benchmark](DBT_BENCHMARK.md): 7-Zip's benchmark, DBT against native,
+  mode bisection and the gaps it shows.
 
 Historical phase plans and day-to-day compatibility notebooks are deliberately
 not part of the public documentation surface.

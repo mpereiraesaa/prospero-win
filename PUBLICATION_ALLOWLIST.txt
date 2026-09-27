@@ -116,6 +116,10 @@ tests/test_pw_videoout_layout.c
 tests/test_pw_videoout_tile.c
 tools/bench_dynarec.c
 tests/test_dynarec_bench.py
+tools/bench_7zip.sh
+tools/bench_7zip.py
+tests/test_bench_7zip.py
+docs/DBT_BENCHMARK.md
 tests/test_docs_links.py
 tests/test_wine_runtime_manifest.py
 tools/build_wine_runtime.sh
