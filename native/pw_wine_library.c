@@ -103,10 +103,12 @@ static int scan_readdir(PwWineLibrary *library, const char *directory)
 
 #ifndef __linux__
 /* Names through getdents; 0, or -1 with errno (EINVAL for a malformed
- * buffer). */
+ * buffer). The buffer is a whole directory block: libc's readdir reads with
+ * one at least a page (16 KiB on the console), and /data's directories use
+ * 64 KiB blocks, while a 4 KiB buffer got EINVAL there. */
 static int scan_getdents(PwWineLibrary *library, const char *directory)
 {
-    uint8_t buffer[4096];
+    static uint8_t buffer[64 * 1024];
     int fd = open(directory, O_RDONLY | O_DIRECTORY), got, error;
 
     if (fd < 0) return -1;
@@ -123,23 +125,18 @@ static int scan_getdents(PwWineLibrary *library, const char *directory)
 }
 #endif
 
-/* List the directory's names into the library; 0, or -1. On the console
- * getdents is tried first (a title in the sandbox gets EPERM from opendir),
- * then readdir; scan_error keeps the first failure's errno for the log. */
+/* List the directory's names into the library; 0, or -1. readdir lists
+ * /data on the console (measured); getdents is the console's second try.
+ * scan_error keeps the first failure's errno for the log. */
 static int scan(PwWineLibrary *library, const char *directory)
 {
+    if (scan_readdir(library, directory) == 0) return 0;
+    library->scan_error = errno;
 #ifndef __linux__
-    if (scan_getdents(library, directory) == 0) return 0;
-    library->scan_error = errno;
     library->count = 0;
-    if (scan_readdir(library, directory) == 0) return 0;
-    return -1;
-#else
-    /* The host tests' file system. */
-    if (scan_readdir(library, directory) == 0) return 0;
-    library->scan_error = errno;
-    return -1;
+    if (scan_getdents(library, directory) == 0) return 0;
 #endif
+    return -1;
 }
 
 static int by_file(const void *a, const void *b)

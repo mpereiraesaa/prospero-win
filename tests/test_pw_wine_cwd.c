@@ -320,6 +320,26 @@ int main(void)
     errno = 0;
     assert(fchdir(untracked) == -1 && errno == EACCES);
     assert(!__real_close(untracked));
+    /* A directory whose descriptor came from another module, as ntdll gets
+     * one from the in-process server: fchdir() cannot enter it, but its name
+     * through the c: link can (patch 0140), and "." then lists it. */
+    {
+        DIR *dir;
+        struct dirent *entry;
+        int seen = 0;
+        assert(!mkdir(at_root("prefix/dosdevices/c:/windows"), 0777));
+        assert((fd = open(at_root("prefix/dosdevices/c:/windows/font.ttf"), O_CREAT | O_WRONLY, 0644)) >= 0);
+        assert(!close(fd));
+        assert((untracked = __real_open(at_root("prefix/drive_c/windows"), O_RDONLY)) >= 0);
+        errno = 0;
+        assert(fchdir(untracked) == -1 && errno == EACCES);
+        assert(!chdir(at_root("prefix/dosdevices/c:/windows")));
+        assert((dir = opendir(".")));
+        while ((entry = readdir(dir))) seen += !strcmp(entry->d_name, "font.ttf");
+        assert(seen == 1 && !closedir(dir));
+        assert(!chdir(prefix) && !unlink(at_root("prefix/drive_c/windows/font.ttf")));
+        assert(!rmdir(at_root("prefix/drive_c/windows")) && !__real_close(untracked));
+    }
     errno = 0;
     assert(fchdir(dir_fd + 1000) == -1 && errno == EBADF);
     assert((fd = open("dosdevices/c:", O_RDONLY)) >= 0);

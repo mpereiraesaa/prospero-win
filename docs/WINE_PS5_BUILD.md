@@ -60,6 +60,7 @@ of the port never collide:
 | 0111 | `ntdll`: connect through `pw_wineserver_connect()` from `wineserver.so` beside ntdll (`wineserver.prx` on PS5) instead of the socket file, and register each thread's kernel id with the server module |
 | 0120 | `server`: when the current user names no audio driver, default `HKCU\Software\Wine\Drivers\Audio` to `ps5`; see [Audio](#audio) |
 | 0130 | `ntdll`: when the main program cannot be loaded in-process, print it with the status and end, instead of running `start.exe`, which would need a new process |
+| 0140 | `ntdll`: `NtQueryDirectoryFile` enters a directory by the name the server opened it with when `fchdir()` on the server's descriptor fails. The descriptor has no path in ntdll's working-directory emulation, so no directory could be listed |
 | 0400 | `win32u`: in-process PS5 user driver (`WINE_PS5_USER_DRIVER`, set on PS5); see [User driver](#user-driver) |
 | 0470 | `xinput`: controller 0 is the PS5 title's, read through a Unix library (`xinput1_3.so`) from the title's sink; elsewhere xinput uses HID as before; see [XInput controller](#xinput-controller) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
@@ -289,8 +290,16 @@ drivers, the hinters, the two rasterisers and FreeType's own gzip.
 - A `dlopen` that fails writes one line to stderr, and so to ps5log:
   `pw_wine_dl: cannot open <name>, tried <paths>: <reason>`.
 - Wine's 13 fonts (`fonts/*.ttf`: Tahoma, MS Sans Serif, Courier, System,
-  Marlett and others) are copied to `<work>/prx/fonts`. They are staged
-  under `share/wine/fonts`, where win32u looks for Wine's fonts.
+  Marlett and others) are copied to `<work>/prx/fonts`.
+- **Stage them in the prefix's `drive_c/windows/Fonts` on `/data`.**
+  win32u finds fonts by listing two directories: Wine's `share/wine/fonts`
+  and `C:\windows\Fonts`. The first is inside the read-only application
+  image, which a title cannot list (`opendir` and `getdents` fail there). On
+  `/data`, libc `readdir` works once `/data` is granted (measured
+  2026-09-27), and patch 0140 lets Wine list a directory whose descriptor
+  came from the in-process server.
+- Without them FreeType loads, but win32u logs `can't find a single
+  appropriate font`: windows show no captions, menus or caption buttons.
 
 ## Audio
 

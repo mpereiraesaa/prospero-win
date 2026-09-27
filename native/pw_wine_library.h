@@ -11,8 +11,9 @@
  *
  * <root> is /data/prospero-win on the console. Nothing is built in: a game
  * appears by adding its profile. An index, when present, says exactly what
- * is offered; otherwise the directory is listed with getdents (a title gets
- * EPERM from opendir), then with readdir. Files are read with open/read.
+ * is offered; otherwise the directory is listed with readdir, which works on
+ * /data once it is granted, then with getdents. Files are read with
+ * open/read.
  */
 #include <stddef.h>
 #include <stdint.h>
