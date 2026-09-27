@@ -79,9 +79,9 @@ void pw_x86_commit_canonical_flags(PwX86State *state);
 
 typedef enum PwX86ExitKind {
     PW_X86_EXIT_NONE = 0,
-    PW_X86_EXIT_DIRECT_JUMP,   /* Direct unconditional branch: jmp rel8/rel32 */
+    PW_X86_EXIT_DIRECT_JUMP,   /* Direct unconditional branch: jmp rel8/rel32, call rel32 */
     PW_X86_EXIT_CONDITIONAL,   /* Conditional branch: jcc rel8/rel32 */
-    PW_X86_EXIT_DYNAMIC        /* Call, ret, indirect, trap, fault, max block length */
+    PW_X86_EXIT_DYNAMIC        /* Ret, indirect call/jump, trap, fault, max block length */
 } PwX86ExitKind;
 
 typedef struct PwX86ExitDesc {

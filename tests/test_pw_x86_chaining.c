@@ -656,6 +656,58 @@ static void test_pending_exits_share_a_bucket(void)
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
 }
 
+/* 12. A direct call chains to its target once the return address is pushed */
+static void test_direct_call_chains(void)
+{
+    /*
+     * 0x1000: mov eax, 5; call 0x1020; add eax, 1; ret   (return lands at 0x100a)
+     * 0x1020: add eax, 100; ret
+     */
+    uint8_t code[64];
+    memset(code, 0x90, sizeof(code));
+    code[0] = 0xb8; code[1] = 5; code[2] = 0; code[3] = 0; code[4] = 0;
+    code[5] = 0xe8; code[6] = 0x16; code[7] = 0; code[8] = 0; code[9] = 0; /* 0x100a + 0x16 */
+    code[10] = 0x83; code[11] = 0xc0; code[12] = 1;
+    code[13] = 0xc3;
+    code[32] = 0x83; code[33] = 0xc0; code[34] = 100;
+    code[35] = 0xc3;
+
+    TestSource src = {0x1000, code, sizeof(code)};
+    PwVmBackend vm;
+    PwX86Engine engine;
+    PwX86CacheEntry entries[16];
+    PwX86StepReport step;
+    PwX86State state = {.eip = 0x1000, .stack_low = 0x03000000, .stack_high = 0x03010000};
+    const uint32_t esp = 0x0300ff00;
+
+    assert(pw_vm_posix_backend(&vm) == PW_OK);
+    assert(pw_x86_engine_init(&engine, &vm, entries, 16, 65536, 1, test_source_view, &src) == PW_OK);
+    assert(pw_x86_engine_set_chaining(&engine, 1) == PW_OK);
+    for (unsigned pass = 0; pass < 2; pass++) {
+        uint64_t transitions = engine.linked_transitions;
+        state.eip = 0x1000; state.gpr[0] = 0; state.gpr[4] = esp;
+        *(uint32_t *)(uintptr_t)esp = 0x99999999;
+        /* The call's block: on the second pass it runs straight into 0x1020. */
+        assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK);
+        if (!pass) {
+            assert(state.eip == 0x1020 && state.gpr[0] == 5);
+            assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK);
+        } else {
+            assert(engine.linked_transitions - transitions == 1);
+        }
+        /* 0x1020 returned to the pushed address, below the caller's slot. */
+        assert(state.eip == 0x100a && state.gpr[0] == 105 && state.gpr[4] == esp);
+        assert(*(uint32_t *)(uintptr_t)(esp - 4) == 0x100a);
+        assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK);
+        assert(state.eip == 0x99999999 && state.gpr[0] == 106 && state.gpr[4] == esp + 4);
+    }
+    /* A call whose push faults stops at the call with nothing chained. */
+    state.eip = 0x1000; state.gpr[4] = 0x03000002;
+    assert(pw_x86_engine_step(&engine, &state, &step) == PW_ERR_VM);
+    assert(state.eip == 0x1005 && state.gpr[4] == 0x03000002);
+    assert(pw_x86_engine_destroy(&engine) == PW_OK);
+}
+
 int main(void)
 {
     PwVmBackend vm;
@@ -675,8 +727,9 @@ int main(void)
     test_code_arena_exhaustion();
     test_wx_backend_spy();
     test_pending_exits_share_a_bucket();
+    test_direct_call_chains();
 
     assert(vm.release(vm.context, &stack_region) == PW_OK);
-    printf("all 11 direct chaining tests passed successfully\n");
+    printf("all 12 direct chaining tests passed successfully\n");
     return 0;
 }

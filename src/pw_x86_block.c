@@ -3132,14 +3132,14 @@ analyze_and_emit:
                                       : read32(source+cursor+1);
             next += delta;
             terminal = 1;
-            if (op == 0xeb || op == 0xe9) {
-                block->exit.kind = PW_X86_EXIT_DIRECT_JUMP;
-                block->exit.chainable = 1;
-                block->exit.target_pc = next;
-                emit_chain_exit(&e, count, next, &block->exit_contract,
-                                &block->exit.target_patch_offset, &block->exit.target_stub_offset,
-                                &block->exit.target_reconcile_offset, &block->exit.target_reconcile_patch_offset);
-            }
+            /* A direct call's target is known here, like a jump's: once the
+             * return address is pushed it chains the same way. */
+            block->exit.kind = PW_X86_EXIT_DIRECT_JUMP;
+            block->exit.chainable = 1;
+            block->exit.target_pc = next;
+            emit_chain_exit(&e, count, next, &block->exit_contract,
+                            &block->exit.target_patch_offset, &block->exit.target_stub_offset,
+                            &block->exit.target_reconcile_offset, &block->exit.target_reconcile_patch_offset);
         } else if (op == 0xc3 || op==0xc2) {
             stack_address(&e,0,&block->exit_contract);
             byte(&e,0x8b); byte(&e,0x08); /* ecx = guest return */
@@ -3155,7 +3155,7 @@ analyze_and_emit:
         /* fs_call is terminal like the other control transfers: the target it
          * loaded into EIP must not be overwritten by the fall-through. */
         if (op != 0xc3 && op!=0xc2 && op!=0xff && !conditional && op != 0xeb &&
-            op != 0xe9 && !fs_call) store(&e,offsetof(PwX86State,eip),next);
+            op != 0xe9 && op != 0xe8 && !fs_call) store(&e,offsetof(PwX86State,eip),next);
         block->instruction_ends[i]=(uint16_t)(cursor + length);
     }
     if (!block->exit.chainable) {

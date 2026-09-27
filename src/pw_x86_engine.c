@@ -306,17 +306,22 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
     state->reg_reconciliations = 0;
     state->reg_spills = 0;
 
-    engine->fault_block_pc = entry->guest_pc;
-    engine->fault_block_instructions = entry->instructions;
-    engine->fault_block_resident_mask = entry->entry_contract.resident_mask;
-    memcpy(engine->fault_block_map, entry->entry_contract.guest_to_host,
-           sizeof(engine->fault_block_map));
-    engine->fault_block_code_bytes = entry->code_bytes < sizeof(engine->fault_block_code)
-        ? (uint32_t)entry->code_bytes : (uint32_t)sizeof(engine->fault_block_code);
-    memcpy(engine->fault_block_code,
-           (const uint8_t *)engine->code.exec_base + entry->code_offset,
-           engine->fault_block_code_bytes);
     int invoked=invoke((uint8_t *)engine->code.exec_base+entry->code_offset+entry->canonical_entry_offset,state);
+
+    /* The block a failed step entered, for the fault report. Taken only on
+     * failure: copying it before every dispatch cost a kilobyte per step. */
+    if(invoked) {
+        engine->fault_block_pc = entry->guest_pc;
+        engine->fault_block_instructions = entry->instructions;
+        engine->fault_block_resident_mask = entry->entry_contract.resident_mask;
+        memcpy(engine->fault_block_map, entry->entry_contract.guest_to_host,
+               sizeof(engine->fault_block_map));
+        engine->fault_block_code_bytes = entry->code_bytes < sizeof(engine->fault_block_code)
+            ? (uint32_t)entry->code_bytes : (uint32_t)sizeof(engine->fault_block_code);
+        memcpy(engine->fault_block_code,
+               (const uint8_t *)engine->code.exec_base + entry->code_offset,
+               engine->fault_block_code_bytes);
+    }
 
     engine->linked_transitions += state->step_transitions;
     engine->reg_loads += state->reg_loads;
