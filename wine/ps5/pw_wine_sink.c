@@ -16,6 +16,12 @@ static pthread_once_t wake_once=PTHREAD_ONCE_INIT;
 static int wake[2]={-1,-1};
 static PwWinePad pad_state;
 static uint32_t rumble_left,rumble_right,rumble_changed;
+/* Audio has its own lock: its sink blocks for a grain, which must not hold
+ * up frames or input. */
+static pthread_mutex_t audio_lock=PTHREAD_MUTEX_INITIALIZER;
+static PwWineAudioSink audio_sink;
+static void *audio_context;
+static uint64_t grains,grains_dropped;
 
 static void create_wake_pipe(void)
 {
@@ -91,12 +97,40 @@ int pw_wine_next_input(PwWineInput *event)
     pthread_mutex_unlock(&lock);
     return found;
 }
+void pw_wine_set_audio_sink(PwWineAudioSink new_sink,void *context)
+{
+    pthread_mutex_lock(&audio_lock);
+    audio_sink=new_sink;audio_context=context;
+    pthread_mutex_unlock(&audio_lock);
+}
+int pw_wine_audio_available(void)
+{
+    pthread_mutex_lock(&audio_lock);
+    int available=audio_sink!=NULL;
+    pthread_mutex_unlock(&audio_lock);
+    return available;
+}
+int pw_wine_audio_output(const int16_t *frames)
+{
+    int status=-1;
+    /* The lock also serialises grains: the sink sees one at a time. */
+    pthread_mutex_lock(&audio_lock);
+    if(audio_sink && frames)status=audio_sink(audio_context,frames);
+    if(status)grains_dropped++;
+    else grains++;
+    pthread_mutex_unlock(&audio_lock);
+    return status;
+}
+
 void pw_wine_sink_stats(PwWineSinkStats *out)
 {
     if(!out)return;
     pthread_mutex_lock(&lock);
     *out=stats;
     pthread_mutex_unlock(&lock);
+    pthread_mutex_lock(&audio_lock);
+    out->grains=grains;out->grains_dropped=grains_dropped;
+    pthread_mutex_unlock(&audio_lock);
 }
 
 /* The pad has its own fields compared, not memcmp'd: padding stays out. */

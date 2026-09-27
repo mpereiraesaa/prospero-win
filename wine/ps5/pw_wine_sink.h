@@ -11,7 +11,9 @@
  * fills from the DualSense and the driver drains in ProcessEvents. A
  * game's XInput controller is one more slot: the title keeps the newest
  * gamepad state in it, Wine's xinput reads it (its Unix library, patch
- * 0440, finds these calls with dlsym) and leaves the rumble it asks for. */
+ * 0440, finds these calls with dlsym) and leaves the rumble it asks for.
+ * Sound goes out like frames: Wine's audio driver (wine/wineps5) hands its
+ * mix to the title's one audio port, one grain at a time. */
 
 /* BGRA, top-down; stride in bytes. Returns the sink's result. */
 typedef int (*PwWinePresentSink)(void *context,const void *bgra,uint32_t width,uint32_t height,
@@ -26,9 +28,17 @@ typedef struct PwWineInput {
     uint32_t down;      /* KEY, MOUSE_BUTTON: 1 pressed, 0 released */
 } PwWineInput;
 
+/* The console's output format: interleaved left,right 16-bit frames at
+ * 48 kHz, played PW_WINE_AUDIO_GRAIN frames at a time. */
+enum { PW_WINE_AUDIO_RATE=48000,PW_WINE_AUDIO_GRAIN=256 };
+/* Plays one grain and returns once the console has taken it, so the
+ * console's output clocks the caller. Returns the sink's result. */
+typedef int (*PwWineAudioSink)(void *context,const int16_t *frames);
+
 typedef struct PwWineSinkStats {
     uint64_t frames,frames_dropped;       /* dropped: no sink set, or it failed */
     uint64_t inputs_posted,inputs_dropped,inputs_delivered;
+    uint64_t grains,grains_dropped;       /* audio; dropped as for frames */
 } PwWineSinkStats;
 
 /* An XInput gamepad (XINPUT_GAMEPAD with the connection and a packet
@@ -43,6 +53,7 @@ typedef struct PwWinePad {
 
 /* Title side. */
 void pw_wine_set_present_sink(PwWinePresentSink sink,void *context);
+void pw_wine_set_audio_sink(PwWineAudioSink sink,void *context);
 /* 0, or -1 when the queue is full or the event is invalid. */
 int pw_wine_post_input(const PwWineInput *event);
 void pw_wine_sink_stats(PwWineSinkStats *stats);
@@ -66,5 +77,11 @@ int pw_wine_input_fd(void);
 int pw_wine_pad(PwWinePad *pad);
 /* The rumble a game asked for (XInputSetState); speeds are clamped. */
 void pw_wine_set_rumble(uint32_t left,uint32_t right);
+/* 1 when the title set an audio sink: the audio driver offers its device
+ * only then. */
+int pw_wine_audio_available(void);
+/* Blocks while the sink plays one grain. -1 when no sink is set or frames
+ * is NULL. */
+int pw_wine_audio_output(const int16_t *frames);
 
 #endif

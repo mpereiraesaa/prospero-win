@@ -18,6 +18,42 @@ static int sink(void *context,const void *bgra,uint32_t w,uint32_t h,uint32_t st
     return 0;
 }
 
+static int audio_calls,audio_fail;
+static int16_t audio_first,audio_last;
+static void *audio_seen;
+static int audio_sink(void *context,const int16_t *frames)
+{
+    audio_calls++;audio_seen=context;
+    audio_first=frames[0];audio_last=frames[2*PW_WINE_AUDIO_GRAIN-1];
+    return audio_fail?-3:0;
+}
+
+static void test_audio(void)
+{
+    int16_t grain[2*PW_WINE_AUDIO_GRAIN];
+    PwWineSinkStats s;
+    int tag;
+    for(int i=0;i<2*PW_WINE_AUDIO_GRAIN;i++)grain[i]=(int16_t)(i-100);
+
+    /* No sink: nothing is available and a grain is dropped. */
+    assert(!pw_wine_audio_available());
+    assert(pw_wine_audio_output(grain)==-1 && audio_calls==0);
+    pw_wine_set_audio_sink(audio_sink,&tag);
+    assert(pw_wine_audio_available());
+    assert(pw_wine_audio_output(grain)==0 && audio_calls==1);
+    assert(audio_seen==&tag && audio_first==-100 && audio_last==2*PW_WINE_AUDIO_GRAIN-101);
+    assert(pw_wine_audio_output(NULL)==-1 && audio_calls==1);
+    /* The sink's failure is returned and counted. */
+    audio_fail=1;assert(pw_wine_audio_output(grain)==-3 && audio_calls==2);audio_fail=0;
+    pw_wine_sink_stats(&s);
+    assert(s.grains==1 && s.grains_dropped==3);
+    /* Audio is counted apart from frames. */
+    assert(s.frames==1 && s.frames_dropped==5);
+    pw_wine_set_audio_sink(NULL,NULL);
+    assert(!pw_wine_audio_available() && pw_wine_audio_output(grain)==-1 && audio_calls==2);
+    pw_wine_sink_stats(NULL);
+}
+
 static void *poster(void *arg)
 {
     (void)arg;
@@ -48,6 +84,7 @@ int main(void)
     /* The sink's failure is returned and counted. */
     fail_next=1;assert(pw_wine_present(frame,4,3,16)==-7 && calls==2);
     pw_wine_sink_stats(&s);assert(s.frames==1 && s.frames_dropped==5);
+    test_audio();
 
     /* Input is first in, first out, validated, and bounded. */
     PwWineInput e,out;
