@@ -624,10 +624,42 @@ static void rotate_tests(void)
         assert(run_mode(keep_zf,sizeof(keep_zf),0xd1c0,mode&1,mode>>1)==0);
         assert(state.gpr[1]==0x56781234 && (state.gpr[2]&0xff)==1);
     }
-    /* RCL/RCR (/2, /3) still stop the block at the instruction. */
+    /* RCL/RCR (/2, /3) by a constant, and the 16-bit rotates by a constant,
+     * against the host instruction with the carry in both states: register
+     * and memory, imm8 and one, every count 0..255 (masked to five bits).
+     * RCL/RCR by CL still stop the block at the instruction. */
+    for(unsigned kind=0;kind<6;kind++)for(unsigned form=0;form<2;form++)
+    for(unsigned memory=0;memory<2;memory++)for(unsigned mode=0;mode<4;mode++)
+    for(unsigned count=0;count<256;count+=(mode?7:1))for(unsigned v=0;v<6;v++)
+    for(unsigned carry=0;carry<2;carry++) {
+        /* kind: rcl, rcr (32-bit); rol, ror, rcl, rcr (16-bit) */
+        const unsigned word=kind>=2, group=kind<2?2+kind:kind-2;
+        unsigned actual=form==1?1:count,masked=actual&31;
+        uint32_t expected=values[v];unsigned long flags;
+        if(kind==0)__asm__ volatile("btl $0,%k2; rcll %%cl,%0; pushfq; popq %1":"+a"(expected),"=r"(flags):"r"(carry),"c"(actual):"cc");
+        else if(kind==1)__asm__ volatile("btl $0,%k2; rcrl %%cl,%0; pushfq; popq %1":"+a"(expected),"=r"(flags):"r"(carry),"c"(actual):"cc");
+        else if(kind==2)__asm__ volatile("btl $0,%k2; rolw %%cl,%w0; pushfq; popq %1":"+a"(expected),"=r"(flags):"r"(carry),"c"(actual):"cc");
+        else if(kind==3)__asm__ volatile("btl $0,%k2; rorw %%cl,%w0; pushfq; popq %1":"+a"(expected),"=r"(flags):"r"(carry),"c"(actual):"cc");
+        else if(kind==4)__asm__ volatile("btl $0,%k2; rclw %%cl,%w0; pushfq; popq %1":"+a"(expected),"=r"(flags):"r"(carry),"c"(actual):"cc");
+        else __asm__ volatile("btl $0,%k2; rcrw %%cl,%w0; pushfq; popq %1":"+a"(expected),"=r"(flags):"r"(carry),"c"(actual):"cc");
+        const uint32_t initial=0xad6u|carry;
+        state.gpr[0]=values[v];state.gpr[1]=count;state.gpr[2]=state.stack_high-4;state.eflags=initial;
+        memcpy((void *)(uintptr_t)state.gpr[2],&values[v],4);
+        uint8_t op[4];size_t n=0;
+        if(word)op[n++]=0x66;
+        op[n++]=(uint8_t)(form==0?0xc1:0xd1);
+        op[n++]=(uint8_t)((memory?2:0xc0)|(group<<3));
+        if(form==0)op[n++]=(uint8_t)count;
+        assert(run_mode(op,n,0xd1e0,mode&1,mode>>1)==0);
+        uint32_t result=state.gpr[0];if(memory)memcpy(&result,(void *)(uintptr_t)state.gpr[2],4);
+        unsigned mask=masked?(masked==1?0x801:0x001):0;
+        assert(result==expected && state.eflags==((initial&~mask)|((unsigned)flags&mask)));
+        assert(state.gpr[1]==count && state.gpr[2]==state.stack_high-4);
+    }
     PwX86Block block;uint8_t scratch[512];
-    const uint8_t rcl[]={0xc1,0xd0,4};
-    assert(pw_x86_translate(rcl,sizeof(rcl),0xd1e0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
+    const uint8_t rcl_cl[]={0xd3,0xd0}, rcl_cl16[]={0x66,0xd3,0xd0};
+    assert(pw_x86_translate(rcl_cl,sizeof(rcl_cl),0xd1e0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
+    assert(pw_x86_translate(rcl_cl16,sizeof(rcl_cl16),0xd1e0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
 }
 /*
  * SHLD/SHRD against the host instruction: every count 0..255 (masked to five
@@ -1348,7 +1380,7 @@ static void sse_and_scan_tests(void)
     assert(run(bsr16,sizeof(bsr16),0x8130)==0);
     assert(state.gpr[0]==0xffff000f);
     /* The 16-bit shift group: only the low word changes, the count is masked
-     * to four bits, and a masked-zero count preserves every flag. */
+     * to five bits, and a masked-zero count preserves every flag. */
     state.gpr[2]=0x00070008;state.eflags=0x202|1;
     assert(run(shr16,sizeof(shr16),0x8140)==0);
     assert(state.gpr[2]==0x00070004);
@@ -1356,9 +1388,16 @@ static void sse_and_scan_tests(void)
     state.gpr[0]=0x0000ffff;state.eflags=0x202;
     assert(run(shl16_imm,sizeof(shl16_imm),0x8150)==0);
     assert(state.gpr[0]==0x0000fff0 && (state.eflags&0x40)==0);
-    state.gpr[0]=0x00000001;state.gpr[1]=16;state.eflags=0xad7;
-    assert(run(shr16_cl,sizeof(shr16_cl),0x8160)==0);
-    assert(state.gpr[0]==0x00000001 && state.eflags==0xad7); /* count 16 & 15 == 0 */
+    /* A count of 16 or more empties the word, as on the host; 32 is zero. */
+    for(unsigned count=16;count<=32;count+=16) {
+        uint32_t expected=0x00018001;unsigned long flags;
+        __asm__ volatile("shrw %%cl,%w0; pushfq; popq %1":"+a"(expected),"=r"(flags):"c"(count):"cc");
+        state.gpr[0]=0x00018001;state.gpr[1]=count;state.eflags=0xad7;
+        assert(run(shr16_cl,sizeof(shr16_cl),0x8160)==0);
+        const unsigned mask=count==32?0:0xc5;
+        assert(state.gpr[0]==expected && state.eflags==((0xad7&~mask)|((unsigned)flags&mask)));
+    }
+    assert(state.gpr[0]==0x00018001);
     state.gpr[0]=0x00008000;state.gpr[1]=1;state.eflags=0x202;
     assert(run(shr16_cl,sizeof(shr16_cl),0x8170)==0);
     assert(state.gpr[0]==0x00004000 && (state.eflags&1)==0);

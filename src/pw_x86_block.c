@@ -1709,10 +1709,12 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
             if(result!=PW_OK)DECODE_FAIL(result);
             /* SHL, SHR and SAR, and ROL/ROR, which write only CF (and OF
              * for a count of one) and leave SF, ZF, AF and PF alone. */
-            const unsigned rotate=operand.reg<=1;
+            const unsigned rotate=operand.reg<=3;
             const uint32_t one=rotate?0x801:0x8c5, many=rotate?0x001:0x0c5;
-            if(operand.reg!=0 && operand.reg!=1 && operand.reg!=4 && operand.reg!=5 &&
-               operand.reg!=7)DECODE_FAIL(PW_ERR_UNSUPPORTED);
+            /* RCL/RCR (2, 3) only by a constant: they also read CF. */
+            if(operand.reg==6 || ((operand.reg==2 || operand.reg==3) && op==0xd3))
+                DECODE_FAIL(PW_ERR_UNSUPPORTED);
+            if(operand.reg==2 || operand.reg==3)flags_use=0x001;
             length=1+operand.bytes+(op==0xc1);
             can_fault=(operand.mod!=3);
             /* A masked zero shift count preserves every flag.  Immediate
@@ -1801,17 +1803,24 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
                   (source[cursor+1]==0xc1 || source[cursor+1]==0xd1 ||
                    source[cursor+1]==0xd3)) {
             /* 16-bit shift/rotate group. The destination's upper 16 bits are
-             * untouched, and the count is masked to four bits rather than
-             * five, which also changes which counts preserve the flags. */
+             * untouched, and the count is masked to five bits as for 32-bit
+             * operands (a 16-bit shift by 16..31 empties the word). */
             int result=decode_operand(source+cursor+2,bytes-cursor-2,&operand);
             if(result!=PW_OK)DECODE_FAIL(result);
-            if(operand.reg!=4 && operand.reg!=5 && operand.reg!=7)
+            if(operand.reg==6 || (operand.reg<=3 && source[cursor+1]==0xd3))
                 DECODE_FAIL(PW_ERR_UNSUPPORTED);
             shift_word=1;
             length=2+operand.bytes+(source[cursor+1]==0xc1);
             can_fault=(operand.mod!=3);
-            if(source[cursor+1]==0xc1 && length<=bytes-cursor) {
-                unsigned count=source[cursor+length-1]&15;
+            if(operand.reg<=3) {
+                /* A rotate by a constant, run as the host instruction: the
+                 * count is masked to five bits, and RCL/RCR read CF. */
+                unsigned count=source[cursor+1]==0xd1?1u:
+                               length<=bytes-cursor?source[cursor+length-1]&31u:0u;
+                flags_def=count==0?0:count==1?0x801:0x001;
+                if(operand.reg>=2)flags_use=0x001;
+            } else if(source[cursor+1]==0xc1 && length<=bytes-cursor) {
+                unsigned count=source[cursor+length-1]&31;
                 flags_def=count==0?0:count==1?0x8c5:0x0c5;
             } else {
                 flags_def=0x8c5;
@@ -2575,22 +2584,38 @@ analyze_and_emit:
             block->exit_contract.dirty_mask = 0;
             x87_call(&e,x87-1,x87_register);
             emit_load_all_resident(&e, &block->exit_contract);
-        } else if((op==0xc1 && (source[cursor+length-1]&31)) || op==0xd1) {
+        } else if(((op==0xc1 && (source[cursor+length-1]&31)) || op==0xd1) ||
+                  (shift_word && operand.reg<=3 && source[cursor+1]!=0xd3)) {
             /* A 32-bit shift or rotate by a nonzero constant: the host
              * instruction itself, and its defined flags deferred like any
              * producer's. SHL/SHR/SAR define CF, PF, ZF and SF (and OF for a
              * count of one); ROL/ROR define CF (and OF for one). The bits
              * they leave undefined keep their guest value, as below. */
-            const unsigned count=op==0xd1?1u:(source[cursor+length-1]&31u);
-            const unsigned rotate=operand.reg<=1;
+            const uint8_t shift_op=(uint8_t)(shift_word?source[cursor+1]:op);
+            const unsigned count=shift_op==0xd1?1u:(source[cursor+length-1]&31u);
+            const unsigned rotate=operand.reg<=3, carry=operand.reg==2 || operand.reg==3;
             const uint32_t mask=count==1?(rotate?0x801u:0x8c5u):(rotate?0x001u:0x0c5u);
-            const uint8_t modrm=(uint8_t)((operand.mod==3?0xc0u:0u)|(operand.reg<<3));
+            /* With a carry rotate the operand is in r11 (memory) or loaded
+             * after CF is: materializing CF uses eax, ecx and edx. */
+            const uint8_t modrm=(uint8_t)((operand.mod==3?0xc0u:carry?0x03u:0u)|(operand.reg<<3));
+            if(operand.mod!=3) {
+                effective_address(&e,&operand,&block->exit_contract);
+                memory_address_width(&e,2,shift_word?2:4);
+                if(carry){byte(&e,0x49);byte(&e,0x89);byte(&e,0xc3);}  /* mov r11, rax */
+            }
+            if(carry) {
+                /* The guest CF into the host CF. */
+                emit_materialize_flags(&e,0x001);
+                byte(&e,0x0f);byte(&e,0xba);byte(&e,0x67);
+                byte(&e,offsetof(PwX86State,eflags));byte(&e,0);     /* bt dword [rdi+eflags], 0 */
+            }
             if(operand.mod==3)load_guest_reg(&e, &block->exit_contract, operand.rm);
-            else {effective_address(&e,&operand,&block->exit_contract);memory_address_width(&e,2,4);}
+            if(shift_word)byte(&e,0x66);
+            if(operand.mod!=3 && carry)byte(&e,0x41);                /* [r11] */
             if(count==1){byte(&e,0xd1);byte(&e,modrm);}
             else {byte(&e,0xc1);byte(&e,modrm);byte(&e,(uint8_t)count);}
             if(operand.mod==3)store_guest_reg(&e, &block->exit_contract, operand.rm);
-            emit_save_flags(&e, mask, lazy_flags_enabled, d->flags_dead);
+            if(count)emit_save_flags(&e, mask, lazy_flags_enabled, d->flags_dead);
         } else if(op==0xc1 || op==0xd1 || op==0xd3 || shift_word) {
             /* A zero-count shift preserves all arithmetic flags and wider
              * counts retain implementation-policy bits. Canonicalize the
@@ -2602,8 +2627,8 @@ analyze_and_emit:
             else {effective_address(&e,&operand,&block->exit_contract);memory_address_width(&e,2,shift_width);}
             if(shift_op==0xd3){load_guest_reg_ecx(&e, &block->exit_contract, 1);}
             else {byte(&e,0xb9);word(&e,shift_op==0xd1?1:source[cursor+length-1]);}
-            /* 16-bit shifts mask the count to four bits, 32-bit to five. */
-            byte(&e,0x83);byte(&e,0xe1);byte(&e,shift_word?15:31);
+            /* 16- and 32-bit shifts both mask the count to five bits. */
+            byte(&e,0x83);byte(&e,0xe1);byte(&e,31);
             /* esi selects only defined flags: none for zero, OF only for one.
              * Preserve undefined AF and multi-bit OF deterministically. A
              * rotate (ROL/ROR, 32-bit only) defines just CF, and OF for one. */
