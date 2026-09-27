@@ -12,7 +12,12 @@ _Static_assert(offsetof(PwX86State,memory[0].permissions)<=127,
 /* flat_span: when nonzero, every guest access and the stack are known to be
  * valid exactly inside [flat_low, flat_low + flat_span), so the guard is one
  * unsigned compare (PwX86TranslateOptions.flat_high). */
-typedef struct Emitter { uint8_t *p; size_t n, cap; int failed; uint32_t flat_low, flat_span; } Emitter;
+/* exits counts the places emitted so far where a block can stop in the
+ * middle (a refused check or a failed helper): an instruction that emits
+ * none needs no guest EIP stored before it. */
+typedef struct Emitter {
+    uint8_t *p; size_t n, cap; int failed; uint32_t flat_low, flat_span; unsigned exits;
+} Emitter;
 static void byte(Emitter *e, uint8_t value)
 {
     if (e->n == e->cap) { e->failed = 1; return; }
@@ -41,6 +46,7 @@ static void store_eax(Emitter *e, size_t offset)
 /* A failed comparison returns -1. The short branch skips mov eax,-1; ret. */
 static void require_condition(Emitter *e, uint8_t condition)
 {
+    e->exits++;
     byte(e,condition); byte(e,6); byte(e,0xb8); word(e,0xffffffffu); byte(e,0xc3);
 }
 /* movaps and movdqa fault on an address that is not 16-byte aligned. With
@@ -49,6 +55,7 @@ static void require_condition(Emitter *e, uint8_t condition)
  * CPU's #GP, before the host instruction could fault. */
 static void require_aligned16(Emitter *e)
 {
+    e->exits++;
     byte(e,0xa8); byte(e,0x0f);                             /* test al, 15 */
     byte(e,0x74); byte(e,36);                               /* jz past the fault */
     byte(e,0xc7); byte(e,0x87); word(e,(uint32_t)offsetof(PwX86State,fault_address));
@@ -75,6 +82,7 @@ static void stack_bounds(Emitter *e)
 {
     if (e->flat_span) {
         size_t ok=flat_range_check(e,4);
+        e->exits++;
         byte(e,0xb8); word(e,0xffffffffu); byte(e,0xc3);
         e->p[ok]=(uint8_t)(e->n-(ok+1));
         return;
@@ -925,7 +933,7 @@ static void x87_call(Emitter *e,unsigned action,unsigned register_operand)
     uint64_t target=(uint64_t)(uintptr_t)&x87_dispatch;
     word(e,(uint32_t)target);word(e,(uint32_t)(target>>32));
     byte(e,0xff);byte(e,0xd0);byte(e,0x5f);byte(e,0x85);byte(e,0xc0);
-    byte(e,0x74);byte(e,1);byte(e,0xc3); /* propagate helper failure */
+    e->exits++;byte(e,0x74);byte(e,1);byte(e,0xc3); /* propagate helper failure */
 }
 static int string_dispatch(PwX86State *state,unsigned opcode,unsigned width,unsigned repeat)
 {
@@ -1046,7 +1054,7 @@ static void cmpxchg_call(Emitter *e, unsigned source)
     uint64_t target=(uint64_t)(uintptr_t)&cmpxchg_dispatch;
     word(e,(uint32_t)target);word(e,(uint32_t)(target>>32));
     byte(e,0xff);byte(e,0xd0);byte(e,0x5f);       /* call rax; pop rdi */
-    byte(e,0x85);byte(e,0xc0);byte(e,0x74);byte(e,1);byte(e,0xc3);
+    byte(e,0x85);byte(e,0xc0);e->exits++;byte(e,0x74);byte(e,1);byte(e,0xc3);
 }
 
 /*
@@ -1081,7 +1089,7 @@ static void xchg_call(Emitter *e, unsigned source)
     uint64_t target=(uint64_t)(uintptr_t)&xchg_dispatch;
     word(e,(uint32_t)target);word(e,(uint32_t)(target>>32));
     byte(e,0xff);byte(e,0xd0);byte(e,0x5f);       /* call rax; pop rdi */
-    byte(e,0x85);byte(e,0xc0);byte(e,0x74);byte(e,1);byte(e,0xc3);
+    byte(e,0x85);byte(e,0xc0);e->exits++;byte(e,0x74);byte(e,1);byte(e,0xc3);
 }
 
 static void string_call(Emitter *e,unsigned opcode,unsigned width,unsigned repeat)
@@ -1091,7 +1099,7 @@ static void string_call(Emitter *e,unsigned opcode,unsigned width,unsigned repea
     uint64_t target=(uint64_t)(uintptr_t)&string_dispatch;
     word(e,(uint32_t)target);word(e,(uint32_t)(target>>32));
     byte(e,0xff);byte(e,0xd0);byte(e,0x5f);byte(e,0x85);byte(e,0xc0);
-    byte(e,0x74);byte(e,1);byte(e,0xc3);
+    e->exits++;byte(e,0x74);byte(e,1);byte(e,0xc3);
 }
 static int muldiv_dispatch(PwX86State *state,unsigned action,uint32_t operand)
 {
@@ -1137,7 +1145,7 @@ static void muldiv_call(Emitter *e,unsigned action)
     uint64_t target=(uint64_t)(uintptr_t)&muldiv_dispatch;
     word(e,(uint32_t)target);word(e,(uint32_t)(target>>32));
     byte(e,0xff);byte(e,0xd0);byte(e,0x5f);byte(e,0x85);byte(e,0xc0);
-    byte(e,0x74);byte(e,1);byte(e,0xc3);
+    e->exits++;byte(e,0x74);byte(e,1);byte(e,0xc3);
 }
 
 static uint32_t branch_condition_flags(unsigned condition)
@@ -1416,7 +1424,7 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
                           uint8_t *output, size_t capacity, PwX86Block *block,
                           const PwX86TranslateOptions *options)
 {
-    Emitter e = {output,0,capacity,0,0,0};
+    Emitter e = {output,0,capacity,0,0,0,0};
     size_t cursor = 0;
     unsigned count = 0;
     if (!source || !bytes || !output || !capacity || !block || !options)
@@ -2144,7 +2152,22 @@ analyze_and_emit:
      * must never lose a predecessor's update. */
     block->exit_contract.dirty_mask = block->entry_contract.resident_mask;
 
-    /* Pass 2: Machine code emission */
+    /* Pass 2: Machine code emission, twice. The first emission stores the
+     * guest EIP before every instruction and records which instructions can
+     * stop the block in the middle; the second, which is kept, stores it only
+     * before those (and after the last instruction), since nothing reads it
+     * in between. */
+    uint8_t needs_eip[32];
+    const PwX86Block planned = *block;
+    memset(needs_eip, 1, sizeof(needs_eip));
+    for (unsigned pass = 0; pass < 2; pass++) {
+    if (pass) {
+        if (e.failed) break;
+        *block = planned;
+        e.n = 0;
+        e.exits = 0;
+        indirect_exit = 0;
+    }
     block->canonical_entry_offset = e.n;
     if (block->entry_contract.resident_mask) {
         emit_load_all_resident(&e, &block->entry_contract);
@@ -2203,8 +2226,9 @@ analyze_and_emit:
         int terminal = d->terminal; (void)terminal;
 
         uint32_t next = pc + (uint32_t)cursor + (uint32_t)length;
+        const unsigned exits_before = e.exits;
         /* Fault exits preserve the PC of the faulting guest instruction. */
-        store(&e,offsetof(PwX86State,eip),pc+(uint32_t)cursor);
+        if (needs_eip[i]) store(&e,offsetof(PwX86State,eip),pc+(uint32_t)cursor);
         if (d->can_fault || string_op || x87) {
             emit_spill_dirty(&e, &block->exit_contract);
             block->exit_contract.dirty_mask = 0;
@@ -3258,8 +3282,10 @@ analyze_and_emit:
         /* fs_call is terminal like the other control transfers: the target it
          * loaded into EIP must not be overwritten by the fall-through. */
         if (op != 0xc3 && op!=0xc2 && op!=0xff && !conditional && op != 0xeb &&
-            op != 0xe9 && op != 0xe8 && !fs_call) store(&e,offsetof(PwX86State,eip),next);
+            op != 0xe9 && op != 0xe8 && !fs_call && (!pass || i + 1 == count))
+            store(&e,offsetof(PwX86State,eip),next);
         block->instruction_ends[i]=(uint16_t)(cursor + length);
+        if (!pass) needs_eip[i] = e.exits != exits_before;
     }
     if (!block->exit.chainable) {
         block->exit.kind = PW_X86_EXIT_DYNAMIC;
@@ -3274,6 +3300,7 @@ analyze_and_emit:
             emit_indirect_lookup(&e, options->indirect_targets, options->indirect_mask);
         byte(&e, 0x48); byte(&e, 0xc7); byte(&e, 0x47); byte(&e, offsetof(PwX86State, last_exit_slot)); word(&e, 0);
         success(&e);
+    }
     }
     if (e.failed) return PW_ERR_LIMIT;
     block->source_bytes = insts[count-1].cursor + insts[count-1].length;

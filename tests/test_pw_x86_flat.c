@@ -100,6 +100,73 @@ static void same_everywhere(const uint8_t *source, size_t bytes, unsigned width,
         }
 }
 
+/* Stops in the middle of a block name their own instruction, with the
+ * effects of the instructions before them and none of the ones after, while
+ * instructions that cannot stop store no EIP at all. */
+static void stops_name_their_instruction(void)
+{
+    /* mov eax,5; add ecx,eax; inc edx; mov esi,[ebx]; add edi,3; push eax;
+     * xor edx,ecx */
+    static const uint8_t block_source[] = { 0xb8, 5, 0, 0, 0, 0x01, 0xc1, 0x42, 0x8b, 0x33,
+                                            0x83, 0xc7, 3, 0x50, 0x31, 0xca };
+    /* inc eax; div ecx */
+    static const uint8_t divide[] = { 0x40, 0xf7, 0xf1 };
+    const uint8_t eip_store[] = { 0xc7, 0x47, (uint8_t)offsetof(PwX86State, eip) };
+
+    for (unsigned mode = 0; mode < 8; mode++) {
+        const unsigned residency = mode & 1, lazy = (mode >> 1) & 1, flat = mode >> 2;
+        Outcome out = run(block_source, sizeof(block_source), flat, residency, lazy, LOW + 64,
+                          HIGH - 64);
+
+        assert(out.status == 0 && out.eip == 0x1010 && out.gpr[0] == 5);
+        assert(out.gpr[1] == 0x02020202u + 5 && out.gpr[7] == 0x08080808u + 3);
+        assert(out.gpr[2] == ((0x03030303u + 1) ^ out.gpr[1]) && out.gpr[4] == HIGH - 68);
+        /* The load at 0x1008 is refused. */
+        out = run(block_source, sizeof(block_source), flat, residency, lazy, 0, HIGH - 64);
+        assert(out.status == -1 && out.eip == 0x1008 && out.fault_address == 0);
+        assert(out.gpr[0] == 5 && out.gpr[1] == 0x02020202u + 5 &&
+               out.gpr[2] == 0x03030303u + 1 && out.gpr[6] == 0x07070707u &&
+               out.gpr[7] == 0x08080808u);
+        /* The push at 0x100d is refused: ESP is at the bottom of the range. */
+        out = run(block_source, sizeof(block_source), flat, residency, lazy, LOW + 64, LOW);
+        assert(out.status == -1 && out.eip == 0x100d && out.gpr[4] == LOW);
+        assert(out.gpr[7] == 0x08080808u + 3 && out.gpr[2] == 0x03030303u + 1);
+        /* A helper's failure: the divide by zero at 0x1001. */
+        reset_state();
+        {
+            const PwX86TranslateOptions options = { residency, lazy, NULL, 0, flat ? LOW : 0,
+                                                    flat ? HIGH : 0 };
+            PwX86Block block;
+            int status;
+
+            assert(backend.protect(NULL, &code, 0, code.bytes, PW_PROT_READ | PW_PROT_WRITE) ==
+                   PW_OK);
+            assert(pw_x86_translate_opts(divide, sizeof(divide), 0x1000, code.write_base,
+                                         code.bytes, &block, &options) == PW_OK &&
+                   block.source_bytes == sizeof(divide));
+            assert(backend.protect(NULL, &code, 0, code.bytes, PW_PROT_READ | PW_PROT_EXEC) ==
+                   PW_OK);
+            state.gpr[1] = 0;
+            status = invoke((BlockFn)code.exec_base, &state);
+            assert(status != 0 && state.eip == 0x1001 && state.gpr[0] == 0x01010101u + 1);
+        }
+    }
+    /* Two instructions can stop (the load and the push), the last one leaves
+     * its successor: at most those three stores and the exit's own. */
+    {
+        const PwX86TranslateOptions options = { 1, 1, NULL, 0, LOW, HIGH };
+        uint8_t output[4096];
+        PwX86Block block;
+        unsigned stores = 0;
+
+        assert(pw_x86_translate_opts(block_source, sizeof(block_source), 0x1000, output,
+                                     sizeof(output), &block, &options) == PW_OK);
+        for (size_t i = 0; i + sizeof(eip_store) <= block.code_bytes; i++)
+            if (!memcmp(output + i, eip_store, sizeof(eip_store))) stores++;
+        assert(stores >= 3 && stores <= 5);
+    }
+}
+
 int main(void)
 {
     /* mov eax,[ebx]; movzx eax,byte [ebx]; movzx eax,word [ebx]; mov [ebx],eax;
@@ -132,6 +199,7 @@ int main(void)
     same_everywhere(push, sizeof(push), 4, 1);
     same_everywhere(pop, sizeof(pop), 4, 1);
     assert(accepted && refused);
+    stops_name_their_instruction();
 
     /* A refused access names itself, as the table guard does. */
     {
@@ -161,6 +229,6 @@ int main(void)
     assert(pw_x86_translate_opts(load32, sizeof(load32), 0x1000, scratch, sizeof(scratch),
                                  &block, &inverted) == PW_OK && block.code_bytes == reference_bytes);
     printf("x86 flat guard passed: %u comparisons (%u accepted, %u refused), 8 forms, "
-           "4 modes, both ends, fault record, shorter code\n", compared, accepted, refused);
+           "4 modes, both ends, fault record, shorter code, stops name their instruction\n", compared, accepted, refused);
     return 0;
 }

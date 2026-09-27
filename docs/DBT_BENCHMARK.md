@@ -97,6 +97,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Change | Before | After | Gain | vs native after |
 |---|---|---|---|---|
 | Flat guard: one compare per access (`PW_WOW_MODES` 5th digit) | 557 | 622 | +12% | 12.5% |
+| Guest EIP stored only before instructions that can stop the block | 617 | 657 | +6% | 13.2% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -104,6 +105,13 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   jbe`, instead of about nine instructions and four branches. An access
   outside the range still goes through the region table, which records the
   fault as before.
+- **EIP stores.** Every guest instruction stored the guest EIP twice: its own
+  address before it, for a fault, and the next one after it. Only an
+  instruction that can stop the block in the middle (a refused access, a
+  failed helper) needs the first, and only the last instruction needs the
+  second. The translator emits each block twice: the first emission finds
+  those instructions, and the second, which is kept, stores EIP only there.
+  In the benchmark's hot loops that removes most of the stores.
 
 ## Comparison with published numbers
 
