@@ -117,6 +117,28 @@ static void test_scale(void)
                 }
         }
     }
+    /* The placement alone is the rectangle pw_present_scale reports. */
+    {
+        const PwPresentTarget *targets[]={&wide,&tall,&small,&square};
+        const PwPresentFrame *frames[]={&frame,&line};
+        PwPresentPlacement alone;
+        for(int mode=PW_PRESENT_SCALE_FIT;mode<=PW_PRESENT_SCALE_STRETCH;mode++)
+            for(size_t f=0;f<2;f++)for(size_t t=0;t<4;t++) {
+                int drawn=pw_present_scale(frames[f],mode,0,targets[t],&shown);
+                assert(pw_present_scale_placement(frames[f],mode,targets[t]->width,
+                                                  targets[t]->height,&alone)==drawn);
+                if(drawn==PW_OK)assert(!memcmp(&alone,&shown,sizeof(shown)));
+            }
+        assert(pw_present_scale_placement(&frame,PW_PRESENT_SCALE_FIT,1920,1080,&alone)==PW_OK);
+        assert(alone.left==240 && !alone.top && alone.shown_width==1440 &&
+               alone.shown_height==1080 && alone.scale==360);
+        assert(pw_present_scale_placement(&frame,PW_PRESENT_SCALE_INTEGER,3,3,&alone)==PW_ERR_LIMIT);
+        assert(pw_present_scale_placement(&frame,7,16,9,&alone)==PW_ERR_UNSUPPORTED);
+        assert(pw_present_scale_placement(&frame,PW_PRESENT_SCALE_FIT,16,9,NULL)==PW_ERR_PRECONDITION);
+        assert(pw_present_scale_placement(&frame,PW_PRESENT_SCALE_FIT,0,9,&alone)==PW_ERR_PRECONDITION);
+        assert(pw_present_scale_placement(&frame,PW_PRESENT_SCALE_FIT,16,0,&alone)==PW_ERR_PRECONDITION);
+        assert(pw_present_scale_placement(NULL,PW_PRESENT_SCALE_FIT,16,9,&alone)==PW_ERR_PRECONDITION);
+    }
     assert(pw_present_scale(&frame,7,0,&wide,&shown)==PW_ERR_UNSUPPORTED);
     assert(pw_present_scale(&frame,PW_PRESENT_SCALE_FIT,0,NULL,&shown)==PW_ERR_PRECONDITION);
     PwPresentTarget bad=wide;bad.stride=10;

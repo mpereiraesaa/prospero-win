@@ -65,6 +65,12 @@ enum { PW_PRESENT_SCALE_FIT=0,PW_PRESENT_SCALE_INTEGER,PW_PRESENT_SCALE_STRETCH 
  * the shown rectangle, with scale 0 when it is not a whole multiple. */
 int pw_present_scale(const PwPresentFrame *frame,int mode,uint32_t background,
                      const PwPresentTarget *target,PwPresentPlacement *placement);
+/* The rectangle pw_present_scale shows frame in on a target of that size,
+ * without drawing, for a backend that scales into its own layout. Source
+ * row and column i of the shown rectangle are floor(i*height/shown_height)
+ * and floor(i*width/shown_width). */
+int pw_present_scale_placement(const PwPresentFrame *frame,int mode,uint32_t target_width,
+                               uint32_t target_height,PwPresentPlacement *placement);
 /* validate -> fit -> acquire -> compose -> submit.  Every refusal happens
  * before acquire, so a malformed or oversized frame never holds an image. */
 int pw_present_frame(const PwPresentSink *sink,const PwPresentFrame *frame,
