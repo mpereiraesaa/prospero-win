@@ -127,14 +127,18 @@ static struct pw_thread *get_thread(void)
         return NULL;
     }
     {
-        /* PW_WOW_MODES=<chaining><residency><lazy-flags>, e.g. "000" for
-         * the plainest translation; used to bisect optimisation defects. */
+        /* PW_WOW_MODES=<chaining><residency><lazy-flags>[<indirect>], e.g.
+         * "0000" for the plainest translation; used to bisect optimisation
+         * defects. A three-digit value keeps indirect targets on; they take
+         * effect only with chaining. */
         const char *modes = getenv( "PW_WOW_MODES" );
 
-        if (!modes || strlen( modes ) != 3) modes = "111";
+        if (!modes || (strlen( modes ) != 3 && strlen( modes ) != 4)) modes = "1111";
         pw_x86_engine_set_chaining( &thread->engine, modes[0] == '1' );
         pw_x86_engine_set_residency( &thread->engine, modes[1] == '1' );
         pw_x86_engine_set_lazy_flags( &thread->engine, modes[2] == '1' );
+        /* Without the table the dynamic exits simply return. */
+        (void)pw_x86_engine_set_indirect( &thread->engine, modes[3] != '0' );
     }
     thread->prefer_host = getenv( "PW_WOW_HOSTEXEC_ALL" ) != NULL;
     if (getenv( "PW_WOW_TRACE" ))

@@ -4,7 +4,8 @@
 #include "pw_x86_cache.h"
 #include "../include/prospero_win_vm.h"
 
-enum { PW_X86_ENGINE_MAX_SOURCE=15*32, PW_X86_ENGINE_MAX_CODE=16384 };
+enum { PW_X86_ENGINE_MAX_SOURCE=15*32, PW_X86_ENGINE_MAX_CODE=16384,
+       PW_X86_ENGINE_INDIRECT_SLOTS=8192 };
 
 /* Return one immutable executable source span beginning at guest_pc. The span
  * remains alive and unchanged for the engine generation. */
@@ -45,6 +46,10 @@ typedef struct PwX86Engine {
     unsigned chaining_enabled;
     unsigned residency_enabled;
     unsigned lazy_flags_enabled;
+    /* Indirect targets (pw_x86_block.h), reserved when first enabled. */
+    unsigned indirect_enabled;
+    PwVmRegion indirect;
+    PwX86IndirectTarget *indirect_targets;
     unsigned sealed,failed,initialized;
 } PwX86Engine;
 
@@ -60,6 +65,11 @@ int pw_x86_engine_set_quantum(PwX86Engine *, uint32_t);
 int pw_x86_engine_set_chaining(PwX86Engine *, unsigned);
 int pw_x86_engine_set_residency(PwX86Engine *, unsigned);
 int pw_x86_engine_set_lazy_flags(PwX86Engine *, unsigned);
+/* Let rets and indirect calls/jumps in blocks translated from now on enter
+ * their target without the dispatcher, through a table the dispatcher fills
+ * and every reset clears. It needs chaining: the lookup spends the chain
+ * budget, which is one without it. */
+int pw_x86_engine_set_indirect(PwX86Engine *, unsigned);
 int pw_x86_engine_step(PwX86Engine *,PwX86State *,PwX86StepReport *);
 int pw_x86_engine_reset(PwX86Engine *,uint32_t);
 int pw_x86_engine_destroy(PwX86Engine *);

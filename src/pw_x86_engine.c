@@ -88,6 +88,27 @@ int pw_x86_engine_set_lazy_flags(PwX86Engine *engine, unsigned enabled)
     return PW_OK;
 }
 
+int pw_x86_engine_set_indirect(PwX86Engine *engine, unsigned enabled)
+{
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    if(enabled && !engine->indirect_targets) {
+        const size_t bytes=PW_X86_ENGINE_INDIRECT_SLOTS*sizeof(PwX86IndirectTarget);
+        int status=engine->backend->reserve(engine->backend->context,bytes,
+                                            engine->backend->page_bytes,&engine->indirect);
+        if(status!=PW_OK)return status;
+        status=engine->backend->commit(engine->backend->context,&engine->indirect,0,
+                                       engine->indirect.bytes,PW_PROT_READ|PW_PROT_WRITE);
+        if(status!=PW_OK) {
+            (void)engine->backend->release(engine->backend->context,&engine->indirect);
+            return status;
+        }
+        engine->indirect_targets=engine->indirect.write_base;
+        memset(engine->indirect_targets,0,bytes);
+    }
+    engine->indirect_enabled = enabled ? 1 : 0;
+    return PW_OK;
+}
+
 static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry)
 {
     const uint8_t *source=NULL;size_t available=0;
@@ -97,7 +118,11 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
     if(available>PW_X86_ENGINE_MAX_SOURCE)available=PW_X86_ENGINE_MAX_SOURCE;
     uint8_t scratch[PW_X86_ENGINE_MAX_CODE];
     PwX86Block best = {0};
-    int last = pw_x86_translate_ext(source, available, pc, scratch, sizeof(scratch), &best, engine->residency_enabled, engine->lazy_flags_enabled);
+    const PwX86TranslateOptions options = {
+        engine->residency_enabled, engine->lazy_flags_enabled,
+        engine->indirect_enabled ? engine->indirect_targets : NULL,
+        PW_X86_ENGINE_INDIRECT_SLOTS - 1 };
+    int last = pw_x86_translate_opts(source, available, pc, scratch, sizeof(scratch), &best, &options);
     if (last != PW_OK) return last;
     if (!best.instructions) return PW_ERR_TRUNCATED;
     if(best.code_bytes>engine->cache.arena_bytes-engine->cache.cursor)return PW_ERR_LIMIT;
@@ -296,6 +321,13 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
 
     report->instructions=entry->instructions;report->source_bytes=entry->source_bytes;
     report->code_bytes=entry->code_bytes;engine->dispatches++;
+    if(engine->indirect_enabled) {
+        PwX86IndirectTarget *target=&engine->indirect_targets[
+            pw_x86_indirect_slot(entry->guest_pc,PW_X86_ENGINE_INDIRECT_SLOTS-1)];
+        target->guest_pc=entry->guest_pc;
+        target->host_code=(const uint8_t *)engine->code.exec_base+entry->code_offset+
+                          entry->canonical_entry_offset;
+    }
 
     state->chain_budget = (engine->chaining_enabled && engine->quantum) ? engine->quantum : 1;
     state->step_retired = 0;
@@ -375,6 +407,9 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
         return status;
     }
     memset(engine->code.write_base,0xcc,engine->code.bytes);
+    /* Every indirect target pointed into the code just discarded. */
+    if(engine->indirect_targets)
+        memset(engine->indirect_targets,0,PW_X86_ENGINE_INDIRECT_SLOTS*sizeof(PwX86IndirectTarget));
     engine->dispatches=0;engine->retired_instructions=0;engine->failed=0;return PW_OK;
 }
 
@@ -382,6 +417,8 @@ int pw_x86_engine_destroy(PwX86Engine *engine)
 {
     if(!engine || !engine->initialized || !engine->backend)return PW_ERR_PRECONDITION;
     int status=engine->backend->release(engine->backend->context,&engine->code);
+    if(status==PW_OK && engine->indirect_targets)
+        status=engine->backend->release(engine->backend->context,&engine->indirect);
     if(status==PW_OK)memset(engine,0,sizeof(*engine));
     return status;
 }

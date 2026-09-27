@@ -593,6 +593,42 @@ static void emit_chain_exit(Emitter *e, uint32_t count, uint32_t target_pc,
     byte(e, 0x41); byte(e, 0xff); byte(e, 0x23);
 }
 
+/*
+ * The dynamic exit's lookup of state->eip in the indirect table (see
+ * pw_x86_block.h). Every guest register is already in PwX86State and the
+ * block's instructions are already retired, so a hit enters the target's
+ * canonical entry as a linked exit would, and anything else falls through to
+ * the return that follows.
+ */
+static void emit_indirect_lookup(Emitter *e, const PwX86IndirectTarget *table, uint32_t mask)
+{
+    size_t budget_patch, miss_patch, empty_patch;
+    uint64_t base = (uint64_t)(uintptr_t)table;
+
+    byte(e, 0xff); byte(e, 0x4f); byte(e, offsetof(PwX86State, chain_budget)); /* dec budget */
+    byte(e, 0x74); byte(e, 0); budget_patch = e->n - 1;                                       /* jz out */
+    byte(e, 0x8b); byte(e, 0x47); byte(e, offsetof(PwX86State, eip));        /* mov eax, eip */
+    byte(e, 0x89); byte(e, 0xc2);                                              /* mov edx, eax */
+    byte(e, 0xc1); byte(e, 0xea); byte(e, 12);                                 /* shr edx, 12 */
+    byte(e, 0x31); byte(e, 0xc2);                                              /* xor edx, eax */
+    byte(e, 0x81); byte(e, 0xe2); word(e, mask);                               /* and edx, mask */
+    byte(e, 0xc1); byte(e, 0xe2); byte(e, 4);                                  /* shl edx, 4 */
+    byte(e, 0x49); byte(e, 0xbb); word(e, (uint32_t)base); word(e, (uint32_t)(base >> 32));
+    byte(e, 0x49); byte(e, 0x01); byte(e, 0xd3);                               /* add r11, rdx */
+    byte(e, 0x41); byte(e, 0x3b); byte(e, 0x03);                               /* cmp eax, [r11] */
+    byte(e, 0x75); byte(e, 0); miss_patch = e->n - 1;                                        /* jne out */
+    byte(e, 0x4d); byte(e, 0x8b); byte(e, 0x5b);
+    byte(e, (uint8_t)offsetof(PwX86IndirectTarget, host_code));                /* mov r11, [r11+8] */
+    byte(e, 0x4d); byte(e, 0x85); byte(e, 0xdb);                               /* test r11, r11 */
+    byte(e, 0x74); byte(e, 0); empty_patch = e->n - 1;                                       /* jz out */
+    byte(e, 0xff); byte(e, 0x47); byte(e, offsetof(PwX86State, step_transitions));
+    byte(e, 0x41); byte(e, 0xff); byte(e, 0xe3);                               /* jmp r11 */
+    if (e->failed) return;
+    e->p[budget_patch] = (uint8_t)(e->n - (budget_patch + 1));
+    e->p[miss_patch] = (uint8_t)(e->n - (miss_patch + 1));
+    e->p[empty_patch] = (uint8_t)(e->n - (empty_patch + 1));
+}
+
 static void emit_materialize_flags(Emitter *e, uint32_t mask);
 static uint32_t branch_condition_flags(unsigned condition);
 
@@ -1332,11 +1368,25 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
                          uint8_t *output, size_t capacity, PwX86Block *block,
                          unsigned residency_enabled, unsigned lazy_flags_enabled)
 {
+    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0 };
+
+    return pw_x86_translate_opts(source, bytes, pc, output, capacity, block, &options);
+}
+
+int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
+                          uint8_t *output, size_t capacity, PwX86Block *block,
+                          const PwX86TranslateOptions *options)
+{
     Emitter e = {output,0,capacity,0};
     size_t cursor = 0;
     unsigned count = 0;
-    if (!source || !bytes || !output || !capacity || !block)
+    if (!source || !bytes || !output || !capacity || !block || !options)
         return PW_ERR_PRECONDITION;
+    const unsigned residency_enabled = options->residency_enabled;
+    const unsigned lazy_flags_enabled = options->lazy_flags_enabled;
+    /* Set by a ret or an indirect call/jump: the exit that may look its
+     * target up in the indirect table. */
+    unsigned indirect_exit = 0;
     memset(block,0,sizeof(*block));
 
     DecodedInst insts[32];
@@ -2969,7 +3019,7 @@ analyze_and_emit:
                 store_guest_reg(&e, &block->exit_contract, 4);
                 store(&e,offsetof(PwX86State,eip),next);
             }
-            if (operand.reg==2 || operand.reg==4) terminal=1;
+            if (operand.reg==2 || operand.reg==4) terminal=1, indirect_exit=1;
         } else if (op<=0x33 && ((op&7)==1 || (op&7)==3)) {
             unsigned reverse=(op&7)==1;
             unsigned operation=op>>3;
@@ -3151,6 +3201,7 @@ analyze_and_emit:
             store_guest_reg(&e, &block->exit_contract, 4);
             byte(&e,0x89); byte(&e,0x4f); byte(&e,offsetof(PwX86State,eip));
             terminal = 1;
+            indirect_exit = 1;
         }
         /* fs_call is terminal like the other control transfers: the target it
          * loaded into EIP must not be overwritten by the fall-through. */
@@ -3167,6 +3218,8 @@ analyze_and_emit:
             byte(&e, 0x83); byte(&e, 0x47); byte(&e, offsetof(PwX86State, reg_stores)); byte(&e, n_dirty);
         }
         byte(&e, 0x83); byte(&e, 0x47); byte(&e, offsetof(PwX86State, step_retired)); byte(&e, (uint8_t)count);
+        if (indirect_exit && options->indirect_targets)
+            emit_indirect_lookup(&e, options->indirect_targets, options->indirect_mask);
         byte(&e, 0x48); byte(&e, 0xc7); byte(&e, 0x47); byte(&e, offsetof(PwX86State, last_exit_slot)); word(&e, 0);
         success(&e);
     }

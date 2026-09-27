@@ -136,4 +136,35 @@ int pw_x86_translate(const uint8_t *source, size_t bytes, uint32_t guest_pc,
 int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t guest_pc,
                          uint8_t *output, size_t capacity, PwX86Block *block,
                          unsigned residency_enabled, unsigned lazy_flags_enabled);
+
+/*
+ * Indirect targets: a direct-mapped table from guest PC to the host entry
+ * that runs it with every guest register in PwX86State. A ret, an indirect
+ * call or an indirect jump translated with a table looks its target up there
+ * and jumps straight to it, spending one unit of the chain budget as a linked
+ * exit does; a miss, an empty slot or an exhausted budget returns to the
+ * dispatcher as before. The table's owner fills it and clears it whenever the
+ * code it points into is discarded.
+ */
+typedef struct PwX86IndirectTarget {
+    uint32_t guest_pc;
+    uint32_t reserved;
+    const void *host_code;      /* NULL: empty */
+} PwX86IndirectTarget;
+
+static inline uint32_t pw_x86_indirect_slot(uint32_t guest_pc, uint32_t mask)
+{
+    return (guest_pc ^ (guest_pc >> 12)) & mask;
+}
+
+typedef struct PwX86TranslateOptions {
+    unsigned residency_enabled;
+    unsigned lazy_flags_enabled;
+    const PwX86IndirectTarget *indirect_targets;   /* NULL: dynamic exits return */
+    uint32_t indirect_mask;                        /* slots - 1, a power of two minus one */
+} PwX86TranslateOptions;
+
+int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t guest_pc,
+                          uint8_t *output, size_t capacity, PwX86Block *block,
+                          const PwX86TranslateOptions *options);
 #endif

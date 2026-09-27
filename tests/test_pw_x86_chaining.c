@@ -708,6 +708,237 @@ static void test_direct_call_chains(void)
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
 }
 
+/* ---- indirect targets: rets and indirect calls/jumps without the dispatcher ---- */
+
+static void indirect_engine(PwX86Engine *engine, PwVmBackend *vm, PwX86CacheEntry *entries,
+                            uint32_t capacity, TestSource *src, unsigned residency, unsigned lazy)
+{
+    assert(pw_vm_posix_backend(vm) == PW_OK);
+    assert(pw_x86_engine_init(engine, vm, entries, capacity, 1u << 20, 1, test_source_view, src) == PW_OK);
+    assert(pw_x86_engine_set_chaining(engine, 1) == PW_OK);
+    assert(pw_x86_engine_set_residency(engine, residency) == PW_OK);
+    assert(pw_x86_engine_set_lazy_flags(engine, lazy) == PW_OK);
+    assert(pw_x86_engine_set_indirect(engine, 1) == PW_OK);
+}
+
+/* Run from pc until EIP reaches stop; returns the number of steps. */
+static unsigned run_until(PwX86Engine *engine, PwX86State *state, uint32_t pc, uint32_t stop)
+{
+    PwX86StepReport step;
+    unsigned steps = 0;
+
+    state->eip = pc;
+    while (state->eip != stop) {
+        assert(pw_x86_engine_step(engine, state, &step) == PW_OK);
+        assert(++steps < 100000);
+    }
+    return steps;
+}
+
+/* 13. A ret enters its caller's continuation straight from the table, in every
+ * engine mode; a ret whose target was never dispatched still returns. */
+static void test_indirect_ret(void)
+{
+    /*
+     * 0x1000: mov eax, 5; call 0x1020   (the call is at 0x1005)
+     * 0x100a: add eax, 1; ret
+     * 0x1020: add eax, 100; ret
+     */
+    uint8_t code[64];
+    memset(code, 0x90, sizeof(code));
+    code[0] = 0xb8; code[1] = 5; code[2] = 0; code[3] = 0; code[4] = 0;
+    code[5] = 0xe8; code[6] = 0x16; code[7] = 0; code[8] = 0; code[9] = 0;
+    code[10] = 0x83; code[11] = 0xc0; code[12] = 1; code[13] = 0xc3;
+    code[32] = 0x83; code[33] = 0xc0; code[34] = 100; code[35] = 0xc3;
+    const uint32_t esp = 0x0300ff00;
+
+    for (unsigned mode = 0; mode < 4; mode++) {
+        TestSource src = {0x1000, code, sizeof(code)};
+        PwVmBackend vm;
+        PwX86Engine engine;
+        PwX86CacheEntry entries[16];
+        PwX86State state = {.stack_low = 0x03000000, .stack_high = 0x03010000};
+
+        indirect_engine(&engine, &vm, entries, 16, &src, mode & 1, mode >> 1);
+        for (unsigned pass = 0; pass < 2; pass++) {
+            uint64_t transitions = engine.linked_transitions;
+            state.gpr[0] = 0; state.gpr[4] = esp;
+            *(uint32_t *)(uintptr_t)esp = 0x99999999;
+            unsigned steps = run_until(&engine, &state, 0x1000, 0x99999999);
+            assert(state.gpr[0] == 106 && state.gpr[4] == esp + 4);
+            /* Warm: the call chains and the callee's ret enters 0x100a from
+             * the table, all in one step; only the outer ret returns. */
+            if (pass) assert(steps == 1 && engine.linked_transitions - transitions == 2);
+            else assert(steps == 3);
+        }
+        assert(pw_x86_engine_destroy(&engine) == PW_OK);
+    }
+}
+
+/* 14. An indirect jump whose target changes: each target is entered from the
+ * table once dispatched, a target sharing a slot with another is refused and
+ * taken by the dispatcher, and the slot then names the newer one. */
+static void test_indirect_target_changes(void)
+{
+    /*
+     * 0x1000: jmp eax
+     * 0x1100: mov edx, 1; ret
+     * 0x1200: mov edx, 2; ret
+     * 0x3102: mov edx, 3; ret      (the same slot as 0x1100)
+     */
+    static uint8_t code[0x2200];
+    const uint32_t targets[3] = {0x1100, 0x1200, 0x3102};
+    const uint32_t mask = PW_X86_ENGINE_INDIRECT_SLOTS - 1;
+    const unsigned order[] = {0, 1, 0, 1, 2, 0, 2, 2, 1, 0};
+
+    memset(code, 0x90, sizeof(code));
+    code[0] = 0xff; code[1] = 0xe0;
+    for (unsigned t = 0; t < 3; t++) {
+        uint8_t *p = code + (targets[t] - 0x1000);
+        p[0] = 0xba; p[1] = (uint8_t)(t + 1); p[2] = 0; p[3] = 0; p[4] = 0; p[5] = 0xc3;
+    }
+    assert(pw_x86_indirect_slot(0x1100, mask) == pw_x86_indirect_slot(0x3102, mask));
+    assert(pw_x86_indirect_slot(0x1100, mask) != pw_x86_indirect_slot(0x1200, mask));
+
+    TestSource src = {0x1000, code, sizeof(code)};
+    PwVmBackend vm;
+    PwX86Engine engine;
+    PwX86CacheEntry entries[16];
+    PwX86State state = {.stack_low = 0x03000000, .stack_high = 0x03010000};
+    indirect_engine(&engine, &vm, entries, 16, &src, 1, 1);
+    for (unsigned i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
+        const unsigned t = order[i];
+        const PwX86IndirectTarget *slot = &engine.indirect_targets[pw_x86_indirect_slot(targets[t], mask)];
+        const unsigned warm = slot->guest_pc == targets[t] && slot->host_code;
+
+        state.gpr[0] = targets[t]; state.gpr[2] = 0; state.gpr[4] = 0x0300ff00;
+        *(uint32_t *)(uintptr_t)state.gpr[4] = 0x88888888;
+        unsigned steps = run_until(&engine, &state, 0x1000, 0x88888888);
+        assert(state.gpr[2] == t + 1);
+        /* A warm target takes one step (jmp eax straight into it; its ret
+         * misses); a cold or displaced one goes through the dispatcher. */
+        assert(steps == (warm ? 1u : 2u));
+        assert(slot->guest_pc == targets[t]);
+    }
+    assert(pw_x86_engine_destroy(&engine) == PW_OK);
+}
+
+/* 15. A reset discards every target with the code it pointed into: after the
+ * guest rewrites a target, the next run executes the new code. */
+static void test_indirect_reset_after_code_change(void)
+{
+    /* 0x1000: jmp eax; 0x1010: mov edx, 7; ret */
+    uint8_t code[32];
+    memset(code, 0x90, sizeof(code));
+    code[0] = 0xff; code[1] = 0xe0;
+    code[16] = 0xba; code[17] = 7; code[18] = 0; code[19] = 0; code[20] = 0; code[21] = 0xc3;
+    TestSource src = {0x1000, code, sizeof(code)};
+    PwVmBackend vm;
+    PwX86Engine engine;
+    PwX86CacheEntry entries[16];
+    PwX86State state = {.stack_low = 0x03000000, .stack_high = 0x03010000};
+    indirect_engine(&engine, &vm, entries, 16, &src, 1, 1);
+
+    for (unsigned round = 0; round < 3; round++) {
+        state.gpr[0] = 0x1010; state.gpr[4] = 0x0300ff00;
+        *(uint32_t *)(uintptr_t)state.gpr[4] = 0x88888888;
+        unsigned steps = run_until(&engine, &state, 0x1000, 0x88888888);
+        assert(state.gpr[2] == (round < 2 ? 7u : 9u));
+        assert(steps == (round == 1 ? 1u : 2u));
+        if (round == 1) {
+            code[17] = 9;                       /* the guest rewrites 0x1010 */
+            assert(pw_x86_engine_reset(&engine, 2) == PW_OK);
+            for (uint32_t i = 0; i < PW_X86_ENGINE_INDIRECT_SLOTS; i++)
+                assert(!engine.indirect_targets[i].host_code);
+        }
+    }
+    assert(pw_x86_engine_destroy(&engine) == PW_OK);
+}
+
+/* 16. Recursion 2000 calls deep: every ret lands correctly, and they enter
+ * their continuation without the dispatcher. */
+static void test_indirect_deep_recursion(void)
+{
+    /*
+     * 0x1000: inc eax; dec ecx; jz 0x1009; call 0x1000
+     * 0x1009: ret
+     */
+    uint8_t code[16] = {0x40, 0x49, 0x74, 0x05, 0xe8, 0xf7, 0xff, 0xff, 0xff, 0xc3};
+    TestSource src = {0x1000, code, sizeof(code)};
+    PwVmBackend vm;
+    PwX86Engine engine;
+    PwX86CacheEntry entries[16];
+    PwX86State state = {.stack_low = 0x03000000, .stack_high = 0x03010000};
+    const uint32_t esp = 0x0300ff00, depth = 2000;
+
+    indirect_engine(&engine, &vm, entries, 16, &src, 1, 1);
+    for (unsigned pass = 0; pass < 2; pass++) {
+        state.gpr[0] = 0; state.gpr[1] = depth; state.gpr[4] = esp;
+        *(uint32_t *)(uintptr_t)esp = 0x66666666;
+        unsigned steps = run_until(&engine, &state, 0x1000, 0x66666666);
+        assert(state.gpr[0] == depth && state.gpr[1] == 0 && state.gpr[4] == esp + 4);
+        /* About 6000 transitions: one step per quantum, plus the cold ones. */
+        assert(steps <= 3 * depth / PW_X86_ENGINE_DEFAULT_QUANTUM + 6);
+    }
+    assert(pw_x86_engine_destroy(&engine) == PW_OK);
+}
+
+/* 17. A jump to itself cannot run away: the lookup spends the chain budget
+ * and the dispatcher regains control at every safepoint. */
+static void test_indirect_budget(void)
+{
+    uint8_t code[4] = {0xff, 0xe0, 0x90, 0x90};     /* 0x1000: jmp eax */
+    TestSource src = {0x1000, code, sizeof(code)};
+    PwVmBackend vm;
+    PwX86Engine engine;
+    PwX86CacheEntry entries[16];
+    PwX86StepReport step;
+    PwX86State state = {.eip = 0x1000, .stack_low = 0x03000000, .stack_high = 0x03010000};
+
+    indirect_engine(&engine, &vm, entries, 16, &src, 1, 1);
+    assert(pw_x86_engine_set_quantum(&engine, 16) == PW_OK);
+    state.gpr[0] = 0x1000;
+    for (unsigned i = 0; i < 4; i++) {
+        uint64_t transitions = engine.linked_transitions;
+        assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK && state.eip == 0x1000);
+        assert(engine.linked_transitions - transitions == 15 && engine.safepoint_returns == i + 1);
+    }
+    assert(pw_x86_engine_destroy(&engine) == PW_OK);
+}
+
+/* 18. Off by default, and inert without chaining: every exit returns. */
+static void test_indirect_off(void)
+{
+    /* 0x1000: jmp eax; 0x1004: mov edx, 1; ret */
+    uint8_t code[10] = {0xff, 0xe0, 0x90, 0x90, 0xba, 1, 0, 0, 0, 0xc3};
+
+    for (unsigned variant = 0; variant < 2; variant++) {
+        TestSource src = {0x1000, code, sizeof(code)};
+        PwVmBackend vm;
+        PwX86Engine engine;
+        PwX86CacheEntry entries[16];
+        PwX86State state = {.stack_low = 0x03000000, .stack_high = 0x03010000};
+
+        assert(pw_vm_posix_backend(&vm) == PW_OK);
+        assert(pw_x86_engine_init(&engine, &vm, entries, 16, 65536, 1, test_source_view, &src) == PW_OK);
+        assert(!engine.indirect_enabled && !engine.indirect_targets);
+        if (variant) assert(pw_x86_engine_set_indirect(&engine, 1) == PW_OK);  /* no chaining */
+        else assert(pw_x86_engine_set_chaining(&engine, 1) == PW_OK);         /* no table */
+        for (unsigned pass = 0; pass < 3; pass++) {
+            state.gpr[0] = 0x1004; state.gpr[2] = 0; state.gpr[4] = 0x0300ff00;
+            *(uint32_t *)(uintptr_t)state.gpr[4] = 0x88888888;
+            assert(run_until(&engine, &state, 0x1000, 0x88888888) == 2 && state.gpr[2] == 1);
+        }
+        /* Turning the table off keeps it for the blocks translated with it. */
+        if (variant) {
+            assert(pw_x86_engine_set_indirect(&engine, 0) == PW_OK && engine.indirect_targets);
+            assert(!engine.indirect_enabled);
+        }
+        assert(pw_x86_engine_destroy(&engine) == PW_OK);
+    }
+    assert(pw_x86_engine_set_indirect(NULL, 1) == PW_ERR_PRECONDITION);
+}
+
 int main(void)
 {
     PwVmBackend vm;
@@ -728,8 +959,14 @@ int main(void)
     test_wx_backend_spy();
     test_pending_exits_share_a_bucket();
     test_direct_call_chains();
+    test_indirect_ret();
+    test_indirect_target_changes();
+    test_indirect_reset_after_code_change();
+    test_indirect_deep_recursion();
+    test_indirect_budget();
+    test_indirect_off();
 
     assert(vm.release(vm.context, &stack_region) == PW_OK);
-    printf("all 12 direct chaining tests passed successfully\n");
+    printf("all 18 chaining and indirect target tests passed successfully\n");
     return 0;
 }
