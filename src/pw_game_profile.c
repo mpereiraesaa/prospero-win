@@ -166,6 +166,14 @@ static int display_field(PwGameDisplay *display, uint32_t *seen, const uint8_t *
         *seen |= 1u;
         return PW_OK;
     }
+    if (is(key, key_length, "view")) {
+        if (*seen & 4u) return PW_ERR_MALFORMED;
+        if (is(v, n, "window")) display->view = PW_GAME_VIEW_WINDOW;
+        else if (is(v, n, "desktop")) display->view = PW_GAME_VIEW_DESKTOP;
+        else return PW_ERR_UNSUPPORTED;
+        *seen |= 4u;
+        return PW_OK;
+    }
     if (is(key, key_length, "scaling")) {
         if (*seen & 2u) return PW_ERR_MALFORMED;
         if (is(v, n, "fit")) display->scaling = PW_GAME_SCALING_FIT;

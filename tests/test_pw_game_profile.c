@@ -51,6 +51,9 @@ static void test_profile(void)
 
     assert(parse(APP "[input]\nmode = xinput\n[display]\nscaling = stretch\n", &p) == PW_OK);
     assert(p.input.mode == PW_GAME_INPUT_XINPUT && p.display.scaling == PW_GAME_SCALING_STRETCH);
+    assert(p.display.view == PW_GAME_VIEW_WINDOW);
+    assert(parse(APP "[display]\nview = desktop\n", &p) == PW_OK && p.display.view == PW_GAME_VIEW_DESKTOP);
+    assert(parse(APP "[display]\nview = Window\n", &p) == PW_OK && p.display.view == PW_GAME_VIEW_WINDOW);
     assert(parse(APP "[display]\ndesktop = 320x200\n[input]\nmouse = left_stick\n", &p) == PW_OK);
     assert(p.display.width == 320 && p.input.mouse == PW_GAME_STICK_LEFT);
     assert(parse(APP "[display]\ndesktop = 3840x2160\n[input]\nmouse = none\ncross = enter\n", &p) == PW_OK);
@@ -76,6 +79,8 @@ static void test_refusals(void)
         APP "[display]\ndesktop = 800x\n",
         APP "[display]\nscaling = zoom\n",
         APP "[display]\nscaling = fit\nscaling = fit\n",
+        APP "[display]\nview = screen\n",
+        APP "[display]\nview = window\nview = window\n",
         APP "[input]\nmode = gamepad\n",
         APP "[input]\nmode = keyboard\nmode = keyboard\n",
         APP "[input]\nmouse = both_sticks\n",

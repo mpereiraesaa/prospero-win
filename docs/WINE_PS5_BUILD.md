@@ -363,6 +363,9 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   - `[display] desktop` sets `WINE_PS5_DESKTOP`, and `scaling` (`fit`,
     `integer` or `stretch`) scales each frame onto the whole 1920x1080
     screen. `fit` keeps the aspect ratio, so 800x600 is shown at 1440x1080;
+  - `[display] view = window` (the default) sets `WINE_PS5_VIEW=window`: Wine's
+    driver (patch 0430) presents only the game's visible windows, so a small
+    game fills the screen; `view = desktop` shows the whole Wine desktop;
   - `[input]` binds each DualSense button to a key or a mouse button, and a
     stick moves the pointer. `preset = <name>` shares a mapping from
     `<root>/input/<name>.input`. `mode = xinput` is accepted but not wired

@@ -472,7 +472,7 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 
 int main(int argc, char **argv)
 {
-    static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24];
+    static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
     static PwWineStartEnv extra[] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -481,6 +481,7 @@ int main(int argc, char **argv)
         { "HOME", prefix },
         { "USER", "prospero" },
         { "WINE_PS5_TRACE_STARTUP", "1" },  /* patch 0560: name startup steps */
+        { "WINE_PS5_VIEW", view },          /* patch 0430: the game's windows, or the desktop */
         { "WINE_PS5_DESKTOP", desktop },    /* last: only when the profile sets it */
     };
     static const char *wine_argv[] = { "wine", NULL };
@@ -539,14 +540,15 @@ int main(int argc, char **argv)
     if (game) {
         int input_status = pw_wine_library_input(game, library_root, &game_input);
         scaling = (int)game->display.scaling;
+        if (game->display.view == PW_GAME_VIEW_DESKTOP) snprintf(view, sizeof(view), "desktop");
         if (game->display.width) {
             snprintf(desktop, sizeof(desktop), "%ux%u", (unsigned)game->display.width,
                      (unsigned)game->display.height);
             config.extra_env_count++;
         }
-        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d input=%s preset=%s "
-                   "mode=%s mouse=%d", game->app.id, prefix, desktop[0] ? desktop : "default",
-                   scaling, pw_result_name(input_status),
+        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s input=%s "
+                   "preset=%s mode=%s mouse=%d", game->app.id, prefix, desktop[0] ? desktop : "default",
+                   scaling, view, pw_result_name(input_status),
                    game->input.preset[0] ? game->input.preset : "-",
                    game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse);
         if (game_input.mode == PW_GAME_INPUT_XINPUT)
