@@ -5,14 +5,6 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { LEFT = 0x400u, RIGHT = 0x800u, CROSS = 0x4000u, UNMAPPED = 0x10u };
-
-static const PwPadKeyMap map[] = {
-    { LEFT, 'Z', 0, 0, "left-flipper" },
-    { RIGHT, 0xbf, 0, 0, "right-flipper" },
-    { CROSS, 0x20, 0, 0, "plunger" },
-};
-
 static void test_frames(void)
 {
     PwWineFrameBox box;
@@ -96,46 +88,75 @@ static void test_threads(void)
     pw_wine_frame_box_destroy(&shared);
 }
 
-static void test_pad(void)
+static const char preset_text[] =
+    "[input]\nl1 = z\nr1 = slash\ncross = space\nr2 = mouse_left\nl2 = mouse_right\n"
+    "square = none\n";
+enum { L1 = 0x400u, R1 = 0x800u, CROSS = 0x4000u, SQUARE = 0x8000u, L2 = 0x100u, R2 = 0x200u,
+       CIRCLE = 0x2000u };
+
+static void test_inputs(void)
 {
-    PwPad pad;
+    PwGameInput input;
     PwWineInput events[8];
-    PwPadSample sample = { .connected = 1 };
 
-    assert(!pw_pad_init(&pad, map, sizeof(map) / sizeof(map[0])));
-    sample.buttons = LEFT | CROSS | UNMAPPED;
-    assert(!pw_pad_track(&pad, &sample, 1));
-    assert(pw_wine_pad_inputs(&pad, events, 8) == 2);
-    assert(events[0].type == PW_WINE_INPUT_KEY && events[0].code == 'Z' && events[0].down == 1);
-    assert(events[1].code == 0x20 && events[1].down == 1 && !events[1].x && !events[1].y);
+    pw_game_input_init(&input);
+    assert(pw_game_input_parse((const uint8_t *)preset_text, sizeof(preset_text) - 1, &input) == PW_OK);
+    assert(pw_wine_game_inputs(&input, L1 | CROSS | CIRCLE | SQUARE, 0, events, 8) == 2);
+    assert(events[0].type == PW_WINE_INPUT_KEY && events[0].code == 0x20 && events[0].down == 1);
+    assert(events[1].code == 'Z' && events[1].down == 1 && !events[1].x && !events[1].y);
 
-    /* Releases come before presses; unmapped buttons send none. */
-    sample.buttons = RIGHT | UNMAPPED;
-    assert(!pw_pad_track(&pad, &sample, 1));
-    assert(pw_wine_pad_inputs(&pad, events, 8) == 3);
-    assert(events[0].code == 'Z' && events[0].down == 0);
-    assert(events[1].code == 0x20 && events[1].down == 0);
-    assert(events[2].code == 0xbf && events[2].down == 1);
-    assert(pw_wine_pad_inputs(&pad, events, 1) == 1 && events[0].code == 'Z');
+    /* Releases come first; mouse bindings send buttons; unbound and none send nothing. */
+    assert(pw_wine_game_inputs(&input, R2 | L2, L1 | CROSS, events, 8) == 4);
+    assert(events[0].code == 0x20 && !events[0].down && events[1].code == 'Z' && !events[1].down);
+    assert(events[2].type == PW_WINE_INPUT_MOUSE_BUTTON && events[2].code == 1 && events[2].down);
+    assert(events[3].type == PW_WINE_INPUT_MOUSE_BUTTON && events[3].code == 0 && events[3].down);
+    assert(pw_wine_game_inputs(&input, R1 | L1, 0, events, 1) == 1 && events[0].code == 'Z');
+    assert(pw_wine_game_inputs(&input, 0, 0, events, 8) == 0);
+    assert(pw_wine_game_inputs(NULL, L1, 0, events, 8) == 0 && pw_wine_game_inputs(&input, L1, 0, NULL, 8) == 0);
+}
 
-    /* An unchanged batch sends nothing; a disconnection releases what is held. */
-    assert(!pw_pad_track(&pad, &sample, 1));
-    assert(pw_wine_pad_inputs(&pad, events, 8) == 0);
-    sample.connected = 0;
-    assert(!pw_pad_track(&pad, &sample, 1));
-    assert(pw_wine_pad_inputs(&pad, events, 8) == 1 && events[0].code == 0xbf && !events[0].down);
+static void test_pointer(void)
+{
+    PwWinePointer pointer;
+    PwWineInput move;
 
-    assert(pw_wine_pad_inputs(NULL, events, 8) == 0 && pw_wine_pad_inputs(&pad, NULL, 8) == 0);
-    pad.map = NULL;
-    assert(pw_wine_pad_inputs(&pad, events, 8) == 0);
+    pw_wine_pointer_init(&pointer, 800, 600);
+    assert(pointer.x >> 16 == 400 && pointer.y >> 16 == 300);
+    /* At rest and inside the dead zone nothing moves. */
+    assert(!pw_wine_pointer_step(&pointer, 0x80, 0x80, 1200, 16000, &move));
+    assert(!pw_wine_pointer_step(&pointer, 0x80 + PW_WINE_POINTER_DEADZONE, 0x80 - PW_WINE_POINTER_DEADZONE,
+                                 1200, 1000000, &move));
+    /* Full tilt right for a second covers the speed; up moves y down to 0. */
+    assert(pw_wine_pointer_step(&pointer, 0xff, 0x80, 300, 1000000, &move) == 1);
+    assert(move.type == PW_WINE_INPUT_MOUSE_MOVE && move.x == 700 && move.y == 300);
+    assert(pw_wine_pointer_step(&pointer, 0x80, 0x00, 1200, 1000000, &move) == 1);
+    assert(move.x == 700 && move.y == 0);
+    /* Held against the edges it stays on the desktop. */
+    assert(pw_wine_pointer_step(&pointer, 0xff, 0xff, 20000, 1000000, &move) == 1);
+    assert(move.x == 799 && move.y == 599);
+    assert(!pw_wine_pointer_step(&pointer, 0xff, 0xff, 20000, 1000000, &move));
+    assert(pw_wine_pointer_step(&pointer, 0x00, 0x00, 20000, 1000000, &move) == 1 && !move.x && !move.y);
+    /* Half tilt is slower than half speed (squared curve), and small steps add up. */
+    pw_wine_pointer_init(&pointer, 800, 600);
+    assert(pw_wine_pointer_step(&pointer, 0x80 + 74, 0x80, 1000, 1000000, &move) == 1);
+    assert(move.x > 400 + 200 && move.x < 400 + 300);
+    pw_wine_pointer_init(&pointer, 800, 600);
+    int moves = 0;
+    for (int i = 0; i < 100; i++) moves += pw_wine_pointer_step(&pointer, 0xff, 0x80, 60, 16000, &move);
+    assert(moves > 0 && pointer.x >> 16 >= 400 + 95 && pointer.x >> 16 <= 400 + 96);
+    pw_wine_pointer_init(&pointer, 0, 0);
+    assert(pointer.width == 1 && !pw_wine_pointer_step(&pointer, 0xff, 0xff, 1000, 1000, &move));
+    assert(!pw_wine_pointer_step(NULL, 0xff, 0x80, 1, 1, &move) && !pw_wine_pointer_step(&pointer, 0, 0, 1, 1, NULL));
+    pw_wine_pointer_init(NULL, 1, 1);
 }
 
 int main(void)
 {
     test_frames();
     test_threads();
-    test_pad();
+    test_inputs();
+    test_pointer();
     printf("wine display passed: frame box copy, newest frame, refusals, concurrent put/take, "
-           "pad edges to key events\n");
+           "profile bindings to keys and mouse buttons, stick pointer\n");
     return 0;
 }

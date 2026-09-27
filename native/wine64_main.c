@@ -85,20 +85,18 @@ enum { CATALOG_COUNT = sizeof(catalog) / sizeof(catalog[0]) };
 enum { PW_WINE64_MAX_FRAME = 1280 * 1024 * 4, PW_WINE64_TICK_US = 16000,
        PW_WINE64_TICKS_PER_S = 60, PW_WINE64_CLOSE_WAIT_S = 5 };
 
-/* Pinball's keys, as the direct runtime maps them (native/runtime_main.c). */
 enum { PAD_CREATE = 0x1u, PAD_OPTIONS = 0x8u, PAD_UP = 0x10u, PAD_RIGHT = 0x20u,
        PAD_DOWN = 0x40u, PAD_LEFT = 0x80u, PAD_L1 = 0x400u, PAD_R1 = 0x800u,
        PAD_CROSS = 0x4000u, PAD_SQUARE = 0x8000u, PAD_CLOSE = PAD_OPTIONS | PAD_CREATE };
-static const PwPadKeyMap pinball_pad_map[] = {
-    { PAD_L1, 'Z', 0, 0, "left-flipper" },
-    { PAD_R1, 0xbf, 0, 0, "right-flipper" },
-    { PAD_CROSS, 0x20, 0, 0, "plunger" },
-    { PAD_LEFT, 'X', 0, 0, "nudge-left" },
-    { PAD_RIGHT, 0xbe, 0, 0, "nudge-right" },
-    { PAD_UP, 0x26, 0x48, 1, "nudge-up" },
-    { PAD_OPTIONS, 0x72, 0, 0, "pause" },
-    { PAD_SQUARE, 0x71, 0, 0, "new-game" },
-};
+/* The pad core needs a key map to open; the title reads raw edges and maps
+ * them with the game's bindings (pw_game_profile). */
+static const PwPadKeyMap pad_open_map[] = { { PAD_CROSS, 0x20, 0, 0, "cross" } };
+
+/* Pinball's bindings, the direct runtime's map, until profiles are read from
+ * /data (the same [input] format a shared preset file uses). */
+static const char pinball_input[] =
+    "[input]\nl1 = z\nr1 = slash\ncross = space\nleft = x\nright = period\nup = up\n"
+    "options = f3\nsquare = f2\n";
 
 int sceSystemServiceLoadExec(const char *path, char *const argv[]);
 int32_t sceKernelLoadStartModule(const char *path, size_t argc, const void *argv,
@@ -255,8 +253,8 @@ static void run_launcher(void)
     int dirty = 1, chosen = -1;
 
     if (pad_status == PW_OK)
-        pad_status = pw_pad_ps5_open(&pad, &pad_ops, pinball_pad_map,
-                                     sizeof(pinball_pad_map) / sizeof(pinball_pad_map[0]));
+        pad_status = pw_pad_ps5_open(&pad, &pad_ops, pad_open_map,
+                                     sizeof(pad_open_map) / sizeof(pad_open_map[0]));
     for (size_t i = 0; i < CATALOG_COUNT; i++)
         items[i] = (PwLauncherItem){ catalog[i].name, catalog[i].detail, 1 };
     PS5LOG_LOG("PW_WINE64 launcher video=%s pad=%s frame=%d apps=%u cycle=%u refused=%u script=%d",
@@ -403,6 +401,8 @@ int main(int argc, char **argv)
     static PwWineStart start;
     static PwVideoOutPs5 video;
     static PwPadPs5 pad;
+    static PwGameInput game_input;
+    PwWinePointer pointer = { 0, 0, 0, 0 };
     int (*post_input)(const PwWineInput *) = NULL;
     uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
     ps5log_config log_config;
@@ -420,6 +420,8 @@ int main(int argc, char **argv)
                launch.app ? launch.app->id : "-", (unsigned)launch.cycle, launch.refused);
     if (launch.mode != PW_WINE_LAUNCH_GAME) run_launcher();
     wine_argv[1] = launch.executable;
+    pw_game_input_init(&game_input);
+    (void)pw_game_input_parse((const uint8_t *)pinball_input, sizeof(pinball_input) - 1, &game_input);
 
     /* Request /data; keep the /download0 prefix if it does not appear. */
     {
@@ -461,8 +463,8 @@ int main(int argc, char **argv)
         video_status = pw_videoout_ps5_open(&video);
         pad_status = pw_pad_ps5_platform_ops(&pad_ops);
         if (pad_status == PW_OK)
-            pad_status = pw_pad_ps5_open(&pad, &pad_ops, pinball_pad_map,
-                                         sizeof(pinball_pad_map) / sizeof(pinball_pad_map[0]));
+            pad_status = pw_pad_ps5_open(&pad, &pad_ops, pad_open_map,
+                                         sizeof(pad_open_map) / sizeof(pad_open_map[0]));
         {
             uint8_t *storage = mmap(NULL, 2u * PW_WINE64_MAX_FRAME, PROT_READ | PROT_WRITE,
                                     MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -486,11 +488,23 @@ int main(int argc, char **argv)
     for (uint64_t tick = 1; status == PW_OK; tick++) {
         uint64_t now = now_ns();
         PwGdiTargetView view;
-        PwWineInput events[2 * sizeof(pinball_pad_map) / sizeof(pinball_pad_map[0])];
+        PwWineInput events[2 * PW_GAME_BUTTON_COUNT + 1];
         int presented = 0;
 
         if (pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK) {
-            size_t count = pw_wine_pad_inputs(&pad.core, events, sizeof(events) / sizeof(events[0]));
+            size_t count = pw_wine_game_inputs(&game_input, pad.core.pressed_edges,
+                                               pad.core.released_edges, events,
+                                               sizeof(events) / sizeof(events[0]) - 1);
+            /* A stick moves the pointer over Wine's desktop, sized by its frames. */
+            if (game_input.mouse != PW_GAME_STICK_NONE && frames.width) {
+                if (pointer.width != frames.width || pointer.height != frames.height)
+                    pw_wine_pointer_init(&pointer, frames.width, frames.height);
+                const PwPadPs5Stick *stick = game_input.mouse == PW_GAME_STICK_LEFT ?
+                                             &pad.left_stick : &pad.right_stick;
+                count += (size_t)pw_wine_pointer_step(&pointer, stick->x, stick->y,
+                                                      game_input.mouse_speed,
+                                                      PW_WINE64_TICK_US, &events[count]);
+            }
             for (size_t i = 0; i < count; i++) {
                 if (post_input(&events[i]) == 0) posted++;
                 else refused++;

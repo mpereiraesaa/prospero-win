@@ -8,13 +8,14 @@
  * sink only copies it into a PwWineFrameBox; the title's own thread takes the
  * newest frame and shows it, so the display backend never runs on a Wine
  * thread and a slow flip never stalls Wine. The same thread reads the pad and
- * turns its button edges into the key events Wine's driver drains.
+ * turns it into Wine input with the game profile's bindings: buttons send
+ * keys or mouse buttons, and a stick can move the pointer.
  */
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "../src/pw_gdi.h"
-#include "../src/pw_pad.h"
+#include "../src/pw_game_profile.h"
 #include "../wine/ps5/pw_wine_sink.h"
 
 typedef struct PwWineFrameBox {
@@ -41,8 +42,27 @@ int pw_wine_frame_box_put(PwWineFrameBox *box, const void *bgra, uint32_t width,
 int pw_wine_frame_box_take(PwWineFrameBox *box, uint64_t *seen, uint8_t *out,
                            size_t capacity, PwGdiTargetView *view);
 
-/* Key events for the pad's last batch: a release for each mapped button in
- * released_edges, then a press for each in pressed_edges, with the map's
- * virtual key. Returns how many were written (at most max). */
-size_t pw_wine_pad_inputs(const PwPad *pad, PwWineInput *out, size_t max);
+/* Wine input for one pad batch's edges under a profile's bindings: a
+ * release for each bound button in released, then a press for each in
+ * pressed, as a key or a mouse button. Returns how many were written (at
+ * most max). */
+size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t released,
+                           PwWineInput *out, size_t max);
+
+/* A pointer a stick moves over Wine's desktop, in 1/65536 pixels. */
+typedef struct PwWinePointer {
+    int64_t x, y;
+    uint32_t width, height;
+} PwWinePointer;
+
+enum { PW_WINE_POINTER_DEADZONE = 20 };   /* of 128, stick noise at rest */
+
+/* A pointer in the middle of a width x height desktop. */
+void pw_wine_pointer_init(PwWinePointer *pointer, uint32_t width, uint32_t height);
+/* Move by a stick position (0..255 each axis, 0x80 centred) held for
+ * elapsed_us, at up to speed pixels per second at full tilt, on a squared
+ * curve past the dead zone, kept on the desktop. 1 and an absolute
+ * MOUSE_MOVE in out when the pointer reached another pixel, else 0. */
+int pw_wine_pointer_step(PwWinePointer *pointer, uint8_t stick_x, uint8_t stick_y,
+                         uint32_t speed, uint32_t elapsed_us, PwWineInput *out);
 #endif
