@@ -7,7 +7,7 @@ __attribute__((no_sanitize("function")))
 #endif
 static int invoke(void *entry,PwX86State *state)
 {
-    return ((int (*)(PwX86State *))entry)(state);
+    return pw_x86_run_block(state,entry);
 }
 
 static int protection(PwX86Engine *engine,size_t offset,size_t bytes,unsigned value)
@@ -88,6 +88,17 @@ int pw_x86_engine_set_lazy_flags(PwX86Engine *engine, unsigned enabled)
     return PW_OK;
 }
 
+int pw_x86_engine_set_global_resident(PwX86Engine *engine, uint8_t mask)
+{
+    unsigned count = 0;
+
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    for(unsigned g = 0; g < 8; g++) count += (mask >> g) & 1u;
+    if(count > 7) return PW_ERR_PRECONDITION;
+    engine->global_resident = mask;
+    return PW_OK;
+}
+
 int pw_x86_engine_set_counters(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
@@ -138,7 +149,8 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         engine->residency_enabled, engine->lazy_flags_enabled,
         engine->indirect_enabled ? engine->indirect_targets : NULL,
         PW_X86_ENGINE_INDIRECT_SLOTS - 1, engine->flat_low, engine->flat_high,
-        engine->no_counters };
+        engine->no_counters,
+        engine->residency_enabled ? engine->global_resident : (uint8_t)0 };
     int last = pw_x86_translate_opts(source, available, pc, scratch, sizeof(scratch), &best, &options);
     if (last != PW_OK) return last;
     if (!best.instructions) return PW_ERR_TRUNCATED;

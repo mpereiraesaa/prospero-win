@@ -53,6 +53,8 @@ typedef struct PwX86Engine {
     /* The flat guest range (PwX86TranslateOptions.flat_low/high), or 0/0. */
     uint32_t flat_low, flat_high;
     unsigned no_counters;
+    /* PwX86TranslateOptions.global_resident for blocks translated from now on. */
+    uint8_t global_resident;
     unsigned sealed,failed,initialized;
 } PwX86Engine;
 
@@ -73,6 +75,10 @@ int pw_x86_engine_set_lazy_flags(PwX86Engine *, unsigned);
  * and every reset clears. It needs chaining: the lookup spends the chain
  * budget, which is one without it. */
 int pw_x86_engine_set_indirect(PwX86Engine *, unsigned);
+/* Hold the guest GPRs in mask (at most seven) in the same host registers in
+ * every block translated from now on (PwX86TranslateOptions.global_resident);
+ * 0 returns to the per-block allocator. It needs residency enabled. */
+int pw_x86_engine_set_global_resident(PwX86Engine *, uint8_t mask);
 /* Translate from now on for a flat guest address space [low, high): the
  * state's stack range and its single RW memory region must both be exactly
  * that range. The guard is then one compare per access; accesses outside it

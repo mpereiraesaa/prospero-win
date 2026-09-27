@@ -18,8 +18,12 @@
 /* PW_X86_EXEC is carried so a region can remember the protection it was given
  * through NtProtectVirtualMemory and report it back as the old protection; the
  * access guard itself only ever asks for read and write. */
+/* Host register ids are r8 + id. Id 3 (r11) is the emitter's scratch and is
+ * never handed out; a block's own allocator uses ids 0..2 (r8-r10), and the
+ * global assignment also uses the callee-saved r12-r15 (ids 4..7), which is
+ * why generated code must be entered through pw_x86_run_block. */
 enum { PW_X86_MEMORY_REGIONS=256, PW_X86_READ=1, PW_X86_WRITE=2, PW_X86_EXEC=4,
-       PW_X86_MAX_HOST_REGS=3 };
+       PW_X86_MAX_HOST_REGS=8, PW_X86_LOCAL_HOST_REGS=3 };
 typedef struct PwX86Memory {
     uint32_t low;
     uint64_t high; /* exclusive; can represent 4 GiB */
@@ -171,7 +175,28 @@ typedef struct PwX86TranslateOptions {
      * the reg_* counts): a step's report then counts no retired instructions
      * and the engine's transition and register totals stay zero. */
     unsigned no_counters;
+    /* Guest GPRs (bit n = gpr n) held in the same host register by every
+     * block without a helper call, so linked blocks pass them on without a
+     * store or load; at most seven. 0 keeps the per-block allocator. */
+    uint8_t global_resident;
 } PwX86TranslateOptions;
+
+/* The host register the global assignment gives guest GPR gpr under mask,
+ * or -1: the set bits take ids 0, 1, 2, 4, 5, 6, 7 in order. */
+static inline int pw_x86_global_host(uint8_t mask, unsigned gpr)
+{
+    static const int8_t ids[7] = { 0, 1, 2, 4, 5, 6, 7 };
+    unsigned slot = 0;
+
+    if (gpr >= 8 || !(mask & (1u << gpr))) return -1;
+    for (unsigned g = 0; g < gpr; g++) slot += (mask >> g) & 1u;
+    return slot < 7 ? ids[slot] : -1;
+}
+
+/* Run generated code at entry with state: the SysV call a block expects,
+ * with rbx, rbp and r12-r15 saved for the caller, since resident guest
+ * values may live in them. Returns what the block returns. */
+int pw_x86_run_block(PwX86State *state, const void *entry);
 
 int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t guest_pc,
                           uint8_t *output, size_t capacity, PwX86Block *block,

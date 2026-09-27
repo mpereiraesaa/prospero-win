@@ -87,6 +87,7 @@ tests/test_pw_x86_flat.c
 tests/test_pw_x86_engine.c
 tests/test_pw_x86_chaining.c
 tests/test_pw_x86_residency.c
+tests/test_pw_x86_global_residency.c
 tests/test_pw_x86_lazyflags.c
 tests/test_pw_x87.c
 tests/test_pw_launcher_render.c

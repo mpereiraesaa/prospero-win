@@ -336,6 +336,33 @@ static void condition_value(Emitter *e,unsigned condition)
     byte(e,0x41);byte(e,0x58); /* pop r8 */
     byte(e,0x5f); /* pop rdi */
 }
+/* Blocks may keep guest values in the callee-saved rbx, rbp and r12-r15,
+ * so the C side enters them here. The extra slot keeps the block's entry
+ * alignment that of a direct call (rsp = 8 mod 16), which its helper calls
+ * rely on. */
+__asm__(
+    ".text\n"
+    ".globl pw_x86_run_block\n"
+    ".type pw_x86_run_block,@function\n"
+    "pw_x86_run_block:\n"
+    "    push %rbx\n"
+    "    push %rbp\n"
+    "    push %r12\n"
+    "    push %r13\n"
+    "    push %r14\n"
+    "    push %r15\n"
+    "    sub $8, %rsp\n"
+    "    call *%rsi\n"
+    "    add $8, %rsp\n"
+    "    pop %r15\n"
+    "    pop %r14\n"
+    "    pop %r13\n"
+    "    pop %r12\n"
+    "    pop %rbp\n"
+    "    pop %rbx\n"
+    "    ret\n"
+    ".size pw_x86_run_block,.-pw_x86_run_block\n");
+
 static inline int get_resident_host_reg(const PwX86RegContract *c, unsigned gpr)
 {
     if (!c || gpr >= 8 || !(c->resident_mask & (1 << gpr))) return -1;
@@ -1525,7 +1552,7 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
                          uint8_t *output, size_t capacity, PwX86Block *block,
                          unsigned residency_enabled, unsigned lazy_flags_enabled)
 {
-    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0, 0 };
+    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0, 0, 0 };
 
     return pw_x86_translate_opts(source, bytes, pc, output, capacity, block, &options);
 }
@@ -2243,8 +2270,21 @@ analyze_and_emit:
     /* Tiny blocks do not contain enough work to repay canonical-entry loads
      * and cross-contract reconciliation.  Four instructions is the measured
      * break-even floor for this first allocator. */
-    if (residency_enabled && count >= 4u && !helper_boundary) {
-        for (int h = 0; h < PW_X86_MAX_HOST_REGS; h++) {
+    if (residency_enabled && options->global_resident && !helper_boundary) {
+        /* The same assignment in every such block: a linked exit then
+         * always meets a matching contract and hands the values over in
+         * their registers. A block with a helper call keeps an empty
+         * contract, entered and left through the reconciliation stubs. */
+        for (unsigned g = 0; g < 8; g++) {
+            int h = pw_x86_global_host(options->global_resident, g);
+            if (h < 0) continue;
+            block->entry_contract.resident_mask |= (uint8_t)(1u << g);
+            block->entry_contract.guest_to_host[g] = (int8_t)h;
+            block->entry_contract.host_to_guest[h] = (int8_t)g;
+        }
+    } else if (residency_enabled && !options->global_resident && count >= 4u &&
+               !helper_boundary) {
+        for (int h = 0; h < PW_X86_LOCAL_HOST_REGS; h++) {
             int best_gpr = -1;
             /* A one-use resident register only pays entry/exit and contract
              * overhead.  Reserve scarce host registers for values reused in
