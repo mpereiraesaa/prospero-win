@@ -9,7 +9,9 @@
  * exits, or the game does not close in time, the title restarts into the
  * launcher.
  *
- * The title requests the /data mount, loads ntdll.prx, prepares Wine's
+ * The launcher stays in the sandbox and reads the copy of the library a
+ * game or a sync run (Triangle, or Cross with no games) leaves in
+ * /download0. A game requests the /data mount, loads ntdll.prx, prepares Wine's
  * environment and enters __wine_main on a dedicated thread
  * (src/pw_wine_start.c). Wine's stderr reaches ps5log/1 through the sink
  * ntdll exports (Wine patch 0560), so its debug channels become telemetry;
@@ -30,6 +32,7 @@
 #include "pw_wine_display.h"
 #include "../include/prospero_win.h"
 
+#include <errno.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
@@ -52,7 +55,11 @@
 static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 /* The title's data: profiles/, input/, prefix/ and prefixes/<name>. */
 #define PW_WINE64_ROOT_DATA "/data/prospero-win"            /* when /data is granted */
-#define PW_WINE64_ROOT_SANDBOX "/download0/prospero-win"    /* sandbox fallback */
+#define PW_WINE64_ROOT_SANDBOX "/download0/prospero-win"    /* the launcher's copy */
+/* The same copy as a process granted /data sees it (tried first), then as
+ * the sandbox sees it. */
+static const char *const mirror_roots[] = {
+    "/mnt/sandbox/" PW_TITLE_ID "_000/download0/prospero-win", PW_WINE64_ROOT_SANDBOX };
 #ifndef PW_WINE64_DEBUG
 /* No +seh: WoW64 callback returns unwind with 80000026 many times a second
  * and would flood the sink. */
@@ -87,7 +94,7 @@ enum { PW_WINE64_MAX_FRAME = 1280 * 1024 * 4, PW_WINE64_TICK_US = 16000,
 
 enum { PAD_CREATE = 0x1u, PAD_OPTIONS = 0x8u, PAD_UP = 0x10u, PAD_RIGHT = 0x20u,
        PAD_DOWN = 0x40u, PAD_LEFT = 0x80u, PAD_L1 = 0x400u, PAD_R1 = 0x800u,
-       PAD_CROSS = 0x4000u, PAD_SQUARE = 0x8000u, PAD_CLOSE = PAD_OPTIONS | PAD_CREATE };
+       PAD_TRIANGLE = 0x1000u, PAD_CROSS = 0x4000u, PAD_SQUARE = 0x8000u, PAD_CLOSE = PAD_OPTIONS | PAD_CREATE };
 /* The pad core needs a key map to open; the title reads raw edges and maps
  * them with the game's bindings (pw_game_profile). */
 static const PwPadKeyMap pad_open_map[] = { { PAD_CROSS, 0x20, 0, 0, "cross" } };
@@ -221,19 +228,23 @@ static PwWineLaunch launch;
 /* Replace this process with the title again: app's game, or the launcher
  * when app is NULL. /app0 is not visible once /data is granted, so the
  * sandbox's view of the same eboot is tried next. Returns only on failure. */
-static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reason)
+static void restart_title(const PwWineApp *app, int sync, uint32_t cycle, const char *reason)
 {
     static const char *const eboots[] = { "/app0/eboot.bin", PW_SANDBOX_APP0 "/eboot.bin" };
     static char storage[2 * PW_WINE_LAUNCH_PATH_MAX + 64];
     char *next[PW_WINE_LAUNCH_ARGS];
+    size_t words = sync ? pw_wine_launch_sync_argv(cycle, storage, sizeof(storage), next,
+                                                   PW_WINE_LAUNCH_ARGS)
+                        : pw_wine_launch_argv(app, cycle, storage, sizeof(storage), next,
+                                              PW_WINE_LAUNCH_ARGS);
 
-    if (!pw_wine_launch_argv(app, cycle, storage, sizeof(storage), next, PW_WINE_LAUNCH_ARGS)) {
+    if (!words) {
         PS5LOG_LOG("PW_WINE64 restart refused: arguments do not fit");
         return;
     }
     for (size_t i = 0; i < sizeof(eboots) / sizeof(eboots[0]); i++) {
-        PS5LOG_LOG("PW_WINE64 restart to=%s cycle=%u reason=%s eboot=%s", app ? app->id : "launcher",
-                   (unsigned)cycle, reason, eboots[i]);
+        PS5LOG_LOG("PW_WINE64 restart to=%s cycle=%u reason=%s eboot=%s",
+                   sync ? "sync" : app ? app->id : "launcher", (unsigned)cycle, reason, eboots[i]);
         int rc = sceSystemServiceLoadExec(eboots[i], next);
         PS5LOG_LOG("PW_WINE64 restart failed rc=0x%08x", (unsigned)rc);
     }
@@ -244,23 +255,27 @@ static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reas
 static void on_exit_report(void)
 {
     PS5LOG_LOG("PW_WINE64 exit sink_calls=%lu", sink_calls);
-    restart_title(NULL, launch.cycle + 1u, "wine-exit");
+    restart_title(NULL, 0, launch.cycle + 1u, "wine-exit");
     ps5log_close("wine64-exit");
 }
 
 /* ---- library ------------------------------------------------------------ */
 
-/* Request /data, as a game does, and read the games from it (or from the
- * sandbox's /download0 when /data does not appear). */
-static void open_library(void)
+/* Read the games: from /data, requested as a game does, when with_data
+ * (a game or sync); otherwise, and when /data does not appear, from the
+ * copy in /download0. The launcher stays in the sandbox: a console powered
+ * off when a launcher granted /data restarted itself into a game. */
+static int open_library(int with_data)
 {
     PwDataMountResult mount;
     int status;
 
-    if (pw_data_mount_request(&mount) == 0) library_root = PW_WINE64_ROOT_DATA;
-    PS5LOG_LOG("PW_WINE64 data_mount data_before=%d wrote=%d write_errno=%d data_after=%d "
-               "waited_ms=%d root=%s", mount.data_before, mount.wrote_request, mount.write_errno,
-               mount.data_after, mount.waited_ms, library_root);
+    if (with_data) {
+        if (pw_data_mount_request(&mount) == 0) library_root = PW_WINE64_ROOT_DATA;
+        PS5LOG_LOG("PW_WINE64 data_mount data_before=%d wrote=%d write_errno=%d data_after=%d "
+                   "waited_ms=%d root=%s", mount.data_before, mount.wrote_request,
+                   mount.write_errno, mount.data_after, mount.waited_ms, library_root);
+    }
     status = pw_wine_library_load(&library, library_root);
     catalog_count = 0;
     for (uint32_t i = 0; i < library.count; i++) {
@@ -284,15 +299,29 @@ static void open_library(void)
                                               catalog_detail[catalog_count], game->app.executable };
         catalog_count++;
     }
-    PS5LOG_LOG("PW_WINE64 library status=%s listed_by=%d entries=%u games=%u",
+    PS5LOG_LOG("PW_WINE64 library status=%s listed_by=%d entries=%u games=%u root=%s",
                pw_result_name(status), library.listed_by, (unsigned)library.count,
-               (unsigned)catalog_count);
+               (unsigned)catalog_count, library_root);
+    return status;
+}
+
+/* Leave the launcher a copy of the library read from /data. */
+static void mirror_library(void)
+{
+    if (strcmp(library_root, PW_WINE64_ROOT_DATA)) return;
+    for (size_t i = 0; i < sizeof(mirror_roots) / sizeof(mirror_roots[0]); i++) {
+        int status = pw_wine_library_mirror(&library, PW_WINE64_ROOT_DATA, mirror_roots[i]);
+        int error = status == PW_OK ? 0 : errno;
+        PS5LOG_LOG("PW_WINE64 mirror to=%s status=%s errno=%d", mirror_roots[i],
+                   pw_result_name(status), error);
+        if (status == PW_OK) return;
+    }
 }
 
 /* ---- launcher ----------------------------------------------------------- */
 
 /* Shown until a game is chosen; Wine is not loaded. Does not return. */
-static void run_launcher(void)
+static void run_launcher(int library_status)
 {
     static PwVideoOutPs5 video;
     static PwPadPs5 pad;
@@ -302,10 +331,11 @@ static void run_launcher(void)
     uint8_t *frame = mmap(NULL, frame_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     PwLauncherScene scene = { items, 0, PW_LAUNCHER_RENDER_NONE,
         launch.refused ? "THAT GAME IS NOT IN THE LIBRARY" :
+        library_status != PW_OK ? "PRESS X TO READ /DATA/PROSPERO-WIN" :
         !catalog_count ? "ADD PROFILES TO /DATA/PROSPERO-WIN/PROFILES" :
         launch.cycle ? "WELCOME BACK" : "CHOOSE A GAME" };
     int video_status = pw_videoout_ps5_open(&video), pad_status = pw_pad_ps5_platform_ops(&pad_ops);
-    int dirty = 1, chosen = -1;
+    int dirty = 1, chosen = -1, sync = 0;
 
     if (pad_status == PW_OK)
         pad_status = pw_pad_ps5_open(&pad, &pad_ops, pad_open_map,
@@ -320,7 +350,7 @@ static void run_launcher(void)
     PS5LOG_LOG("PW_WINE64 launcher video=%s pad=%s frame=%d apps=%u cycle=%u refused=%u script=%d",
                pw_result_name(video_status), pw_result_name(pad_status), frame != MAP_FAILED,
                (unsigned)catalog_count, (unsigned)launch.cycle, launch.refused, PW_WINE64_SCRIPT);
-    for (uint64_t tick = 1; chosen < 0; tick++) {
+    for (uint64_t tick = 1; chosen < 0 && !sync; tick++) {
         if (pad_status == PW_OK && pw_pad_ps5_read(&pad) == PW_OK) {
             uint32_t pressed = scene.count ? pad.core.pressed_edges : 0, before = scene.selected;
             if ((pressed & PAD_RIGHT) && scene.selected + 1 < scene.count) scene.selected++;
@@ -328,6 +358,10 @@ static void run_launcher(void)
             if ((pressed & PAD_DOWN) && scene.selected + 3 < scene.count) scene.selected += 3;
             if ((pressed & PAD_UP) && scene.selected >= 3) scene.selected -= 3;
             if ((pressed & PAD_CROSS) && scene.selected < catalog_count) chosen = (int)scene.selected;
+            /* Read /data again: Triangle, or Cross with no games to choose. */
+            if ((pad.core.pressed_edges & PAD_TRIANGLE) ||
+                ((pad.core.pressed_edges & PAD_CROSS) && !catalog_count))
+                sync = 1;
             dirty |= scene.selected != before;
         }
         if (PW_WINE64_SCRIPT && tick == 3 * PW_WINE64_TICKS_PER_S) {
@@ -351,10 +385,10 @@ static void run_launcher(void)
             usleep(PW_WINE64_TICK_US);
         }
     }
-    PS5LOG_LOG("PW_WINE64 launcher chose=%s", catalog[chosen].id);
+    PS5LOG_LOG("PW_WINE64 launcher chose=%s", sync ? "sync" : catalog[chosen].id);
     if (pad_status == PW_OK) (void)pw_pad_ps5_close(&pad, NULL, 0);
     if (video_status == PW_OK) (void)pw_videoout_ps5_close(&video);
-    restart_title(&catalog[chosen], launch.cycle, "launcher");
+    restart_title(sync ? NULL : &catalog[chosen], sync, launch.cycle, "launcher");
     ps5log_close("wine64-launch-failed");
     _exit(1);
 }
@@ -479,12 +513,20 @@ int main(int argc, char **argv)
     if (ps5log_load_config(ps5log_default_conf_paths, ps5log_default_conf_path_count,
                            &log_config, NULL) == 0)
         ps5log_init(&log_config, PW_TITLE_ID, PW_APP_NAME, now_ns());
-    open_library();
+    status = open_library(pw_wine_launch_needs_data(argc, argv));
     (void)pw_wine_launch_parse(argc, argv, catalog, catalog_count, &launch);
     PS5LOG_LOG("PW_WINE64 args argc=%d mode=%s profile=%s cycle=%u refused=%u", argc,
-               launch.mode == PW_WINE_LAUNCH_GAME ? "game" : "launcher",
+               launch.mode == PW_WINE_LAUNCH_GAME ? "game" :
+               launch.mode == PW_WINE_LAUNCH_SYNC ? "sync" : "launcher",
                launch.app ? launch.app->id : "-", (unsigned)launch.cycle, launch.refused);
-    if (launch.mode != PW_WINE_LAUNCH_GAME) run_launcher();
+    if (launch.mode == PW_WINE_LAUNCH_SYNC) {
+        mirror_library();
+        restart_title(NULL, 0, launch.cycle, "synced");
+        ps5log_close("wine64-sync-failed");
+        _exit(1);
+    }
+    if (launch.mode != PW_WINE_LAUNCH_GAME) run_launcher(status);
+    mirror_library();
     wine_argv[1] = launch.executable;
     /* The game's profile: its prefix, desktop, scaling and input. A bare
      * path= runs in the default prefix with nothing bound. */
@@ -620,7 +662,7 @@ int main(int argc, char **argv)
         }
         if (close_requested && now - close_requested >= (uint64_t)PW_WINE64_CLOSE_WAIT_S * 1000000000u) {
             PS5LOG_LOG("PW_WINE64 close timeout: leaving the game");
-            restart_title(NULL, launch.cycle + 1u, "close-timeout");
+            restart_title(NULL, 0, launch.cycle + 1u, "close-timeout");
             break;
         }
         if (tick % 60 == 0) {
@@ -642,7 +684,7 @@ int main(int argc, char **argv)
         }
     }
     PS5LOG_LOG("PW_WINE64 done status=%d stage=%d", status, start.stage);
-    if (status != PW_OK) restart_title(NULL, launch.cycle + 1u, "start-failed");
+    if (status != PW_OK) restart_title(NULL, 0, launch.cycle + 1u, "start-failed");
     ps5log_close(status == PW_OK ? "wine64-restart-failed" : "wine64-start-failed");
     _exit(1);
 }

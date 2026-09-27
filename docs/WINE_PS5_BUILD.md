@@ -322,13 +322,20 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   (`profile=pinball path=C:\Games\Pinball\PINBALL.EXE cycle=<n>`). A
   restart is a new process that receives its arguments intact in about
   430 ms (see `HARDWARE_VALIDATION.md`).
-- **Library.** Both the launcher and a game request `/data` first, and read the
-  games from `/data/prospero-win` (`native/pw_wine_library.h`), or from
-  `/download0/prospero-win` when `/data` does not appear. Nothing is built
-  in: a game appears by adding `profiles/<name>.profile`, in the format of
-  `src/pw_game_profile.h`. The directory is listed with `getdents`, or read
-  from `profiles/profiles.lst` when it cannot be listed. Refused profiles
-  are listed as not available and logged with the reason.
+- **Library.** The games live in `/data/prospero-win`
+  (`native/pw_wine_library.h`). Nothing is built in: a game appears by adding
+  `profiles/<name>.profile`, in the format of `src/pw_game_profile.h`. The
+  directory is read from `profiles/profiles.lst` when present, and listed
+  with `getdents` otherwise. Refused profiles are listed as not available and
+  logged with the reason.
+- **The launcher stays in the sandbox.** A console powered off right after a
+  launcher that had been granted `/data` restarted itself into a game. So
+  only a game or a sync run requests `/data`, and each leaves a copy of the
+  profiles, their input presets and an index in `/download0/prospero-win`,
+  which the launcher reads. Without a copy, the launcher asks for Cross,
+  which restarts the title with `sync=1`: that run copies the library and
+  restarts into the launcher. Triangle does the same at any time, after
+  profiles were added. The copy holds no prefixes.
   `examples/wine/` has the same layout, with Pinball's profile and its
   shared input preset.
 - **Game.** Started with `profile=` or `path=`, the title runs that executable
@@ -352,9 +359,9 @@ The title runs one game per process (`src/pw_wine_launch.h`):
 
 In a game, the title works as follows:
 
-1. It requests the `/data` mount (`native/pw_data_mount.c`) and uses
-   `/data/prospero-win/prefix`, or `/download0/prospero-win/prefix` when
-   `/data` does not appear.
+1. It requests the `/data` mount (`native/pw_data_mount.c`), copies the
+   library for the launcher, and uses `/data/prospero-win/prefix`, or
+   `/download0/prospero-win/prefix` when `/data` does not appear.
 2. It loads `ntdll.prx` from `/app0/win/wine/lib/wine/x86_64-unix`.
 3. It registers ntdll's stderr sink (patch 0560), which turns Wine's debug
    channels into `WINE ...` ps5log lines.

@@ -36,6 +36,7 @@ int pw_wine_launch_parse(int argc, char *const *argv, const PwWineApp *apps, siz
                          PwWineLaunch *out)
 {
     const char *profile = NULL, *path = NULL;
+    int sync = 0;
 
     if (!out || (!apps && count)) return -1;
     memset(out, 0, sizeof(*out));
@@ -45,6 +46,7 @@ int pw_wine_launch_parse(int argc, char *const *argv, const PwWineApp *apps, siz
         if (!word) continue;
         if ((value = value_of(word, "profile"))) profile = value;
         else if ((value = value_of(word, "path"))) path = value;
+        else if ((value = value_of(word, "sync"))) sync = !strcmp(value, "1");
         else if ((value = value_of(word, "cycle")) && parse_count(value, &out->cycle)) out->cycle = 0;
     }
     if (profile) {
@@ -53,7 +55,10 @@ int pw_wine_launch_parse(int argc, char *const *argv, const PwWineApp *apps, siz
         if (!out->app) { out->refused = 1; return 0; }
         if (!path) path = out->app->executable;
     }
-    if (!path) return 0;
+    if (!path) {
+        if (sync) out->mode = PW_WINE_LAUNCH_SYNC;
+        return 0;
+    }
     if (!valid_path(path)) { out->app = NULL; out->refused = 1; return 0; }
     memcpy(out->executable, path, strlen(path) + 1);
     out->mode = PW_WINE_LAUNCH_GAME;
@@ -73,8 +78,9 @@ static int add_word(char *storage, size_t size, size_t *used, const char *key, c
     return 0;
 }
 
-size_t pw_wine_launch_argv(const PwWineApp *app, uint32_t cycle, char *storage, size_t size,
-                           char **argv, size_t max)
+/* app's words, or key=1 without one, then the cycle. */
+static size_t launch_words(const PwWineApp *app, const char *key, uint32_t cycle, char *storage,
+                           size_t size, char **argv, size_t max)
 {
     char digits[11], number[11];
     size_t used = 0, words = 0, n = 0;
@@ -91,10 +97,32 @@ size_t pw_wine_launch_argv(const PwWineApp *app, uint32_t cycle, char *storage, 
         if (add_word(storage, size, &used, "path", app->executable)) return 0;
     } else {
         argv[words++] = storage + used;
-        if (add_word(storage, size, &used, "launcher", "1")) return 0;
+        if (add_word(storage, size, &used, key, "1")) return 0;
     }
     argv[words++] = storage + used;
     if (add_word(storage, size, &used, "cycle", number)) return 0;
     argv[words] = NULL;
     return words;
+}
+
+size_t pw_wine_launch_argv(const PwWineApp *app, uint32_t cycle, char *storage, size_t size,
+                           char **argv, size_t max)
+{
+    return launch_words(app, "launcher", cycle, storage, size, argv, max);
+}
+
+size_t pw_wine_launch_sync_argv(uint32_t cycle, char *storage, size_t size, char **argv, size_t max)
+{
+    return launch_words(NULL, "sync", cycle, storage, size, argv, max);
+}
+
+int pw_wine_launch_needs_data(int argc, char *const *argv)
+{
+    for (int i = 0; argv && i < argc; i++) {
+        const char *word = argv[i], *value;
+        if (!word) continue;
+        if (value_of(word, "profile") || value_of(word, "path")) return 1;
+        if ((value = value_of(word, "sync")) && !strcmp(value, "1")) return 1;
+    }
+    return 0;
 }

@@ -102,11 +102,47 @@ static void test_argv(void)
     assert(!pw_wine_launch_argv(&apps[0], 0, storage, sizeof(storage), NULL, 4));
 }
 
+static void test_sync(void)
+{
+    char storage[64], tiny[8], *argv[PW_WINE_LAUNCH_ARGS];
+    char *sync[] = { "sync=1", "cycle=3" };
+    char *not_sync[] = { "sync=0" };
+    char *game_wins[] = { "sync=1", "profile=notepad" };
+    char *refused[] = { "sync=1", "profile=missing" };
+    char *system[] = { "" }, *launcher[] = { "launcher=1", "cycle=2" };
+    char *path[] = { "path=C:\\x.exe" }, *profile[] = { NULL, "profile=missing" };
+    PwWineLaunch l;
+
+    l = parse(2, sync);
+    assert(l.mode == PW_WINE_LAUNCH_SYNC && l.cycle == 3 && !l.app && !l.refused);
+    l = parse(1, not_sync);
+    assert(l.mode == PW_WINE_LAUNCH_LAUNCHER);
+    l = parse(2, game_wins);
+    assert(l.mode == PW_WINE_LAUNCH_GAME && l.app == &apps[1]);
+    /* A refused game shows the launcher, which says so, rather than syncing. */
+    l = parse(2, refused);
+    assert(l.mode == PW_WINE_LAUNCH_LAUNCHER && l.refused);
+
+    assert(pw_wine_launch_sync_argv(9, storage, sizeof(storage), argv, 4) == 2);
+    assert(!strcmp(argv[0], "sync=1") && !strcmp(argv[1], "cycle=9") && !argv[2]);
+    l = parse(2, argv);
+    assert(l.mode == PW_WINE_LAUNCH_SYNC && l.cycle == 9);
+    assert(!pw_wine_launch_sync_argv(0, tiny, sizeof(tiny), argv, 4));
+    assert(!pw_wine_launch_sync_argv(0, storage, sizeof(storage), argv, 3));
+
+    /* Only a game or sync needs /data before the catalog is read. */
+    assert(pw_wine_launch_needs_data(2, sync) && pw_wine_launch_needs_data(2, game_wins));
+    assert(pw_wine_launch_needs_data(1, path) && pw_wine_launch_needs_data(2, profile));
+    assert(!pw_wine_launch_needs_data(1, not_sync) && !pw_wine_launch_needs_data(1, system));
+    assert(!pw_wine_launch_needs_data(2, launcher) && !pw_wine_launch_needs_data(0, NULL));
+}
+
 int main(void)
 {
     test_parse();
     test_argv();
+    test_sync();
     printf("wine launch passed: launcher on no game, profile and path, overrides, refusals, "
-           "cycle counts, LoadExec argv round trip, bounded storage\n");
+           "cycle counts, LoadExec argv round trip, bounded storage, sync mode, /data need\n");
     return 0;
 }
