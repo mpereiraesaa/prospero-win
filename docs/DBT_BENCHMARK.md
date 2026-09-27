@@ -313,13 +313,25 @@ under the title:
    title.
 3. Choose "7-Zip benchmark". The profile's `arguments` line
    (`b -mmt1 -md22`) is passed to the program. The title forwards its
-   standard output (fd 1) to ps5log as `STDOUT` lines. This path has not yet
-   been run on the console.
+   standard output (fd 1) to ps5log as `STDOUT` lines.
 4. When the program exits, the title returns to the launcher. Feed the
    `STDOUT` lines to `tools/bench_7zip.py`, which reads the `Avr:`/`Tot:`
    rows.
 
 The native baseline for the PS5 has to come from another x86-64 machine
 with the same CPU family: the console cannot run the binary without the DBT.
+
+Measured on the console on 2026-09-27 (FW 12.02, one run, main at `cd92d61`
+with the re-encoder and quantum 1024). 7-Zip reported the CPU as "AMD Eng
+Sample 100-000000189-11" at about 3460 MHz.
+
+| Config | Compress MIPS | Decompress MIPS | Total MIPS |
+|---|---|---|---|
+| PS5, DBT (`wowprospero`) | 1252 | 1514 | 1383 |
+
+There is no console native figure to divide by. For scale, the host's DBT
+run of the same build rated 1416 total at 29% of its native 4850, on a
+faster core. Getting 1383 on a 3.46 GHz Zen 2 core puts the console within
+the same ratio range.
 
 [b]: https://box86.org/2022/03/box86-box64-vs-qemu-vs-fex-vs-rosetta2/
