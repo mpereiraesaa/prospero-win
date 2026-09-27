@@ -8,7 +8,10 @@
  * descriptor before __wine_main, and win32u's driver reaches the present
  * and next calls with dlsym. Frames go out through one sink, the title's
  * pw_present_frame path; input comes in through a bounded queue the title
- * fills from the DualSense and the driver drains in ProcessEvents. */
+ * fills from the DualSense and the driver drains in ProcessEvents. A
+ * game's XInput controller is one more slot: the title keeps the newest
+ * gamepad state in it, Wine's xinput reads it (its Unix library, patch
+ * 0440, finds these calls with dlsym) and leaves the rumble it asks for. */
 
 /* BGRA, top-down; stride in bytes. Returns the sink's result. */
 typedef int (*PwWinePresentSink)(void *context,const void *bgra,uint32_t width,uint32_t height,
@@ -28,11 +31,27 @@ typedef struct PwWineSinkStats {
     uint64_t inputs_posted,inputs_dropped,inputs_delivered;
 } PwWineSinkStats;
 
+/* An XInput gamepad (XINPUT_GAMEPAD with the connection and a packet
+ * number in front), laid out as xinput's Unix library reads it. */
+typedef struct PwWinePad {
+    uint32_t connected;     /* 0: no controller */
+    uint32_t packet;        /* the sink's: changes whenever the state does */
+    uint16_t buttons;       /* XINPUT_GAMEPAD_* */
+    uint8_t left_trigger,right_trigger;
+    int16_t thumb_lx,thumb_ly,thumb_rx,thumb_ry;
+} PwWinePad;
+
 /* Title side. */
 void pw_wine_set_present_sink(PwWinePresentSink sink,void *context);
 /* 0, or -1 when the queue is full or the event is invalid. */
 int pw_wine_post_input(const PwWineInput *event);
 void pw_wine_sink_stats(PwWineSinkStats *stats);
+/* The gamepad's newest state, or NULL when it is disconnected. The sink
+ * numbers the packets; the pad's own packet field is ignored. */
+void pw_wine_set_pad(const PwWinePad *pad);
+/* 1 and the newest motor speeds (0..65535) when they changed since the
+ * last call, else 0. */
+int pw_wine_rumble(uint32_t *left,uint32_t *right);
 
 /* Driver side. -1 when no sink is set or the arguments are invalid. */
 int pw_wine_present(const void *bgra,uint32_t width,uint32_t height,uint32_t stride);
@@ -43,5 +62,9 @@ int pw_wine_next_input(PwWineInput *event);
  * drain it before emptying the queue, which loses no wakeup. -1 if no
  * pipe could be created. */
 int pw_wine_input_fd(void);
+/* 1 and the gamepad's state while one is connected, else 0. */
+int pw_wine_pad(PwWinePad *pad);
+/* The rumble a game asked for (XInputSetState); speeds are clamped. */
+void pw_wine_set_rumble(uint32_t left,uint32_t right);
 
 #endif

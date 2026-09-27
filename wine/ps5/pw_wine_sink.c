@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stddef.h>
+#include <string.h>
 #include <unistd.h>
 
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
@@ -13,6 +14,8 @@ static uint32_t head,count;
 static PwWineSinkStats stats;
 static pthread_once_t wake_once=PTHREAD_ONCE_INIT;
 static int wake[2]={-1,-1};
+static PwWinePad pad_state;
+static uint32_t rumble_left,rumble_right,rumble_changed;
 
 static void create_wake_pipe(void)
 {
@@ -94,4 +97,54 @@ void pw_wine_sink_stats(PwWineSinkStats *out)
     pthread_mutex_lock(&lock);
     *out=stats;
     pthread_mutex_unlock(&lock);
+}
+
+/* The pad has its own fields compared, not memcmp'd: padding stays out. */
+static int same_pad(const PwWinePad *a,const PwWinePad *b)
+{
+    return a->buttons==b->buttons && a->left_trigger==b->left_trigger &&
+           a->right_trigger==b->right_trigger && a->thumb_lx==b->thumb_lx &&
+           a->thumb_ly==b->thumb_ly && a->thumb_rx==b->thumb_rx && a->thumb_ry==b->thumb_ry;
+}
+void pw_wine_set_pad(const PwWinePad *pad)
+{
+    pthread_mutex_lock(&lock);
+    if(!pad)pad_state.connected=0;
+    else if(!pad_state.connected || !same_pad(pad,&pad_state)) {
+        uint32_t packet=pad_state.packet+1;
+        pad_state=*pad;pad_state.connected=1;
+        pad_state.packet=packet?packet:1;   /* 0 is never a packet */
+    }
+    pthread_mutex_unlock(&lock);
+}
+int pw_wine_pad(PwWinePad *pad)
+{
+    int connected;
+    if(!pad)return 0;
+    pthread_mutex_lock(&lock);
+    connected=pad_state.connected!=0;
+    if(connected)*pad=pad_state;
+    else memset(pad,0,sizeof(*pad));
+    pthread_mutex_unlock(&lock);
+    return connected;
+}
+void pw_wine_set_rumble(uint32_t left,uint32_t right)
+{
+    if(left>0xffffu)left=0xffffu;
+    if(right>0xffffu)right=0xffffu;
+    pthread_mutex_lock(&lock);
+    if(left!=rumble_left || right!=rumble_right) {
+        rumble_left=left;rumble_right=right;rumble_changed=1;
+    }
+    pthread_mutex_unlock(&lock);
+}
+int pw_wine_rumble(uint32_t *left,uint32_t *right)
+{
+    int changed;
+    pthread_mutex_lock(&lock);
+    changed=(int)rumble_changed;rumble_changed=0;
+    if(left)*left=rumble_left;
+    if(right)*right=rumble_right;
+    pthread_mutex_unlock(&lock);
+    return changed;
 }

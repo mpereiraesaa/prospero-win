@@ -83,5 +83,40 @@ int main(void)
     pthread_t thread;assert(!pthread_create(&thread,NULL,poster,NULL));
     for(int expected=0;expected<100;) if(pw_wine_next_input(&out)) {assert(out.x==expected);expected++;}
     assert(!pthread_join(thread,NULL));
+
+    /* The gamepad: none until the title sets one. */
+    PwWinePad pad,got;
+    memset(&got,0x5a,sizeof(got));
+    assert(!pw_wine_pad(&got) && got.connected==0 && got.packet==0 && got.buttons==0);
+    assert(!pw_wine_pad(NULL));
+    pad=(PwWinePad){0,77,0x1000,10,255,-32768,32767,0,-1};
+    pw_wine_set_pad(&pad);
+    assert(pw_wine_pad(&got) && got.connected==1 && got.packet==1);  /* the sink numbers it */
+    assert(got.buttons==0x1000 && got.left_trigger==10 && got.right_trigger==255);
+    assert(got.thumb_lx==-32768 && got.thumb_ly==32767 && got.thumb_rx==0 && got.thumb_ry==-1);
+    /* The same state keeps its packet; any change takes a new one. */
+    pw_wine_set_pad(&pad);assert(pw_wine_pad(&got) && got.packet==1);
+    PwWinePad changes[7];
+    for(int i=0;i<7;i++)changes[i]=pad;
+    changes[0].buttons=0x2000;changes[1].left_trigger=11;changes[2].right_trigger=254;
+    changes[3].thumb_lx=1;changes[4].thumb_ly=2;changes[5].thumb_rx=3;changes[6].thumb_ry=4;
+    for(uint32_t i=0;i<7;i++) {
+        pw_wine_set_pad(&changes[i]);
+        assert(pw_wine_pad(&got) && got.packet==2+i);
+    }
+    /* Disconnected: nothing to read; reconnecting is a new packet. */
+    pw_wine_set_pad(NULL);
+    assert(!pw_wine_pad(&got) && got.connected==0 && got.buttons==0);
+    pw_wine_set_pad(&changes[6]);assert(pw_wine_pad(&got) && got.packet==9 && got.thumb_ry==4);
+
+    /* Rumble: reported once per change, clamped to 16 bits. */
+    uint32_t left=1,right=1;
+    assert(!pw_wine_rumble(&left,&right) && left==0 && right==0);
+    pw_wine_set_rumble(1000,70000);
+    assert(pw_wine_rumble(&left,&right)==1 && left==1000 && right==0xffff);
+    assert(!pw_wine_rumble(&left,&right) && left==1000 && right==0xffff);
+    pw_wine_set_rumble(1000,0xffff);assert(!pw_wine_rumble(NULL,NULL));  /* unchanged */
+    pw_wine_set_rumble(0x10000,0);assert(pw_wine_rumble(NULL,&right)==1 && right==0);
+    assert(!pw_wine_rumble(&left,NULL) && left==0xffff);
     return 0;
 }
