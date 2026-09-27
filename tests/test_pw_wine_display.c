@@ -150,13 +150,44 @@ static void test_pointer(void)
     pw_wine_pointer_init(NULL, 1, 1);
 }
 
+static void test_pointer_resize(void)
+{
+    PwWinePointer pointer;
+    PwWineInput move;
+
+    /* A menu widens the frame: the pointer stays where it was, to the pixel
+     * and to the fraction of one. */
+    pw_wine_pointer_init(&pointer, 160, 200);
+    assert(pw_wine_pointer_step(&pointer, 0xff, 0xff, 50, 1000000, &move) == 1);
+    assert(move.x == 130 && move.y == 150);
+    int64_t x = pointer.x, y = pointer.y;
+    pw_wine_pointer_resize(&pointer, 320, 400);
+    assert(pointer.width == 320 && pointer.height == 400 && pointer.x == x && pointer.y == y);
+    /* It then reaches the new edges. */
+    assert(pw_wine_pointer_step(&pointer, 0xff, 0xff, 20000, 1000000, &move) == 1);
+    assert(move.x == 319 && move.y == 399);
+    /* The menu closes: the pointer is brought onto the smaller frame's last
+     * pixel, and one inside stays put. */
+    pw_wine_pointer_resize(&pointer, 160, 200);
+    assert(pointer.x >> 16 == 159 && pointer.y >> 16 == 199);
+    assert(!pw_wine_pointer_step(&pointer, 0xff, 0xff, 20000, 1000000, &move));
+    pw_wine_pointer_init(&pointer, 160, 200);
+    pw_wine_pointer_resize(&pointer, 100, 300);
+    assert(pointer.x >> 16 == 80 && pointer.y >> 16 == 100);
+    /* An empty frame is one pixel, at its origin. */
+    pw_wine_pointer_resize(&pointer, 0, 0);
+    assert(pointer.width == 1 && pointer.height == 1 && !pointer.x && !pointer.y);
+    pw_wine_pointer_resize(NULL, 1, 1);
+}
+
 int main(void)
 {
     test_frames();
     test_threads();
     test_inputs();
     test_pointer();
+    test_pointer_resize();
     printf("wine display passed: frame box copy, newest frame, refusals, concurrent put/take, "
-           "profile bindings to keys and mouse buttons, stick pointer\n");
+           "profile bindings to keys and mouse buttons, stick pointer, resized frames\n");
     return 0;
 }

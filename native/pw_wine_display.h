@@ -59,6 +59,11 @@ enum { PW_WINE_POINTER_DEADZONE = 20 };   /* of 128, stick noise at rest */
 
 /* A pointer in the middle of a width x height desktop. */
 void pw_wine_pointer_init(PwWinePointer *pointer, uint32_t width, uint32_t height);
+/* The desktop the pointer moves over is now width x height (a frame of
+ * another size): the pointer keeps its position, brought inside. With
+ * WINE_PS5_VIEW=window, a menu that opens widens the frame from the same
+ * top left, so the pointer stays on what it was over. */
+void pw_wine_pointer_resize(PwWinePointer *pointer, uint32_t width, uint32_t height);
 /* Move by a stick position (0..255 each axis, 0x80 centred) held for
  * elapsed_us, at up to speed pixels per second at full tilt, on a squared
  * curve past the dead zone, kept on the desktop. 1 and an absolute

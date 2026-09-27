@@ -619,10 +619,14 @@ int main(int argc, char **argv)
             size_t count = pw_wine_game_inputs(&game_input, pad.core.pressed_edges,
                                                pad.core.released_edges, events,
                                                sizeof(events) / sizeof(events[0]) - 1);
-            /* A stick moves the pointer over Wine's desktop, sized by its frames. */
+            /* A stick moves the pointer over what the frames show. It starts
+             * in the middle and keeps its place when their size changes, as
+             * when a menu widens the game's windows. */
             if (game_input.mouse != PW_GAME_STICK_NONE && frames.width) {
-                if (pointer.width != frames.width || pointer.height != frames.height)
+                if (!pointer.width)
                     pw_wine_pointer_init(&pointer, frames.width, frames.height);
+                else if (pointer.width != frames.width || pointer.height != frames.height)
+                    pw_wine_pointer_resize(&pointer, frames.width, frames.height);
                 const PwPadPs5Stick *stick = game_input.mouse == PW_GAME_STICK_LEFT ?
                                              &pad.left_stick : &pad.right_stick;
                 count += (size_t)pw_wine_pointer_step(&pointer, stick->x, stick->y,

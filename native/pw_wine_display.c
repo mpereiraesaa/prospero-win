@@ -124,6 +124,15 @@ static int64_t clamp(int64_t value, uint32_t size)
     return value < 0 ? 0 : value > last ? last : value;
 }
 
+void pw_wine_pointer_resize(PwWinePointer *pointer, uint32_t width, uint32_t height)
+{
+    if (!pointer) return;
+    pointer->width = width ? width : 1u;
+    pointer->height = height ? height : 1u;
+    pointer->x = clamp(pointer->x, pointer->width);
+    pointer->y = clamp(pointer->y, pointer->height);
+}
+
 int pw_wine_pointer_step(PwWinePointer *pointer, uint8_t stick_x, uint8_t stick_y,
                          uint32_t speed, uint32_t elapsed_us, PwWineInput *out)
 {
