@@ -15,7 +15,11 @@ static int pad_read(int32_t h,PwPadPs5Data *s,int32_t n)
 {assert(h==7&&n==64);read_calls++;if(read_rc<0)return read_rc;
  memcpy(s,fixture,(size_t)fixture_count*sizeof(*s));return fixture_count;}
 static int pad_close(int32_t h){assert(h==7);close_calls++;return 0;}
-static const PwPadPs5Ops ops={user_initialize,foreground,terminate,pad_init,pad_open,pad_read,pad_close};
+static int vibration_calls,vibration_rc;static uint8_t motors_seen[2];
+static int pad_set_vibration(int32_t h,const uint8_t m[2])
+{assert(h==7);vibration_calls++;memcpy(motors_seen,m,2);return vibration_rc;}
+static const PwPadPs5Ops ops={user_initialize,foreground,terminate,pad_init,pad_open,pad_read,pad_close,
+                              pad_set_vibration};
 enum { CREATE=0x1,L1=0x400 };
 static const PwPadKeyMap map[]={{L1,'Z',0,0,"left-flipper"}};
 
@@ -64,7 +68,17 @@ int main(void)
                       pad.core.released_edges==CREATE && !pad.core.previous_buttons &&
                       pad.right_stick.x==0x80);
     read_rc=0;
+    /* Vibration: both motors in order, a failure kept, nothing without the op. */
+    assert(pw_pad_ps5_vibrate(&pad,200,10)==PW_OK && vibration_calls==1 &&
+           motors_seen[0]==200 && motors_seen[1]==10 && !pad.vibration_rc);
+    vibration_rc=-5;assert(pw_pad_ps5_vibrate(&pad,0,0)==PW_ERR_STATE && pad.vibration_rc==-5);
+    vibration_rc=0;
+    pad.ops.pad_set_vibration=NULL;
+    assert(pw_pad_ps5_vibrate(&pad,1,1)==PW_ERR_UNSUPPORTED && vibration_calls==2);
+    pad.ops.pad_set_vibration=pad_set_vibration;
+    assert(pw_pad_ps5_vibrate(NULL,1,1)==PW_ERR_PRECONDITION);
     assert(pw_pad_ps5_close(&pad,&user,0x10000)==PW_OK);
+    assert(pw_pad_ps5_vibrate(&pad,1,1)==PW_ERR_PRECONDITION && vibration_calls==2);
     assert(close_calls==1&&terminate_calls==1&&!pad.opened&&!pad.owns_user_service);
 
     user_init_rc=1;read_rc=0;fixture_count=0;

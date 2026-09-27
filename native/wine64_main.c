@@ -517,6 +517,8 @@ int main(int argc, char **argv)
     PwWinePointer pointer = { 0, 0, 0, 0 };
     int (*post_input)(const PwWineInput *) = NULL;
     void (*set_pad)(const PwWinePad *) = NULL;
+    int (*rumble)(uint32_t *, uint32_t *) = NULL;
+    uint64_t vibrations = 0;
     uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
     ps5log_config log_config;
     PwPadPs5Ops pad_ops;
@@ -596,9 +598,12 @@ int main(int argc, char **argv)
             (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_post_input");
         /* xinput mode: the DualSense is also the game's XInput controller
          * 0, read by Wine's xinput (patch 0470); bindings still apply. */
-        if (game_input.mode == PW_GAME_INPUT_XINPUT)
+        if (game_input.mode == PW_GAME_INPUT_XINPUT) {
             set_pad = (void (*)(const PwWinePad *))
                 (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_pad");
+            rumble = (int (*)(uint32_t *, uint32_t *))
+                (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_rumble");
+        }
         video_status = pw_videoout_ps5_open(&video);
         pad_status = pw_pad_ps5_platform_ops(&pad_ops);
         if (pad_status == PW_OK)
@@ -666,6 +671,15 @@ int main(int argc, char **argv)
                 PwWinePad state;
                 set_pad(pw_wine_game_pad(&pad, &state) ? &state : NULL);
             }
+            /* The rumble the game asked for: XInput's left motor is the
+             * DualSense's large one, speeds 0..65535 become 0..255. */
+            uint32_t left, right;
+            if (rumble && rumble(&left, &right) == 1) {
+                int vibrate = pw_pad_ps5_vibrate(&pad, (uint8_t)(left >> 8), (uint8_t)(right >> 8));
+                if (!vibrations++ || vibrate != PW_OK)
+                    PS5LOG_LOG("PW_WINE64 rumble left=%u right=%u status=%s rc=%d", (unsigned)left,
+                               (unsigned)right, pw_result_name(vibrate), pad.vibration_rc);
+            }
         }
         if (video_status == PW_OK && frame_shown &&
             pw_wine_frame_box_take(&frames, &shown_sequence, frame_shown, PW_WINE64_MAX_FRAME,
@@ -689,6 +703,7 @@ int main(int argc, char **argv)
                 { PW_WINE_INPUT_KEY, 0x73, 0, 0, 0 }, { PW_WINE_INPUT_KEY, 0x12, 0, 0, 0 },
             };
             close_requested = now;
+            if (rumble && pad_status == PW_OK) (void)pw_pad_ps5_vibrate(&pad, 0, 0);
             for (size_t i = 0; post_input && i < sizeof(alt_f4) / sizeof(alt_f4[0]); i++)
                 (void)post_input(&alt_f4[i]);
             PS5LOG_LOG("PW_WINE64 close requested by=%s", combo_ticks ? "combo" : "deadline");
