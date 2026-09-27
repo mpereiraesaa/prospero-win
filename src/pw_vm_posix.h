@@ -4,9 +4,8 @@
  * a single alias for writes and execution.
  *
  * It is the host-test backend and also the plain path on the console for
- * images that are only mapped and inspected. Executing mapped code on the
- * PS5 needs the aliased backend instead, because a read-write to
- * read-execute transition is not a supported operation there.
+ * images that are only mapped and inspected; FW 12.02 allows the read-write
+ * to read-execute change it makes (prospero_win_vm.h).
  */
 #ifndef PROSPERO_WIN_VM_POSIX_H
 #define PROSPERO_WIN_VM_POSIX_H

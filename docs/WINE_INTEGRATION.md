@@ -139,7 +139,9 @@ prospero-win title hosting several programs would place them in the same outer
 sandbox.
 
 Wine's own handle, path and process model applies inside the title. PE32
-code passes through the DBT, which publishes translated code W^X; native PE64
+code passes through the DBT, which writes the code it translates into memory
+of its own above the guest's 4 GiB, readable, writable and executable, where
+guest code cannot reach it; native PE64
 execution shares the host address space and is limited to trusted inputs.
 Native PS5 debugging or deployment facilities stay outside the guest's
 reach.

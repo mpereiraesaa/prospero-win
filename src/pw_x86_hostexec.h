@@ -23,7 +23,7 @@
  * Those stay with the translator or dedicated emulation.
  *
  * Stubs depend only on the instruction bytes, so they are cached per guest PC
- * and published once through the W^X VM backend.
+ * and published once through the VM backend.
  */
 #include "pw_x86_block.h"
 #include "../include/prospero_win_vm.h"

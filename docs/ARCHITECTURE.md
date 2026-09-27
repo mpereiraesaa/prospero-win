@@ -74,8 +74,10 @@ The packaged title supplies the outer process and filesystem boundary.
 several Windows applications, they share that sandbox; prospero-win does not
 create a jail per program.
 
-PE32 code passes through the DBT, which validates the code it translates
-and publishes translated code W^X. PE64 code runs directly on the host CPU
+PE32 code passes through the DBT, which validates the code it translates.
+Under Wine, translated code lives in memory of the DBT's own above the
+guest's 4 GiB, readable, writable and executable, so publishing a block
+needs no protection change; the backend is the caller's choice. PE64 code runs directly on the host CPU
 and shares the title's address space, so it is limited to trusted inputs.
 Native speed is not itself an isolation boundary.
 
