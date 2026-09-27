@@ -75,12 +75,13 @@ static __thread struct pw_thread *self;
  * not mapped) stays Wine's, as before. The handler reads the translators'
  * code ranges from this table rather than thread-local storage. */
 enum { MAX_ARENAS = 1024 };
-static struct { uintptr_t low, high; } arenas[MAX_ARENAS];
+static struct { uintptr_t low, high; PwX86State *state; } arenas[MAX_ARENAS];
 #ifndef __PROSPERO__
 static struct sigaction wine_segv;
 #endif
 static int fault_markers;
 static void register_arena( struct pw_thread *thread, int add );
+static void profile_add_thread( struct pw_thread *thread );
 static PwWowHostMemory host_memory;
 /* Set once a thread has its DBT: the threads after it take the smaller
  * budget (thread_budget.h). */
@@ -272,6 +273,7 @@ static struct pw_thread *get_thread(void)
     thread->cache_epoch = (uint32_t)code_generation;
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
+    profile_add_thread( thread );
     return self = thread;
 }
 
@@ -351,15 +353,27 @@ static int redirect_fault( siginfo_t *info, void *context )
 {
     const uintptr_t address = (uintptr_t)info->si_addr;
     uintptr_t *rip = context_rip( context ), target = 0;
+    PwX86State *state = NULL;
+    uint32_t eip;
 
-    if (address >= GUEST_LOW && address < GUEST_HIGH) return 0;
     for (unsigned int i = 0; i < MAX_ARENAS && !target; i++)
     {
-        uintptr_t low = __atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE );
         uintptr_t high = __atomic_load_n( &arenas[i].high, __ATOMIC_ACQUIRE );
-        if (low && *rip >= low && *rip < high) target = pw_x86_fault_redirect( *rip, low, high );
+        uintptr_t low = __atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE );
+        if (low && high && *rip >= low && *rip < high)
+        {
+            target = pw_x86_fault_redirect( *rip, low, high );
+            state = arenas[i].state;
+        }
     }
     if (!target) return 0;
+    if (address >= GUEST_LOW && address < GUEST_HIGH)
+    {
+        /* Wine's to handle (a guard page, a write watch); the block stored
+         * no EIP before the access, so give Wine the exact one. */
+        if (state && pw_x86_cold_path_eip( target, &eip )) state->eip = eip;
+        return 0;
+    }
     *rip = target;
     return 1;
 }
@@ -377,6 +391,207 @@ static void segv_handler( int signal, siginfo_t *info, void *context )
 }
 #endif
 
+#ifndef __PROSPERO__
+/* PW_WOW_PROFILE=<file>: sample the host RIP with SIGPROF (1 ms of CPU) and
+ * write, every few seconds from run(), where the time goes: translated
+ * blocks by guest EIP (with the host and guest bytes of the hottest), and
+ * everything else by module and symbol. A host-only diagnostic. */
+#include <dlfcn.h>
+#include <sys/time.h>
+#include <time.h>
+
+enum { PROFILE_SAMPLES = 1 << 20, PROFILE_THREADS = 64, PROFILE_TOP = 40, PROFILE_DUMP = 12 };
+static uint64_t *profile_rips;
+static uint32_t profile_count;
+static const char *profile_path;
+static struct pw_thread *profile_threads[PROFILE_THREADS];
+static uint32_t profile_thread_count;
+static uint64_t profile_last_dump;
+
+static void profile_handler( int signal, siginfo_t *info, void *context )
+{
+    uint32_t i = __atomic_fetch_add( &profile_count, 1, __ATOMIC_RELAXED );
+    (void)signal; (void)info;
+    if (i < PROFILE_SAMPLES) profile_rips[i] = *context_rip( context );
+}
+
+static void profile_start(void)
+{
+    struct sigaction action;
+    struct itimerval timer = { { 0, 1000 }, { 0, 1000 } };
+
+    if (!(profile_path = getenv( "PW_WOW_PROFILE" )) || !*profile_path) { profile_path = NULL; return; }
+    if (!(profile_rips = calloc( PROFILE_SAMPLES, sizeof(*profile_rips) ))) { profile_path = NULL; return; }
+    memset( &action, 0, sizeof(action) );
+    action.sa_sigaction = profile_handler;
+    action.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset( &action.sa_mask );
+    sigaction( SIGPROF, &action, NULL );
+    setitimer( ITIMER_PROF, &timer, NULL );
+}
+
+static void profile_add_thread( struct pw_thread *thread )
+{
+    uint32_t i = __atomic_fetch_add( &profile_thread_count, 1, __ATOMIC_RELAXED );
+    if (i < PROFILE_THREADS) profile_threads[i] = thread;
+}
+
+static int compare_u64( const void *a, const void *b )
+{
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+struct profile_block { const PwX86CacheEntry *entry; const uint8_t *code; uint32_t samples; };
+
+static int compare_block_samples( const void *a, const void *b )
+{
+    const struct profile_block *x = a, *y = b;
+    return x->samples < y->samples ? 1 : x->samples > y->samples ? -1 : 0;
+}
+
+static const PwX86CacheEntry *profile_find( uint64_t rip, const uint8_t **code )
+{
+    for (uint32_t t = 0; t < profile_thread_count && t < PROFILE_THREADS; t++)
+    {
+        PwX86Engine *engine = &profile_threads[t]->engine;
+        const uint8_t *base = engine->code.exec_base;
+        if (!base || rip < (uintptr_t)base || rip >= (uintptr_t)base + engine->code.bytes) continue;
+        for (uint32_t i = 0; i < engine->cache.capacity; i++)
+        {
+            const PwX86CacheEntry *e = &engine->cache.entries[i];
+            if (!e->used || e->generation != engine->cache.generation) continue;
+            if (rip >= (uintptr_t)base + e->code_offset && rip < (uintptr_t)base + e->code_offset + e->code_bytes)
+            {
+                *code = base + e->code_offset;
+                return e;
+            }
+        }
+        *code = NULL;
+        return NULL;  /* in an arena, outside every block: stubs */
+    }
+    *code = (const uint8_t *)1;
+    return NULL;
+}
+
+static void profile_dump(void)
+{
+    uint32_t n = __atomic_load_n( &profile_count, __ATOMIC_RELAXED ), blocks = 0, arena = 0, stubs = 0;
+    struct profile_block *table;
+    uint64_t *rips;
+    char name[512];
+    FILE *out;
+
+    if (n > PROFILE_SAMPLES) n = PROFILE_SAMPLES;
+    if (!n || !(rips = malloc( n * sizeof(*rips) ))) return;
+    if (!(table = calloc( 65536, sizeof(*table) ))) { free( rips ); return; }
+    memcpy( rips, profile_rips, n * sizeof(*rips) );
+    qsort( rips, n, sizeof(*rips), compare_u64 );
+    snprintf( name, sizeof(name), "%s.tmp", profile_path );
+    if (!(out = fopen( name, "w" ))) { free( rips ); free( table ); return; }
+    fprintf( out, "samples %u\n\n== outside translated code (module!symbol+offset)\n", n );
+    for (uint32_t i = 0; i < n; )
+    {
+        const uint8_t *code;
+        const PwX86CacheEntry *e = profile_find( rips[i], &code );
+        uint32_t j = i;
+
+        if (e)
+        {
+            uint32_t k;
+            for (k = 0; k < blocks && table[k].entry != e; k++);
+            if (k == blocks && blocks < 65536) { table[blocks].entry = e; table[blocks].code = code; blocks++; }
+            while (j < n && rips[j] < (uintptr_t)code + e->code_bytes) j++;
+            if (k < 65536) table[k].samples += j - i;
+            arena += j - i;
+        }
+        else if (!code)
+        {
+            while (j < n && rips[j] == rips[i]) j++;
+            stubs += j - i;
+            arena += j - i;
+        }
+        else
+        {
+            Dl_info info;
+            const char *module = "?", *symbol = "?";
+            uintptr_t symbol_address = 0;
+            int known = dladdr( (void *)(uintptr_t)rips[i], &info );
+            if (known)
+            {
+                if (info.dli_fname) module = strrchr( info.dli_fname, '/' ) ? strrchr( info.dli_fname, '/' ) + 1 : info.dli_fname;
+                if (info.dli_sname) { symbol = info.dli_sname; symbol_address = (uintptr_t)info.dli_saddr; }
+            }
+            /* group by symbol (unresolved addresses: by 64 KiB) */
+            for (j = i + 1; j < n; j++)
+            {
+                Dl_info other;
+                const uint8_t *c2;
+                if (profile_find( rips[j], &c2 ) || c2 != (const uint8_t *)1) break;
+                if (known ? !dladdr( (void *)(uintptr_t)rips[j], &other ) || other.dli_saddr != info.dli_saddr ||
+                            other.dli_fbase != info.dli_fbase
+                          : (rips[j] >> 16) != (rips[i] >> 16) || dladdr( (void *)(uintptr_t)rips[j], &other ))
+                    break;
+            }
+            if ((j - i) * 1000 >= n)
+                fprintf( out, "%5.1f%% %s!%s (%#lx)\n", 100.0 * (j - i) / n, module, symbol,
+                         (unsigned long)(rips[i] - symbol_address) );
+        }
+        i = j;
+    }
+    fprintf( out, "\n== translated code %.1f%% (%u blocks), of it outside blocks (stubs) %.1f%%\n",
+             100.0 * arena / n, blocks, 100.0 * stubs / n );
+    qsort( table, blocks, sizeof(*table), compare_block_samples );
+    for (uint32_t k = 0; k < blocks && k < PROFILE_TOP; k++)
+    {
+        const PwX86CacheEntry *e = table[k].entry;
+        fprintf( out, "%5.2f%% eip=%08x instr=%u guest_bytes=%zu host_bytes=%zu\n", 100.0 * table[k].samples / n,
+                 e->guest_pc, e->instructions, e->source_bytes, e->code_bytes );
+        if (k < PROFILE_DUMP)
+        {
+            FILE *bin;
+            snprintf( name, sizeof(name), "%s.%02u.host", profile_path, k );
+            if ((bin = fopen( name, "wb" ))) { fwrite( table[k].code, 1, e->code_bytes, bin ); fclose( bin ); }
+            snprintf( name, sizeof(name), "%s.%02u.guest", profile_path, k );
+            if ((bin = fopen( name, "wb" ))) { fwrite( (const void *)(uintptr_t)e->guest_pc, 1, e->source_bytes, bin ); fclose( bin ); }
+            /* where inside the block */
+            fprintf( out, "   hot offsets:" );
+            for (uint32_t i = 0; i < n; i++)
+            {
+                uint32_t j = i;
+                if (rips[i] < (uintptr_t)table[k].code || rips[i] >= (uintptr_t)table[k].code + e->code_bytes) continue;
+                while (j < n && rips[j] == rips[i]) j++;
+                if ((j - i) * 200 >= table[k].samples) fprintf( out, " +%#lx:%u", (unsigned long)(rips[i] - (uintptr_t)table[k].code), j - i );
+                i = j - 1;
+            }
+            fprintf( out, "\n" );
+        }
+    }
+    fclose( out );
+    snprintf( name, sizeof(name), "%s.tmp", profile_path );
+    rename( name, profile_path );
+    free( rips );
+    free( table );
+}
+
+static void profile_maybe_dump(void)
+{
+    struct timespec now;
+    uint64_t ms;
+
+    if (!profile_path) return;
+    clock_gettime( CLOCK_MONOTONIC, &now );
+    ms = now.tv_sec * 1000ull + now.tv_nsec / 1000000;
+    if (ms - profile_last_dump < 5000) return;
+    profile_last_dump = ms;
+    profile_dump();
+}
+#else
+static void profile_start(void) {}
+static void profile_add_thread( struct pw_thread *thread ) { (void)thread; }
+static void profile_maybe_dump(void) {}
+#endif
+
 static void register_arena( struct pw_thread *thread, int add )
 {
     const uintptr_t low = (uintptr_t)thread->engine.code.exec_base;
@@ -385,13 +600,19 @@ static void register_arena( struct pw_thread *thread, int add )
     {
         if (add)
         {
+            /* Claim a free slot, then publish it: the handler skips a slot
+             * whose high is still 0. */
             uintptr_t none = 0;
-            __atomic_store_n( &arenas[i].high, low + thread->engine.code.bytes, __ATOMIC_RELEASE );
             if (__atomic_compare_exchange_n( &arenas[i].low, &none, low, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ))
+            {
+                arenas[i].state = &thread->state;
+                __atomic_store_n( &arenas[i].high, low + thread->engine.code.bytes, __ATOMIC_RELEASE );
                 return;
+            }
         }
         else if (__atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE ) == low)
         {
+            __atomic_store_n( &arenas[i].high, 0, __ATOMIC_RELEASE );
             __atomic_store_n( &arenas[i].low, 0, __ATOMIC_RELEASE );
             return;
         }
@@ -429,6 +650,7 @@ static NTSTATUS process_init( void *args )
 #endif
         }
     }
+    profile_start();
     return STATUS_SUCCESS;
 }
 
@@ -507,6 +729,7 @@ static NTSTATUS run( void *args )
     pw_x86_commit_canonical_flags( state );
     store_state( state, ctx );
     sync_fp_out( thread, ctx );
+    profile_maybe_dump();
     return STATUS_SUCCESS;
 }
 
