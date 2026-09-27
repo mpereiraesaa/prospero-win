@@ -65,6 +65,7 @@ $(eval $(call test_rule,test_pw_launcher_render,tests/test_pw_launcher_render.c 
 $(eval $(call test_rule,test_pw_pad,tests/test_pw_pad.c src/pw_pad.c,))
 $(eval $(call test_rule,test_pw_vm,tests/test_pw_vm.c src/pw_vm.c src/pw_vm_posix.c src/pw_result.c,))
 $(eval $(call test_rule,test_pw_x86_block,tests/test_pw_x86_block.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c src/pw_guest_call.c src/pw_vm.c src/pw_vm_posix.c,))
+$(eval $(call test_rule,test_pw_x86_flat,tests/test_pw_x86_flat.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,))
 $(eval $(call test_rule,test_pw_x86_cache,tests/test_pw_x86_cache.c src/pw_x86_cache.c,))
 $(eval $(call test_rule,test_pw_x86_code_pages,tests/test_pw_x86_code_pages.c,))
 $(eval $(call test_rule,test_pw_x86_hostexec,tests/test_pw_x86_hostexec.c src/pw_x86_hostexec.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,))
@@ -102,7 +103,7 @@ TESTS := test_pw_x86_hostexec test_pw_app_profile test_pw_profile_catalog test_p
 	test_pw_wine_heap test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_game_profile \
 	test_pw_wine_library test_pw_wine_display test_pw_wine_dl test_pw_wine_sink \
 	test_pw_wine_threads test_pw_wine_compat test_pw_wine_cwd test_pw_launcher_render test_pw_pad \
-	test_pw_guest_fp test_pw_vm test_pw_x86_block test_pw_x86_cache test_pw_x86_code_pages \
+	test_pw_guest_fp test_pw_vm test_pw_x86_block test_pw_x86_flat test_pw_x86_cache test_pw_x86_code_pages \
 	test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_lazyflags \
 	test_pw_guest_call test_pw_x87 test_pw_audio_ps5 test_pw_audio_mix test_pw_agc_submit_lifecycle \
 	test_pw_videoout_layout test_pw_videoout_tile test_pw_pad_ps5 test_pw_data_mount \

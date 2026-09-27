@@ -24,8 +24,8 @@ translates per thread.
 The two i386 configurations use the same Wine build, prefix and binary. Only
 the WoW64 CPU backend differs: the script sets
 `HKLM\Software\Microsoft\Wow64\x86`. `--modes` sets `PW_WOW_MODES`, whose
-digits are chaining, register residency, lazy flags and the indirect target
-table.
+digits are chaining, register residency, lazy flags, the indirect target
+table and the flat guard; digits left out stay on.
 
 ```
 tools/bench_7zip.sh --config wow64cpu    --wine <wine> --prefix <prefix> --runs 3
@@ -88,6 +88,23 @@ process died with an illegal instruction:
 After these, 6.5M fallbacks per run remain, and they take about 3% of the
 DBT's time.
 
+### Speed-ups since
+
+Each row is an interleaved A/B against the build before it, on the same
+machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
+4989 in the same session.
+
+| Change | Before | After | Gain | vs native after |
+|---|---|---|---|---|
+| Flat guard: one compare per access (`PW_WOW_MODES` 5th digit) | 557 | 622 | +12% | 12.5% |
+
+- **Flat guard.** wowprospero's guest is one identity-mapped range, and the
+  stack range and the one region are both that range, so every access
+  inside it is valid. The guard is `lea edx,[rax-low]; cmp edx,span-width;
+  jbe`, instead of about nine instructions and four branches. An access
+  outside the range still goes through the region table, which records the
+  fault as before.
+
 ## Comparison with published numbers
 
 Published ratios, total rating as a share of native:
@@ -121,7 +138,7 @@ available on this host), full-fix build:
 
 ## Follow-ups
 
-1. **The memory guard on every access.** `memory_address_width` runs about 9
+1. **The memory guard on every access** (done: the flat guard above). `memory_address_width` runs about 9
    instructions and 4 branches before each guest load or store, even when
    the whole address space is one region, as in wowprospero. Under WoW64 the
    guest is identity-mapped, so a single bounds check, or none with a fault

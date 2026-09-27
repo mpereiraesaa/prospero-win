@@ -88,6 +88,15 @@ int pw_x86_engine_set_lazy_flags(PwX86Engine *engine, unsigned enabled)
     return PW_OK;
 }
 
+int pw_x86_engine_set_flat_memory(PwX86Engine *engine, uint32_t low, uint32_t high)
+{
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    if(low != high && (high < low || high - low < 16)) return PW_ERR_PRECONDITION;
+    engine->flat_low = low == high ? 0 : low;
+    engine->flat_high = low == high ? 0 : high;
+    return PW_OK;
+}
+
 int pw_x86_engine_set_indirect(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
@@ -121,7 +130,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
     const PwX86TranslateOptions options = {
         engine->residency_enabled, engine->lazy_flags_enabled,
         engine->indirect_enabled ? engine->indirect_targets : NULL,
-        PW_X86_ENGINE_INDIRECT_SLOTS - 1 };
+        PW_X86_ENGINE_INDIRECT_SLOTS - 1, engine->flat_low, engine->flat_high };
     int last = pw_x86_translate_opts(source, available, pc, scratch, sizeof(scratch), &best, &options);
     if (last != PW_OK) return last;
     if (!best.instructions) return PW_ERR_TRUNCATED;

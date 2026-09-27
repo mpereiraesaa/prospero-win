@@ -31,6 +31,8 @@
 #include "code_pages.h"
 
 enum { CACHE_ENTRIES = 65536, ARENA_BYTES = 128u * 1024u * 1024u };
+/* The guest range every translated access is checked against (load_state). */
+enum { GUEST_LOW = 0x10000u, GUEST_HIGH = 0xfffff000u };
 
 struct pw_thread
 {
@@ -127,18 +129,22 @@ static struct pw_thread *get_thread(void)
         return NULL;
     }
     {
-        /* PW_WOW_MODES=<chaining><residency><lazy-flags>[<indirect>], e.g.
-         * "0000" for the plainest translation; used to bisect optimisation
-         * defects. A three-digit value keeps indirect targets on; they take
-         * effect only with chaining. */
+        /* PW_WOW_MODES=<chaining><residency><lazy-flags>[<indirect>[<flat>]],
+         * e.g. "00000" for the plainest translation; used to bisect
+         * optimisation defects. Digits left out stay on; indirect targets
+         * take effect only with chaining. */
         const char *modes = getenv( "PW_WOW_MODES" );
+        size_t digits = modes ? strlen( modes ) : 0;
 
-        if (!modes || (strlen( modes ) != 3 && strlen( modes ) != 4)) modes = "1111";
+        if (digits < 3 || digits > 5) { modes = "11111"; digits = 5; }
         pw_x86_engine_set_chaining( &thread->engine, modes[0] == '1' );
         pw_x86_engine_set_residency( &thread->engine, modes[1] == '1' );
         pw_x86_engine_set_lazy_flags( &thread->engine, modes[2] == '1' );
         /* Without the table the dynamic exits simply return. */
-        (void)pw_x86_engine_set_indirect( &thread->engine, modes[3] != '0' );
+        (void)pw_x86_engine_set_indirect( &thread->engine, digits < 4 || modes[3] != '0' );
+        /* The guest range load_state gives the stack and the one region. */
+        if (digits < 5 || modes[4] != '0')
+            pw_x86_engine_set_flat_memory( &thread->engine, GUEST_LOW, GUEST_HIGH );
     }
     thread->prefer_host = getenv( "PW_WOW_HOSTEXEC_ALL" ) != NULL;
     if (getenv( "PW_WOW_TRACE" ))
@@ -175,11 +181,11 @@ static void load_state( PwX86State *state, const I386_CONTEXT *ctx, UINT teb32 )
     state->fs_bytes = 0x1000;
     /* Wine owns the address space; every translated access is checked only
      * against the identity-mapped guest range and faults natively. */
-    state->stack_low = 0x10000;
-    state->stack_high = 0xfffff000;
+    state->stack_low = GUEST_LOW;
+    state->stack_high = GUEST_HIGH;
     state->memory_count = 1;
-    state->memory[0].low = 0x10000;
-    state->memory[0].high = 0xfffff000;
+    state->memory[0].low = GUEST_LOW;
+    state->memory[0].high = GUEST_HIGH;
     state->memory[0].permissions = PW_X86_READ | PW_X86_WRITE | PW_X86_EXEC;
 }
 

@@ -83,6 +83,7 @@ tests/test_pw_guest_call.c
 tests/test_pw_x86_block.c
 tests/test_pw_x86_cache.c
 tests/test_pw_x86_code_pages.c
+tests/test_pw_x86_flat.c
 tests/test_pw_x86_engine.c
 tests/test_pw_x86_chaining.c
 tests/test_pw_x86_residency.c

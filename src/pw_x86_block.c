@@ -9,7 +9,10 @@ _Static_assert(offsetof(PwX86State,eflags)<=127,"context exceeds disp8 layout");
 _Static_assert(offsetof(PwX86State,memory[0].permissions)<=127,
                "generated memory fast path exceeds disp8 layout");
 
-typedef struct Emitter { uint8_t *p; size_t n, cap; int failed; } Emitter;
+/* flat_span: when nonzero, every guest access and the stack are known to be
+ * valid exactly inside [flat_low, flat_low + flat_span), so the guard is one
+ * unsigned compare (PwX86TranslateOptions.flat_high). */
+typedef struct Emitter { uint8_t *p; size_t n, cap; int failed; uint32_t flat_low, flat_span; } Emitter;
 static void byte(Emitter *e, uint8_t value)
 {
     if (e->n == e->cap) { e->failed = 1; return; }
@@ -59,8 +62,23 @@ static int sse_aligned_move(uint8_t prefix, uint8_t opcode)
     return (prefix == 0x66u && (opcode == 0x6fu || opcode == 0x7fu)) ||
            (prefix == 0u && (opcode == 0x28u || opcode == 0x29u));
 }
+/* Flat guard: jbe over whatever follows when eax .. eax+width-1 lies in
+ * the flat range; edx is clobbered. Returns the rel8 slot to patch. */
+static size_t flat_range_check(Emitter *e,unsigned width)
+{
+    byte(e,0x8d); byte(e,0x90); word(e,(uint32_t)0u-e->flat_low);   /* lea edx,[rax-low] */
+    byte(e,0x81); byte(e,0xfa); word(e,e->flat_span-width);         /* cmp edx,span-width */
+    byte(e,0x76);                                                   /* jbe fast_ok */
+    return e->n++;
+}
 static void stack_bounds(Emitter *e)
 {
+    if (e->flat_span) {
+        size_t ok=flat_range_check(e,4);
+        byte(e,0xb8); word(e,0xffffffffu); byte(e,0xc3);
+        e->p[ok]=(uint8_t)(e->n-(ok+1));
+        return;
+    }
     byte(e,0x3b); byte(e,0x47); byte(e,offsetof(PwX86State,stack_low));
     require_condition(e,0x73);
     byte(e,0x8b); byte(e,0x57); byte(e,offsetof(PwX86State,stack_high));
@@ -102,8 +120,17 @@ static uintptr_t memory_pointer(PwX86State *state,uint32_t address,unsigned writ
     if(width!=1 && width!=2 && width!=4 && width!=8 && width!=10 && width!=16)return 0;
     return memory_range_pointer(state,address,write,width);
 }
+static void memory_slow_path(Emitter *e,unsigned write,unsigned width);
 static void memory_address_width(Emitter *e,unsigned write,unsigned width)
 {
+    if (e->flat_span) {
+        /* Inside the flat range the access is valid, as the region table
+         * says; outside it the slow helper decides and records the fault. */
+        size_t ok=flat_range_check(e,width);
+        memory_slow_path(e,write,width);
+        if (!e->failed) e->p[ok]=(uint8_t)(e->n-(ok+1));
+        return;
+    }
     /* Preserve the slow helper's state-contract checks before taking either
      * inline path.  In particular, a corrupt registry must not make even the
      * otherwise-valid stack path executable, and guest NULL is never a valid
@@ -178,6 +205,15 @@ static void memory_address_width(Emitter *e,unsigned write,unsigned width)
     e->p[patch_jb_low] = (uint8_t)(e->n - (patch_jb_low + 1));
     e->p[patch_jne_high] = (uint8_t)(e->n - (patch_jne_high + 1));
 
+    memory_slow_path(e,write,width);
+
+    /* fast_ok: */
+    e->p[patch_jbe_stack] = (uint8_t)(e->n - (patch_jbe_stack + 1));
+    e->p[patch_jbe_mem] = (uint8_t)(e->n - (patch_jbe_mem + 1));
+}
+/* Ask memory_pointer for the host address of eax, or stop the block. */
+static void memory_slow_path(Emitter *e,unsigned write,unsigned width)
+{
     byte(e,0x89);byte(e,0xc6); /* esi = address */
     byte(e,0xba);word(e,write);
     byte(e,0xb9);word(e,width);
@@ -197,10 +233,6 @@ static void memory_address_width(Emitter *e,unsigned write,unsigned width)
     byte(e,0x5f); /* pop rdi */
     byte(e,0x48);byte(e,0x85);byte(e,0xc0);
     require_condition(e,0x75);
-
-    /* fast_ok: */
-    e->p[patch_jbe_stack] = (uint8_t)(e->n - (patch_jbe_stack + 1));
-    e->p[patch_jbe_mem] = (uint8_t)(e->n - (patch_jbe_mem + 1));
 }
 static void memory_address(Emitter *e,unsigned write){memory_address_width(e,write,4);}
 static int branch_condition(PwX86State *s,unsigned condition)
@@ -1375,7 +1407,7 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
                          uint8_t *output, size_t capacity, PwX86Block *block,
                          unsigned residency_enabled, unsigned lazy_flags_enabled)
 {
-    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0 };
+    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0 };
 
     return pw_x86_translate_opts(source, bytes, pc, output, capacity, block, &options);
 }
@@ -1384,13 +1416,17 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
                           uint8_t *output, size_t capacity, PwX86Block *block,
                           const PwX86TranslateOptions *options)
 {
-    Emitter e = {output,0,capacity,0};
+    Emitter e = {output,0,capacity,0,0,0};
     size_t cursor = 0;
     unsigned count = 0;
     if (!source || !bytes || !output || !capacity || !block || !options)
         return PW_ERR_PRECONDITION;
     const unsigned residency_enabled = options->residency_enabled;
     const unsigned lazy_flags_enabled = options->lazy_flags_enabled;
+    if (options->flat_high > options->flat_low && options->flat_high - options->flat_low >= 16) {
+        e.flat_low = options->flat_low;
+        e.flat_span = options->flat_high - options->flat_low;
+    }
     /* Set by a ret or an indirect call/jump: the exit that may look its
      * target up in the indirect table. */
     unsigned indirect_exit = 0;

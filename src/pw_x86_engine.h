@@ -50,6 +50,8 @@ typedef struct PwX86Engine {
     unsigned indirect_enabled;
     PwVmRegion indirect;
     PwX86IndirectTarget *indirect_targets;
+    /* The flat guest range (PwX86TranslateOptions.flat_low/high), or 0/0. */
+    uint32_t flat_low, flat_high;
     unsigned sealed,failed,initialized;
 } PwX86Engine;
 
@@ -70,6 +72,11 @@ int pw_x86_engine_set_lazy_flags(PwX86Engine *, unsigned);
  * and every reset clears. It needs chaining: the lookup spends the chain
  * budget, which is one without it. */
 int pw_x86_engine_set_indirect(PwX86Engine *, unsigned);
+/* Translate from now on for a flat guest address space [low, high): the
+ * state's stack range and its single RW memory region must both be exactly
+ * that range. The guard is then one compare per access; accesses outside it
+ * still go through the region table. low == high turns it off. */
+int pw_x86_engine_set_flat_memory(PwX86Engine *, uint32_t low, uint32_t high);
 int pw_x86_engine_step(PwX86Engine *,PwX86State *,PwX86StepReport *);
 int pw_x86_engine_reset(PwX86Engine *,uint32_t);
 int pw_x86_engine_destroy(PwX86Engine *);

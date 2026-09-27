@@ -162,6 +162,11 @@ typedef struct PwX86TranslateOptions {
     unsigned lazy_flags_enabled;
     const PwX86IndirectTarget *indirect_targets;   /* NULL: dynamic exits return */
     uint32_t indirect_mask;                        /* slots - 1, a power of two minus one */
+    /* A flat guest address space: when flat_high > flat_low (at least 16
+     * bytes apart), the caller promises the stack range and a single RW
+     * region are both exactly [flat_low, flat_high), and every guest access
+     * inside it is checked with one compare. 0/0 uses the region table. */
+    uint32_t flat_low, flat_high;
 } PwX86TranslateOptions;
 
 int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t guest_pc,
