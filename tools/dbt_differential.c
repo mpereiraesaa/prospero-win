@@ -223,10 +223,19 @@ int main(int argc, char **argv)
         pw_x86_engine_init(&engine, &vm, entries, ENTRIES, 1u << 22, generation, source_view, NULL) != PW_OK ||
         pw_x86_hostexec_init(&hx, &vm, 1u << 24) != PW_OK)
         return 2;
-    /* "global": the guest GPRs in fixed host registers, as wowprospero runs. */
+    /* "global": the guest GPRs in fixed host registers, as wowprospero runs.
+     * "reencode": the same-ISA re-encoder, which needs the flat range (the
+     * window's one region, which is also the stack) and no counters. */
     if (argc > 1 && !strcmp(argv[1], "global") &&
         pw_x86_engine_set_global_resident(&engine, 0xfb) != PW_OK)
         return 2;
+    if (argc > 1 && !strcmp(argv[1], "reencode")) {
+        const uint32_t base = (uint32_t)(uintptr_t)window;
+        if (pw_x86_engine_set_reencode(&engine, 1) != PW_OK ||
+            pw_x86_engine_set_counters(&engine, 0) != PW_OK ||
+            pw_x86_engine_set_flat_memory(&engine, base + 0x1000, base + WINDOW - 0x2000) != PW_OK)
+            return 2;
+    }
 
     while (fgets(line, sizeof(line), stdin)) {
         uint8_t code[15];
@@ -312,8 +321,9 @@ int main(int argc, char **argv)
         }
         (void)both_ran;
     }
-    printf("differential: tested %llu skipped %llu mismatched %llu fault-trials %llu\n",
+    printf("differential: tested %llu skipped %llu mismatched %llu fault-trials %llu re-encoded %llu\n",
            (unsigned long long)tested, (unsigned long long)skipped,
-           (unsigned long long)mismatched, (unsigned long long)faults);
+           (unsigned long long)mismatched, (unsigned long long)faults,
+           (unsigned long long)engine.reencoded_blocks);
     return mismatched ? 1 : 0;
 }

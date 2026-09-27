@@ -133,7 +133,7 @@ static struct pw_thread *get_thread(void)
         return NULL;
     }
     {
-        /* PW_WOW_MODES=<chaining><residency><lazy-flags>[<indirect>[<flat>]],
+        /* PW_WOW_MODES=<chaining><residency><lazy-flags>[<indirect>[<flat>[<reencode>]]],
          * e.g. "00000" for the plainest translation; used to bisect
          * optimisation defects. Digits left out stay on; indirect targets
          * take effect only with chaining; residency 2 is the per-block
@@ -141,7 +141,7 @@ static struct pw_thread *get_thread(void)
         const char *modes = getenv( "PW_WOW_MODES" );
         size_t digits = modes ? strlen( modes ) : 0;
 
-        if (digits < 3 || digits > 5) { modes = "11111"; digits = 5; }
+        if (digits < 3 || digits > 6) { modes = "111111"; digits = 6; }
         pw_x86_engine_set_chaining( &thread->engine, modes[0] == '1' );
         /* Residency '1': the guest GPRs in fixed host registers across
          * linked blocks (PW_WOW_RESIDENT=<hex mask> picks which); '2': the
@@ -159,6 +159,9 @@ static struct pw_thread *get_thread(void)
         /* The guest range load_state gives the stack and the one region. */
         if (digits < 5 || modes[4] != '0')
             pw_x86_engine_set_flat_memory( &thread->engine, GUEST_LOW, GUEST_HIGH );
+        /* The same-ISA re-encoder where it takes a block (it needs the flat
+         * range and no counters); the emitter elsewhere. */
+        pw_x86_engine_set_reencode( &thread->engine, digits < 6 || modes[5] != '0' );
         /* Nothing here reads the step statistics; PW_WOW_STATS keeps them. */
         pw_x86_engine_set_counters( &thread->engine, getenv( "PW_WOW_STATS" ) != NULL );
     }

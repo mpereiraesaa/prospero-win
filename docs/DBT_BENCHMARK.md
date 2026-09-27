@@ -105,6 +105,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Flat-guard misses out of line, after the block | 872 | 960 | +10% | 20.4% |
 | RCL/RCR and 16-bit rotates by a constant (and the 16-bit count fix) | 958 | 977 | +2% | 20.0% |
 | Global residency: seven guest GPRs in the same host registers in every block | 956 | 1006 | +5% | 21.3% |
+| Same-ISA re-encoder: pinned GPRs, native flags, copied instructions | 987 | 1204 | +22% | 28.6% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -164,6 +165,22 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   emitter still copies a resident value through `eax` for most operations
   and stores every resident register before each instruction that can
   fault. `PW_WOW_MODES` residency `2` keeps the per-block allocator.
+- **Same-ISA re-encoder** (`src/pw_x86_reencode.c`). Host and guest are
+  both x86, so a block is re-emitted rather than emulated. The eight guest
+  GPRs are pinned for a whole chain (eax ecx edx ebx ebp esi in their own
+  registers, esp in r12, edi in r13), and the guest's arithmetic flags stay
+  in RFLAGS, saved only on the way back to C. ALU, mov, shift, imul,
+  movzx/movsx, setcc, cmov, bt and bswap forms are copied with the ModRM
+  and REX adjusted for r12 and r13. A memory operand becomes `[r11]` after
+  the flat guard; the guest range is identity-mapped. The glue between
+  instructions is flag-free (mov, lea, xchg, jrcxz), and the guard, the
+  only thing that compares, saves the flags around itself with
+  `lahf`/`seto` whenever a later instruction reads them. Push, pop, call,
+  ret and leave are translated onto r12. The first instruction it does not
+  take ends the block, and the old emitter translates that one; the two
+  meet through their canonical entries. `PW_WOW_MODES` 6th digit `0` turns
+  it off. Three interleaved rounds with native (median 4210 MIPS under
+  this machine's load); compression +27%, decompression +13%.
 
 ### After these changes
 
