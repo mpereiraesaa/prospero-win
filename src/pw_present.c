@@ -77,6 +77,57 @@ int pw_present_compose(const PwPresentFrame *frame,const PwPresentPlacement *pla
     }
     return PW_OK;
 }
+int pw_present_scale(const PwPresentFrame *frame,int mode,uint32_t background,
+                     const PwPresentTarget *target,PwPresentPlacement *placement)
+{
+    if(!target || !target->pixels || !target->width || !target->height)return PW_ERR_PRECONDITION;
+    int status=pw_present_validate(frame);if(status!=PW_OK)return status;
+    if(target->width>UINT32_MAX/PW_PRESENT_BYTES_PER_PIXEL ||
+       target->stride<target->width*PW_PRESENT_BYTES_PER_PIXEL ||
+       target->stride%PW_PRESENT_BYTES_PER_PIXEL ||
+       (uint64_t)target->stride*target->height>target->bytes)return PW_ERR_MALFORMED;
+    PwPresentPlacement shown;
+    if(mode==PW_PRESENT_SCALE_INTEGER) {
+        if((status=pw_present_fit(frame,target->width,target->height,0,UINT32_MAX,&shown))!=PW_OK)
+            return status;
+        if((status=pw_present_compose(frame,&shown,background,target))!=PW_OK)return status;
+        if(placement)*placement=shown;
+        return PW_OK;
+    }
+    if(mode==PW_PRESENT_SCALE_STRETCH) {
+        shown=(PwPresentPlacement){0,0,0,target->width,target->height};
+    } else if(mode==PW_PRESENT_SCALE_FIT) {
+        uint64_t w=frame->width,h=frame->height;
+        if(w*target->height<=(uint64_t)target->width*h) {
+            uint32_t sw=(uint32_t)(w*target->height/h);
+            shown=(PwPresentPlacement){(target->width-sw)/2u,0,0,sw?sw:1u,target->height};
+        } else {
+            uint32_t sh=(uint32_t)(h*target->width/w);
+            shown=(PwPresentPlacement){0,(target->height-sh)/2u,0,target->width,sh?sh:1u};
+        }
+    } else {
+        return PW_ERR_UNSUPPORTED;
+    }
+    if(shown.shown_width%frame->width==0 && shown.shown_height%frame->height==0 &&
+       shown.shown_width/frame->width==shown.shown_height/frame->height)
+        shown.scale=shown.shown_width/frame->width;
+    for(uint32_t y=0;y<target->height;y++) {
+        uint8_t *row=target->pixels+(uint64_t)y*target->stride;
+        int inside=y>=shown.top && y<shown.top+shown.shown_height;
+        const uint8_t *source=inside?frame->pixels+
+            (uint64_t)(y-shown.top)*frame->height/shown.shown_height*frame->stride:NULL;
+        for(uint32_t x=0;x<target->width;x++) {
+            if(!inside || x<shown.left || x>=shown.left+shown.shown_width) {
+                store_opaque(row+(uint64_t)x*4u,background);
+                continue;
+            }
+            const uint8_t *pixel=source+(uint64_t)(x-shown.left)*frame->width/shown.shown_width*4u;
+            row[x*4u]=pixel[0];row[x*4u+1]=pixel[1];row[x*4u+2]=pixel[2];row[x*4u+3]=0xff;
+        }
+    }
+    if(placement)*placement=shown;
+    return PW_OK;
+}
 int pw_present_frame(const PwPresentSink *sink,const PwPresentFrame *frame,
                      uint32_t margin,uint32_t max_scale,uint32_t background,
                      uint64_t sequence,PwPresentPlacement *placement)

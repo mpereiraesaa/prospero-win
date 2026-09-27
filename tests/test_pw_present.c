@@ -45,8 +45,75 @@ static void expect_pixel(const TestSink *sink,uint32_t x,uint32_t y,
     assert(pixel[0]==b && pixel[1]==g && pixel[2]==r && pixel[3]==0xff);
 }
 
+static uint8_t scaled[32*32*4];
+static const uint8_t *at_scaled(const PwPresentTarget *t,uint32_t x,uint32_t y)
+{
+    return t->pixels+(uint64_t)y*t->stride+(uint64_t)x*4u;
+}
+/* Frame pixel (x,y) is B=x, G=y, R=0x80. */
+static void test_scale(void)
+{
+    uint8_t source[4*3*4];
+    for(uint32_t y=0;y<3;y++)for(uint32_t x=0;x<4;x++) {
+        uint8_t *p=source+(y*4+x)*4;p[0]=(uint8_t)x;p[1]=(uint8_t)y;p[2]=0x80;p[3]=0;
+    }
+    const PwPresentFrame frame={source,4,3,16,PW_PRESENT_BGRX8};
+    PwPresentTarget wide={scaled,16,9,16*4,sizeof(scaled)},tall={scaled,9,16,9*4,sizeof(scaled)};
+    PwPresentPlacement shown;
+    const uint8_t *px;
+
+    /* FIT keeps 4:3 and fills the height of 16:9: 12x9 at x=2, a whole 3x. */
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_FIT,0x102030u,&wide,&shown)==PW_OK);
+    assert(shown.left==2 && shown.top==0 && shown.shown_width==12 && shown.shown_height==9 &&
+           shown.scale==3);
+    px=at_scaled(&wide,0,0);assert(px[0]==0x30 && px[1]==0x20 && px[2]==0x10 && px[3]==0xff);
+    px=at_scaled(&wide,15,8);assert(px[0]==0x30);
+    px=at_scaled(&wide,2,0);assert(px[0]==0 && px[1]==0 && px[2]==0x80 && px[3]==0xff);
+    px=at_scaled(&wide,13,8);assert(px[0]==3 && px[1]==2);
+    px=at_scaled(&wide,7,4);assert(px[0]==1 && px[1]==1);
+    /* ... and the width of a tall target, letterboxed. */
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_FIT,0,&tall,&shown)==PW_OK);
+    assert(shown.left==0 && shown.top==5 && shown.shown_width==9 && shown.shown_height==6 &&
+           !shown.scale);
+    px=at_scaled(&tall,8,10);assert(px[0]==3 && px[1]==2);
+    px=at_scaled(&tall,0,4);assert(!px[0] && !px[1] && !px[2]);
+
+    /* STRETCH fills the target; not a whole multiple here. */
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_STRETCH,0,&wide,&shown)==PW_OK);
+    assert(!shown.left && !shown.top && shown.shown_width==16 && shown.shown_height==9 &&
+           !shown.scale);
+    px=at_scaled(&wide,0,0);assert(px[0]==0 && px[2]==0x80);
+    px=at_scaled(&wide,15,8);assert(px[0]==3 && px[1]==2);
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_STRETCH,0,&wide,NULL)==PW_OK);
+
+    /* INTEGER uses the whole-multiple placement and refuses larger frames. */
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_INTEGER,0,&wide,&shown)==PW_OK);
+    assert(shown.scale==3 && shown.left==2 && shown.shown_width==12);
+    PwPresentTarget small={scaled,3,3,3*4,sizeof(scaled)};
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_INTEGER,0,&small,&shown)==PW_ERR_LIMIT);
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_FIT,0,&small,&shown)==PW_OK &&
+           shown.shown_width==3 && shown.shown_height==2);
+
+    /* A one-pixel-high strip still shows at least one row. */
+    uint8_t strip[20*4]={0};
+    const PwPresentFrame line={strip,20,1,80,PW_PRESENT_BGRX8};
+    PwPresentTarget square={scaled,2,2,8,sizeof(scaled)};
+    assert(pw_present_scale(&line,PW_PRESENT_SCALE_FIT,0,&square,&shown)==PW_OK &&
+           shown.shown_height==1 && shown.shown_width==2);
+
+    assert(pw_present_scale(&frame,7,0,&wide,&shown)==PW_ERR_UNSUPPORTED);
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_FIT,0,NULL,&shown)==PW_ERR_PRECONDITION);
+    PwPresentTarget bad=wide;bad.stride=10;
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_FIT,0,&bad,&shown)==PW_ERR_MALFORMED);
+    bad=wide;bad.bytes=10;
+    assert(pw_present_scale(&frame,PW_PRESENT_SCALE_FIT,0,&bad,&shown)==PW_ERR_MALFORMED);
+    PwPresentFrame broken=frame;broken.format=0;
+    assert(pw_present_scale(&broken,PW_PRESENT_SCALE_FIT,0,&wide,&shown)==PW_ERR_UNSUPPORTED);
+}
+
 int main(void)
 {
+    test_scale();
     PwGdi gdi;PwGdiDc dcs[4];PwGdiSurface surfaces[4];uint8_t pixels[1024];
     assert(pw_gdi_init(&gdi,dcs,4,surfaces,4,pixels,sizeof(pixels))==PW_OK);
     uint32_t dc;assert(pw_gdi_get_dc(&gdi,WINDOW,4,3,&dc)==PW_OK);

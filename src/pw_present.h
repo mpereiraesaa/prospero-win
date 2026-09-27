@@ -56,6 +56,15 @@ int pw_present_fit(const PwPresentFrame *frame,uint32_t output_width,uint32_t ou
                    uint32_t margin,uint32_t max_scale,PwPresentPlacement *placement);
 int pw_present_compose(const PwPresentFrame *frame,const PwPresentPlacement *placement,
                        uint32_t background,const PwPresentTarget *target);
+/* How a profile shows its frames on the whole target. */
+enum { PW_PRESENT_SCALE_FIT=0,PW_PRESENT_SCALE_INTEGER,PW_PRESENT_SCALE_STRETCH };
+/* Nearest-neighbour scaling of frame onto all of target, the rest painted
+ * background. FIT keeps the aspect ratio and fills one axis; INTEGER uses
+ * the largest whole scale that fits (a frame larger than the target is
+ * refused); STRETCH fills the target. placement, when not NULL, receives
+ * the shown rectangle, with scale 0 when it is not a whole multiple. */
+int pw_present_scale(const PwPresentFrame *frame,int mode,uint32_t background,
+                     const PwPresentTarget *target,PwPresentPlacement *placement);
 /* validate -> fit -> acquire -> compose -> submit.  Every refusal happens
  * before acquire, so a malformed or oversized frame never holds an image. */
 int pw_present_frame(const PwPresentSink *sink,const PwPresentFrame *frame,
