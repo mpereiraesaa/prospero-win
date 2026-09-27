@@ -55,6 +55,9 @@ typedef struct PwX86Engine {
     unsigned no_counters;
     /* PwX86TranslateOptions.global_resident for blocks translated from now on. */
     uint8_t global_resident;
+    /* Try the same-ISA re-encoder (pw_x86_reencode.h) first. */
+    unsigned reencode_enabled;
+    uint64_t reencoded_blocks;
     unsigned sealed,failed,initialized;
 } PwX86Engine;
 
@@ -79,6 +82,10 @@ int pw_x86_engine_set_indirect(PwX86Engine *, unsigned);
  * every block translated from now on (PwX86TranslateOptions.global_resident);
  * 0 returns to the per-block allocator. It needs residency enabled. */
 int pw_x86_engine_set_global_resident(PwX86Engine *, uint8_t mask);
+/* Translate blocks from now on with the same-ISA re-encoder where it takes
+ * them (pw_x86_reencode.h: a flat range and no counters), and with the
+ * emitter elsewhere. */
+int pw_x86_engine_set_reencode(PwX86Engine *, unsigned enabled);
 /* Translate from now on for a flat guest address space [low, high): the
  * state's stack range and its single RW memory region must both be exactly
  * that range. The guard is then one compare per access; accesses outside it

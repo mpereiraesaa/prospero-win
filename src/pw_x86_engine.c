@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_x86_engine.h"
+#include "pw_x86_reencode.h"
 #include <string.h>
 
 #if defined(__clang__)
@@ -99,6 +100,13 @@ int pw_x86_engine_set_global_resident(PwX86Engine *engine, uint8_t mask)
     return PW_OK;
 }
 
+int pw_x86_engine_set_reencode(PwX86Engine *engine, unsigned enabled)
+{
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    engine->reencode_enabled = enabled ? 1 : 0;
+    return PW_OK;
+}
+
 int pw_x86_engine_set_counters(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
@@ -151,7 +159,13 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         PW_X86_ENGINE_INDIRECT_SLOTS - 1, engine->flat_low, engine->flat_high,
         engine->no_counters,
         engine->residency_enabled ? engine->global_resident : (uint8_t)0 };
-    int last = pw_x86_translate_opts(source, available, pc, scratch, sizeof(scratch), &best, &options);
+    int last = PW_ERR_UNSUPPORTED;
+    if (engine->reencode_enabled) {
+        last = pw_x86_reencode(source, available, pc, scratch, sizeof(scratch), &best, &options);
+        if (last == PW_OK) engine->reencoded_blocks++;
+    }
+    if (last != PW_OK)
+        last = pw_x86_translate_opts(source, available, pc, scratch, sizeof(scratch), &best, &options);
     if (last != PW_OK) return last;
     if (!best.instructions) return PW_ERR_TRUNCATED;
     if(best.code_bytes>engine->cache.arena_bytes-engine->cache.cursor)return PW_ERR_LIMIT;

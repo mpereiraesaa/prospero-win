@@ -1,0 +1,304 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+/* The same-ISA re-encoder against the emitter, on one flat guest range. */
+#include "../src/pw_x86_engine.h"
+#include "../src/pw_x86_reencode.h"
+#include "../src/pw_vm_posix.h"
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+
+enum { SPAN = 0x40000, CODE = 0x1000, DATA = 0x20000, STACK_TOP = 0x3f000 };
+
+static uint8_t *guest;          /* identity-mapped: guest address == host address */
+static uint32_t low;
+
+static int view(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes)
+{
+    (void)opaque;
+    if (pc < low + CODE || pc >= low + DATA) return PW_ERR_NOT_FOUND;
+    *data = (const uint8_t *)(uintptr_t)pc;
+    *bytes = low + DATA - pc;
+    return PW_OK;
+}
+
+static void initial(PwX86State *s)
+{
+    memset(s, 0, sizeof(*s));
+    s->eip = low + CODE;
+    s->stack_low = low;
+    s->stack_high = low + SPAN;
+    s->memory_count = 1;
+    s->memory[0].low = low;
+    s->memory[0].high = (uint64_t)low + SPAN;
+    s->memory[0].permissions = PW_X86_READ | PW_X86_WRITE;
+    for (unsigned r = 0; r < 8; r++) s->gpr[r] = 0x11111111u * (r + 1);
+    s->gpr[4] = low + STACK_TOP;
+    s->gpr[6] = low + DATA;          /* esi */
+    s->gpr[7] = low + DATA + 0x100;  /* edi */
+    s->eflags = 0x2 | 0x040 | 0x001; /* ZF CF */
+}
+
+typedef struct Run {
+    PwX86State state;
+    uint8_t data[0x1000];
+    int status;
+    uint64_t reencoded;
+} Run;
+
+/* Run code from low+CODE until the guest returns to its sentinel. */
+static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
+{
+    static PwX86CacheEntry entries[512];
+    static PwVmBackend vm;
+    PwX86Engine engine;
+    PwX86StepReport step;
+    Run r;
+
+    memset(guest + CODE, 0xcc, DATA - CODE);
+    memcpy(guest + CODE, code, bytes);
+    for (unsigned i = 0; i < 0x1000; i++) guest[DATA + i] = (uint8_t)(i * 7 + 3);
+    initial(&r.state);
+    memcpy(guest + STACK_TOP, &(uint32_t){ 0xdead0000u }, 4);
+    assert(pw_vm_posix_backend(&vm) == PW_OK);
+    assert(pw_x86_engine_init(&engine, &vm, entries, 512, 1u << 20, 1, view, NULL) == PW_OK);
+    assert(pw_x86_engine_set_chaining(&engine, 1) == PW_OK);
+    assert(pw_x86_engine_set_indirect(&engine, 1) == PW_OK);
+    assert(pw_x86_engine_set_counters(&engine, 0) == PW_OK);
+    assert(pw_x86_engine_set_flat_memory(&engine, low, low + SPAN) == PW_OK);
+    assert(pw_x86_engine_set_reencode(&engine, reencode) == PW_OK);
+    r.status = PW_OK;
+    for (unsigned i = 0; i < 100000 && r.state.eip != 0xdead0000u; i++)
+        if ((r.status = pw_x86_engine_step(&engine, &r.state, &step)) != PW_OK) break;
+    memcpy(r.data, guest + DATA, sizeof(r.data));
+    r.reencoded = engine.reencoded_blocks;
+    assert(pw_x86_engine_destroy(&engine) == PW_OK);
+    return r;
+}
+
+static void same(const Run *a, const Run *b)
+{
+    for (unsigned g = 0; g < 8; g++) {
+        if (a->state.gpr[g] != b->state.gpr[g])
+            fprintf(stderr, "gpr%u %08x != %08x\n", g, a->state.gpr[g], b->state.gpr[g]);
+        assert(a->state.gpr[g] == b->state.gpr[g]);
+    }
+    assert(a->state.eip == b->state.eip);
+    if ((a->state.eflags ^ b->state.eflags) & 0x8d5)
+        fprintf(stderr, "flags %03x != %03x\n", a->state.eflags & 0x8d5, b->state.eflags & 0x8d5);
+    assert((a->state.eflags & 0x8d5) == (b->state.eflags & 0x8d5));
+    assert(a->status == b->status);
+    assert(!memcmp(a->data, b->data, sizeof(a->data)));
+}
+
+/* Both backends give the same result; the re-encoder took some blocks. */
+static void compare(const uint8_t *code, size_t bytes)
+{
+    Run emitter = run(code, bytes, 0), reencoded = run(code, bytes, 1);
+    if (emitter.status != PW_OK || emitter.state.eip != 0xdead0000u)
+        fprintf(stderr, "emitter stopped: status %d eip +%x\n", emitter.status, emitter.state.eip - low - CODE);
+    assert(emitter.status == PW_OK && emitter.state.eip == 0xdead0000u);
+    same(&reencoded, &emitter);
+    assert(!emitter.reencoded && reencoded.reencoded);
+}
+
+static void test_options(void)
+{
+    static const uint8_t mov[] = { 0x89, 0xc8, 0xc3 };           /* mov eax, ecx; ret */
+    static const uint8_t lock[] = { 0xf0, 0x01, 0x06, 0xc3 };    /* lock add [esi], eax */
+    static const uint8_t tail[] = { 0x40, 0xf0, 0x01, 0x06 };    /* inc eax; lock add */
+    PwX86TranslateOptions o = { .flat_low = 0x10000, .flat_high = 0xfffff000u, .no_counters = 1 };
+    uint8_t out[16384];
+    PwX86Block block;
+
+    assert(pw_x86_reencode(mov, sizeof(mov), 0x401000, out, sizeof(out), &block, &o) == PW_OK);
+    assert(block.instructions == 2 && block.exit.kind == PW_X86_EXIT_DYNAMIC);
+    assert(block.entry_contract.resident_mask == 0xff);
+    assert(block.entry_contract.guest_to_host[4] == PW_X86_REENCODE_HOST_BASE + 12);
+    assert(pw_x86_reencode(lock, sizeof(lock), 0x401000, out, sizeof(out), &block, &o) ==
+           PW_ERR_UNSUPPORTED);
+    assert(pw_x86_reencode(tail, sizeof(tail), 0x401000, out, sizeof(out), &block, &o) == PW_OK);
+    assert(block.instructions == 1 && block.source_bytes == 1);
+    assert(block.exit.kind == PW_X86_EXIT_DIRECT_JUMP && block.exit.target_pc == 0x401001);
+    o.no_counters = 0;
+    assert(pw_x86_reencode(mov, sizeof(mov), 0x401000, out, sizeof(out), &block, &o) ==
+           PW_ERR_UNSUPPORTED);
+    o.no_counters = 1; o.flat_high = 0;
+    assert(pw_x86_reencode(mov, sizeof(mov), 0x401000, out, sizeof(out), &block, &o) ==
+           PW_ERR_UNSUPPORTED);
+    assert(pw_x86_reencode(NULL, 1, 0, out, sizeof(out), &block, &o) == PW_ERR_PRECONDITION);
+}
+
+/* ALU and moves on every register, esp and edi in both ModRM fields and
+ * as base and index, byte registers high and low, 16-bit forms. (A form
+ * that needs a REX prefix and names ah-bh, such as movzx edi, ah, ends
+ * the block for the emitter instead.) */
+static void test_registers(void)
+{
+    static const uint8_t ok[] = {
+        0x89, 0xe0, 0x89, 0xfb, 0x01, 0xe7, 0x29, 0xfc, 0x01, 0xfc, 0x29, 0xe7,
+        0x8b, 0x14, 0x24, 0x8b, 0x4c, 0x24, 0xfc, 0x8d, 0x6c, 0xbe, 0x10,
+        0x88, 0xe1, 0x00, 0xf2, 0x66, 0x01, 0xfe, 0x66, 0x89, 0xe6,
+        0x0f, 0xb6, 0xc4,                   /* movzx eax, ah */
+        0x0f, 0xbf, 0xfe,                   /* movsx edi, si */
+        0x0f, 0xcf,                         /* bswap edi */
+        0x4c, 0x44, 0x47, 0x4f,             /* dec esp, inc esp, inc edi, dec edi */
+        0xbf, 0x78, 0x56, 0x34, 0x12,       /* mov edi, 0x12345678 */
+        0xc1, 0xe7, 0x05,                   /* shl edi, 5 */
+        0xd3, 0xcf,                         /* ror edi, cl */
+        0x0f, 0xaf, 0xfa,                   /* imul edi, edx */
+        0x6b, 0xc7, 0x13,                   /* imul eax, edi, 19 */
+        0xf7, 0xe7,                         /* mul edi */
+        0x99,                               /* cdq */
+        0x39, 0xd8,                         /* cmp eax, ebx: every flag defined */
+        0xc3,
+    };
+    compare(ok, sizeof(ok));
+}
+
+/* xchg between registers, which only the re-encoder takes. */
+static void test_xchg(void)
+{
+    static const uint8_t code[] = {
+        0x87, 0xe7, 0x87, 0xe7,             /* xchg edi, esp, twice */
+        0x87, 0xfb,                         /* xchg ebx, edi */
+        0x97,                               /* xchg eax, edi */
+        0x86, 0xe1,                         /* xchg cl, ah */
+        0xc3,
+    };
+    Run r = run(code, sizeof(code), 1);
+    assert(r.status == PW_OK && r.state.eip == 0xdead0000u);
+    assert(r.state.gpr[3] == low + DATA + 0x100 && r.state.gpr[0] == 0x44442244u);
+    assert(r.state.gpr[7] == 0x11111111u && r.state.gpr[1] == 0x22222244u);
+    assert(r.state.gpr[4] == low + STACK_TOP + 4);
+}
+
+/* Memory operands through the guard: loads, stores, read-modify-write,
+ * immediates, moffs, setcc and cmov with memory. */
+static void test_memory(void)
+{
+    uint8_t code[] = {
+        0xb9, 0x04, 0x00, 0x00, 0x00,       /* mov ecx, 4 */
+        0x8b, 0x06,                         /* mov eax, [esi] */
+        0x03, 0x47, 0x04,                   /* add eax, [edi+4] */
+        0x89, 0x47, 0x08,                   /* mov [edi+8], eax */
+        0x01, 0x07,                         /* add [edi], eax */
+        0x83, 0x6f, 0x0c, 0x05,             /* sub dword [edi+12], 5 */
+        0x80, 0x76, 0x10, 0x5a,             /* xor byte [esi+16], 0x5a */
+        0xc7, 0x44, 0x8e, 0x20, 1, 2, 3, 4, /* mov dword [esi+ecx*4+0x20], 0x04030201 */
+        0x66, 0xc7, 0x47, 0x30, 0x34, 0x12, /* mov word [edi+0x30], 0x1234 */
+        0xa1, 0, 0, 0, 0,                   /* mov eax, [moffs] (patched) */
+        0xa3, 0, 0, 0, 0,                   /* mov [moffs+4], eax (patched) */
+        0x39, 0x06,                         /* cmp [esi], eax */
+        0x0f, 0x94, 0xc2,                   /* setz dl */
+        0x88, 0x57, 0x40,                   /* mov [edi+0x40], dl */
+        0x0f, 0x42, 0x5e, 0x44,             /* cmovb ebx, [esi+0x44] */
+        0x13, 0x4e, 0x48,                   /* adc ecx, [esi+0x48] */
+        0xd1, 0x67, 0x50,                   /* shl dword [edi+0x50], 1 */
+        0xf7, 0x5f, 0x54,                   /* neg dword [edi+0x54] */
+        0x0f, 0xb6, 0x56, 0x58,             /* movzx edx, byte [esi+0x58] */
+        0x0f, 0xbf, 0x6e, 0x5a,             /* movsx ebp, word [esi+0x5a] */
+        0xff, 0x47, 0x60,                   /* inc dword [edi+0x60] */
+        0x85, 0x46, 0x64,                   /* test [esi+0x64], eax */
+        0x39, 0xd8,                         /* cmp eax, ebx: test leaves AF undefined */
+        0xc3,
+    };
+    uint32_t moffs = low + DATA + 0x80, moffs4 = moffs + 4;
+    memcpy(code + 38, &moffs, 4);
+    memcpy(code + 43, &moffs4, 4);
+    compare(code, sizeof(code));
+}
+
+/* Flags across linked blocks (a compare in one block, the branch in the
+ * next), a loop, calls, returns, push and pop of every kind, and leave. */
+static void test_control(void)
+{
+    static const uint8_t code[] = {
+        0x55,                               /* 00 push ebp */
+        0x89, 0xe5,                         /* 01 mov ebp, esp */
+        0x57, 0x56,                         /* 03 push edi; push esi */
+        0xb9, 0x20, 0, 0, 0,                /* 05 mov ecx, 32 */
+        0x31, 0xc0,                         /* 0a xor eax, eax */
+        0x01, 0xc8,                         /* 0c L: add eax, ecx */
+        0x39, 0xc1,                         /* 0e cmp ecx, eax */
+        0xeb, 0x00,                         /* 10 jmp +0 (the flags cross a link) */
+        0x72, 0x01,                         /* 12 jb +1 */
+        0x40,                               /* 14 inc eax */
+        0x49,                               /* 15 dec ecx */
+        0x75, 0xf4,                         /* 16 jnz L */
+        0xe8, 0x0d, 0, 0, 0,                /* 18 call F */
+        0x6a, 0xfe,                         /* 1d push -2 */
+        0x68, 0x44, 0x33, 0x22, 0x11,       /* 1f push 0x11223344 */
+        0x5b, 0x5a,                         /* 24 pop ebx; pop edx */
+        0x5e, 0x5f,                         /* 26 pop esi; pop edi */
+        0xc9,                               /* 28 leave */
+        0xc3,                               /* 29 ret */
+        0xff, 0x36,                         /* 2a F: push dword [esi] */
+        0x5f,                               /* 2c pop edi */
+        0x54,                               /* 2d push esp */
+        0x58,                               /* 2e pop eax */
+        0xc2, 0x00, 0x00,                   /* 2f ret 0 */
+    };
+    compare(code, sizeof(code));
+}
+
+/* A block the re-encoder stops in the middle (div, which it leaves to the
+ * emitter) and indirect calls and jumps through registers and memory. */
+static void test_mixed_and_indirect(void)
+{
+    uint8_t code[] = {
+        0xb8, 100, 0, 0, 0,                 /* 00 mov eax, 100 */
+        0x31, 0xd2,                         /* 05 xor edx, edx */
+        0xb9, 7, 0, 0, 0,                   /* 07 mov ecx, 7 */
+        0xf7, 0xf1,                         /* 0c div ecx (emitter) */
+        0x8d, 0x1c, 0x10,                   /* 0e lea ebx, [eax+edx] */
+        0xbf, 0, 0, 0, 0,                   /* 11 mov edi, F (patched) */
+        0xff, 0xd7,                         /* 16 call edi */
+        0x89, 0x3e,                         /* 18 mov [esi], edi */
+        0xff, 0x16,                         /* 1a call [esi] */
+        0x39, 0xd8,                         /* 1c cmp eax, ebx: div left the flags undefined */
+        0xc3,                               /* 1e ret */
+        0x43,                               /* 1f F: inc ebx */
+        0xc3,                               /* 20 ret */
+    };
+    uint32_t f = low + CODE + 0x1f;
+    memcpy(code + 0x12, &f, 4);
+    compare(code, sizeof(code));
+}
+
+/* A refused access stops with every register and, since a branch reads
+ * them later, the flags of the compare before it. */
+static void test_fault(void)
+{
+    static const uint8_t code[] = {
+        0xb8, 5, 0, 0, 0,                   /* 00 mov eax, 5 */
+        0x8d, 0x3c, 0x00,                   /* 05 lea edi, [eax+eax] */
+        0x39, 0xf8,                         /* 08 cmp eax, edi: CF SF */
+        0x89, 0x05, 0x10, 0, 0, 0,          /* 0a mov [0x10], eax: outside */
+        0x72, 0x00,                         /* 10 jb */
+        0xc3,
+    };
+    Run emitter = run(code, sizeof(code), 0), reencoded = run(code, sizeof(code), 1);
+    assert(reencoded.status != PW_OK && reencoded.state.eip == low + CODE + 0x0a);
+    assert(reencoded.state.gpr[0] == 5 && reencoded.state.gpr[7] == 10);
+    assert((reencoded.state.eflags & 0x8d5) == 0x091);          /* SF AF CF */
+    same(&reencoded, &emitter);
+}
+
+int main(void)
+{
+    guest = mmap(NULL, SPAN, PROT_READ | PROT_WRITE | PROT_EXEC,
+                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    assert(guest != MAP_FAILED);
+    low = (uint32_t)(uintptr_t)guest;
+    test_options();
+    test_registers();
+    test_xchg();
+    test_memory();
+    test_control();
+    test_mixed_and_indirect();
+    test_fault();
+    printf("reencode passed: options, register remapping, xchg, memory operands, flags across links, "
+           "stack and calls, emitter hand-over, indirect targets, fault state\n");
+    return 0;
+}

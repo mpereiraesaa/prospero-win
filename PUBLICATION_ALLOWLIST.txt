@@ -88,6 +88,7 @@ tests/test_pw_x86_engine.c
 tests/test_pw_x86_chaining.c
 tests/test_pw_x86_residency.c
 tests/test_pw_x86_global_residency.c
+tests/test_pw_x86_reencode.c
 tests/test_pw_x86_lazyflags.c
 tests/test_pw_x87.c
 tests/test_pw_launcher_render.c
@@ -145,6 +146,8 @@ wine/wowprospero/wowprospero.h
 wine/wowprospero/wowprospero.spec
 src/pw_x86_hostexec.c
 src/pw_x86_hostexec.h
+src/pw_x86_reencode.c
+src/pw_x86_reencode.h
 tests/test_pw_x86_hostexec.c
 tools/dbt_differential.c
 tests/fixtures/dbt_differential_forms.txt
