@@ -361,6 +361,11 @@ static int soft_add(PwGuestFp *fp,Soft80 a,Soft80 b,uint8_t out[10])
         return pack_exact(fp,b.sign,b.exp,b.sig,63,out);
     if(b.kind==SOFT_ZERO && a.kind==SOFT_FINITE)
         return pack_exact(fp,a.sign,a.exp,a.sig,63,out);
+    if(a.kind==SOFT_ZERO && b.kind==SOFT_ZERO) {
+        /* Zeros of opposite signs sum to +0, or to -0 rounding down. */
+        unsigned sign=a.sign==b.sign?a.sign:((fp->x87_control>>10)&3)==1;
+        pack_special((Soft80){.kind=SOFT_ZERO,.sign=sign},out);return PW_OK;
+    }
     if(a.kind==SOFT_ZERO){pack_special(b,out);return PW_OK;}
     if(b.kind==SOFT_ZERO){pack_special(a,out);return PW_OK;}
     if(a.exp<b.exp){Soft80 swap=a;a=b;b=swap;}
@@ -404,11 +409,14 @@ static int soft_div(PwGuestFp *fp,Soft80 a,Soft80 b,uint8_t out[10])
     }
     if(a.kind==SOFT_INFINITY){pack_special((Soft80){.kind=SOFT_INFINITY,.sign=sign},out);return PW_OK;}
     if(a.kind==SOFT_ZERO || b.kind==SOFT_INFINITY){pack_special((Soft80){.kind=SOFT_ZERO,.sign=sign},out);return PW_OK;}
+    /* 64 or 65 quotient bits, then two more from the remainder, so that a
+     * 64-bit precision result still has a rounding bit below the sticky. */
     __uint128_t dividend=(__uint128_t)a.sig<<64;
     __uint128_t quotient=dividend/b.sig,remainder=dividend%b.sig;
+    quotient=quotient<<2|(remainder<<2)/b.sig;remainder=(remainder<<2)%b.sig;
     if(remainder)quotient|=1;
     unsigned top_bit=highest128(quotient);
-    int exponent=a.exp-b.exp+(int)top_bit-64;
+    int exponent=a.exp-b.exp+(int)top_bit-66;
     return pack_exact(fp,sign,exponent,quotient,top_bit,out);
 }
 static uint64_t integer_sqrt128(__uint128_t value)
@@ -607,11 +615,17 @@ static int binary(PwGuestFp *fp,Soft80 rhs,unsigned operation,unsigned reverse,
     if(pop && (status=pw_guest_x87_pop(&after,left_raw))!=PW_OK)return status;
     *fp=after;return PW_OK;
 }
-static int memory_operand(PwGuestFp *fp,uintptr_t operand,unsigned bits,Soft80 *value)
+/* The operand's DE is left out when denormal is 0: a denormal divided by
+ * zero reports only the zero divide, as the hardware does. */
+static int memory_operand(PwGuestFp *fp,uintptr_t operand,unsigned bits,Soft80 *value,
+                          unsigned denormal)
 {
     uint8_t raw[10];int status;uint32_t u32;uint64_t u64;PwGuestFp copy=*fp;
+    uint16_t control=copy.x87_control,status_word=copy.x87_status;
+    if(!denormal)copy.x87_control=(uint16_t)(copy.x87_control|X87_DE);
     if(bits==32){memcpy(&u32,(const void *)operand,4);status=from_binary(&copy,u32,23,8,127,raw);}
     else {memcpy(&u64,(const void *)operand,8);status=from_binary(&copy,u64,52,11,1023,raw);}
+    if(!denormal)copy.x87_control=control,copy.x87_status=status_word;
     if(status!=PW_OK){if(status==PW_ERR_X87_TRAP)*fp=copy;return status;}
     *fp=copy;*value=unpack80(raw);return PW_OK;
 }
@@ -720,7 +734,11 @@ int pw_x87_execute(PwGuestFp *fp,PwX87Action action,uintptr_t operand,uint16_t *
         Soft80 rhs;unsigned bits=action==PW_X87_FADD_F64 || action==PW_X87_FMUL_F64 ||
             action==PW_X87_FSUB_F64 || action==PW_X87_FSUBR_F64 ||
             action==PW_X87_FDIV_F64 || action==PW_X87_FDIVR_F64?64:32;
-        if((status=memory_operand(fp,operand,bits,&rhs))!=PW_OK)return status;
+        uint8_t top_raw[10];
+        unsigned reverse_divide=action==PW_X87_FDIVR_F32 || action==PW_X87_FDIVR_F64;
+        unsigned zero_divisor=reverse_divide && peek(fp,0,top_raw)==PW_OK &&
+            unpack80(top_raw).kind==SOFT_ZERO;
+        if((status=memory_operand(fp,operand,bits,&rhs,!zero_divisor))!=PW_OK)return status;
         unsigned op=action==PW_X87_FMUL_F32 || action==PW_X87_FMUL_F64?1:
             action==PW_X87_FSUB_F32 || action==PW_X87_FSUB_F64 ||
             action==PW_X87_FSUBR_F32 || action==PW_X87_FSUBR_F64?2:
@@ -758,7 +776,7 @@ int pw_x87_execute(PwGuestFp *fp,PwX87Action action,uintptr_t operand,uint16_t *
     case PW_X87_FCOM_F32:case PW_X87_FCOM_F64:
     case PW_X87_FCOMP_F32:case PW_X87_FCOMP_F64: {
         Soft80 rhs;unsigned bits=action==PW_X87_FCOM_F64 || action==PW_X87_FCOMP_F64?64:32;
-        if((status=memory_operand(fp,operand,bits,&rhs))!=PW_OK)return status;
+        if((status=memory_operand(fp,operand,bits,&rhs,1))!=PW_OK)return status;
         return compare(fp,rhs,action==PW_X87_FCOMP_F32 || action==PW_X87_FCOMP_F64);
     }
     case PW_X87_FCOM_ST:

@@ -176,6 +176,53 @@ static void test_fp_forms(void)
     }
 }
 
+/* SSE arithmetic the fallback runs natively obeys the guest's MXCSR, not
+ * the host thread's: a host that flushes denormals (FTZ|DAZ) or rounds
+ * differently must not change what the guest computes. */
+static uint64_t guest_sse(uint32_t guest_mxcsr, const uint8_t code[4], uint64_t x, uint64_t y,
+                          uint32_t *mxcsr_after)
+{
+    PwX86State s;
+    uint64_t lane;
+
+    reset_state(&s);
+    s.fp.mxcsr = guest_mxcsr;
+    memcpy(s.fp.xmm[0], &x, 8);
+    memcpy(s.fp.xmm[1], &y, 8);
+    assert(run(&s, code, 4) == PW_OK);
+    memcpy(&lane, s.fp.xmm[0], 8);
+    *mxcsr_after = s.fp.mxcsr;
+    return lane;
+}
+
+static void test_guest_mxcsr(void)
+{
+    static const uint8_t mulsd[4] = {0xf2, 0x0f, 0x59, 0xc1};
+    static const uint8_t divss[4] = {0xf3, 0x0f, 0x5e, 0xc1};
+    static const uint8_t addsd[4] = {0xf2, 0x0f, 0x58, 0xc1};
+    const unsigned host = _mm_getcsr();
+    uint32_t after;
+
+    _mm_setcsr(0x9fc0 | 0x6000); /* FTZ, DAZ, round toward zero */
+    /* A denormal times one stays denormal (DE) under Windows' 0x1f80. */
+    assert(guest_sse(0x1f80, mulsd, 0x0008000000000000ull, 0x3ff0000000000000ull, &after) ==
+           0x0008000000000000ull);
+    assert(after == (0x1f80 | 0x02));
+    /* The smallest normal float halved is a float denormal (UE, PE clear:
+     * exact), not zero. */
+    assert(guest_sse(0x1f80, divss, 0x00800000u, 0x40000000u, &after) == 0x00400000u);
+    assert((after & 0x3f) == 0);
+    /* The guest's own FTZ|DAZ, when it asks for them, apply. */
+    assert(guest_sse(0x9fc0, mulsd, 0x0008000000000000ull, 0x3ff0000000000000ull, &after) == 0);
+    /* Round to nearest, then round up: 1 + 2^-60 is inexact either way. */
+    assert(guest_sse(0x1f80, addsd, 0x3ff0000000000000ull, 0x3c30000000000000ull, &after) ==
+           0x3ff0000000000000ull && (after & 0x20));
+    assert(guest_sse(0x5f80, addsd, 0x3ff0000000000000ull, 0x3c30000000000000ull, &after) ==
+           0x3ff0000000000001ull);
+    assert(_mm_getcsr() == (0x9fc0 | 0x6000));
+    _mm_setcsr(host);
+}
+
 static void test_refusals_and_cache(void)
 {
     PwX86State s;
@@ -226,9 +273,10 @@ int main(void)
     assert(pw_x86_hostexec_init(&hx, &vm, 1u << 20) == PW_OK);
     test_integer_forms();
     test_fp_forms();
+    test_guest_mxcsr();
     test_refusals_and_cache();
     assert(pw_x86_hostexec_destroy(&hx) == PW_OK);
-    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms; %llu stubs\n",
+    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR; %llu stubs\n",
            (unsigned long long)hx.compiled);
     return 0;
 }
