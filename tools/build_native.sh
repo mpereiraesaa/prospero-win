@@ -15,6 +15,7 @@
 #   PW_OUTPUT_SUFFIX       isolated build/dist suffix, e.g. -wine-smoke
 #   PW_WINE64_SCRIPT       1 drives the launcher unattended (validation)
 #   PW_WINE64_SECONDS      close each game after this many seconds; 0 never
+#   PW_WINE64_SCRIPT_CYCLES games the unattended launcher opens (default 2)
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -26,11 +27,14 @@ native_mode=${PW_NATIVE_MODE:-wine64}
 output_suffix=${PW_OUTPUT_SUFFIX:-}
 wine64_script=${PW_WINE64_SCRIPT:-0}
 wine64_seconds=${PW_WINE64_SECONDS:-0}
+wine64_cycles=${PW_WINE64_SCRIPT_CYCLES:-2}
 
 [[ $native_mode == wine64 ]] || {
     echo "PW_NATIVE_MODE must be wine64: the direct Win32 runtime was removed" >&2; exit 2; }
-[[ $wine64_script == 0 || $wine64_script == 1 ]] && [[ $wine64_seconds =~ ^[0-9]+$ ]] || {
-    echo "PW_WINE64_SCRIPT must be 0 or 1 and PW_WINE64_SECONDS a number" >&2; exit 2; }
+[[ $wine64_script == 0 || $wine64_script == 1 ]] && [[ $wine64_seconds =~ ^[0-9]+$ ]] &&
+    [[ $wine64_cycles =~ ^[1-9][0-9]{0,3}$ ]] || {
+    echo "PW_WINE64_SCRIPT must be 0 or 1, PW_WINE64_SECONDS a number and" \
+         "PW_WINE64_SCRIPT_CYCLES 1-9999" >&2; exit 2; }
 [[ $output_suffix =~ ^[A-Za-z0-9_-]*$ ]] || {
     echo "PW_OUTPUT_SUFFIX must contain only letters, digits, '_' or '-'" >&2
     exit 2
@@ -98,7 +102,8 @@ cc=(env PS5_PAYLOAD_SDK="$sdk" sh "$foundation/tooling/prospero-clang18")
 common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -I"$root/include" -I"$root/src" -I"$root/native"
         -I"$root/native/ps5log"
-        -DPW_WINE64_SCRIPT="$wine64_script" -DPW_WINE64_SECONDS="$wine64_seconds")
+        -DPW_WINE64_SCRIPT="$wine64_script" -DPW_WINE64_SECONDS="$wine64_seconds"
+        -DPW_WINE64_SCRIPT_CYCLES="$wine64_cycles")
 
 sources=(
     native/wine64_main.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c

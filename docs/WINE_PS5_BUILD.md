@@ -489,7 +489,8 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   Wine exits, the title restarts into the launcher. If the game has not
   closed after 5 s, the title restarts into the launcher anyway.
 - **Unattended validation.** `-DPW_WINE64_SCRIPT=1` makes the launcher open
-  the first game by itself, `PW_WINE64_SCRIPT_CYCLES` times.
+  the first game by itself, `PW_WINE64_SCRIPT_CYCLES` times (2 unless the
+  build sets it; each cycle is two sandbox escapes, the game and the launcher).
   `-DPW_WINE64_SECONDS=<s>` closes each game after that long; the default, 0,
   lets a game run until it is closed.
 
