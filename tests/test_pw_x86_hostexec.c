@@ -100,6 +100,23 @@ static void test_integer_forms(void)
     assert(run(&s, (const uint8_t[]){0x8f, 0x04, 0x24}, 3) == PW_OK);
     assert(!memcmp(guest + 0x8000, &(uint32_t){0x13572468}, 4));
 
+    /* 9C/9D: pushfd stores the guest flags with bit 1 and IF; the CPUID
+     * probe (pushfd; pushfd; btc [esp], 21; popfd; pushfd; pop eax) sees ID
+     * toggle, and popfd restores the arithmetic and DF bits it pushed. */
+    reset_state(&s);
+    s.eflags = 0x2 | 0x400 | 0x41;                          /* DF, ZF, CF */
+    assert(run(&s, (const uint8_t[]){0x9c}, 1) == PW_OK);
+    assert(s.gpr[4] == addr(0x7ffc) && s.eip == 0x1001);
+    assert(!memcmp(guest + 0x7ffc, &(uint32_t){0x643}, 4));
+    memcpy(guest + 0x7ffc, &(uint32_t){0x00200000u | 0x100 | 0x3000 | 0x880 | 0x2}, 4);
+    assert(run(&s, (const uint8_t[]){0x9d}, 1) == PW_OK);
+    assert(s.gpr[4] == addr(0x8000) && s.eip == 0x1002);
+    assert(s.eflags == (0x00200000u | 0x880 | 0x2));        /* ID, OF, SF; no TF or IOPL */
+    assert(run(&s, (const uint8_t[]){0x9c}, 1) == PW_OK);
+    assert(!memcmp(guest + 0x7ffc, &(uint32_t){0x00200a82u}, 4));
+    /* 66 9C (pushf, 16-bit) stays refused. */
+    assert(run(&s, (const uint8_t[]){0x66, 0x9c}, 2) == PW_ERR_UNSUPPORTED);
+
     /* 98: cwde, and CF from a memory ADD, merged into the guest flags. */
     reset_state(&s);
     s.gpr[0] = 0x0000ff80;

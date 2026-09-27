@@ -34,10 +34,10 @@ assert statuses[7] != 0, statuses
 assert statuses[8:14] == [0] * 6, statuses
 assert statuses[14] != 0 and statuses[15] != 0, statuses
 # The packed moves that require 16-byte alignment are accepted between
-# registers and refused with a memory operand, because the host executes the
-# emitted instruction and there is no classified guest alignment fault yet.
+# registers and with a memory operand: the block checks the address first and
+# a misaligned one is the guest's own access violation.
 assert statuses[16:20] == [0] * 4, statuses
-assert statuses[20:24] == [-5] * 4, statuses
+assert statuses[20:24] == [0] * 4, statuses
 # XCHG: the memory form Wine's heap code uses to take an entry off a free list
 # is translated, with or without the redundant LOCK prefix; the register form
 # has no memory operand to exchange and the byte and 16-bit forms are not

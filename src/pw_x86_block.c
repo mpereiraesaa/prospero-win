@@ -40,6 +40,25 @@ static void require_condition(Emitter *e, uint8_t condition)
 {
     byte(e,condition); byte(e,6); byte(e,0xb8); word(e,0xffffffffu); byte(e,0xc3);
 }
+/* movaps and movdqa fault on an address that is not 16-byte aligned. With
+ * the guarded host pointer in rax, a misaligned one stops the block as the
+ * guest's access violation at 0xffffffff, which is how Windows reports the
+ * CPU's #GP, before the host instruction could fault. */
+static void require_aligned16(Emitter *e)
+{
+    byte(e,0xa8); byte(e,0x0f);                             /* test al, 15 */
+    byte(e,0x74); byte(e,36);                               /* jz past the fault */
+    byte(e,0xc7); byte(e,0x87); word(e,(uint32_t)offsetof(PwX86State,fault_address));
+    word(e,0xffffffffu);
+    byte(e,0xc7); byte(e,0x87); word(e,(uint32_t)offsetof(PwX86State,fault_width)); word(e,16);
+    byte(e,0xc7); byte(e,0x87); word(e,(uint32_t)offsetof(PwX86State,fault_write)); word(e,0);
+    byte(e,0xb8); word(e,0xffffffffu); byte(e,0xc3);
+}
+static int sse_aligned_move(uint8_t prefix, uint8_t opcode)
+{
+    return (prefix == 0x66u && (opcode == 0x6fu || opcode == 0x7fu)) ||
+           (prefix == 0u && (opcode == 0x28u || opcode == 0x29u));
+}
 static void stack_bounds(Emitter *e)
 {
     byte(e,0x3b); byte(e,0x47); byte(e,offsetof(PwX86State,stack_low));
@@ -1294,23 +1313,11 @@ static int decode_sse(uint8_t prefix, size_t prefix_bytes,
         *mem_bytes < 16u && operand->mod == 3)
         return PW_ERR_UNSUPPORTED;
     /*
-     * The two packed moves that *require* 16-byte alignment - movaps/movapd
-     * (0f 28/29) and movdqa (66 0f 6f/7f) - stay refused with a memory
-     * operand until the dispatcher has a classified alignment fault. The host
-     * executes the emitted instruction, so a misaligned guest address would
-     * otherwise become an uncontrolled host fault instead of the guest's own
-     * exception. Their register forms touch no memory and are unambiguous, so
-     * those stay accepted; the unaligned twins (movups, movdqu) keep their
-     * memory forms.
+     * The two packed moves that *require* 16-byte alignment - movaps (0f
+     * 28/29) and movdqa (66 0f 6f/7f) - keep their memory forms because the
+     * emitter checks the address first (sse_aligned_move): a misaligned one
+     * is the guest's own fault, as the CPU's #GP is, never a host fault.
      */
-    if (operand->mod != 3) {
-        const int aligned_move =
-            (prefix == 0x66u && (opcode == 0x6fu || opcode == 0x7fu)) ||
-            (prefix == 0u && (opcode == 0x28u || opcode == 0x29u));
-
-        if (aligned_move)
-            return PW_ERR_UNSUPPORTED;
-    }
     /*
      * PMOVMSKB (66 0f d7) and PEXTRW (66 0f c5) have no memory form: their
      * r/m operand is an XMM register, so a ModRM that names memory is not an
@@ -1545,7 +1552,12 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
         } else if(op==0xc1 || op==0xd1 || op==0xd3) {
             int result=decode_operand(source+cursor+1,bytes-cursor-1,&operand);
             if(result!=PW_OK)DECODE_FAIL(result);
-            if(operand.reg!=4 && operand.reg!=5 && operand.reg!=7)DECODE_FAIL(PW_ERR_UNSUPPORTED);
+            /* SHL, SHR and SAR, and ROL/ROR, which write only CF (and OF
+             * for a count of one) and leave SF, ZF, AF and PF alone. */
+            const unsigned rotate=operand.reg<=1;
+            const uint32_t one=rotate?0x801:0x8c5, many=rotate?0x001:0x0c5;
+            if(operand.reg!=0 && operand.reg!=1 && operand.reg!=4 && operand.reg!=5 &&
+               operand.reg!=7)DECODE_FAIL(PW_ERR_UNSUPPORTED);
             length=1+operand.bytes+(op==0xc1);
             can_fault=(operand.mod!=3);
             /* A masked zero shift count preserves every flag.  Immediate
@@ -1553,10 +1565,10 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
              * defining and consuming the deterministic flag subset. */
             if(op==0xc1 && length<=bytes-cursor) {
                 unsigned count=source[cursor+length-1]&31;
-                flags_def=count==0?0:count==1?0x8c5:0x0c5;
+                flags_def=count==0?0:count==1?one:many;
             } else {
-                flags_def=0x8c5;
-                if(op==0xd3)flags_use=0x8c5;
+                flags_def=one;
+                if(op==0xd3)flags_use=one;
             }
         } else if(op==0x69 || op==0x6b) {
             int result=decode_operand(source+cursor+1,bytes-cursor-1,&operand);
@@ -2399,12 +2411,14 @@ analyze_and_emit:
             /* 16-bit shifts mask the count to four bits, 32-bit to five. */
             byte(&e,0x83);byte(&e,0xe1);byte(&e,shift_word?15:31);
             /* esi selects only defined flags: none for zero, OF only for one.
-             * Preserve undefined AF and multi-bit OF deterministically. */
-            byte(&e,0xbe);word(&e,0xc5);
+             * Preserve undefined AF and multi-bit OF deterministically. A
+             * rotate (ROL/ROR, 32-bit only) defines just CF, and OF for one. */
+            const unsigned rotate=!shift_word && operand.reg<=1;
+            byte(&e,0xbe);word(&e,rotate?0x001:0xc5);
             byte(&e,0xba);word(&e,0);
             byte(&e,0x85);byte(&e,0xc9);
             byte(&e,0x0f);byte(&e,0x44);byte(&e,0xf2);
-            byte(&e,0xba);word(&e,0x8c5);
+            byte(&e,0xba);word(&e,rotate?0x801:0x8c5);
             byte(&e,0x83);byte(&e,0xf9);byte(&e,1);
             byte(&e,0x0f);byte(&e,0x44);byte(&e,0xf2);
             if(shift_word)byte(&e,0x66);
@@ -2780,6 +2794,7 @@ analyze_and_emit:
                 } else {
                     effective_address(&e,&operand,&block->exit_contract);
                     memory_address_width(&e,0,(unsigned)sse_mem_bytes);
+                    if(sse_aligned_move(sse_prefix,sse_opcode))require_aligned16(&e);
                     if(sse_prefix)byte(&e,sse_prefix);
                     byte(&e,0x0f);byte(&e,sse_opcode);byte(&e,0x00);
                 }
@@ -2845,6 +2860,7 @@ analyze_and_emit:
                 } else {
                     effective_address(&e,&operand,&block->exit_contract);
                     memory_address_width(&e,2,(unsigned)sse_mem_bytes);
+                    if(sse_aligned_move(sse_prefix,sse_opcode))require_aligned16(&e);
                     if(sse_prefix)byte(&e,sse_prefix);
                     byte(&e,0x0f);byte(&e,sse_opcode);byte(&e,0x00);
                 }

@@ -593,6 +593,43 @@ static void shift_tests(void)
     }
 }
 /*
+ * ROL/ROR r/m32 against the host instruction: imm8, 1 and CL forms, register
+ * and memory, every count 0..255, under all four engine modes. Only CF is
+ * defined, and OF for a count of one; SF, ZF, AF and PF are left alone.
+ */
+static void rotate_tests(void)
+{
+    const uint32_t values[]={0,1,0x80000000,0x7fffffff,0xffffffff,0x89abcdef};
+    for(unsigned right=0;right<2;right++)for(unsigned form=0;form<3;form++)
+    for(unsigned memory=0;memory<2;memory++)for(unsigned mode=0;mode<4;mode++)
+    for(unsigned count=0;count<256;count+=(mode?5:1))for(unsigned v=0;v<6;v++) {
+        unsigned actual=form==1?1:count,masked=actual&31;
+        uint32_t expected=values[v];unsigned long flags;
+        if(right)__asm__ volatile("rorl %%cl,%0; pushfq; popq %1":"+a"(expected),"=r"(flags):"c"(actual):"cc");
+        else __asm__ volatile("roll %%cl,%0; pushfq; popq %1":"+a"(expected),"=r"(flags):"c"(actual):"cc");
+        state.gpr[0]=values[v];state.gpr[1]=count;state.gpr[2]=state.stack_high-4;state.eflags=0xad7;
+        memcpy((void *)(uintptr_t)state.gpr[2],&values[v],4);
+        const uint8_t op[]={(uint8_t)(form==0?0xc1:form==1?0xd1:0xd3),(uint8_t)((memory?2:0xc0)|(right<<3)),(uint8_t)count};
+        assert(run_mode(op,form==0?3:2,0xd180,mode&1,mode>>1)==0);
+        uint32_t result=state.gpr[0];if(memory)memcpy(&result,(void *)(uintptr_t)state.gpr[2],4);
+        unsigned mask=masked?(masked==1?0x801:0x001):0;
+        assert(result==expected && state.eflags==((0xad7&~mask)|((unsigned)flags&mask)));
+        assert(state.gpr[1]==count && state.gpr[2]==state.stack_high-4);
+    }
+    /* A rotate between a producer and its consumer keeps the producer's ZF:
+     * xor eax, eax; ror ecx, 16; setz dl. */
+    for(unsigned mode=0;mode<4;mode++) {
+        state.gpr[1]=0x12345678;state.gpr[2]=0;state.eflags=0x202;
+        const uint8_t keep_zf[]={0x31,0xc0,0xc1,0xc9,16,0x0f,0x94,0xc2};
+        assert(run_mode(keep_zf,sizeof(keep_zf),0xd1c0,mode&1,mode>>1)==0);
+        assert(state.gpr[1]==0x56781234 && (state.gpr[2]&0xff)==1);
+    }
+    /* RCL/RCR (/2, /3) still stop the block at the instruction. */
+    PwX86Block block;uint8_t scratch[512];
+    const uint8_t rcl[]={0xc1,0xd0,4};
+    assert(pw_x86_translate(rcl,sizeof(rcl),0xd1e0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
+}
+/*
  * SHLD/SHRD against the host instruction: every count 0..255 (masked to five
  * bits), register and memory destinations, imm8 and CL forms, under all four
  * engine modes. Zero preserves every flag and only a count of one defines OF;
@@ -1436,17 +1473,42 @@ static void sse_and_scan_tests(void)
     const uint8_t movups_oob[]={0x0f,0x11,0x00};
     const uint8_t lea_cs_reg[]={0x2e,0x8d,0xc0};
     const uint8_t nop_bad[]={0x0f,0x1f,0xc8};
-    /* The packed moves that require 16-byte alignment: register forms are
-     * fine, memory forms are refused until a classified guest alignment fault
-     * exists, because the host executes the emitted instruction. */
+    /* The packed moves that require 16-byte alignment (movaps 0f 28/29,
+     * movdqa 66 0f 6f/7f): an aligned memory operand moves the 16 bytes in
+     * every mode, and a misaligned one is the guest's access violation at
+     * 0xffffffff with memory, XMM and the instruction pointer untouched. */
     const uint8_t movaps_reg[]={0x0f,0x28,0xc3};
-    const uint8_t movaps_mem[]={0x0f,0x28,0x10};
-    const uint8_t movdqa_mem[]={0x66,0x0f,0x6f,0x10};
-    const uint8_t movdqa_store_mem[]={0x66,0x0f,0x7f,0x10};
     assert(pw_x86_translate(movaps_reg,sizeof(movaps_reg),0,scratch,sizeof(scratch),&block)==PW_OK);
-    assert(pw_x86_translate(movaps_mem,sizeof(movaps_mem),0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
-    assert(pw_x86_translate(movdqa_mem,sizeof(movdqa_mem),0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
-    assert(pw_x86_translate(movdqa_store_mem,sizeof(movdqa_store_mem),0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
+    {
+        const uint8_t aligned_moves[][4]={{0x0f,0x28,0x10},{0x0f,0x29,0x10},
+                                          {0x66,0x0f,0x6f,0x10},{0x66,0x0f,0x7f,0x10}};
+        const size_t lengths[]={3,3,4,4};
+        uint8_t pattern[16],before[32];
+        for(unsigned i=0;i<16;i++)pattern[i]=(uint8_t)(0xa0+i);
+        for(unsigned form=0;form<4;form++)for(unsigned mode=0;mode<4;mode++)
+        for(unsigned misaligned=0;misaligned<2;misaligned++) {
+            const int store=form==1||form==3;
+            const uint32_t base=(state.stack_high-64)&~15u,address=base+(misaligned?4:0);
+            uint8_t *memory=(uint8_t *)(uintptr_t)base;
+            memset(memory,0x11,32);
+            if(!store)memcpy(memory+(misaligned?4:0),pattern,16);
+            memset(state.fp.xmm,0x22,sizeof(state.fp.xmm));
+            if(store)memcpy(state.fp.xmm[2],pattern,16);
+            memcpy(before,memory,32);
+            state.gpr[0]=address;state.eflags=0xad7;state.fault_address=0;
+            const int status=run_mode(aligned_moves[form],lengths[form],0xd600,mode&1,mode>>1);
+            if(misaligned) {
+                assert(status==-1 && state.eip==0xd600 && state.fault_address==0xffffffffu);
+                assert(!memcmp(memory,before,32) && state.eflags==0xad7);
+                uint8_t fill[16];memset(fill,0x22,16);
+                if(!store)assert(!memcmp(state.fp.xmm[2],fill,16));
+            } else {
+                assert(status==0 && state.eflags==0xad7);
+                assert(!memcmp(store?memory:state.fp.xmm[2],pattern,16));
+                if(store)assert(memory[16]==0x11);
+            }
+        }
+    }
     assert(pw_x86_translate(lea_cs_reg,sizeof(lea_cs_reg),0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
     assert(pw_x86_translate(nop_bad,sizeof(nop_bad),0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
     assert(pw_x86_translate(mmx_movq,sizeof(mmx_movq),0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
@@ -2222,6 +2284,7 @@ int main(int argc, char **argv)
     ret_cleanup_tests();
     extension_tests();
     shift_tests();
+    rotate_tests();
     double_shift_tests();
     /* Enter an actual translated guest callback, then restore its caller. */
     state.gpr[4]=state.stack_high-16;state.eip=0xf0000010;

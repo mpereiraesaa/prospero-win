@@ -480,6 +480,31 @@ static int stack_memory_form(PwX86State *s, const uint8_t *src, size_t n)
     return PW_OK;
 }
 
+/* PUSHFD (9C) and POPFD (9D) use the guest stack implicitly too. PUSHFD
+ * stores the guest's arithmetic, DF, AC and ID bits with the always-set
+ * bit 1 and IF; POPFD takes back only those bits, so the ID toggle that
+ * CPUID detection performs (pushfd; btc [esp], 21; popfd) reads back as
+ * supported. TF, IOPL, NT, RF and VM stay clear; the 16-bit forms are
+ * refused. */
+enum { POPF_BITS = 0x00240cd5u, PUSHF_FIXED = 0x00000202u };
+static int flags_stack_form(PwX86State *s, const uint8_t *src, size_t n)
+{
+    uint32_t value;
+
+    if (!n || (src[0] != 0x9c && src[0] != 0x9d)) return PW_ERR_UNSUPPORTED;
+    if (src[0] == 0x9c) {
+        value = (s->eflags & POPF_BITS) | PUSHF_FIXED;
+        s->gpr[4] -= 4;
+        memcpy((void *)(uintptr_t)s->gpr[4], &value, 4);
+    } else {
+        memcpy(&value, (const void *)(uintptr_t)s->gpr[4], 4);
+        s->gpr[4] += 4;
+        s->eflags = (s->eflags & ~POPF_BITS) | (value & POPF_BITS);
+    }
+    s->eip += 1;
+    return PW_OK;
+}
+
 int pw_x86_hostexec_step(PwX86HostExec *h, PwX86State *s, const uint8_t *src, size_t n)
 {
     PwX86HostExecPlan plan;
@@ -490,7 +515,8 @@ int pw_x86_hostexec_step(PwX86HostExec *h, PwX86State *s, const uint8_t *src, si
 
     if (!h || !h->initialized || !s || !src) return PW_ERR_PRECONDITION;
     status = pw_x86_hostexec_plan(s, src, n, &plan);
-    if (status == PW_ERR_UNSUPPORTED && stack_memory_form(s, src, n) == PW_OK) {
+    if (status == PW_ERR_UNSUPPORTED &&
+        (stack_memory_form(s, src, n) == PW_OK || flags_stack_form(s, src, n) == PW_OK)) {
         h->executed++;
         return PW_OK;
     }
