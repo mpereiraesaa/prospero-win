@@ -93,7 +93,7 @@ $(eval $(call test_rule,test_pw_launcher_render,tests/test_pw_launcher_render.c 
 $(eval $(call test_rule,test_pw_gdi_abi,tests/test_pw_gdi_abi.c src/pw_win32.c src/pw_user32.c src/pw_gdi.c src/pw_crt_format.c src/pw_registry.c src/pw_guest_heap.c src/pw_guest_args.c src/pw_x87.c src/pw_guest_fp.c src/pw_guest_call.c src/pw_module_name.c src/pw_vm.c src/pw_vm_posix.c,))
 $(eval $(call test_rule,test_pw_crt_format,tests/test_pw_crt_format.c src/pw_crt_format.c,))
 $(eval $(call test_rule,test_pw_user32,tests/test_pw_user32.c src/pw_user32.c,))
-$(eval $(call test_rule,test_pw_pad,tests/test_pw_pad.c src/pw_pad.c src/pw_user32.c,))
+$(eval $(call test_rule,test_pw_pad,tests/test_pw_pad.c src/pw_pad.c,))
 $(eval $(call test_rule,test_pe_layout,tests/test_pe_layout.c src/pe_image.c src/pe_layout.c src/pw_result.c,))
 $(eval $(call test_rule,test_pe_reloc,tests/test_pe_reloc.c src/pe_image.c src/pe_reloc.c src/pw_result.c,))
 $(eval $(call test_rule,test_pe_import,tests/test_pe_import.c src/pe_image.c src/pe_import.c src/pw_result.c,))
@@ -149,7 +149,7 @@ $(eval $(call test_rule,test_pw_audio_mix,tests/test_pw_audio_mix.c src/pw_audio
 $(eval $(call test_rule,test_pw_agc_submit_lifecycle,tests/test_pw_agc_submit_lifecycle.c native/pw_agc_submit_lifecycle.c,))
 $(eval $(call test_rule,test_pw_videoout_layout,tests/test_pw_videoout_layout.c,))
 $(eval $(call test_rule,test_pw_videoout_tile,tests/test_pw_videoout_tile.c src/pw_present.c,))
-$(eval $(call test_rule,test_pw_pad_ps5,tests/test_pw_pad_ps5.c native/pw_pad_ps5.c src/pw_pad.c src/pw_user32.c,-DPW_PAD_PS5_HOST_TEST))
+$(eval $(call test_rule,test_pw_pad_ps5,tests/test_pw_pad_ps5.c native/pw_pad_ps5.c src/pw_pad.c,-DPW_PAD_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_data_mount,tests/test_pw_data_mount.c native/pw_data_mount.c,))
 PW_DATA_MOUNT_TEST_FLAGS := -DPW_DATA_MOUNT_REQUEST_PATH='"/tmp/pw_dm_req"' -DPW_DATA_MOUNT_PATH='"/tmp/pw_dm_data"' -DPW_DATA_MOUNT_WAIT_MS=200 -DPW_DATA_MOUNT_POLL_MS=50
 $(eval $(call test_rule,test_pw_data_mount_native,tests/test_pw_data_mount_native.c native/pw_data_mount.c,$(PW_DATA_MOUNT_TEST_FLAGS)))

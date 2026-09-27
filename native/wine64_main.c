@@ -399,7 +399,7 @@ static void run_launcher(int library_status)
         }
     }
     PS5LOG_LOG("PW_WINE64 launcher chose=%s", sync ? "sync" : catalog[chosen].id);
-    if (pad_status == PW_OK) (void)pw_pad_ps5_close(&pad, NULL, 0);
+    if (pad_status == PW_OK) (void)pw_pad_ps5_close(&pad);
     if (video_status == PW_OK) (void)pw_videoout_ps5_close(&video);
     restart_title(sync ? NULL : &catalog[chosen], sync, launch.cycle, "launcher");
     ps5log_close("wine64-launch-failed");

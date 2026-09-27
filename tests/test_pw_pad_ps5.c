@@ -25,28 +25,24 @@ static const PwPadKeyMap map[]={{L1,'Z',0,0,"left-flipper"}};
 
 int main(void)
 {
-    PwUser32 user;PwUser32Message messages[1];PwUser32Window windows[1];PwPadPs5 pad;
-    assert(pw_user32_init(&user,messages,1,windows,1)==PW_OK);
-    windows[0]=(PwUser32Window){.handle=0x10000,.wndproc=1,.module=1,.used=1};
+    PwPadPs5 pad;
     assert(pw_pad_ps5_open(&pad,&ops,map,1)==PW_OK && pad.opened && pad.pad_handle==7);
     assert(pad.left_stick.x==0x80 && pad.right_stick.y==0x80 && !pad.l2 && !pad.r2);
     assert(init_calls==1&&foreground_calls==1&&pad_init_calls==1&&open_calls==1);
     fixture[0]=(PwPadPs5Data){.buttons=L1|CREATE,.connected=1,.timestamp=1000,.connected_count=1};
-    fixture_count=1;assert(pw_pad_ps5_poll(&pad,&user,0x10000)==PW_OK);
-    assert(user.queue_count==1&&user.queue[0].message==0x100&&pad.connected_samples==1 &&
-           (pad.core.pressed_edges&CREATE));
-    fixture_count=0;assert(pw_pad_ps5_poll(&pad,&user,0x10000)==PW_OK &&
+    fixture_count=1;assert(pw_pad_ps5_read(&pad)==PW_OK);
+    assert(pad.connected_samples==1 && pad.core.pressed_edges==(L1|CREATE));
+    fixture_count=0;assert(pw_pad_ps5_read(&pad)==PW_OK &&
                            !pad.core.pressed_edges && !pad.core.released_edges);
     fixture_count=1;fixture[0].buttons=0x80000000u|L1;fixture[0].timestamp=2000;
-    assert(pw_pad_ps5_poll(&pad,&user,0x10000)==PW_OK);
-    assert(user.queue_count==2&&user.queue[1].message==0x101&&pad.intercepted_samples==1);
-    read_rc=-9;assert(pw_pad_ps5_poll(&pad,&user,0x10000)==PW_OK&&pad.read_errors==1);
-    /* The native-UI read reports edges without posting Win32 keys. */
-    read_rc=0;unsigned queued=user.queue_count;
+    assert(pw_pad_ps5_read(&pad)==PW_OK);
+    assert(pad.intercepted_samples==1 && pad.core.released_edges==(L1|CREATE) &&
+           !pad.core.previous_buttons);
+    read_rc=-9;assert(pw_pad_ps5_read(&pad)==PW_OK&&pad.read_errors==1);
+    read_rc=0;
     fixture[0]=(PwPadPs5Data){.buttons=CREATE,.connected=1,.timestamp=3000,.connected_count=1};
     fixture_count=1;assert(pw_pad_ps5_read(&pad)==PW_OK);
-    assert(pad.core.pressed_edges==CREATE && pad.core.previous_buttons==CREATE &&
-           user.queue_count==queued);
+    assert(pad.core.pressed_edges==CREATE && pad.core.previous_buttons==CREATE);
     /* Sticks and triggers follow the newest connected sample... */
     fixture[0]=(PwPadPs5Data){.buttons=CREATE,.left_stick={10,250},.right_stick={200,40},
                               .l2=30,.r2=255,.connected=1,.timestamp=3100,.connected_count=1};
@@ -77,13 +73,14 @@ int main(void)
     assert(pw_pad_ps5_vibrate(&pad,1,1)==PW_ERR_UNSUPPORTED && vibration_calls==2);
     pad.ops.pad_set_vibration=pad_set_vibration;
     assert(pw_pad_ps5_vibrate(NULL,1,1)==PW_ERR_PRECONDITION);
-    assert(pw_pad_ps5_close(&pad,&user,0x10000)==PW_OK);
+    assert(pw_pad_ps5_close(&pad)==PW_OK);
     assert(pw_pad_ps5_vibrate(&pad,1,1)==PW_ERR_PRECONDITION && vibration_calls==2);
     assert(close_calls==1&&terminate_calls==1&&!pad.opened&&!pad.owns_user_service);
 
     user_init_rc=1;read_rc=0;fixture_count=0;
     assert(pw_pad_ps5_open(&pad,&ops,map,1)==PW_OK&&!pad.owns_user_service);
-    assert(pw_pad_ps5_close(&pad,&user,0x10000)==PW_OK && terminate_calls==1);
+    assert(pw_pad_ps5_close(&pad)==PW_OK && terminate_calls==1);
+    assert(pw_pad_ps5_close(NULL)==PW_ERR_PRECONDITION);
     assert(pw_pad_ps5_read(&pad)==PW_ERR_PRECONDITION);
     return 0;
 }

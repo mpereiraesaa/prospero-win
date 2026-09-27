@@ -44,10 +44,9 @@ typedef struct PwPadPs5 {
 
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *);
 int pw_pad_ps5_open(PwPadPs5 *,const PwPadPs5Ops *,const PwPadKeyMap *,size_t);
-int pw_pad_ps5_poll(PwPadPs5 *,PwUser32 *,uint32_t window);
-/* The same read for a native UI: held buttons and edges, no Win32 keys. */
+/* Held buttons, edges, sticks and triggers from the pending samples. */
 int pw_pad_ps5_read(PwPadPs5 *);
-int pw_pad_ps5_close(PwPadPs5 *,PwUser32 *,uint32_t window);
+int pw_pad_ps5_close(PwPadPs5 *);
 /* Run the motors: large is the low-frequency one (XInput's left), small
  * the high-frequency one, 0 stops. PW_OK, PW_ERR_UNSUPPORTED with no
  * vibration op, PW_ERR_PRECONDITION when the pad is not open, PW_ERR_STATE

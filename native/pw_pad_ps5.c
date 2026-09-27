@@ -106,15 +106,6 @@ static int read_batch(PwPadPs5 *pad,PwPadSample samples[PW_PAD_PS5_BATCH])
     return count;
 }
 
-int pw_pad_ps5_poll(PwPadPs5 *pad,PwUser32 *user,uint32_t window)
-{
-    if(!pad || !pad->opened || !user || !window)return PW_ERR_PRECONDITION;
-    PwPadSample samples[PW_PAD_PS5_BATCH];int count=read_batch(pad,samples);
-    if(count<0)return pw_pad_neutralize(&pad->core,user,window,0);
-    if(!count)return PW_OK;
-    return pw_pad_process(&pad->core,user,window,samples,(size_t)count);
-}
-
 int pw_pad_ps5_read(PwPadPs5 *pad)
 {
     if(!pad || !pad->opened)return PW_ERR_PRECONDITION;
@@ -127,11 +118,10 @@ int pw_pad_ps5_read(PwPadPs5 *pad)
     return pw_pad_track(&pad->core,samples,(size_t)count);
 }
 
-int pw_pad_ps5_close(PwPadPs5 *pad,PwUser32 *user,uint32_t window)
+int pw_pad_ps5_close(PwPadPs5 *pad)
 {
     if(!pad)return PW_ERR_PRECONDITION;
     int status=PW_OK;
-    if(pad->opened && user && window)status=pw_pad_neutralize(&pad->core,user,window,0);
     if(pad->opened) {
         pad->close_rc=pad->ops.pad_close(pad->pad_handle);pad->opened=0;pad->pad_handle=-1;
         if(pad->close_rc<0)status=PW_ERR_STATE;

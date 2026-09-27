@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #ifndef PW_PAD_H
 #define PW_PAD_H
-#include "pw_user32.h"
+#include "../include/prospero_win.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -20,7 +20,7 @@ typedef struct PwPadKeyMap {
 } PwPadKeyMap;
 
 typedef struct PwPadStats {
-    uint64_t batches,samples,events,presses,releases,neutralizations;
+    uint64_t batches,samples;
     uint32_t max_batch;
 } PwPadStats;
 
@@ -28,10 +28,8 @@ typedef struct PwPad {
     const PwPadKeyMap *map;
     size_t map_count;
     uint32_t previous_buttons;
-    /* Raw edges observed in the most recent process batch.  These include
-     * buttons with no Win32-key binding so a title adapter can implement
-     * lifecycle actions (for example an orderly WM_QUIT) without teaching
-     * the reusable mapper title-specific policy. */
+    /* Raw edges observed in the most recent batch, bound or not; the
+     * title maps them (a game's bindings, the launcher's selection). */
     uint32_t pressed_edges,released_edges;
     uint8_t generation;
     unsigned generation_valid,connected;
@@ -39,13 +37,9 @@ typedef struct PwPad {
 } PwPad;
 
 int pw_pad_init(PwPad *,const PwPadKeyMap *,size_t);
-int pw_pad_process(PwPad *,PwUser32 *,uint32_t window,
-                   const PwPadSample *,size_t);
-int pw_pad_neutralize(PwPad *,PwUser32 *,uint32_t window,uint64_t timestamp_us);
-/* Consumes samples for a native UI with no Win32 destination: updates the
- * held buttons and the raw edges only.  Disconnection, interception and a
- * generation change release every button, exactly as process does, so a
- * later process call on the same pad never sees a phantom press. */
+/* Consumes samples: updates the held buttons and the raw edges.
+ * Disconnection, interception and a generation change release every
+ * button, so a later batch never sees a phantom press. */
 int pw_pad_track(PwPad *,const PwPadSample *,size_t);
 
 #endif
