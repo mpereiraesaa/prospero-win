@@ -1,0 +1,251 @@
+From ed2bbc52b44ecec3c5ddfd2fce37f6943dbb3112 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 09:57:02 +0200
+Subject: [PATCH] win32u: Draw the application's cursor in the PS5 user driver.
+
+A PS5 title has no display server to draw the pointer, and the driver
+did not implement SetCursor, so the cursor an application set was never
+shown. SetCursor now converts the cursor (color with alpha or mask, or
+monochrome) to a straight-alpha ARGB image with its hotspot, and each
+presented frame is a copy of the screen with the cursor blended at the
+pointer; moving the pointer presents again. A hidden cursor (SetCursor
+with no cursor) is not drawn. The conversion follows winewayland.drv.
+---
+ dlls/win32u/ps5drv.c | 165 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 162 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
+index 9519b7f..bc12bbd 100644
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -5,7 +5,9 @@
+  * server and no driver dll.  This driver reports one virtual monitor,
+  * gives each window a 32-bpp surface, composes the surfaces of visible
+  * top-level windows into one screen buffer and hands every flushed frame
+- * to pw_wine_present(), the title's single presentation sink.  Input the
++ * to pw_wine_present(), the title's single presentation sink.  With no
++ * display server to draw the pointer, the cursor the application sets is
++ * drawn over a copy of the screen as each frame is presented.  Input the
+  * title derives from the DualSense arrives through pw_wine_next_input()
+  * and is injected as hardware input.  Both entry points are found with
+  * dlsym at load time: on the console they live in ntdll.prx, on a host
+@@ -76,6 +78,11 @@ static UINT32 *screen;
+ static struct ps5_window windows[PS5_MAX_WINDOWS];
+ static UINT window_count;
+ static POINT cursor;
++/* The cursor image, straight-alpha ARGB, NULL when hidden; frame is the
++ * screen with the cursor drawn over it, what the title is given. */
++static UINT32 *cursor_image, *frame;
++static UINT cursor_width, cursor_height;
++static POINT cursor_hotspot;
+ static BOOL display_published;
+ static DWORD input_threads[PS5_MAX_WINDOWS];
+ static UINT input_thread_count;
+@@ -98,10 +105,39 @@ static void clear_screen_rect( const RECT *rect )
+         memset( screen + y * screen_width + clip.left, 0, (clip.right - clip.left) * 4 );
+ }
+ 
++/* screen_lock held: blend the cursor into frame at the pointer */
++static void draw_cursor(void)
++{
++    INT left = cursor.x - cursor_hotspot.x, top = cursor.y - cursor_hotspot.y, x, y;
++
++    for (y = max( top, 0 ); y < min( top + (INT)cursor_height, (INT)screen_height ); y++)
++    {
++        const UINT32 *src = cursor_image + (y - top) * cursor_width;
++        UINT32 *dst = frame + y * screen_width;
++        for (x = max( left, 0 ); x < min( left + (INT)cursor_width, (INT)screen_width ); x++)
++        {
++            UINT32 s = src[x - left], d = dst[x], a = s >> 24, out = 0;
++            UINT shift;
++            if (!a) continue;
++            for (shift = 0; shift < 24; shift += 8)
++                out |= ((((s >> shift) & 0xff) * a + ((d >> shift) & 0xff) * (255 - a)) / 255) << shift;
++            dst[x] = out | 0xff000000;
++        }
++    }
++}
++
+ /* screen_lock held */
+ static void present_screen(void)
+ {
+-    if (present_frame) present_frame( screen, screen_width, screen_height, screen_width * 4 );
++    if (!present_frame) return;
++    if (cursor_image && frame)
++    {
++        memcpy( frame, screen, (size_t)screen_width * screen_height * 4 );
++        draw_cursor();
++        present_frame( frame, screen_width, screen_height, screen_width * 4 );
++        return;
++    }
++    present_frame( screen, screen_width, screen_height, screen_width * 4 );
+ }
+ 
+ /***********************************************************************
+@@ -382,8 +418,11 @@ static BOOL ps5_ProcessEvents( DWORD mask )
+             NtUserSendHardwareInput( hwnd, 0, &input, 0 );
+             break;
+         case 2:
++            pthread_mutex_lock( &screen_lock );
+             cursor.x = min( max( event.x, 0 ), (INT)screen_width - 1 );
+             cursor.y = min( max( event.y, 0 ), (INT)screen_height - 1 );
++            if (cursor_image) present_screen();     /* the pointer moved on screen */
++            pthread_mutex_unlock( &screen_lock );
+             /* hardware input from a driver is absolute in screen pixels */
+             send_mouse( hwnd, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, cursor.x, cursor.y );
+             break;
+@@ -395,6 +434,121 @@ static BOOL ps5_ProcessEvents( DWORD mask )
+     return processed != 0;
+ }
+ 
++/***********************************************************************
++ *           cursor
++ */
++/* A monochrome cursor: the mask bitmap holds the AND mask over the XOR mask.
++ * Invert pixels cannot be drawn over a copy of the screen: they are black.
++ * Adapted from winewayland.drv, itself from wineandroid.drv. */
++static UINT32 *mono_cursor( HBITMAP bitmap, UINT *width, UINT *height )
++{
++    BITMAP bm;
++    BYTE *mask = NULL;
++    UINT32 *image = NULL;
++    UINT stride, i, j;
++
++    if (!NtGdiExtGetObjectW( bitmap, sizeof(bm), &bm ) || bm.bmHeight < 2) return NULL;
++    stride = ((bm.bmWidth + 15) >> 3) & ~1;
++    if (!(mask = malloc( stride * bm.bmHeight )) ||
++        !NtGdiGetBitmapBits( bitmap, stride * bm.bmHeight, mask ) ||
++        !(image = malloc( bm.bmWidth * (bm.bmHeight / 2) * 4 )))
++        goto done;
++    *width = bm.bmWidth;
++    *height = bm.bmHeight / 2;
++    for (i = 0; i < *height; i++)
++        for (j = 0; j < *width; j++)
++        {
++            int and = (mask[i * stride + j / 8] << (j % 8)) & 0x80;
++            int xor = (mask[(i + *height) * stride + j / 8] << (j % 8)) & 0x80;
++            image[i * *width + j] = and && !xor ? 0 : xor && !and ? 0xffffffff : 0xff000000;
++        }
++done:
++    free( mask );
++    return image;
++}
++
++/* A color cursor, its alpha from the bitmap or else from the mask. */
++static UINT32 *color_cursor( HDC hdc, HBITMAP color, HBITMAP mask, UINT *width, UINT *height )
++{
++    char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
++    BITMAPINFO *info = (BITMAPINFO *)buffer;
++    BYTE *mask_bits = NULL;
++    UINT32 *image = NULL;
++    BOOL has_alpha = FALSE;
++    BITMAP bm;
++    UINT i, j;
++
++    if (!NtGdiExtGetObjectW( color, sizeof(bm), &bm )) return NULL;
++    memset( info, 0, sizeof(info->bmiHeader) );
++    info->bmiHeader.biSize = sizeof(info->bmiHeader);
++    info->bmiHeader.biWidth = bm.bmWidth;
++    info->bmiHeader.biHeight = -bm.bmHeight;
++    info->bmiHeader.biPlanes = 1;
++    info->bmiHeader.biBitCount = 32;
++    info->bmiHeader.biCompression = BI_RGB;
++    info->bmiHeader.biSizeImage = bm.bmWidth * bm.bmHeight * 4;
++    if (!(image = malloc( info->bmiHeader.biSizeImage )) ||
++        !NtGdiGetDIBitsInternal( hdc, color, 0, bm.bmHeight, image, info, DIB_RGB_COLORS, 0, 0 ))
++        goto failed;
++    for (i = 0; i < (UINT)(bm.bmWidth * bm.bmHeight) && !has_alpha; i++)
++        has_alpha = (image[i] & 0xff000000) != 0;
++    if (!has_alpha)
++    {
++        UINT width_bytes = (bm.bmWidth + 31) / 32 * 4;
++        info->bmiHeader.biBitCount = 1;
++        info->bmiHeader.biSizeImage = width_bytes * bm.bmHeight;
++        if (!(mask_bits = malloc( info->bmiHeader.biSizeImage )) ||
++            !NtGdiGetDIBitsInternal( hdc, mask, 0, bm.bmHeight, mask_bits, info, DIB_RGB_COLORS, 0, 0 ))
++            goto failed;
++        for (i = 0; i < (UINT)bm.bmHeight; i++)
++            for (j = 0; j < (UINT)bm.bmWidth; j++)
++                if (!((mask_bits[i * width_bytes + j / 8] << (j % 8)) & 0x80))
++                    image[i * bm.bmWidth + j] |= 0xff000000;
++                else
++                    image[i * bm.bmWidth + j] = 0;
++        free( mask_bits );
++    }
++    *width = bm.bmWidth;
++    *height = bm.bmHeight;
++    return image;
++failed:
++    free( mask_bits );
++    free( image );
++    return NULL;
++}
++
++static void ps5_SetCursor( HWND hwnd, HCURSOR handle )
++{
++    UINT32 *image = NULL, *old;
++    UINT width = 0, height = 0;
++    ICONINFO info;
++
++    if (handle && NtUserGetIconInfo( handle, &info, NULL, NULL, NULL, 0 ))
++    {
++        if (info.hbmColor)
++        {
++            HDC hdc = NtGdiCreateCompatibleDC( 0 );
++            image = color_cursor( hdc, info.hbmColor, info.hbmMask, &width, &height );
++            NtGdiDeleteObjectApp( hdc );
++            NtGdiDeleteObjectApp( info.hbmColor );
++        }
++        else image = mono_cursor( info.hbmMask, &width, &height );
++        if (info.hbmMask) NtGdiDeleteObjectApp( info.hbmMask );
++        if (image && (info.xHotspot >= width || info.yHotspot >= height))
++            info.xHotspot = info.yHotspot = 0;
++    }
++    pthread_mutex_lock( &screen_lock );
++    old = cursor_image;
++    cursor_image = image;
++    cursor_width = width;
++    cursor_height = height;
++    if (image) cursor_hotspot = (POINT){info.xHotspot, info.yHotspot};
++    if (old || image) present_screen();
++    pthread_mutex_unlock( &screen_lock );
++    free( old );
++    TRACE( "cursor %p: %ux%u\n", handle, width, height );
++}
++
+ static BOOL ps5_GetCursorPos( POINT *pos )
+ {
+     *pos = cursor;
+@@ -403,8 +557,11 @@ static BOOL ps5_GetCursorPos( POINT *pos )
+ 
+ static BOOL ps5_SetCursorPos( INT x, INT y )
+ {
++    pthread_mutex_lock( &screen_lock );
+     cursor.x = x;
+     cursor.y = y;
++    if (cursor_image) present_screen();
++    pthread_mutex_unlock( &screen_lock );
+     return TRUE;
+ }
+ 
+@@ -417,6 +574,7 @@ static const struct user_driver_funcs ps5_user_driver =
+     .pDestroyWindow = ps5_DestroyWindow,
+     .pProcessEvents = ps5_ProcessEvents,
+     .pGetCursorPos = ps5_GetCursorPos,
++    .pSetCursor = ps5_SetCursor,
+     .pSetCursorPos = ps5_SetCursorPos,
+     .pSetDesktopWindow = ps5_SetDesktopWindow,
+ };
+@@ -437,7 +595,8 @@ void ps5_install_user_driver(void)
+         screen_width = width;
+         screen_height = height;
+     }
+-    if (!(screen = calloc( (size_t)screen_width * screen_height, sizeof(*screen) )))
++    if (!(screen = calloc( (size_t)screen_width * screen_height, sizeof(*screen) )) ||
++        !(frame = malloc( (size_t)screen_width * screen_height * sizeof(*frame) )))
+     {
+         ERR( "no memory for a %ux%u desktop\n", screen_width, screen_height );
+         return;
+-- 
+2.43.0
+
