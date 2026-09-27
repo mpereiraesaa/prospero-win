@@ -23,9 +23,6 @@ include/prospero_win_abi.h
 LICENSE
 LICENSING.md
 Makefile
-native/main.c
-native/runtime_main.c
-native/wine_main.c
 native/pw_agc_ps5.c
 native/pw_agc_ps5.h
 native/pw_agc_submit_lifecycle.c
@@ -36,13 +33,6 @@ native/pw_pad_ps5.c
 native/pw_pad_ps5.h
 native/pw_videoout_layout.h
 native/pw_videoout_tile.h
-native/pw_present_vk_ps5.c
-native/pw_present_vk_ps5.h
-native/pw_psbc_absent_ps5.c
-native/pw_state_ps5.c
-native/pw_prefix_ps5.c
-native/pw_prefix_ps5.h
-native/pw_state_ps5.h
 native/pw_videoout_ps5.c
 native/pw_videoout_ps5.h
 native/stubs/libSceAgc.c
@@ -51,12 +41,6 @@ native/ps5log/ps5log.c
 native/ps5log/ps5log.h
 native/ps5log/ps5log_ps5_net.c
 native/ps5log/ps5log_ps5_net.h
-native/pw_compat32_ps5.c
-native/pw_compat32_ps5.h
-native/pw_file_ps5.c
-native/pw_file_ps5.h
-native/pw_lowmem_ps5.c
-native/pw_lowmem_ps5.h
 NOTICE.md
 PUBLICATION_ALLOWLIST.txt
 README.md
@@ -150,13 +134,10 @@ examples/wine/input/pinball.input
 examples/wine/profiles/minesweeper.profile
 examples/wine/profiles/pinball.profile
 tests/test_pw_prefix.c
-tests/test_pw_prefix_ps5.c
-tests/test_pw_profile_session_flow.c
 tests/test_pw_runtime_supervisor.c
 tests/test_pw_pad.c
 tests/test_pw_pad_ps5.c
 tests/test_pw_file_posix.c
-tests/test_pw_file_ps5.c
 tests/test_win32_catalog.py
 tests/test_wine_runtime_modules.py
 tests/test_status_vocabulary.py
@@ -247,7 +228,6 @@ tests/test_pw_registry.c
 src/pw_registry_store.c
 src/pw_registry_store.h
 tests/test_pw_registry_store.c
-tests/test_pw_state_ps5.c
 tests/test_pw_agc_submit_lifecycle.c
 tests/test_pw_videoout_layout.c
 tests/test_pw_videoout_tile.c
@@ -327,7 +307,6 @@ tests/test_pw_wine_gate_bridge.c
 tests/test_nt_handler_ledger.py
 tests/test_reentrancy_contract.py
 tests/test_test_reachability.py
-tests/test_runtime_profile_selection.py
 tests/test_stage_wine_runtime.py
 tests/test_unix_call_table.py
 tests/test_unixlib_table.py
@@ -363,8 +342,6 @@ tools/dbt_differential.c
 tests/fixtures/dbt_differential_forms.txt
 tools/build_wowprospero.sh
 tools/run_wine_dbt_host.sh
-native/pw_wine_platform_ps5.c
-native/pw_wine_platform_ps5.h
 tests/test_build_wine_ps5.py
 tools/build_wine_ps5.sh
 tools/gen_prx_descriptor.py
@@ -392,8 +369,6 @@ tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
 wine/ps5/pw_wine_heap_libc.c
-native/pw_ucontext_map_ps5.c
-native/pw_ucontext_map_ps5.h
 tests/test_pw_wine_prx.c
 wine/ps5/prx_eh_frame.ld
 wine/ps5/pw_wine_prx.c
@@ -409,11 +384,6 @@ tests/test_pw_wine_threads.c
 wine/ps5/pw_wine_threads.c
 wine/ps5/pw_wine_threads.h
 wine/ps5/pw_wine_threads_libc.c
-tests/test_pw_wine_unix_probe.c
-wine/ps5/pw_wine_unix_probe.c
-wine/ps5/pw_wine_unix_probe.h
-native/pw_vmspace_ps5.c
-native/pw_vmspace_ps5.h
 wine/patches/0500-ntdll-ps5-signal-context-and-segment-bases.patch
 wine/patches/0510-ntdll-ps5-host-page-size.patch
 wine/patches/0520-ntdll-ps5-ntdll-directory.patch
@@ -441,7 +411,6 @@ tests/test_pw_wine_display.c
 tests/test_pw_wine_library.c
 native/pw_data_mount.c
 native/wine64_main.c
-native/relaunch_probe_main.c
 native/pw_data_mount.h
 tests/test_pw_data_mount.c
 tests/test_pw_data_mount_native.c

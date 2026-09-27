@@ -37,12 +37,9 @@ def main() -> int:
     assert param["contentId"] == CONTENT_ID, param["contentId"]
     assert param["localizedParameters"]["en-US"]["titleName"] == DISPLAY_NAME
 
-    native = (ROOT / "native/main.c").read_text()
-    require(native, f'#define PW_TITLE_ID "{TITLE_ID}"', "native/main.c")
-    require(native, f'#define PW_APP_NAME "{APP_NAME}"', "native/main.c")
-    # The measured teardown rule: never return from main() on FW 12.02.
-    require(native, "_exit(0);", "native/main.c")
-    assert "return 0;" not in native, "native/main.c must not return from main"
+    native = (ROOT / "native/wine64_main.c").read_text()
+    require(native, f'#define PW_TITLE_ID "{TITLE_ID}"', "native/wine64_main.c")
+    require(native, f'#define PW_APP_NAME "{APP_NAME}-wine64"', "native/wine64_main.c")
 
     builder = (ROOT / "tools/build_native.sh").read_text()
     require(builder, f"title_id={TITLE_ID}", "tools/build_native.sh")
@@ -58,7 +55,7 @@ def main() -> int:
             "tools/validate_pe_map_evidence.py")
 
     # A helper pinned to another title would launch the wrong application.
-    for source in ("native/main.c", "tools/build_native.sh",
+    for source in ("native/wine64_main.c", "tools/build_native.sh",
                    "tools/validate_pe_map_evidence.py",
                    "sce_sys/param.json"):
         text = (ROOT / source).read_text()

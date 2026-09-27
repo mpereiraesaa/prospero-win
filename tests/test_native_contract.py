@@ -110,47 +110,6 @@ def test_module_classification_is_explicit() -> None:
         assert f'"{name}"' not in text, name
 
 
-def test_adapter_uses_measured_platform_calls() -> None:
-    text = read("native/pw_file_ps5.c")
-    # sceKernelOpen/Close/Stat plus libc read/lseek on that descriptor is
-    # the combination already proven on FW 12.02 by the Xash3D port.
-    for symbol in ("sceKernelOpen", "sceKernelClose", "sceKernelStat"):
-        assert f"extern int {symbol}(" in text, symbol
-    assert re.search(r"\bread\(descriptor", text)
-    assert re.search(r"\blseek\(descriptor", text)
-    # The image cannot be listed from a title, so there is no scan here.
-    for symbol in ("opendir", "readdir", "sceKernelGetdents"):
-        assert symbol not in text, symbol
-    # File bytes never come from the libc heap.
-    assert "mmap(" in text
-    assert re.search(r"\bmalloc\(", text) is None
-
-
-def test_compat32_adapter_asks_the_kernel_correctly() -> None:
-    text = read("native/pw_compat32_ps5.c")
-    # The syscall this gate exists to measure, named explicitly.
-    assert "extern int sysarch(int number, void *args);" in text
-    assert "PW_I386_SET_LDT = 1" in text
-    assert "PW_LDT_AUTO_ALLOC = 0xffffffff" in text
-    # FreeBSD packs the descriptor pointer at offset 4 on amd64. Getting it
-    # wrong hands the kernel a garbage pointer, so it is asserted at compile
-    # time rather than trusted.
-    assert text.count("_Static_assert") >= 3
-    assert "offsetof(struct pw_ldt_args, descs) == 4" in text
-    # The probe must never ask for memory that is writable and executable at
-    # once: it writes the stub, then seals the page.
-    assert "PROT_WRITE | PROT_EXEC" not in text
-    assert "PROT_READ | PROT_EXEC" in text
-    # MAP_FIXED silently replaces live mappings on this firmware, and
-    # MAP_EXCL is ignored there, so a low address is requested with a hint
-    # and verified afterwards, never demanded. Matched on the flag
-    # combination rather than the bare word, which appears in the comment
-    # explaining exactly this.
-    assert "MAP_ANONYMOUS | MAP_FIXED" not in text
-    assert "MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)" in text
-    assert "(uintptr_t)page != (uintptr_t)base" in text
-
-
 def test_compat32_stub_stays_below_two_gib() -> None:
     text = read("src/pw_compat32.c")
     # `mov rsp, imm32` sign-extends and every far pointer holds a 32-bit
@@ -162,101 +121,22 @@ def test_compat32_stub_stays_below_two_gib() -> None:
     assert "PW_COMPAT32_EXPECTED_RESULT" in read("src/pw_compat32.h")
 
 
-def test_adapter_reports_before_it_parses() -> None:
-    text = read("native/main.c")
-    assert "PW_BEGIN" in text
-    # A platform pre-flight runs before the loader touches any bytes.
-    smoke = text.index("pw_file_ps5_smoke")
-    gate = text.index("pw_gate_run")
-    assert smoke < gate, "the filesystem smoke test must precede the loader"
-    assert "PW_FS_SMOKE" in text
-    # Every exit path closes the channel, so no run ends without a BYE,
-    # including the fault path: a crash that says nothing costs a whole run.
-    assert "install_signal_reporter();" in text
-    assert "PW_SIGNAL" in text and "pc_minus_main" in text
-    assert "SA_SIGINFO" in text
-    # Count statements, not prose: the file also discusses _exit() in a
-    # comment explaining why main() must never return on this firmware.
-    exits = len(re.findall(r"^\s*_exit\(", text, re.M))
-    closes = len(re.findall(r"^\s*ps5log_close\(", text, re.M))
-    assert exits == closes, (exits, closes)
-    assert exits >= 6
-    # The registry is far too large for the libc heap.
-    assert "reserve_scratch(sizeof(*loader))" in text
-    assert re.search(r"\bmalloc\(", text) is None
-    # Gate 0.2a runs before the loader and its stage-two transfer is opt-in.
-    probe = text.index("pw_compat32_probe")
-    assert probe < gate, "the compatibility-mode probe must precede the loader"
-    assert "PW_COMPAT32_TRANSFER" in text
-
-
-def test_builder_compiles_every_core_source() -> None:
+def test_builder_builds_the_wine64_title() -> None:
     builder = read("tools/build_native.sh")
     sources = builder[builder.index("sources=("):]
     sources = sources[:sources.index(")")]
-    for name in CORE_SOURCES:
-        assert f"src/{name}" in sources, \
-            f"tools/build_native.sh does not compile src/{name}"
+    listed = re.findall(r"[\w/]+\.c", sources)
+    assert listed[0] == "native/wine64_main.c"
+    for name in listed:
+        assert (ROOT / name).is_file(), f"tools/build_native.sh compiles missing {name}"
     # The host-only provider depends on dirent and stdio, both unusable on
     # the console image; linking it in would only fail on target.
     assert "pw_file_posix.c" not in sources
-    assert 'entry=native/runtime_main.c' in builder
-    assert '[[ $native_mode == gate ]] && entry=native/main.c' in builder
-    assert '"$entry"' in sources
-    assert "native/pw_file_ps5.c" in sources
-    assert "native/pw_audio_ps5.c" in sources
-    assert "native/pw_agc_submit_lifecycle.c" in sources
+    for name in ("native/pw_audio_ps5.c", "native/pw_agc_submit_lifecycle.c",
+                 "native/pw_data_mount.c", "native/pw_wine_library.c"):
+        assert name in sources, name
     # The banned import is rejected by the build, not merely documented.
     assert "strcasestr" in builder
-
-
-def test_runtime_entry_owns_execution_services() -> None:
-    text = read("native/runtime_main.c")
-    for symbol in ("pw_x86_engine_step", "pw_win32_dispatch",
-                   "pw_gdi_target_view", "pw_audio_ps5_submit",
-                   "pw_pad_ps5_poll", "pw_user32_post_quit"):
-        assert symbol in text, symbol
-    assert "pad->core.pressed_edges&PAD_CREATE" in text
-    # The launcher closes with a held combo, keeps pad and display across
-    # sessions and never opens the display from inside a launched session.
-    assert "const uint32_t combo=PAD_OPTIONS|PAD_CREATE;" in text
-    assert "now-combo_since>=1000000000ull" in text
-    assert 'PW_PAD_QUIT schema=1 source=combo action=WM_QUIT' in text
-    assert "host->launcher?PW_OK:pw_pad_ps5_close(" in text
-    assert "if(!host->launcher && (status=host_open_display(host))!=PW_OK)" in text
-    assert 'PW_PAD_QUIT schema=1 source=create action=WM_QUIT' in text
-    assert 'PAD_CREATE,0x1b' not in text
-    assert "PW_RUNTIME_READY" in text
-    assert "PW_RUNTIME_HEARTBEAT" in text
-    assert "PW_EXEC_ABORT schema=1" in text
-    assert "eip=0x%08x" in text and "bytes=%02x%02x%02x%02x" in text
-    assert "for(;;events++)" in text
-    assert "ps5log_close(\"runtime-signal\")" in text
-
-
-def test_native_wine_bootstrap_is_opt_in_and_bounded() -> None:
-    builder = read("tools/build_native.sh")
-    entry = read("native/wine_main.c")
-    assert "native/wine_main.c" in builder
-    assert "PW_NATIVE_MODE=wine" in builder
-    assert "PW_WINE_RUNTIME_DIR is required" in builder
-    assert "PW_APP_PROFILE is required for PW_NATIVE_MODE=wine" in builder
-    assert '"$dist/win/app/app.profile"' in builder
-    assert "--root-module" in builder
-    assert "PW_USE_APP_PROFILE" in entry
-    assert "app_profile.graphics != PW_APP_GRAPHICS_GDI" in entry
-    host_entry = read("tools/wine_ntdll_entry.c")
-    assert "app_profile.graphics != PW_APP_GRAPHICS_GDI" in host_entry
-    assert "PW_OUTPUT_SUFFIX" in builder
-    assert "--application" in builder
-    assert 'PW_STAGE_DIR "/runtime/lib/i386-windows"' in entry
-    assert 'PW_STAGE_DIR "/runtime/nls"' in entry
-    for contract in ("pw_wine_seed_registry", "pw_wine_seed_objects",
-                     "pw_wine_seed_user_sid", "pw_file_ps5_wine_file_service",
-                     "LdrInitializeThunk", "host_calls=%llu", "ps5log_close"):
-        assert contract in entry, contract
-    assert '"FreeBSD"' in entry and '"PS5"' in entry
-
 
 def test_prefix_registry_names_match_pinned_wine_contract() -> None:
     header = read("src/pw_prefix.h")

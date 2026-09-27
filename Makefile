@@ -66,8 +66,6 @@ $(eval $(call test_rule,test_pw_ini,tests/test_pw_ini.c src/pw_ini.c,))
 $(eval $(call test_rule,test_pw_app_profile,tests/test_pw_app_profile.c src/pw_app_profile.c,))
 $(eval $(call test_rule,test_pw_profile_catalog,tests/test_pw_profile_catalog.c src/pw_profile_catalog.c,))
 $(eval $(call test_rule,test_pw_prefix,tests/test_pw_prefix.c src/pw_prefix.c,))
-$(eval $(call test_rule,test_pw_prefix_ps5,tests/test_pw_prefix_ps5.c native/pw_prefix_ps5.c src/pw_prefix.c,-DPW_PREFIX_PS5_HOST_TEST))
-$(eval $(call test_rule,test_pw_profile_session_flow,tests/test_pw_profile_session_flow.c native/pw_prefix_ps5.c src/pw_prefix.c src/pw_app_profile.c src/pw_registry_store.c src/pw_registry.c src/pw_runtime_supervisor.c,-DPW_PREFIX_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_runtime_supervisor,tests/test_pw_runtime_supervisor.c src/pw_runtime_supervisor.c src/pw_app_profile.c src/pw_prefix.c,))
 $(eval $(call test_rule,test_launcher_model,tests/test_launcher_model.c src/pw_launcher_model.c src/pw_runtime_supervisor.c src/pw_app_profile.c src/pw_ini.c src/pw_prefix.c,))
 $(eval $(call test_rule,test_prefix_launcher,tests/test_prefix_launcher.c src/pw_prefix_registry.c src/pw_launcher_model.c src/pw_runtime_supervisor.c src/pw_app_profile.c src/pw_ini.c src/pw_prefix.c,))
@@ -75,7 +73,6 @@ $(eval $(call test_rule,test_pw_gdi,tests/test_pw_gdi.c src/pw_gdi.c,))
 $(eval $(call test_rule,test_pw_present,tests/test_pw_present.c src/pw_present.c src/pw_gdi.c,))
 $(eval $(call test_rule,test_pw_wine_heap,tests/test_pw_wine_heap.c wine/ps5/pw_wine_heap.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_prx,tests/test_pw_wine_prx.c wine/ps5/pw_wine_prx.c,-I.))
-$(eval $(call test_rule,test_pw_wine_unix_probe,tests/test_pw_wine_unix_probe.c wine/ps5/pw_wine_unix_probe.c wine/ps5/pw_wine_prx.c,-I.))
 $(eval $(call test_rule,test_pw_wine_threads,tests/test_pw_wine_threads.c wine/ps5/pw_wine_threads.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_sink,tests/test_pw_wine_sink.c wine/ps5/pw_wine_sink.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_start,tests/test_pw_wine_start.c src/pw_wine_start.c wine/ps5/pw_wine_prx.c,-I.))
@@ -103,7 +100,6 @@ $(eval $(call test_rule,test_pe_import,tests/test_pe_import.c src/pe_image.c src
 $(eval $(call test_rule,test_pe_export,tests/test_pe_export.c src/pe_image.c src/pe_export.c src/pw_result.c,))
 $(eval $(call test_rule,test_pw_module_name,tests/test_pw_module_name.c src/pw_module_name.c src/pw_result.c,))
 $(eval $(call test_rule,test_pw_file_posix,tests/test_pw_file_posix.c src/pw_file_posix.c src/pw_module_name.c,))
-$(eval $(call test_rule,test_pw_file_ps5,tests/test_pw_file_ps5.c native/pw_file_ps5.c,))
 $(eval $(call test_rule,test_pw_vm,tests/test_pw_vm.c src/pw_vm.c src/pw_vm_posix.c src/pw_result.c,))
 $(eval $(call test_rule,test_pw_map,tests/test_pw_map.c $(CORE),))
 $(eval $(call test_rule,test_pw_loader,tests/test_pw_loader.c $(CORE),))
@@ -154,7 +150,6 @@ $(eval $(call test_rule,test_pw_agc_submit_lifecycle,tests/test_pw_agc_submit_li
 $(eval $(call test_rule,test_pw_videoout_layout,tests/test_pw_videoout_layout.c,))
 $(eval $(call test_rule,test_pw_videoout_tile,tests/test_pw_videoout_tile.c src/pw_present.c,))
 $(eval $(call test_rule,test_pw_pad_ps5,tests/test_pw_pad_ps5.c native/pw_pad_ps5.c src/pw_pad.c src/pw_user32.c,-DPW_PAD_PS5_HOST_TEST))
-$(eval $(call test_rule,test_pw_state_ps5,tests/test_pw_state_ps5.c native/pw_state_ps5.c src/pw_registry_store.c src/pw_registry.c,-DPW_STATE_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_data_mount,tests/test_pw_data_mount.c native/pw_data_mount.c,))
 PW_DATA_MOUNT_TEST_FLAGS := -DPW_DATA_MOUNT_REQUEST_PATH='"/tmp/pw_dm_req"' -DPW_DATA_MOUNT_PATH='"/tmp/pw_dm_data"' -DPW_DATA_MOUNT_WAIT_MS=200 -DPW_DATA_MOUNT_POLL_MS=50
 $(eval $(call test_rule,test_pw_data_mount_native,tests/test_pw_data_mount_native.c native/pw_data_mount.c,$(PW_DATA_MOUNT_TEST_FLAGS)))
@@ -178,10 +173,10 @@ box86-catalog: $(BUILD)/pw_x86_decode_probe
 		--json-output data/box86_opcode_catalog.json \
 		--markdown-output docs/BOX86_OPCODE_CATALOG.md
 
-TESTS := test_pw_x86_hostexec test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_profile_catalog test_pw_prefix test_pw_prefix_ps5 test_pw_profile_session_flow test_pw_runtime_supervisor test_launcher_model test_prefix_launcher test_pw_gdi test_pw_gdi_abi test_pw_present test_pw_wine_heap test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_game_profile test_pw_wine_library test_pw_wine_display test_pw_wine_dl test_pw_wine_sink test_pw_wine_threads test_pw_wine_unix_probe test_pw_wine_compat test_pw_wine_cwd test_pw_launcher_render test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
+TESTS := test_pw_x86_hostexec test_pw_guest_heap test_pw_registry test_pw_registry_store test_pw_ini test_pw_app_profile test_pw_profile_catalog test_pw_prefix test_pw_runtime_supervisor test_launcher_model test_prefix_launcher test_pw_gdi test_pw_gdi_abi test_pw_present test_pw_wine_heap test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_game_profile test_pw_wine_library test_pw_wine_display test_pw_wine_dl test_pw_wine_sink test_pw_wine_threads test_pw_wine_compat test_pw_wine_cwd test_pw_launcher_render test_pw_crt_format test_pw_user32 test_pw_pad test_pe_resource test_pw_time test_pw_guest_args test_pw_initterm test_pw_window test_pw_guest_fp test_pe_image test_pe_layout test_pe_reloc test_pe_import \
 	test_pe_export \
-	test_pw_module_name test_pw_file_posix test_pw_file_ps5 test_pw_vm test_pw_map test_pw_loader \
-	test_pw_segment test_pw_compat32 test_pw_guest_vm test_pw_guest_process test_pw_nt_handle test_pw_unixlib test_pw_wine_runner test_pw_wine_seed_services test_pw_wine_unixlib test_pw_wine_handle test_pw_wine_path test_pw_gate test_pw_win64 test_pw_x86_block test_pw_x86_cache test_pw_x86_code_pages test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_lazyflags test_pw_guest_call test_pw_tls test_pw_import_bind test_pw_export test_pw_wine_gate test_pw_wine_gate_bridge test_pw_wine_file_service test_pw_wine_registry test_pw_wine_objects test_pw_wine_process_info test_pw_wine_virtual_memory test_pw_wine_section test_pw_wine_thread test_pw_wine_continue test_pw_wine_vm_transactions test_pw_wine_teardown test_pw_win32 test_pw_x87 test_pw_audio_ps5 test_pw_audio_mix test_pw_agc_submit_lifecycle test_pw_videoout_layout test_pw_videoout_tile test_pw_pad_ps5 test_pw_state_ps5 test_pw_data_mount test_pw_data_mount_native
+	test_pw_module_name test_pw_file_posix test_pw_vm test_pw_map test_pw_loader \
+	test_pw_segment test_pw_compat32 test_pw_guest_vm test_pw_guest_process test_pw_nt_handle test_pw_unixlib test_pw_wine_runner test_pw_wine_seed_services test_pw_wine_unixlib test_pw_wine_handle test_pw_wine_path test_pw_gate test_pw_win64 test_pw_x86_block test_pw_x86_cache test_pw_x86_code_pages test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_lazyflags test_pw_guest_call test_pw_tls test_pw_import_bind test_pw_export test_pw_wine_gate test_pw_wine_gate_bridge test_pw_wine_file_service test_pw_wine_registry test_pw_wine_objects test_pw_wine_process_info test_pw_wine_virtual_memory test_pw_wine_section test_pw_wine_thread test_pw_wine_continue test_pw_wine_vm_transactions test_pw_wine_teardown test_pw_win32 test_pw_x87 test_pw_audio_ps5 test_pw_audio_mix test_pw_agc_submit_lifecycle test_pw_videoout_layout test_pw_videoout_tile test_pw_pad_ps5 test_pw_data_mount test_pw_data_mount_native
 
 # The Python suites drive the built binaries: the evidence validator is
 # tested against a transcript the real gate produced, and the Python PE
@@ -189,7 +184,6 @@ TESTS := test_pw_x86_hostexec test_pw_guest_heap test_pw_registry test_pw_regist
 test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/inspect_pe $(BUILD)/trace_x86_entry $(BUILD)/classify_x86 $(BUILD)/dbt_differential $(BUILD)/bench_dynarec $(BUILD)/wine_ntdll_entry
 	@set -e; for test in $(addprefix $(BUILD)/,$(TESTS)); do $$test; done
 	python3 tests/test_title_identity.py
-	python3 tests/test_runtime_profile_selection.py
 	python3 tests/test_icon.py
 	python3 tests/test_docs_links.py
 	python3 tests/test_native_contract.py
