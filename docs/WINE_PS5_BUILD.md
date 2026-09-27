@@ -55,6 +55,7 @@ of the port never collide:
 | 0102 | `server`: size the user shared data section to a whole host page; with 16 KiB pages that page also holds the syscall dispatcher pointer at `0x7ffe1000` (patch 0530) |
 | 0110 | `server`: run in-process (`WINE_INPROCESS_SERVER`, set on PS5): `pw_wineserver_connect()` starts the server on a thread and returns a client socket; see [In-process server](#in-process-server) |
 | 0111 | `ntdll`: connect through `pw_wineserver_connect()` from `wineserver.so` beside ntdll (`wineserver.prx` on PS5) instead of the socket file, and register each thread's kernel id with the server module |
+| 0120 | `server`: when the current user names no audio driver, default `HKCU\Software\Wine\Drivers\Audio` to `ps5`; see [Audio](#audio) |
 | 0400 | `win32u`: in-process PS5 user driver (`WINE_PS5_USER_DRIVER`, set on PS5); see [User driver](#user-driver) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
 | 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
@@ -281,6 +282,37 @@ drivers, the hinters, the two rasterisers and FreeType's own gzip.
 - Wine's 13 fonts (`fonts/*.ttf`: Tahoma, MS Sans Serif, Courier, System,
   Marlett and others) are copied to `<work>/prx/fonts`. They are staged
   under `share/wine/fonts`, where win32u looks for Wine's fonts.
+
+## Audio
+
+Wine 11's mmdevapi loads an audio driver as a bare Unix library by name:
+driver `ps5` is `wineps5.so`, which `pw_wine_dl` loads as `wineps5.prx`
+beside `ntdll.prx`. It takes the name from
+`HKCU\Software\Wine\Drivers\Audio`. None of the drivers in its default
+list (`pulse,alsa,oss,coreaudio`) exists on the console, so patch 0120 makes
+the in-process server set the value to `ps5` when a prefix does not name
+one. A prefix that names another driver keeps it, and an empty value still
+means no audio.
+
+`wine/wineps5/unix.c` is the driver's Unix side, built and linked by the PRX
+stage like `wowprospero.prx`. Its stream, buffer and WoW64 code follows
+Wine's OSS driver.
+- It offers one render endpoint, `PS5`, and no capture.
+- Its mix format is 48 kHz float stereo. A stream may use any PCM or float
+  format `src/pw_audio_mix.h` decodes: winmm and dsound open theirs with
+  `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`.
+- One Unix thread mixes every started stream into a grain of 256 16-bit
+  stereo frames, then passes it to `pw_wine_audio_output`. That is the audio
+  sink ntdll exports (`wine/ps5/pw_wine_sink.h`); the driver finds it with
+  `dlsym`.
+- The title plays each grain on the console's main port with
+  `sceAudioOutOutput`, which returns once the port has taken it. The port is
+  therefore the clock, and each stream's event is set once per period.
+- It reports itself unavailable when the title set no sink, so mmdevapi
+  offers no device.
+
+To use it on the console, stage `wineps5.prx` beside `ntdll.prx`. The game
+log then shows `PW_WINE64 audio sink=1 port=<handle> status=ok`.
 
 ## WoW64 CPU backend
 

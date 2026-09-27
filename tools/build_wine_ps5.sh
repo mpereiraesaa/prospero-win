@@ -305,9 +305,12 @@ if [ "$prx_status" = 0 ]; then
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \
         pw_wineserver_connect pw_wine_thread_register
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wowprospero_desc.c" __wine_unix_call_funcs
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineps5_desc.c" \
+        __wine_unix_call_funcs __wine_unix_call_wow64_funcs
     # shellcheck disable=SC2086
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libfreetype_desc.c" $FREETYPE_EXPORTS
-    for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc libfreetype_desc; do
+    for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc wineps5_desc \
+            libfreetype_desc; do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
@@ -337,6 +340,23 @@ if [ "$prx_status" = 0 ]; then
         fail "no emutls.o in the payload SDK's libc.a"
     link_prx wowprospero - "$wow $prx/obj/emutls.o $prx/obj/wowprospero_desc.o" "$prx/ntdll.shared.elf"
     link_prx libfreetype - "$ft/obj/*.o $prx/obj/libfreetype_desc.o"
+    # The audio driver (wine/wineps5): mmdevapi loads it by name, and it
+    # mixes into the title's audio sink, which ntdll exports.
+    # mmdevapi's interfaces are IDL; the ELF link built only what ntdll,
+    # win32u and the server include.
+    make -C "$build" include/audioclient.h include/mmdeviceapi.h include/devicetopology.h \
+        include/propsys.h include/propidl.h include/objidl.h include/objidlbase.h \
+        include/unknwn.h include/wtypes.h include/oaidl.h >> "$work/make.log" 2>&1 ||
+        fail "cannot generate mmdevapi's headers; see $work/make.log"
+    audio=""
+    for unit in wine/wineps5/unix.c src/pw_audio_mix.c; do
+        object=$prx/obj/wineps5_$(basename "$unit" .c).o
+        "$sdk/bin/prospero-clang" -std=gnu11 -O2 -fPIC -D__WINESRC__ -DWINE_UNIX_LIB -D_REENTRANT \
+            -I"$build/include" -I"$tree/include" -I"$tree/dlls/mmdevapi" -I"$root/wine/ps5" \
+            -I"$root/src" -I"$root/include" -c "$root/$unit" -o "$object" || fail "cannot compile $unit"
+        audio="$audio $object"
+    done
+    link_prx wineps5 - "$audio $prx/obj/wineps5_desc.o" "$prx/ntdll.shared.elf"
     # Wine's own fonts, staged under share/wine/fonts beside the runtime.
     mkdir -p "$prx/fonts"
     cp "$tree"/fonts/*.ttf "$prx/fonts/"
@@ -395,7 +415,7 @@ title_exports = exports("libkernel.so") | exports("libSceLibcInternal.so")
 objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{sdk}/bin/llvm-objdump"
 SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
-for name in ("ntdll", "win32u", "wineserver", "wowprospero", "libfreetype") if not prx_status.startswith("skipped") else ():
+for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfreetype") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
     link_text = link_log.read_text(errors="replace") if link_log.is_file() else ""
@@ -414,7 +434,7 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "libfreetype") if n
         # stay 0 and a call to one jumps to 0 (measured, FW 12.02).
         imports = {fields[7].split("@")[0] for fields in (line.split() for line in symbols.splitlines())
                    if len(fields) >= 8 and fields[6] == "UND"}
-        provided = title_exports | (ntdll_exports if name in ("win32u", "wowprospero") else set())
+        provided = title_exports | (ntdll_exports if name in ("win32u", "wowprospero", "wineps5") else set())
         entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
         # The kernel kills a title that executes a syscall instruction outside
         # libkernel (measured: SYSTEM_ILLEGAL_FUNCTION_CALL). Wine's dispatchers

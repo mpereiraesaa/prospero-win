@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 12:00:00 +0200
+Subject: [PATCH] server: Default the audio driver to the PS5 one on PS5.
+
+mmdevapi takes its audio driver from HKCU\Software\Wine\Drivers\Audio, or
+tries pulse, alsa, oss and coreaudio, none of which a PS5 title has. The
+console's audio goes through wineps5, the driver the title's audio sink
+plays. When the current user's branch names no audio driver, set it to
+ps5 after loading user.reg; a prefix that names one keeps it, and an
+empty value still means no audio.
+---
+ server/registry.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/server/registry.c b/server/registry.c
+--- a/server/registry.c
++++ b/server/registry.c
+@@ -1916,6 +1916,28 @@
+     free( current_user_path );
+     load_init_registry_from_file( "user.reg", hkcu );
+ 
++#ifdef __PROSPERO__
++    /* The console has one audio device, which the PS5 driver (wineps5)
++     * plays through the title; none in mmdevapi's default list can load.
++     * A prefix that names its own audio drivers keeps them. */
++    {
++        static const WCHAR driversW[] = {'S','o','f','t','w','a','r','e','\\','W','i','n','e','\\',
++                                         'D','r','i','v','e','r','s'};
++        static const WCHAR audioW[] = {'A','u','d','i','o'};
++        static const WCHAR ps5W[] = {'p','s','5',0};
++        static const struct unicode_str drivers_name = { driversW, sizeof(driversW) };
++        static const struct unicode_str audio_name = { audioW, sizeof(audioW) };
++        int index;
++
++        if ((key = create_key_recursive( hkcu, drivers_name, current_time )))
++        {
++            if (!find_value( key, audio_name, &index ))
++                set_value( key, audio_name, REG_SZ, ps5W, sizeof(ps5W) );
++            release_object( key );
++        }
++    }
++#endif
++
+     /* set the shared flag on Software\Classes\Wow6432Node for all platforms */
+     for (i = 1; i < supported_machines_count; i++)
+     {
+-- 
+2.43.0
