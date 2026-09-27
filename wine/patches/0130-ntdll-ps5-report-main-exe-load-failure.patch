@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 16:00:00 +0200
+Subject: [PATCH] ntdll: Report why the main program cannot run in-process on PS5.
+
+When the main executable cannot be loaded into the initial process,
+Wine runs start.exe instead, which starts the program in a new process.
+A PS5 title cannot create one, so start.exe only prints that the
+application could not be started, and the reason the program was
+refused is lost. On PS5, print the program and the status instead and
+end the process with it.
+---
+ dlls/ntdll/unix/env.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -1948,6 +1948,15 @@
+         }
+     }
+ 
++#ifdef __PROSPERO__
++    /* start.exe would only run the program in a new process, which a PS5
++     * title cannot create: say why it cannot run in this one instead. */
++    if (status)
++    {
++        MESSAGE( "wine: cannot run %s in this process: status %08x\n", debugstr_a(main_argv[1]), status );
++        NtTerminateProcess( GetCurrentProcess(), status );
++    }
++#endif
+     if (status)  /* try launching it through start.exe */
+     {
+         static const char *args[] = { "start.exe", "/exec" };
+-- 
+2.43.0
