@@ -592,6 +592,55 @@ static void shift_tests(void)
         assert(run(bad,3,0xd300)==-1 && state.eip==0xd300 && state.eflags==0xad7);
     }
 }
+/*
+ * SHLD/SHRD against the host instruction: every count 0..255 (masked to five
+ * bits), register and memory destinations, imm8 and CL forms, under all four
+ * engine modes. Zero preserves every flag and only a count of one defines OF;
+ * AF is never defined.
+ */
+static void double_shift_tests(void)
+{
+    const uint32_t values[][2]={{0,0},{1,0x80000000u},{0x89abcdefu,0x01234567u},
+                                {0xffffffffu,0},{0x80000001u,0xfffffffeu}};
+    for(unsigned left=0;left<2;left++)for(unsigned cl=0;cl<2;cl++)
+    for(unsigned memory=0;memory<2;memory++)for(unsigned mode=0;mode<4;mode++)
+    for(unsigned count=0;count<256;count+=(mode?7:1))for(unsigned v=0;v<5;v++) {
+        uint32_t expected=values[v][0];unsigned long flags;
+        unsigned masked=count&31;
+        if(left)__asm__ volatile("shldl %%cl,%2,%0; pushfq; popq %1":"+r"(expected),"=r"(flags):"r"(values[v][1]),"c"(count):"cc");
+        else __asm__ volatile("shrdl %%cl,%2,%0; pushfq; popq %1":"+r"(expected),"=r"(flags):"r"(values[v][1]),"c"(count):"cc");
+        /* EAX or [EDX] is the destination, ESI the source, ECX the count. */
+        state.gpr[0]=values[v][0];state.gpr[6]=values[v][1];state.gpr[1]=count;
+        state.gpr[2]=state.stack_high-4;state.eflags=0xad7;
+        memcpy((void *)(uintptr_t)state.gpr[2],&values[v][0],4);
+        const uint8_t op[]={0x0f,(uint8_t)((left?0xa4:0xac)|cl),
+                            (uint8_t)((memory?0x02:0xc0)|(6<<3)),(uint8_t)count};
+        assert(run_mode(op,cl?3:4,0xd400,mode&1,mode>>1)==0);
+        uint32_t result=state.gpr[0];if(memory)memcpy(&result,(void *)(uintptr_t)state.gpr[2],4);
+        unsigned mask=masked?(masked==1?0x8c5:0xc5):0;
+        assert(result==expected);
+        if(memory)assert(state.gpr[0]==values[v][0]);
+        assert(state.eflags==((0xad7&~mask)|((unsigned)flags&mask)));
+        assert(state.gpr[6]==values[v][1] && state.gpr[1]==count && state.gpr[2]==state.stack_high-4);
+    }
+    /* The source and the destination may be the same register, and the count
+     * register may be the source: each reads its value before the shift. */
+    state.gpr[1]=0x80000004u;state.eflags=0x202;
+    const uint8_t rotate_like[]={0x0f,0xa5,0xc9};      /* shld ecx, ecx, cl */
+    assert(run(rotate_like,sizeof(rotate_like),0xd480)==0 && state.gpr[1]==0x00000048u);
+    /* A block continues after the instruction. */
+    state.gpr[0]=1;state.gpr[3]=0x80000000u;
+    const uint8_t then_mov[]={0x0f,0xa4,0xd8,1,0xb9,42,0,0,0}; /* shld eax,ebx,1; mov ecx,42 */
+    assert(run(then_mov,sizeof(then_mov),0xd490)==0 && state.gpr[0]==3 && state.gpr[1]==42);
+    /* A destination the guard refuses faults at the instruction, flags intact. */
+    state.gpr[2]=state.stack_high-3;state.eflags=0xad7;
+    const uint8_t bad[]={0x0f,0xac,0x32,4};
+    assert(run(bad,sizeof(bad),0xd4a0)==-1 && state.eip==0xd4a0 && state.eflags==0xad7);
+    /* The imm8 form needs its immediate. */
+    PwX86Block block;uint8_t scratch[512];
+    const uint8_t truncated[]={0x0f,0xa4,0xd8};
+    assert(pw_x86_translate(truncated,sizeof(truncated),0xd4b0,scratch,sizeof(scratch),&block)==PW_ERR_TRUNCATED);
+}
 static void extension_tests(void)
 {
     const uint32_t values[]={0,1,0x7f,0x80,0xff,0x7fff,0x8000,0xffff};
@@ -2173,6 +2222,7 @@ int main(int argc, char **argv)
     ret_cleanup_tests();
     extension_tests();
     shift_tests();
+    double_shift_tests();
     /* Enter an actual translated guest callback, then restore its caller. */
     state.gpr[4]=state.stack_high-16;state.eip=0xf0000010;
     PwX86State caller=state;PwGuestCallback callback={0};

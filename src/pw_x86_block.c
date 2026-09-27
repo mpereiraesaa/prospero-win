@@ -1091,6 +1091,7 @@ typedef struct DecodedInst {
     uint8_t sse_imm;
     unsigned sse_has_imm;
     unsigned bit_scan;              /* 0f bc/bd: BSF or BSR */
+    uint8_t double_shift;           /* 0f a4/a5/ac/ad: SHLD or SHRD, or 0 */
     unsigned bswap;                 /* 0f c8+rd: byte order of one register */
     unsigned bswap_reg;
     uint8_t bit_scan_opcode;
@@ -1363,6 +1364,7 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
         unsigned bswap=0,bswap_reg=0;
         unsigned fs_call=0;
         uint8_t bit_scan_opcode=0;
+        uint8_t double_shift=0;
         unsigned shift_word=0;
         unsigned lea_prefixed=0;
         unsigned extend_word_destination=0;
@@ -1771,6 +1773,25 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
                 sse_opcode=source[cursor+1];
                 can_fault=(operand.mod!=3);
             }
+            else if(source[cursor+1]==0xa4 || source[cursor+1]==0xa5 ||
+                    source[cursor+1]==0xac || source[cursor+1]==0xad) {
+                /* SHLD/SHRD r/m32, r32, imm8|CL. The count is masked to five
+                 * bits; like the one-operand shifts, zero defines no flag and
+                 * only a count of one defines OF. AF stays as it was. */
+                int result=decode_operand(source+cursor+2,bytes-cursor-2,&operand);
+                if(result!=PW_OK)DECODE_FAIL(result);
+                double_shift=source[cursor+1];
+                length=2+operand.bytes+!(double_shift&1);
+                if(length>bytes-cursor)DECODE_FAIL(PW_ERR_TRUNCATED);
+                can_fault=(operand.mod!=3);
+                if(!(double_shift&1)) {
+                    unsigned count=source[cursor+length-1]&31;
+                    flags_def=count==0?0:count==1?0x8c5:0x0c5;
+                } else {
+                    flags_def=0x8c5;
+                    flags_use=0x8c5;
+                }
+            }
             else if(source[cursor+1]==0xbc || source[cursor+1]==0xbd) {
                 /* BSF/BSR: only ZF is architecturally defined. */
                 int result=decode_operand(source+cursor+2,bytes-cursor-2,&operand);
@@ -1902,6 +1923,7 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
         d->bit_scan = bit_scan;
         d->bit_scan_opcode = bit_scan_opcode;
         d->bit_scan_word = bit_scan_word;
+        d->double_shift = double_shift;
         d->bswap = bswap;
         d->bswap_reg = bswap_reg;
         d->shift_word = shift_word;
@@ -1944,7 +1966,7 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
             gpr_uses[0]++;
         if (op == 0x6a || op == 0x68 || op == 0xe8) gpr_uses[4] += 2;
         if (op == 0xc3 || op == 0xc2) gpr_uses[4] += 2;
-        if (op == 0xd3) gpr_uses[1]++;
+        if (op == 0xd3 || (double_shift & 1)) gpr_uses[1]++;
         if (string_op) { gpr_uses[1]++; gpr_uses[6]++; gpr_uses[7]++; }
         if (x87 && (op == 0xd9 && operand.reg == 0x07)) gpr_uses[0]++;
         if (imul_general || (op == 0xf7 && operand.reg >= 4)) { gpr_uses[0]++; gpr_uses[2]++; }
@@ -2059,6 +2081,7 @@ analyze_and_emit:
         unsigned bit_scan = d->bit_scan;
         uint8_t bit_scan_opcode = d->bit_scan_opcode;
         unsigned bit_scan_word = d->bit_scan_word;
+        uint8_t double_shift = d->double_shift;
         unsigned bswap = d->bswap;
         unsigned bswap_reg = d->bswap_reg;
         unsigned shift_word = d->shift_word;
@@ -2581,6 +2604,40 @@ analyze_and_emit:
                     block->exit_contract.dirty_mask |= (1 << operand.reg);
                 }
             } else store_guest_reg(&e, &block->exit_contract, operand.reg);
+        } else if(double_shift) {
+            /*
+             * SHLD/SHRD, executed by the host instruction on the guest
+             * values: destination in EAX (or at [RAX]), source in R11D, count
+             * in CL. The flag selection is the one the one-operand shifts
+             * use, so a zero count preserves every flag.
+             */
+            emit_commit_flags(&e);
+            if(operand.mod==3)load_guest_reg(&e,&block->exit_contract,operand.rm);
+            else {effective_address(&e,&operand,&block->exit_contract);memory_address_width(&e,2,4);}
+            load_guest_reg_ecx(&e,&block->exit_contract,operand.reg);
+            byte(&e,0x41);byte(&e,0x89);byte(&e,0xcb);      /* mov r11d, ecx */
+            if(double_shift&1)load_guest_reg_ecx(&e,&block->exit_contract,1);
+            else {byte(&e,0xb9);word(&e,source[cursor+length-1]);}
+            byte(&e,0x83);byte(&e,0xe1);byte(&e,31);
+            byte(&e,0xbe);word(&e,0xc5);
+            byte(&e,0xba);word(&e,0);
+            byte(&e,0x85);byte(&e,0xc9);
+            byte(&e,0x0f);byte(&e,0x44);byte(&e,0xf2);
+            byte(&e,0xba);word(&e,0x8c5);
+            byte(&e,0x83);byte(&e,0xf9);byte(&e,1);
+            byte(&e,0x0f);byte(&e,0x44);byte(&e,0xf2);
+            /* shld|shrd eax|[rax], r11d, cl */
+            byte(&e,0x44);byte(&e,0x0f);byte(&e,(uint8_t)(double_shift|1));
+            byte(&e,operand.mod==3?0xd8:0x18);
+            if(operand.mod==3)store_guest_reg(&e,&block->exit_contract,operand.rm);
+            if (!d->flags_dead) {
+                byte(&e,0x9c);byte(&e,0x5a); /* snapshot native flags */
+                byte(&e,0x21);byte(&e,0xf2); /* and edx, esi */
+                byte(&e,0xf7);byte(&e,0xd6); /* not esi */
+                byte(&e,0x23);byte(&e,0x77);byte(&e,offsetof(PwX86State,eflags)); /* and esi, [rdi+eflags] */
+                byte(&e,0x09);byte(&e,0xf2); /* or edx, esi */
+                byte(&e,0x89);byte(&e,0x57);byte(&e,offsetof(PwX86State,eflags));
+            }
         } else if(bit_scan) {
             /*
              * BSF/BSR. The host instruction computes the index on the guest
