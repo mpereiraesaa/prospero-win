@@ -462,6 +462,10 @@ The title runs one game per process (`src/pw_wine_launch.h`):
       shoulders, L2/R2 the analog triggers and L3/R3 the stick clicks.
       Options is Start, Create is Back and the touchpad is Guide.
     - The sticks are scaled to XInput's range, with y up.
+    - The rumble a game asks for runs the DualSense's motors through
+      `scePadSetVibration`: XInput's left motor is the large one. The
+      motors stop when the game is asked to close. The first rumble, and
+      any the pad refuses, are logged as `PW_WINE64 rumble`.
     - Bindings and the pointer stick still apply, so a preset can add a key.
       `examples/wine/input/gamepad.input` binds nothing and moves no
       pointer.

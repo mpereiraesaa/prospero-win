@@ -18,6 +18,7 @@ extern int scePadInit(void);
 extern int scePadOpen(int32_t,int32_t,int32_t,const void *);
 extern int scePadRead(int32_t,PwPadPs5Data *,int32_t);
 extern int scePadClose(int32_t);
+extern int scePadSetVibration(int32_t,const uint8_t *);
 static int platform_user_initialize(const void *p){return sceUserServiceInitialize(p);}
 static int platform_foreground_user(int32_t *u){return sceUserServiceGetForegroundUser(u);}
 static int platform_user_terminate(void){return sceUserServiceTerminate();}
@@ -27,6 +28,7 @@ static int platform_pad_open(int32_t u,int32_t t,int32_t i,const void *p)
 static int platform_pad_read(int32_t h,PwPadPs5Data *s,int32_t n)
 {return scePadRead(h,s,n);}
 static int platform_pad_close(int32_t h){return scePadClose(h);}
+static int platform_pad_set_vibration(int32_t h,const uint8_t m[2]){return scePadSetVibration(h,m);}
 #endif
 
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *ops)
@@ -37,7 +39,7 @@ int pw_pad_ps5_platform_ops(PwPadPs5Ops *ops)
 #else
     *ops=(PwPadPs5Ops){platform_user_initialize,platform_foreground_user,
         platform_user_terminate,platform_pad_init,platform_pad_open,
-        platform_pad_read,platform_pad_close};return PW_OK;
+        platform_pad_read,platform_pad_close,platform_pad_set_vibration};return PW_OK;
 #endif
 }
 
@@ -139,4 +141,13 @@ int pw_pad_ps5_close(PwPadPs5 *pad,PwUser32 *user,uint32_t window)
         if(pad->terminate_rc<0)status=PW_ERR_STATE;
     }
     return status;
+}
+
+int pw_pad_ps5_vibrate(PwPadPs5 *pad,uint8_t large,uint8_t small)
+{
+    if(!pad || !pad->opened)return PW_ERR_PRECONDITION;
+    if(!pad->ops.pad_set_vibration)return PW_ERR_UNSUPPORTED;
+    const uint8_t motors[2]={large,small};
+    pad->vibration_rc=pad->ops.pad_set_vibration(pad->pad_handle,motors);
+    return pad->vibration_rc<0?PW_ERR_STATE:PW_OK;
 }
