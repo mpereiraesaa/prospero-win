@@ -72,6 +72,7 @@ of the port never collide:
 | 0560 | `ntdll`: all Unix-side stderr goes through a sink the title sets with `__wine_ps5_set_output_sink` (a title cannot give Wine a usable fd 2); `fatal_error` formats into a local buffer |
 | 0570 | `ntdll`: reserve address space with a fixed, no-overwrite `sceKernelReserveVirtualRange`, since `MAP_FIXED \| MAP_EXCL` replaces existing mappings on FW 12.02; the view heap gets 64 MiB above 4 GiB |
 | 0580 | `ntdll`: skip the configuration directory's parent ownership check on PS5, as 0111 skips the one after `chdir` |
+| 0600 | `ntdll`: anonymous memory in the reserved areas is direct memory, not flexible memory; a 16 GiB area at `0x1000000000` takes the allocations free to go anywhere; see [Direct memory](#direct-memory) |
 
 ## Allocator
 
@@ -99,6 +100,44 @@ imported. Patch 0101 stops the server from receiving libc-allocated names:
 The one-time `realpath(name, NULL)` in `ntdll`'s startup path is left as is
 and appears as a foreign free.
 
+## Direct memory
+
+A title has about 440 MiB of flexible memory, which every anonymous mapping
+draws from, and up to 12 GiB of direct memory, which it allocates by physical
+offset and maps where it chooses (FW 12.02). Mappings without an address
+share one region at `0x200000000` that fills near 384 MiB. Patch 0600 sends
+the host `mmap`, `munmap` and `mprotect` of `virtual.c` (the counting
+wrappers of patch 0540) through `wine/ps5/pw_wine_dmem_ps5.c`, and every
+reserved area becomes a region of `wine/ps5/pw_wine_dmem.c`:
+
+- a fixed anonymous mapping (a view, a commit through `anon_mmap_fixed`) is
+  direct memory, zeroed, mapped read-write and then protected, since the
+  kernel refuses execute permission at map time but grants it through
+  `sceKernelMprotect`;
+- `PROT_NONE` (decommit, release) leaves a reservation and releases the
+  direct memory at once;
+- an `mprotect` that makes reserved pages accessible commits them;
+- a private file view (an image section) is refused with `ENODEV`, so
+  ntdll reads the file into the direct memory already there, as it does on a
+  file system without `mmap`: on the console a fixed file mapping over a
+  reservation left the pages unusable and the loader faulted writing a
+  section's tail; a shared one (shared memory) is mapped where asked, over
+  what is there, and takes the place of the direct memory;
+- `munmap` releases the memory and the address space; the range stays
+  owned, so a later fixed mapping there is direct memory again.
+
+The allocation recipe is the one the ps5-xash3d heap runs on (main direct
+memory of type `0x0c`, a fixed map over a reservation), mapped CPU read-write
+unless the kernel wants the GPU bits xash3d maps with. Before the first
+region is used, a self-check maps a page, writes it, makes it read-execute
+and frees it; if the console refuses any step, every call passes through as
+before and the log says so. A 16 GiB reserved area at `0x1000000000`, where
+the kernel grants the whole range at the hint, takes the views whose limits
+allow it before the low areas are searched, so the i386 guest keeps the low
+4 GiB. The host tests run the policy against a model of the kernel (a memfd
+for physical memory, reservations that refuse to overlap, execute refused at
+map time) with 20,000 random operations checked page by page.
+
 ## PRX modules
 
 The console does not load ELF shared objects, so after the ELF link the
@@ -106,7 +145,7 @@ script links `ntdll` and `win32u` again as PRX modules into
 `.deps/wine-ps5/prx/sce_module/`:
 
 1. Each module takes the objects of its ELF link, read back from
-   `make.log`. `ntdll` adds the heap and the PS5 shims (`pw_wine_prx`,
+   `make.log`. `ntdll` adds the heap, direct memory and the PS5 shims (`pw_wine_prx`,
    `pw_wine_dl`, `pw_wine_compat` and their libc bindings).
 2. `tools/gen_prx_descriptor.py` adds the export descriptor and
    `module_start`. `ntdll` publishes `__wine_main`, `pw_wine_dl_adopt`,

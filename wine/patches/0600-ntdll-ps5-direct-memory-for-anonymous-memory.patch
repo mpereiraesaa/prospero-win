@@ -1,0 +1,124 @@
+From cd1c12b6d9717a3b2516f422b94a23dc455f7343 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 17:46:13 +0200
+Subject: [PATCH] ntdll: Back anonymous memory with direct memory on PS5.
+
+A title has about 440 MiB of flexible memory, which every anonymous
+mapping draws from, and 12 GiB of direct memory it maps where it
+chooses (FW 12.02). The host mmap, munmap and mprotect that the counting
+wrappers issue go through wine/ps5/pw_wine_dmem_ps5.c, which backs every
+reserved area with direct memory on commit and releases it on decommit
+and free; calls outside the reserved areas pass through.
+
+A 16 GiB reserved area at 0x1000000000, where the kernel grants the
+whole range at the hint, takes the allocations that may go anywhere, so
+the low reserved areas stay for the i386 guest.
+---
+ dlls/ntdll/unix/virtual.c | 45 ++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 42 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 99228f07cb..17160e976c 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -182,9 +182,26 @@ static BOOL host_prot_unchanged( const void *addr, size_t len, int prot )
+     return TRUE;
+ }
+ 
++#ifdef __PROSPERO__
++/* wine/ps5/pw_wine_dmem_ps5.c, linked into ntdll: anonymous memory in the
++ * reserved areas comes from the console's direct memory instead of its
++ * ~440 MiB of flexible memory; every other call passes through. */
++extern void *__wine_ps5_mmap( void *addr, size_t len, int prot, int flags, int fd, off_t off );
++extern int __wine_ps5_munmap( void *addr, size_t len );
++extern int __wine_ps5_mprotect( void *addr, size_t len, int prot );
++extern void __wine_ps5_dmem_region( void *base, size_t size );
++#define host_mmap __wine_ps5_mmap
++#define host_munmap __wine_ps5_munmap
++#define host_mprotect __wine_ps5_mprotect
++#else
++#define host_mmap mmap
++#define host_munmap munmap
++#define host_mprotect mprotect
++#endif
++
+ static inline void *counted_mmap( void *addr, size_t len, int prot, int flags, int fd, off_t off )
+ {
+-    void *ret = mmap( addr, len, prot, flags, fd, off );
++    void *ret = host_mmap( addr, len, prot, flags, fd, off );
+ 
+     vm_stat_add( VM_STAT_MMAP, 1 );
+     if (ret != MAP_FAILED) host_prot_record( ret, len, prot | HOST_PROT_KNOWN );
+@@ -195,7 +212,7 @@ static inline int counted_munmap( void *addr, size_t len )
+ {
+     vm_stat_add( VM_STAT_MUNMAP, 1 );
+     host_prot_record( addr, len, 0 );
+-    return munmap( addr, len );
++    return host_munmap( addr, len );
+ }
+ 
+ static inline int counted_mprotect( void *addr, size_t len, int prot )
+@@ -209,7 +226,7 @@ static inline int counted_mprotect( void *addr, size_t len, int prot )
+     }
+     vm_stat_add( VM_STAT_MPROTECT, 1 );
+     vm_stat_add( VM_STAT_MPROTECT_BYTES, len );
+-    if (!(ret = mprotect( addr, len, prot ))) host_prot_record( addr, len, prot | HOST_PROT_KNOWN );
++    if (!(ret = host_mprotect( addr, len, prot ))) host_prot_record( addr, len, prot | HOST_PROT_KNOWN );
+     else host_prot_record( addr, len, 0 );
+     return ret;
+ }
+@@ -585,6 +602,9 @@ static void mmap_add_reserved_area( void *addr, SIZE_T size )
+ 
+     if (!((intptr_t)addr + size)) size -= host_page_size;  /* avoid wrap-around */
+     end = (char *)addr + size;
++#ifdef __PROSPERO__
++    __wine_ps5_dmem_region( addr, size );
++#endif
+ 
+     LIST_FOR_EACH( ptr, &reserved_areas )
+     {
+@@ -737,6 +757,10 @@ extern int sceKernelReserveVirtualRange( void **addr, size_t size, int flags, si
+ #define PS5_MAP_FIXED        0x10
+ #define PS5_MAP_NO_OVERWRITE 0x80
+ #define PS5_HEAP_RESERVE     0x4000000
++/* Room for 64-bit allocations, far from the low 4 GiB the i386 guest needs:
++ * the kernel grants 16 GiB at this hint (measured on FW 12.02). */
++#define PS5_HIGH_BASE        ((void *)0x1000000000)
++#define PS5_HIGH_RESERVE     ((size_t)16 << 30)
+ #endif
+ 
+ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
+@@ -922,8 +946,12 @@ static void mmap_init( const struct preload_info *preload_info )
+      * heap wherever the kernel has space above 4 GiB. */
+     {
+         void *heap = NULL;
++        void *high = PS5_HIGH_BASE;
+         if (!sceKernelReserveVirtualRange( &heap, PS5_HEAP_RESERVE, 0, granularity_mask + 1 ))
+             mmap_add_reserved_area( heap, PS5_HEAP_RESERVE );
++        if (!sceKernelReserveVirtualRange( &high, PS5_HIGH_RESERVE, PS5_MAP_FIXED | PS5_MAP_NO_OVERWRITE,
++                                           granularity_mask + 1 ))
++            mmap_add_reserved_area( high, PS5_HIGH_RESERVE );
+     }
+ #else
+     reserve_area( (void *)0x7ffffe000000, (void *)0x7fffffff0000 );
+@@ -2478,6 +2506,17 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+         if (limit_low && (void *)limit_low > start) start = (void *)limit_low;
+         if (limit_high && (void *)limit_high < end) end = (char *)limit_high + 1;
+ 
++#ifdef __PROSPERO__
++        /* An allocation free to go anywhere goes above 4 GiB first, leaving
++         * the low reserved areas to the i386 guest. */
++        if ((char *)end > (char *)PS5_HIGH_BASE &&
++            (ptr = map_reserved_area( max( start, PS5_HIGH_BASE ), end, host_size, top_down,
++                                      unix_prot, align_mask )))
++        {
++            TRACE( "got mem in the high reserved area %p-%p\n", ptr, (char *)ptr + size );
++            goto done;
++        }
++#endif
+         if ((ptr = map_reserved_area( start, end, host_size, top_down, unix_prot, align_mask )))
+         {
+             TRACE( "got mem in reserved area %p-%p\n", ptr, (char *)ptr + size );
+-- 
+2.43.0
+

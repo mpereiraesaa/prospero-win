@@ -224,12 +224,19 @@ for unit in pw_wine_heap pw_wine_heap_libc; do
         -c "$root/wine/ps5/$unit.c" -o "$work/heap/$unit.o" || fail "cannot compile $unit.c"
     heap="$heap $work/heap/$unit.o"
 done
+# ntdll's anonymous memory comes from direct memory (patch 0600).
+dmem=""
+for unit in pw_wine_dmem pw_wine_dmem_ps5; do
+    "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC \
+        -c "$root/wine/ps5/$unit.c" -o "$work/heap/$unit.o" || fail "cannot compile $unit.c"
+    dmem="$dmem $work/heap/$unit.o"
+done
 base="-L$work/ps5lib -lunwind -Wl,--warn-unresolved-symbols"
 status=0
 : > "$work/make.log"
 # LDFLAGS is not a make dependency, so relink the three targets every run.
 (cd "$build" && rm -f $TARGETS)
-for step in "dlls/ntdll/ntdll.so|$heap" "dlls/win32u/win32u.so|" "server/wineserver|$heap"; do
+for step in "dlls/ntdll/ntdll.so|$heap $dmem" "dlls/win32u/win32u.so|" "server/wineserver|$heap"; do
     target=${step%%|*}; objects=${step#*|}
     make -C "$build" -k -j"$jobs" LDFLAGS="$objects $base" "$target" \
         >> "$work/make.log" 2>&1 || status=$?
@@ -316,7 +323,7 @@ if [ "$prx_status" = 0 ]; then
         pw_wine_present pw_wine_next_input pw_wine_input_fd \
         pw_wine_set_pad pw_wine_rumble pw_wine_pad pw_wine_set_rumble \
         pw_wine_set_audio_sink pw_wine_audio_available pw_wine_audio_output \
-        __wine_virtual_stats __wine_ps5_set_output_sink
+        __wine_virtual_stats __wine_ps5_set_output_sink __wine_ps5_memory_stats
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/win32u_desc.c" __wine_unix_lib_init
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \
         pw_wineserver_connect pw_wine_thread_register
@@ -332,7 +339,7 @@ if [ "$prx_status" = 0 ]; then
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
-    link_prx ntdll dlls/ntdll/ntdll.so "$heap $shims $prx/obj/ntdll_desc.o $cwd_wraps"
+    link_prx ntdll dlls/ntdll/ntdll.so "$heap $dmem $shims $prx/obj/ntdll_desc.o $cwd_wraps"
     link_prx win32u dlls/win32u/win32u.so "$prx/obj/win32u_desc.o" "$prx/ntdll.shared.elf"
     # ntdll loads it with its own dlopen; it has its own heap, needs no
     # dlfcn of its own, and signals threads through the registry ntdll fills.

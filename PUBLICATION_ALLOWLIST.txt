@@ -168,6 +168,8 @@ wine/ps5/pw_wine_heap.h
 tests/test_pw_wine_dmem.c
 wine/ps5/pw_wine_dmem.c
 wine/ps5/pw_wine_dmem.h
+tests/test_pw_wine_dmem_ps5.c
+wine/ps5/pw_wine_dmem_ps5.c
 wine/patches/0101-server-realpath-into-server-memory.patch
 wine/patches/0102-server-user-shared-data-fills-a-host-page.patch
 wine/patches/0110-server-run-in-process-on-ps5.patch
@@ -185,6 +187,7 @@ wine/patches/0560-ntdll-stderr-output-sink.patch
 wine/patches/0570-ntdll-ps5-reserve-virtual-range.patch
 wine/patches/0580-ntdll-ps5-config-dir-parent-ownership.patch
 wine/patches/0590-ntdll-ps5-repair-null-fs-on-unix-entry.patch
+wine/patches/0600-ntdll-ps5-direct-memory-for-anonymous-memory.patch
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
