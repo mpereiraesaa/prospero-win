@@ -103,6 +103,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Guest addresses with one `lea` | 788 | 804 | +2% | 19.9% |
 | Shifts and rotates by a constant as the host instruction | 797 | 872 | +9% | 18.5% |
 | Flat-guard misses out of line, after the block | 872 | 960 | +10% | 20.4% |
+| RCL/RCR and 16-bit rotates by a constant (and the 16-bit count fix) | 958 | 977 | +2% | 20.0% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -148,6 +149,23 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   the hot code is a quarter the size. A refused push or pop shares the same
   mechanism.
 
+### After these changes
+
+Main at the start of this work against main with all of the above, three
+interleaved rounds against native on the same core, medians:
+
+| Configuration | Compress | Decompress | Total | vs native |
+|---|---|---|---|---|
+| native (`wow64cpu`) | 5358 | 4104 | 4731 | 100% |
+| DBT before (#155) | 557 | 522 | 540 | 11.4% |
+| DBT after (`11111`) | 991 | 915 | 953 | **20.1%** |
+| after, no residency (`10111`) | 1029 | 851 | 940 | 19.9% |
+| after, no lazy flags (`11011`) | 970 | 858 | 915 | 19.3% |
+
+The DBT is 1.76× faster: 18.5% of native compressing and 22.3%
+decompressing. Residency is now neutral (it was a 2–14% loss), and lazy
+flags now pay 4%, because producers feed branches directly.
+
 ## Comparison with published numbers
 
 Published ratios, total rating as a share of native:
@@ -160,7 +178,7 @@ Published ratios, total rating as a share of native:
 | Rosetta 2 | Apple M1 | 71% | [box86.org, 2022-03][b] |
 | FEX (x86 / x86-64) | Raspberry Pi 400 | 19% / 26% (FEX of 2022) | [box86.org, 2022-03][b] |
 | QEMU user (x86 / x86-64) | Raspberry Pi 400 | 11% / 16% | [box86.org, 2022-03][b] |
-| **prospero-win DBT** | i7-12700H (x86-64) | **12%** | this page |
+| **prospero-win DBT** | i7-12700H (x86-64) | **20%** (12% before) | this page |
 
 These are indicative only. The others translate x86 to ARM on other
 hardware, and FEX has improved a lot since 2022. Our host is x86-64, so the
@@ -199,6 +217,25 @@ available on this host), full-fix build:
    is the structural fix.
 5. **Remaining fallbacks.** RCL/RCR and the 16-bit rotates are not
    translated yet.
+
+### Still open
+
+- **Guest registers in memory.** Most instructions still load and store
+  `[rdi+gpr*4]`. Mapping all eight guest GPRs to host registers for a whole
+  block or chain, with spills at exits, helpers and faults, is the
+  structural step toward box64's ~50%. Residency (three host registers) is
+  the partial version and is now neutral.
+- **The memory guard.** The flat guard is one `lea`, `cmp` and `ja` per
+  access. Removing it needs a reserved 4 GiB guest range and a fault
+  handler that turns a host fault into the guest's access violation at the
+  right EIP. That handler has to live beside Wine's own signal handling on
+  the PS5, so it needs the console to validate.
+- **Chain quantum.** A chain yields to the dispatcher every 64 blocks. 1024
+  measured +9% more (974 to 1055 total MIPS); the cost is how long a
+  thread runs before it notices a flush or a signal, which needs measuring
+  with Pinball first.
+- **Flag capture.** Producers still capture flags with `pushfq; pop` when
+  the branch is not adjacent.
 
 ## On the console
 
