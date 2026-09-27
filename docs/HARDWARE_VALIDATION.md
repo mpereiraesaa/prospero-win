@@ -167,6 +167,35 @@ On firmware 12.02 (2026-09-27, ps5log `20260927T000252036Z`,
 
 `sceSystemServiceLaunchApp` on the title's own ID was not needed.
 
+## Wine launcher: opening and closing Pinball
+
+The wine64 title boots into the launcher and restarts itself for each game
+(`docs/WINE_PS5_BUILD.md`, "Starting Wine in the title"). A scripted run
+(`PW_WINE64_SCRIPT=1`, `PW_WINE64_SECONDS=75`) on firmware 12.02
+(2026-09-27, ps5log `20260927T003053851Z` to `20260927T003344255Z`) staged
+the Wine runtime beside the title under `win/wine`, used the
+persistent prefix at `/data/prospero-win/prefix`, and deleted the runtime
+and restored the baseline eboot afterwards:
+
+1. The launcher started with no arguments (VideoOut and pad `ok`), chose
+   Pinball and restarted the title with `profile=pinball`.
+2. The game process loaded Wine (`stage=6`). Wine presented two 800x600
+   frames of Pinball's window about 35 s in, and the title showed both.
+3. At the 75 s deadline the title sent Alt+F4. Pinball did not close within
+   5 s, so the title restarted into the launcher (`close-timeout`,
+   `cycle=1`).
+4. The same open and close happened a second time in a fresh process, and
+   the launcher ended the script at `cycle=2`.
+
+Two gaps remain:
+
+- **Graceful close.** Alt+F4 did not close Pinball, so the return to the
+  launcher took the forced path, which discards Wine's state without an
+  orderly shutdown.
+- **No redraw.** Wine presents the window only when it is painted. After the
+  first two frames nothing redraws, so the screen shows a still picture of
+  the table.
+
 ## Evidence rules
 
 A screenshot or video proves appearance only. Runtime acceptance requires:
