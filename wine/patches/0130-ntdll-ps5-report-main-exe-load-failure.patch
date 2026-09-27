@@ -1,22 +1,70 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: prospero-win <prospero-win@invalid>
 Date: Sun, 27 Sep 2026 16:00:00 +0200
-Subject: [PATCH] ntdll: Report why the main program cannot run in-process on PS5.
+Subject: [PATCH] ntdll: Run a relocated main program in-process on PS5.
 
 When the main executable cannot be loaded into the initial process,
 Wine runs start.exe instead, which starts the program in a new process.
-A PS5 title cannot create one, so start.exe only prints that the
-application could not be started, and the reason the program was
-refused is lost. On PS5, print the program and the status instead and
-end the process with it.
+A PS5 title cannot create one. The PS5 title's own image may occupy a
+program's preferred base (0x400000 for most executables), so the program
+is mapped elsewhere and load_main_exe returns STATUS_IMAGE_NOT_AT_BASE:
+on PS5 that is accepted, and the PE loader relocates the image as it
+does any main image that is not at its base.
+
+For any other failure, print the program and the status instead of
+running start.exe. Both that and the "failed to open" path end the
+process through exit() rather than _exit(), so the title's exit handler
+(which restarts into its launcher) runs.
 ---
- dlls/ntdll/unix/env.c | 9 +++++++++
- 1 file changed, 9 insertions(+)
+ dlls/ntdll/unix/env.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
 
 diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
 --- a/dlls/ntdll/unix/env.c
 +++ b/dlls/ntdll/unix/env.c
-@@ -1948,6 +1948,15 @@
+@@ -1886,6 +1886,19 @@
+ }
+ 
+ 
++#ifdef __PROSPERO__
++/* End the process through exit(), so the host's exit handlers run: a PS5
++ * title restarts into its launcher from one. Terminating the other threads
++ * first marks the process as exiting; terminating itself straight away is
++ * abort_process, which is _exit(). */
++static void DECLSPEC_NORETURN exit_initial_process( NTSTATUS status )
++{
++    NtTerminateProcess( 0, status );
++    NtTerminateProcess( GetCurrentProcess(), status );
++    abort_process( status );
++}
++#endif
++
+ /*************************************************************************
+  *		build_initial_params
+  *
+@@ -1927,11 +1940,21 @@
+ 
+     get_full_path( main_argv[1], curdir, &nt_name );
+     status = load_main_exe( &nt_name, 0, module );
++#ifdef __PROSPERO__
++    /* The title's own image may hold the program's preferred base, so the
++     * program is mapped elsewhere; the PE loader relocates it, as Windows
++     * does. start.exe would only retry in a new process, which a PS5 title
++     * cannot create. */
++    if (status == STATUS_IMAGE_NOT_AT_BASE) status = STATUS_SUCCESS;
++#endif
+     /* fail only if the file contained an explicit path */
+     if (status == STATUS_DLL_NOT_FOUND &&
+         (strpbrk( main_argv[1], "/\\" ) || (main_argv[1][0] && main_argv[1][1] == ':')))
+     {
+         MESSAGE( "wine: failed to open %s\n", debugstr_a(main_argv[1]) );
++#ifdef __PROSPERO__
++        exit_initial_process( status );
++#endif
+         NtTerminateProcess( GetCurrentProcess(), status );
+     }
+ 
+@@ -1948,6 +1971,15 @@
          }
      }
  
@@ -26,7 +74,7 @@ diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
 +    if (status)
 +    {
 +        MESSAGE( "wine: cannot run %s in this process: status %08x\n", debugstr_a(main_argv[1]), status );
-+        NtTerminateProcess( GetCurrentProcess(), status );
++        exit_initial_process( status );
 +    }
 +#endif
      if (status)  /* try launching it through start.exe */
