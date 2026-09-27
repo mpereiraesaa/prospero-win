@@ -164,6 +164,9 @@ wine/patches/0100-ntdll-no-fstab-device-on-ps5.patch
 tests/test_pw_wine_heap.c
 wine/ps5/pw_wine_heap.c
 wine/ps5/pw_wine_heap.h
+tests/test_pw_wine_dmem.c
+wine/ps5/pw_wine_dmem.c
+wine/ps5/pw_wine_dmem.h
 wine/patches/0101-server-realpath-into-server-memory.patch
 wine/patches/0102-server-user-shared-data-fills-a-host-page.patch
 wine/patches/0110-server-run-in-process-on-ps5.patch

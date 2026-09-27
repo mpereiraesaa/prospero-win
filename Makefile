@@ -44,6 +44,7 @@ $(eval $(call test_rule,test_pw_app_profile,tests/test_pw_app_profile.c src/pw_a
 $(eval $(call test_rule,test_pw_profile_catalog,tests/test_pw_profile_catalog.c src/pw_profile_catalog.c,))
 $(eval $(call test_rule,test_pw_present,tests/test_pw_present.c src/pw_present.c,))
 $(eval $(call test_rule,test_pw_wine_heap,tests/test_pw_wine_heap.c wine/ps5/pw_wine_heap.c,-pthread))
+$(eval $(call test_rule,test_pw_wine_dmem,tests/test_pw_wine_dmem.c wine/ps5/pw_wine_dmem.c,))
 $(eval $(call test_rule,test_pw_wine_prx,tests/test_pw_wine_prx.c wine/ps5/pw_wine_prx.c,-I.))
 $(eval $(call test_rule,test_pw_wine_threads,tests/test_pw_wine_threads.c wine/ps5/pw_wine_threads.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_sink,tests/test_pw_wine_sink.c wine/ps5/pw_wine_sink.c,-pthread))
@@ -104,7 +105,7 @@ box86-catalog: $(BUILD)/pw_x86_decode_probe
 		--markdown-output docs/BOX86_OPCODE_CATALOG.md
 
 TESTS := test_pw_x86_hostexec test_pw_app_profile test_pw_profile_catalog test_pw_present \
-	test_pw_wine_heap test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_game_profile \
+	test_pw_wine_heap test_pw_wine_dmem test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_game_profile \
 	test_pw_wine_library test_pw_wine_display test_pw_wine_dl test_pw_wine_sink \
 	test_pw_wine_threads test_pw_wine_compat test_pw_wine_cwd test_pw_launcher_render test_pw_pad \
 	test_pw_guest_fp test_pw_vm test_pw_x86_block test_pw_x86_flat test_pw_x86_cache test_pw_x86_code_pages test_pw_wow_thread_budget \
