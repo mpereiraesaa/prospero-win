@@ -181,22 +181,23 @@ static int show_scaled(PwVideoOutPs5 *video, const PwPresentView *view, int scal
     return pw_videoout_ps5_present_scaled(video, &frame, scaling, 0x000000u);
 }
 
-/* ---- fd 2 -> ps5log ---------------------------------------------------- */
+/* ---- fd 1 and fd 2 -> ps5log ------------------------------------------- */
 
-/* The in-process wineserver writes its errors with fprintf(stderr), which a
- * title does not show: fd 2 becomes one end of a socket pair (pipe() is not
- * available and dup2 onto fd 2 is refused, measured) whose lines a thread
- * forwards as "WINESERVER ..." records. */
-static int fd2_reader = -1;
+/* The in-process wineserver writes its errors with fprintf(stderr), and a
+ * console program's output reaches Wine's standard output handle, fd 1,
+ * neither of which a title shows: each becomes one end of a socket pair
+ * (pipe() is not available and dup2 onto fd 2 is refused, measured) whose
+ * lines a thread forwards as "WINESERVER ..." and "STDOUT ..." records. */
+typedef struct PwFdForward { int reader; const char *tag; } PwFdForward;
 
-static void *forward_fd2(void *arg)
+static void *forward_fd(void *arg)
 {
+    const PwFdForward *forward = arg;
     char buffer[1024];
     size_t used = 0;
 
-    (void)arg;
     for (;;) {
-        ssize_t got = read(fd2_reader, buffer + used, sizeof(buffer) - 1 - used);
+        ssize_t got = read(forward->reader, buffer + used, sizeof(buffer) - 1 - used);
         if (got <= 0) break;
         used += (size_t)got;
         for (;;) {
@@ -204,7 +205,8 @@ static void *forward_fd2(void *arg)
             if (!newline && used < sizeof(buffer) - 1) break;
             size_t line = newline ? (size_t)(newline - buffer) : used;
             buffer[line] = 0;
-            PS5LOG_LOG("WINESERVER %s", buffer);
+            if (line && buffer[line - 1] == '\r') buffer[line - 1] = 0;
+            PS5LOG_LOG("%s %s", forward->tag, buffer);
             line += newline ? 1u : 0u;
             memmove(buffer, buffer + line, used - line);
             used -= line;
@@ -213,25 +215,24 @@ static void *forward_fd2(void *arg)
     return NULL;
 }
 
-/* Close fd 2 first: descriptors are allocated lowest first, so one end of
- * the new pair takes number 2; keep that one as the writer. */
-static int capture_fd2(void)
+/* Close fd first: descriptors are allocated lowest first, so one end of the
+ * new pair takes its number. Both ends of a socket pair are alike, so that
+ * end is the writer and the other the reader, with no dup2. */
+static int capture_fd(int fd, PwFdForward *forward)
 {
     int pair[2];
     pthread_t thread;
 
-    close(2);
+    close(fd);
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return -1;
-    if (pair[1] == 2) fd2_reader = pair[0];
-    else if (pair[0] == 2) {
-        fd2_reader = dup(pair[0]);  /* free number 2 for the writer */
-        if (fd2_reader < 0 || dup2(pair[1], 2) != 2) return -2;
+    if (pair[0] == fd || pair[1] == fd) {
+        forward->reader = pair[0] == fd ? pair[1] : pair[0];
     } else {
-        /* 0 and 1 were free too: move the writer onto the closed 2 */
-        fd2_reader = pair[0];
-        if (dup2(pair[1], 2) != 2) return -3;
+        /* lower numbers were free too: move the writer onto fd */
+        forward->reader = pair[0];
+        if (dup2(pair[1], fd) != fd) return -3;
     }
-    return pthread_create(&thread, NULL, forward_fd2, NULL) ? -4 : 0;
+    return pthread_create(&thread, NULL, forward_fd, forward) ? -4 : 0;
 }
 
 /* ---- one game per process -------------------------------------------- */
@@ -497,7 +498,9 @@ int main(int argc, char **argv)
         { "WINE_PS5_VIEW", view },          /* patch 0430: the game's windows, or the desktop */
         { "WINE_PS5_DESKTOP", desktop },    /* last: only when the profile sets it */
     };
-    static const char *wine_argv[] = { "wine", NULL };
+    /* wine, the executable, the profile's argument words, NULL */
+    static const char *wine_argv[2 + PW_WINE_LAUNCH_WORDS + 1] = { "wine" };
+    static char argument_words[PW_APP_ARGUMENTS_CAPACITY];
     static char ntdll_dir[256], ntdll_path[288];
     static const PwWineStartOps ops = {
         sceKernelLoadStartModule, sceKernelGetModuleInfo, set_env, start_thread };
@@ -566,6 +569,13 @@ int main(int argc, char **argv)
                    scaling, view, pw_result_name(input_status),
                    game->input.preset[0] ? game->input.preset : "-",
                    game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse);
+        /* [application] arguments follow the executable in Wine's argv. */
+        int words = pw_wine_launch_split(game->app.arguments, argument_words,
+                                         sizeof(argument_words), wine_argv + 2,
+                                         PW_WINE_LAUNCH_WORDS);
+        if (words > 0) config.argc = 2 + words;
+        if (words < 0) PS5LOG_LOG("PW_WINE64 arguments refused: %s", game->app.arguments);
+        else if (words) PS5LOG_LOG("PW_WINE64 arguments words=%d line=%s", words, game->app.arguments);
     }
 
     for (size_t i = 0; i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
@@ -577,8 +587,13 @@ int main(int argc, char **argv)
     }
     PS5LOG_LOG("PW_WINE64 ntdll=%s prefix=%s exe=%s", config.ntdll_path, config.prefix,
                launch.executable);
-    status = capture_fd2();
-    if (status != 0) PS5LOG_LOG("PW_WINE64 fd2_capture=failed status=%d", status);
+    {
+        static PwFdForward forward_stderr = { -1, "WINESERVER" }, forward_stdout = { -1, "STDOUT" };
+        status = capture_fd(2, &forward_stderr);
+        if (status != 0) PS5LOG_LOG("PW_WINE64 fd2_capture=failed status=%d", status);
+        status = capture_fd(1, &forward_stdout);
+        if (status != 0) PS5LOG_LOG("PW_WINE64 fd1_capture=failed status=%d", status);
+    }
 
     status = pw_wine_start_load(&start, &config, &ops);
     PS5LOG_LOG("PW_WINE64 load status=%d stage=%d module=0x%x segments=%u module_start=%d "

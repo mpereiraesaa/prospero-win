@@ -20,7 +20,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-enum { PW_WINE_LAUNCH_PATH_MAX = 260, PW_WINE_LAUNCH_ARGS = 4 };
+enum { PW_WINE_LAUNCH_PATH_MAX = 260, PW_WINE_LAUNCH_ARGS = 4, PW_WINE_LAUNCH_WORDS = 32 };
 
 typedef struct PwWineApp {
     const char *id;           /* profile=<id> */
@@ -58,4 +58,12 @@ size_t pw_wine_launch_sync_argv(uint32_t cycle, char *storage, size_t size, char
 /* 1 when argv asks for a game or sync, which need /data before the catalog
  * can be read; 0 for the launcher. */
 int pw_wine_launch_needs_data(int argc, char *const *argv);
+/* A profile's arguments line as words for Wine's argv, which Wine quotes
+ * back into the Windows command line: words split at spaces and tabs, and
+ * double quotes group a word ("a b" is one word; the quotes are dropped).
+ * Words are copied into storage. Returns the number of words (0 for an
+ * empty line), or -1 when text is NULL, a quote is unclosed, or the words
+ * do not fit storage or max. */
+int pw_wine_launch_split(const char *text, char *storage, size_t size, const char **words,
+                         size_t max);
 #endif

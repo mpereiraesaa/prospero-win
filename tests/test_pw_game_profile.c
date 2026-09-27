@@ -202,6 +202,14 @@ static void test_examples(void)
     assert(input.mouse == PW_GAME_STICK_LEFT && input.bindings[CROSS].kind == PW_GAME_BIND_MOUSE);
     assert(input.bindings[CIRCLE].code == 1 && input.bindings[SQUARE].code == 2);
 
+    /* The 7-Zip benchmark passes its arguments line to the program. */
+    assert((file = fopen("examples/wine/profiles/sevenzip-bench.profile", "rb")));
+    length = fread(text, 1, sizeof(text), file);
+    assert(!fclose(file) && length < sizeof(text));
+    assert(pw_game_profile_parse(text, length, &p) == PW_OK);
+    assert(!strcmp(p.app.id, "sevenzip-bench") && !strcmp(p.app.arguments, "b -mmt1 -md22"));
+    assert(p.app.architecture == PW_APP_ARCH_PE32 && !p.input.preset[0]);
+
     /* The gamepad preset: XInput, no pointer, nothing bound. */
     assert((file = fopen("examples/wine/input/gamepad.input", "rb")));
     length = fread(text, 1, sizeof(text), file);

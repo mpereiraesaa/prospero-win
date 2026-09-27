@@ -137,12 +137,42 @@ static void test_sync(void)
     assert(!pw_wine_launch_needs_data(2, launcher) && !pw_wine_launch_needs_data(0, NULL));
 }
 
+static void test_split(void)
+{
+    char storage[64], small[6];
+    const char *words[PW_WINE_LAUNCH_WORDS];
+
+    /* 7-Zip's benchmark line: spaces and tabs separate, runs collapse. */
+    assert(pw_wine_launch_split("  b -mmt1\t-md22 ", storage, sizeof(storage), words, 8) == 3);
+    assert(!strcmp(words[0], "b") && !strcmp(words[1], "-mmt1") && !strcmp(words[2], "-md22"));
+    /* Quotes group a word and are dropped, also inside a word. */
+    assert(pw_wine_launch_split("x \"C:\\My Games\\a.dat\" -o\"out dir\" \"\"", storage,
+                                sizeof(storage), words, 8) == 4);
+    assert(!strcmp(words[1], "C:\\My Games\\a.dat") && !strcmp(words[2], "-oout dir") &&
+           !strcmp(words[3], ""));
+    assert(pw_wine_launch_split("", storage, sizeof(storage), words, 8) == 0);
+    assert(pw_wine_launch_split(" \t ", storage, sizeof(storage), words, 0) == 0);
+
+    /* Refusals: an unclosed quote, too many words, storage exhausted. */
+    assert(pw_wine_launch_split("a \"b", storage, sizeof(storage), words, 8) == -1);
+    assert(pw_wine_launch_split("a b c", storage, sizeof(storage), words, 2) == -1);
+    assert(pw_wine_launch_split("abcdef", small, sizeof(small), words, 8) == -1);
+    assert(pw_wine_launch_split("ab cde", small, sizeof(small), words, 8) == -1);
+    assert(pw_wine_launch_split("ab c", small, sizeof(small), words, 8) == 2 &&
+           !strcmp(words[1], "c"));
+    assert(pw_wine_launch_split(NULL, storage, sizeof(storage), words, 8) == -1);
+    assert(pw_wine_launch_split("a", NULL, sizeof(storage), words, 8) == -1);
+    assert(pw_wine_launch_split("a", storage, sizeof(storage), NULL, 8) == -1);
+}
+
 int main(void)
 {
     test_parse();
     test_argv();
     test_sync();
+    test_split();
     printf("wine launch passed: launcher on no game, profile and path, overrides, refusals, "
-           "cycle counts, LoadExec argv round trip, bounded storage, sync mode, /data need\n");
+           "cycle counts, LoadExec argv round trip, bounded storage, sync mode, /data need, "
+           "argument words\n");
     return 0;
 }

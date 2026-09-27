@@ -126,3 +126,27 @@ int pw_wine_launch_needs_data(int argc, char *const *argv)
     }
     return 0;
 }
+
+int pw_wine_launch_split(const char *text, char *storage, size_t size, const char **words,
+                         size_t max)
+{
+    size_t used = 0;
+    int count = 0;
+
+    if (!text || !storage || !words) return -1;
+    for (;;) {
+        int quoted = 0;
+
+        while (*text == ' ' || *text == '\t') text++;
+        if (!*text) return count;
+        if ((size_t)count >= max) return -1;
+        words[count++] = storage + used;
+        for (; *text && (quoted || (*text != ' ' && *text != '\t')); text++) {
+            if (*text == '"') { quoted = !quoted; continue; }
+            if (used + 1 >= size) return -1;
+            storage[used++] = *text;
+        }
+        if (quoted || used >= size) return -1;
+        storage[used++] = 0;
+    }
+}
