@@ -28,6 +28,7 @@
 #include "pw_vm_posix.h"
 #include "pw_guest_fp.h"
 #include "pw_x86_hostexec.h"
+#include "code_pages.h"
 
 enum { CACHE_ENTRIES = 65536, ARENA_BYTES = 128u * 1024u * 1024u };
 
@@ -51,14 +52,21 @@ struct pw_thread
 };
 
 static __thread struct pw_thread *self;
+/* Bumped when a memory notification touches a page translated code was read
+ * from: every thread then discards its translations on its next entry. */
 static volatile uint64_t code_generation = 1;
+/* Bumped by every memory notification: protection may have changed. */
+static volatile uint64_t protect_generation = 1;
+static PwX86CodePages code_pages;
+static volatile int flush_lock;
 
 /* Translation reads source bytes straight from the identity-mapped guest.
  * A span never extends into an unreadable page. Readability comes from
  * Wine's own view of the address space (NtQueryVirtualMemory is resolved in
  * process, without a kernel call), which is the same on every host; the
- * last readable region is cached per thread until the next code flush,
- * because memory frees and protection changes bump code_generation. */
+ * last readable region is cached per thread until the next memory
+ * notification, because frees and protection changes bump
+ * protect_generation. */
 static int readable( uintptr_t address )
 {
     struct pw_thread *thread = self;
@@ -66,7 +74,9 @@ static int readable( uintptr_t address )
     const ULONG readable_mask = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
                                 PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
 
-    if (thread && thread->readable_generation == code_generation &&
+    uint64_t generation = __atomic_load_n( &protect_generation, __ATOMIC_ACQUIRE );
+
+    if (thread && thread->readable_generation == generation &&
         address >= thread->readable_low && address < thread->readable_high)
     {
         thread->readable_hits++;
@@ -82,7 +92,7 @@ static int readable( uintptr_t address )
     {
         thread->readable_low = (uintptr_t)info.BaseAddress;
         thread->readable_high = (uintptr_t)info.BaseAddress + info.RegionSize;
-        thread->readable_generation = code_generation;
+        thread->readable_generation = generation;
     }
     return 1;
 }
@@ -98,6 +108,8 @@ static int source_view( void *opaque, uint32_t pc, const uint8_t **source, size_
     *source = (const uint8_t *)(uintptr_t)pc;
     *bytes = end - pc;
     if (*bytes > PW_X86_ENGINE_MAX_SOURCE) *bytes = PW_X86_ENGINE_MAX_SOURCE;
+    /* Whatever a translation may read from; flush() keys on these marks. */
+    pw_x86_code_pages_mark( &code_pages, pc, *bytes );
     return PW_OK;
 }
 
@@ -193,6 +205,7 @@ static NTSTATUS run( void *args )
     struct pw_thread *thread = get_thread();
     PwX86StepReport report;
     PwX86State *state;
+    uint64_t generation;
     int status;
 
     if (!thread)
@@ -202,9 +215,10 @@ static NTSTATUS run( void *args )
         return STATUS_SUCCESS;
     }
     state = &thread->state;
-    if (thread->generation != code_generation)
+    generation = __atomic_load_n( &code_generation, __ATOMIC_ACQUIRE );
+    if (thread->generation != generation)
     {
-        thread->generation = code_generation;
+        thread->generation = generation;
         pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
         pw_x86_hostexec_reset( &thread->hostexec );
     }
@@ -260,9 +274,29 @@ static NTSTATUS run( void *args )
     return STATUS_SUCCESS;
 }
 
+/* A memory notification. The loader protects and frees memory hundreds of
+ * times while it maps and relocates DLLs; discarding every translation each
+ * time made a game's startup re-translate the same loader code over and
+ * over. Translations are discarded only when the range touches a page code
+ * was translated from, or its extent is unknown (size 0: an unmapped view
+ * or a whole-cache flush).
+ *
+ * Marks are cleared before the generation moves, under a lock, so a thread
+ * that saw the new generation marks pages after the clear: a mark is lost
+ * only for a thread that has yet to see the bump, which will discard its
+ * translations anyway. */
 static NTSTATUS flush( void *args )
 {
-    __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
+    const struct pw_wow_flush_params *params = args;
+
+    __atomic_add_fetch( &protect_generation, 1, __ATOMIC_SEQ_CST );
+    while (__atomic_exchange_n( &flush_lock, 1, __ATOMIC_ACQUIRE )) __builtin_ia32_pause();
+    if (!params || !params->size || pw_x86_code_pages_any( &code_pages, params->address, params->size ))
+    {
+        pw_x86_code_pages_clear( &code_pages );
+        __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
+    }
+    __atomic_store_n( &flush_lock, 0, __ATOMIC_RELEASE );
     return STATUS_SUCCESS;
 }
 

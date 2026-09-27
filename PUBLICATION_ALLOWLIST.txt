@@ -166,6 +166,7 @@ tests/test_pw_import_bind.c
 tests/test_pw_guest_call.c
 tests/test_pw_x86_block.c
 tests/test_pw_x86_cache.c
+tests/test_pw_x86_code_pages.c
 tests/test_pw_x86_engine.c
 tests/test_pw_x86_chaining.c
 tests/test_pw_x86_residency.c
@@ -348,6 +349,7 @@ tools/pw_x86_decode_probe.c
 assets/prospero-win-logo.svg
 assets/prospero-win-banner.svg
 tests/test_wowprospero_contract.py
+wine/wowprospero/code_pages.h
 wine/wowprospero/cpu.c
 wine/wowprospero/unix.c
 wine/wowprospero/wowprospero.h
