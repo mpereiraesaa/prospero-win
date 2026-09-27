@@ -29,8 +29,8 @@
 #include "pw_guest_fp.h"
 #include "pw_x86_hostexec.h"
 #include "code_pages.h"
+#include "thread_budget.h"
 
-enum { CACHE_ENTRIES = 65536, ARENA_BYTES = 128u * 1024u * 1024u };
 /* The guest range every translated access is checked against (load_state). */
 enum { GUEST_LOW = 0x10000u, GUEST_HIGH = 0xfffff000u };
 /* The guest GPRs held in host registers across linked blocks: seven fit, and
@@ -56,10 +56,13 @@ struct pw_thread
     uintptr_t readable_low, readable_high;
     uint64_t readable_generation;
     uint64_t readable_queries, readable_hits;
-    PwX86CacheEntry entries[CACHE_ENTRIES];
+    PwX86CacheEntry *entries;  /* the budget's count (thread_budget.h) */
 };
 
 static __thread struct pw_thread *self;
+/* Set once a thread has its DBT: the threads after it take the smaller
+ * budget (thread_budget.h). */
+static int first_thread_ready;
 /* Bumped when a memory notification touches a page translated code was read
  * from: every thread then discards its translations on its next entry. */
 static volatile uint64_t code_generation = 1;
@@ -121,19 +124,46 @@ static int source_view( void *opaque, uint32_t pc, const uint8_t **source, size_
     return PW_OK;
 }
 
+/* The thread's cache entries, engine and fallback within one budget; 0, or
+ * -1 with nothing left allocated. */
+static int setup_thread( void *context, const PwWowThreadBudget *budget )
+{
+    struct pw_thread *thread = context;
+
+    if (!(thread->entries = calloc( budget->entries, sizeof(*thread->entries) ))) return -1;
+    if (pw_x86_engine_init( &thread->engine, &thread->vm, thread->entries, budget->entries,
+                            budget->arena_bytes, (uint32_t)code_generation, source_view, NULL ) == PW_OK)
+    {
+        if (pw_x86_hostexec_init( &thread->hostexec, &thread->vm, budget->hostexec_bytes ) == PW_OK)
+            return 0;
+        pw_x86_engine_destroy( &thread->engine );
+    }
+    free( thread->entries );
+    thread->entries = NULL;
+    return -1;
+}
+
 static struct pw_thread *get_thread(void)
 {
     struct pw_thread *thread = self;
+    PwWowThreadBudget budget;
+    int first, attempt;
 
     if (thread) return thread;
     if (!(thread = calloc( 1, sizeof(*thread) ))) return NULL;
+    first = !__atomic_load_n( &first_thread_ready, __ATOMIC_ACQUIRE );
     if (pw_vm_posix_backend( &thread->vm ) != PW_OK ||
-        pw_x86_engine_init( &thread->engine, &thread->vm, thread->entries, CACHE_ENTRIES,
-                            ARENA_BYTES, (uint32_t)code_generation, source_view, NULL ) != PW_OK)
+        (attempt = pw_wow_thread_fit( first, setup_thread, thread, &budget )) < 0)
     {
+        fprintf( stderr, "wowprospero: no memory for a %s thread's translator\n",
+                 first ? "first" : "further" );
         free( thread );
         return NULL;
     }
+    if (attempt)
+        fprintf( stderr, "wowprospero: %s thread's translator reduced to %u entries, %zu KiB of code\n",
+                 first ? "first" : "further", budget.entries, budget.arena_bytes >> 10 );
+    __atomic_store_n( &first_thread_ready, 1, __ATOMIC_RELEASE );
     {
         /* PW_WOW_MODES=<chaining><residency><lazy-flags>[<indirect>[<flat>[<reencode>]]],
          * e.g. "00000" for the plainest translation; used to bisect
@@ -182,12 +212,6 @@ static struct pw_thread *get_thread(void)
         pw_x86_engine_set_quantum( &thread->engine, 1 );
     }
     thread->cache_epoch = (uint32_t)code_generation;
-    if (pw_x86_hostexec_init( &thread->hostexec, &thread->vm, 4u << 20 ) != PW_OK)
-    {
-        pw_x86_engine_destroy( &thread->engine );
-        free( thread );
-        return NULL;
-    }
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
     return self = thread;
@@ -362,6 +386,7 @@ static NTSTATUS thread_term( void *args )
     self = NULL;
     pw_x86_hostexec_destroy( &thread->hostexec );
     pw_x86_engine_destroy( &thread->engine );
+    free( thread->entries );
     free( thread );
     return STATUS_SUCCESS;
 }

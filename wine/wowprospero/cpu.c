@@ -276,6 +276,12 @@ void WINAPI BTCpuSimulate(void)
             break;
         default:
             ERR( "DBT error %d at eip %#lx\n", params.status, ctx->Eip );
+            /* End the process the way ExitProcess does: the other threads
+             * first, which marks the process as exiting, so the call for
+             * itself leaves through exit() and the host's exit handlers run
+             * (a title restarts into its launcher from one). Terminating
+             * itself straight away is abort_process, which is _exit(). */
+            NtTerminateProcess( 0, STATUS_INTERNAL_ERROR );
             NtTerminateProcess( GetCurrentProcess(), STATUS_INTERNAL_ERROR );
         }
     }
