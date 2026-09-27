@@ -107,6 +107,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Global residency: seven guest GPRs in the same host registers in every block | 956 | 1006 | +5% | 21.3% |
 | Same-ISA re-encoder: pinned GPRs, native flags, copied instructions | 987 | 1204 | +22% | 28.6% |
 | Re-encoder: lock, atomic xchg/cmpxchg/xadd/cmpxchg8b, fs: | 1237 | 1212 | noise | 23.0% |
+| Re-encoder: returns and indirect calls stay pinned | 1237 | 1316 | +6% | 24.9% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -188,6 +189,14 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   and an `fs:` operand adds the guest's fs base before the guard. 7-Zip's
   hot loops use neither, so its rating does not move (three rounds,
   native median 5281); the gain is in how much of Wine stays re-encoded.
+- **Pinned returns.** A ret or indirect call left the pinned state, looked
+  the target up and re-entered it through its canonical entry: about a
+  hundred instructions. The dispatcher now also records each re-encoded
+  block's chain entry in a table of 65536 slots (the low 16 bits of the
+  PC), and a dynamic exit looks there first without touching the flags
+  (`movzx`, `lea`, `not`, `xchg`, `jrcxz`), so a hit jumps to the target
+  with the state still in registers. Same rounds as above; compression
+  gains 16% (1457-1556 against 1105-1290), decompression is unchanged.
 
 ### After these changes
 

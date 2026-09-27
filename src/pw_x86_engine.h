@@ -55,8 +55,11 @@ typedef struct PwX86Engine {
     unsigned no_counters;
     /* PwX86TranslateOptions.global_resident for blocks translated from now on. */
     uint8_t global_resident;
-    /* Try the same-ISA re-encoder (pw_x86_reencode.h) first. */
+    /* Try the same-ISA re-encoder (pw_x86_reencode.h) first, with its
+     * chain-entry targets (reserved when first enabled). */
     unsigned reencode_enabled;
+    PwVmRegion chain;
+    PwX86IndirectTarget *chain_targets;
     uint64_t reencoded_blocks;
     unsigned sealed,failed,initialized;
 } PwX86Engine;

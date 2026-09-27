@@ -34,7 +34,14 @@
 
 /* The contract every re-encoded block has: all eight guest GPRs resident,
  * with guest_to_host holding 16 + the host register number. */
-enum { PW_X86_REENCODE_HOST_BASE = 16 };
+enum { PW_X86_REENCODE_HOST_BASE = 16, PW_X86_REENCODE_CHAIN_SLOTS = 65536 };
+
+/* Whether a translated block came from this backend. */
+static inline int pw_x86_reencoded(const PwX86RegContract *contract)
+{
+    return contract->resident_mask == 0xff &&
+           contract->guest_to_host[0] == PW_X86_REENCODE_HOST_BASE;
+}
 
 /* Translate the block at pc. PW_OK with a block of at least one
  * instruction; PW_ERR_UNSUPPORTED when the options are not flat or keep

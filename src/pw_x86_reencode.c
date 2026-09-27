@@ -463,7 +463,7 @@ typedef struct Cold {
 typedef struct Ctx {
     Out o;
     uint32_t flat_low, flat_span;
-    const PwX86IndirectTarget *table;
+    const PwX86IndirectTarget *table, *chain_table;
     uint32_t mask;
     Cold cold[MAX_COLD];
     unsigned cold_count;
@@ -606,10 +606,45 @@ static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots)
 
 /* The dynamic exit to the guest EIP in r10d: the indirect table when the
  * translation has one, otherwise back to the dispatcher. */
+static void xchg_rcx_r9(Out *o) { b(o, 0x4c); b(o, 0x87); b(o, 0xc9); }
+
 static void emit_dynamic_exit(Ctx *c)
 {
     Out *o = &c->o;
 
+    if (c->chain_table) {
+        /* A re-encoded target is entered at its chain entry with the guest
+         * state still pinned: the slot of the low 16 bits of the PC, its
+         * PC compared as not(slot) + pc + 1 == 0, all without flags. */
+        const size_t budget = offsetof(PwX86State, chain_budget);
+        uint64_t base = (uint64_t)(uintptr_t)c->chain_table;
+        size_t to_hit, to_miss, to_spent;
+        b(o, 0x45); b(o, 0x0f); b(o, 0xb7); b(o, 0xda);                 /* movzx r11d, r10w */
+        b(o, 0x4e); b(o, 0x8d); b(o, 0x1c); b(o, 0xdd); w32(o, 0);      /* lea r11, [r11*8] */
+        b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x1b);                 /* lea r11, [r11+r11] */
+        b(o, 0x49); b(o, 0xb9); w64(o, base);                           /* movabs r9, table */
+        b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x19);                 /* lea r11, [r9+r11] */
+        b(o, 0x45); b(o, 0x8b); b(o, 0x0b);                             /* mov r9d, [r11] */
+        b(o, 0x41); b(o, 0xf7); b(o, 0xd1);                             /* not r9d */
+        b(o, 0x47); b(o, 0x8d); b(o, 0x4c); b(o, 0x11); b(o, 1);        /* lea r9d, [r9+r10+1] */
+        xchg_rcx_r9(o);
+        to_hit = jump8(o, 0xe3);                                        /* jrcxz hit */
+        xchg_rcx_r9(o);
+        to_miss = jump8(o, 0xeb);
+        land8(o, to_hit);
+        xchg_rcx_r9(o);
+        load_state(o, R9, budget);
+        b(o, 0x45); b(o, 0x8d); b(o, 0x49); b(o, 0xff);                 /* lea r9d, [r9-1] */
+        store_state(o, R9, budget);
+        xchg_rcx_r9(o);
+        to_spent = jump8(o, 0xe3);                                      /* jrcxz spent */
+        xchg_rcx_r9(o);
+        b(o, 0x4d); b(o, 0x8b); b(o, 0x5b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, host_code));
+        b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
+        land8(o, to_spent);
+        xchg_rcx_r9(o);
+        land8(o, to_miss);
+    }
     store_state(o, R10, offsetof(PwX86State, eip));
     emit_leave(o);
     if (c->table) {
@@ -701,6 +736,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     c.flat_low = options->flat_low;
     c.flat_span = options->flat_high - options->flat_low;
     c.table = options->indirect_targets;
+    c.chain_table = options->indirect_targets ? options->chain_targets : NULL;
     c.mask = options->indirect_mask;
 
     block->entry_contract.resident_mask = 0xff;

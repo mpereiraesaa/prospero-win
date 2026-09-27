@@ -103,6 +103,20 @@ int pw_x86_engine_set_global_resident(PwX86Engine *engine, uint8_t mask)
 int pw_x86_engine_set_reencode(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    if(enabled && !engine->chain_targets) {
+        const size_t bytes=PW_X86_REENCODE_CHAIN_SLOTS*sizeof(PwX86IndirectTarget);
+        int status=engine->backend->reserve(engine->backend->context,bytes,
+                                            engine->backend->page_bytes,&engine->chain);
+        if(status!=PW_OK)return status;
+        status=engine->backend->commit(engine->backend->context,&engine->chain,0,
+                                       engine->chain.bytes,PW_PROT_READ|PW_PROT_WRITE);
+        if(status!=PW_OK) {
+            (void)engine->backend->release(engine->backend->context,&engine->chain);
+            return status;
+        }
+        engine->chain_targets=engine->chain.write_base;
+        memset(engine->chain_targets,0,bytes);
+    }
     engine->reencode_enabled = enabled ? 1 : 0;
     return PW_OK;
 }
@@ -158,6 +172,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         engine->indirect_enabled ? engine->indirect_targets : NULL,
         PW_X86_ENGINE_INDIRECT_SLOTS - 1, engine->flat_low, engine->flat_high,
         engine->no_counters,
+        engine->reencode_enabled ? engine->chain_targets : NULL,
         engine->residency_enabled ? engine->global_resident : (uint8_t)0 };
     int last = PW_ERR_UNSUPPORTED;
     if (engine->reencode_enabled) {
@@ -370,6 +385,12 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
         target->guest_pc=entry->guest_pc;
         target->host_code=(const uint8_t *)engine->code.exec_base+entry->code_offset+
                           entry->canonical_entry_offset;
+        if(engine->chain_targets && pw_x86_reencoded(&entry->entry_contract)) {
+            PwX86IndirectTarget *chain=&engine->chain_targets[entry->guest_pc & 0xffffu];
+            chain->guest_pc=entry->guest_pc;
+            chain->host_code=(const uint8_t *)engine->code.exec_base+entry->code_offset+
+                             entry->chain_entry_offset;
+        }
     }
 
     state->chain_budget = (engine->chaining_enabled && engine->quantum) ? engine->quantum : 1;
@@ -453,6 +474,8 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
     /* Every indirect target pointed into the code just discarded. */
     if(engine->indirect_targets)
         memset(engine->indirect_targets,0,PW_X86_ENGINE_INDIRECT_SLOTS*sizeof(PwX86IndirectTarget));
+    if(engine->chain_targets)
+        memset(engine->chain_targets,0,PW_X86_REENCODE_CHAIN_SLOTS*sizeof(PwX86IndirectTarget));
     engine->dispatches=0;engine->retired_instructions=0;engine->failed=0;return PW_OK;
 }
 
@@ -462,6 +485,8 @@ int pw_x86_engine_destroy(PwX86Engine *engine)
     int status=engine->backend->release(engine->backend->context,&engine->code);
     if(status==PW_OK && engine->indirect_targets)
         status=engine->backend->release(engine->backend->context,&engine->indirect);
+    if(status==PW_OK && engine->chain_targets)
+        status=engine->backend->release(engine->backend->context,&engine->chain);
     if(status==PW_OK)memset(engine,0,sizeof(*engine));
     return status;
 }

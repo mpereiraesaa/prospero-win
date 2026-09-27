@@ -44,7 +44,7 @@ typedef struct Run {
     PwX86State state;
     uint8_t data[0x1000];
     int status;
-    uint64_t reencoded;
+    uint64_t reencoded, chain_slots;
 } Run;
 
 /* Run code from low+CODE until the guest returns to its sentinel. */
@@ -73,6 +73,9 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
         if ((r.status = pw_x86_engine_step(&engine, &r.state, &step)) != PW_OK) break;
     memcpy(r.data, guest + DATA, sizeof(r.data));
     r.reencoded = engine.reencoded_blocks;
+    r.chain_slots = 0;
+    for (unsigned k = 0; engine.chain_targets && k < PW_X86_REENCODE_CHAIN_SLOTS; k++)
+        r.chain_slots += engine.chain_targets[k].host_code != NULL;
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
     return r;
 }
@@ -309,6 +312,37 @@ static void test_mixed_and_indirect(void)
     compare(code, sizeof(code));
 }
 
+/* Returns and indirect calls between re-encoded blocks enter their target's
+ * chain entry with the guest state still pinned once the target is known
+ * (the dispatcher records it in the chain table). */
+static void test_return_targets(void)
+{
+    uint8_t code[] = {
+        0xb9, 0xc8, 0, 0, 0,                /* 00 mov ecx, 200 */
+        0x31, 0xc0,                         /* 05 xor eax, eax */
+        0xbb, 0, 0, 0, 0,                   /* 07 mov ebx, G (patched) */
+        0xe8, 0x0b, 0, 0, 0,                /* 0c L: call F */
+        0xff, 0xd3,                         /* 11 call ebx */
+        0x49,                               /* 13 dec ecx */
+        0x75, 0xf6,                         /* 14 jnz L */
+        0x39, 0xd8,                         /* 16 cmp eax, ebx */
+        0xc3,                               /* 18 ret */
+        0x00, 0x00, 0x00,                   /* 19 padding */
+        0x01, 0xc8,                         /* 1c F: add eax, ecx */
+        0xc3,                               /* 1e ret */
+        0x40,                               /* 1f G: inc eax */
+        0xc3,                               /* 20 ret */
+    };
+    uint32_t g = low + CODE + 0x1f;
+    Run emitter, reencoded;
+    memcpy(code + 8, &g, 4);
+    emitter = run(code, sizeof(code), 0);
+    reencoded = run(code, sizeof(code), 1);
+    same(&reencoded, &emitter);
+    assert(reencoded.state.gpr[0] == 200u * 201u / 2u + 200u);
+    assert(!emitter.chain_slots && reencoded.chain_slots >= 3);
+}
+
 /* A refused access stops with every register and, since a branch reads
  * them later, the flags of the compare before it. */
 static void test_fault(void)
@@ -341,8 +375,9 @@ int main(void)
     test_memory();
     test_control();
     test_mixed_and_indirect();
+    test_return_targets();
     test_fault();
     printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
-           "stack and calls, emitter hand-over, indirect targets, fault state\n");
+           "stack and calls, emitter hand-over, indirect targets, pinned returns, fault state\n");
     return 0;
 }
