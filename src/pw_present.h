@@ -48,9 +48,15 @@ typedef struct PwPresentSink {
     int (*submit)(void *context,uint64_t sequence,int commit);
 } PwPresentSink;
 
-struct PwGdiTargetView;
+/* A top-down 32-bit B,G,R,X image and the bytes behind it, as a producer
+ * (Wine's PS5 user driver, the launcher) hands it over. */
+typedef struct PwPresentView {
+    const uint8_t *pixels;
+    uint32_t width,height,stride,bytes;
+} PwPresentView;
 
-int pw_present_frame_from_gdi(const struct PwGdiTargetView *view,PwPresentFrame *frame);
+/* The frame for a view: PW_ERR_TRUNCATED when its rows do not fit its bytes. */
+int pw_present_frame_from_view(const PwPresentView *view,PwPresentFrame *frame);
 int pw_present_validate(const PwPresentFrame *frame);
 int pw_present_fit(const PwPresentFrame *frame,uint32_t output_width,uint32_t output_height,
                    uint32_t margin,uint32_t max_scale,PwPresentPlacement *placement);

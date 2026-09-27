@@ -8,7 +8,7 @@
 static void test_frames(void)
 {
     PwWineFrameBox box;
-    PwGdiTargetView view;
+    PwPresentView view;
     uint8_t source[3 * 16], out[64], small[8], storage[48];
     uint64_t seen = 0;
 
@@ -71,7 +71,7 @@ static void *producer(void *arg)
 static void test_threads(void)
 {
     pthread_t thread;
-    PwGdiTargetView view;
+    PwPresentView view;
     uint32_t out[4], last = 0;
     uint64_t seen = 0;
 

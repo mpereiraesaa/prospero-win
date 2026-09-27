@@ -173,7 +173,7 @@ static int wine_audio(void *context, const int16_t *frames)
 /* Scale a frame onto the whole screen as the profile asks (fit keeps the
  * aspect ratio: 800x600 becomes 1440x1080), straight into the scanout, and
  * flip it. */
-static int show_scaled(PwVideoOutPs5 *video, const PwGdiTargetView *view, int scaling)
+static int show_scaled(PwVideoOutPs5 *video, const PwPresentView *view, int scaling)
 {
     const PwPresentFrame frame = { view->pixels, view->width, view->height, view->stride,
                                    PW_PRESENT_BGRX8 };
@@ -388,7 +388,7 @@ static void run_launcher(int library_status)
         if (dirty && video_status == PW_OK && frame != MAP_FAILED) {
             const PwPresentTarget target = { frame, PW_LAUNCHER_RENDER_WIDTH, PW_LAUNCHER_RENDER_HEIGHT,
                                              PW_LAUNCHER_RENDER_WIDTH * 4u, frame_bytes };
-            const PwGdiTargetView view = { frame, target.width, target.height, target.stride,
+            const PwPresentView view = { frame, target.width, target.height, target.stride,
                                            (uint32_t)frame_bytes };
             int status = pw_launcher_render(&scene, &target);
             if (status == PW_OK) status = pw_videoout_ps5_present(&video, &view);
@@ -641,7 +641,7 @@ int main(int argc, char **argv)
     }
     for (uint64_t tick = 1; status == PW_OK; tick++) {
         uint64_t now = now_ns();
-        PwGdiTargetView view;
+        PwPresentView view;
         PwWineInput events[2 * PW_GAME_BUTTON_COUNT + 1];
         int presented = 0;
 

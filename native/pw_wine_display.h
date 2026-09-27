@@ -15,7 +15,7 @@
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "../src/pw_gdi.h"
+#include "../src/pw_present.h"
 #include "../src/pw_game_profile.h"
 #include "../wine/ps5/pw_wine_sink.h"
 #include "pw_pad_ps5.h"
@@ -42,7 +42,7 @@ int pw_wine_frame_box_put(PwWineFrameBox *box, const void *bgra, uint32_t width,
  * capacity bytes), describe it in view, update *seen and return 1; 0 when
  * there is nothing new, -1 when out is too small. */
 int pw_wine_frame_box_take(PwWineFrameBox *box, uint64_t *seen, uint8_t *out,
-                           size_t capacity, PwGdiTargetView *view);
+                           size_t capacity, PwPresentView *view);
 
 /* Wine input for one pad batch's edges under a profile's bindings: a
  * release for each bound button in released, then a press for each in

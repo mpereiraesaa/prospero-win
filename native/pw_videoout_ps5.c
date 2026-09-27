@@ -121,7 +121,7 @@ int pw_videoout_ps5_present_scaled(PwVideoOutPs5 *video,const PwPresentFrame *fr
     pw_videoout_tiles_scale(&tiles,&scale_rows,frame,&placement,background,draw_frame(video));
     return flip(video);
 }
-int pw_videoout_ps5_present(PwVideoOutPs5 *video,const PwGdiTargetView *view)
+int pw_videoout_ps5_present(PwVideoOutPs5 *video,const PwPresentView *view)
 {
     if(!video || !video->opened || !view || !view->pixels || !view->width || !view->height)
         return PW_ERR_PRECONDITION;

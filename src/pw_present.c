@@ -1,13 +1,10 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_present.h"
-#include "pw_gdi.h"
 #include <string.h>
 
-int pw_present_frame_from_gdi(const PwGdiTargetView *view,PwPresentFrame *frame)
+int pw_present_frame_from_view(const PwPresentView *view,PwPresentFrame *frame)
 {
     if(!view || !frame)return PW_ERR_PRECONDITION;
-    /* pw_gdi target surfaces are top-down 32-bit B,G,R,A rows; resource
-     * DIBs are flipped when they are drawn, never when presented. */
     PwPresentFrame candidate={view->pixels,view->width,view->height,view->stride,
         PW_PRESENT_BGRX8};
     int status=pw_present_validate(&candidate);if(status!=PW_OK)return status;

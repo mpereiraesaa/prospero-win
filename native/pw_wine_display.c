@@ -44,7 +44,7 @@ int pw_wine_frame_box_put(PwWineFrameBox *box, const void *bgra, uint32_t width,
 }
 
 int pw_wine_frame_box_take(PwWineFrameBox *box, uint64_t *seen, uint8_t *out,
-                           size_t capacity, PwGdiTargetView *view)
+                           size_t capacity, PwPresentView *view)
 {
     size_t bytes;
     int status = 0;

@@ -2,12 +2,11 @@
 /* GDI target -> PwPresentFrame -> fixed-extent sink.  The sink copies the
  * lent target into its own "scanout" during submit, as a display backend
  * must, so the test can observe ownership after the call returns. */
-#include "../src/pw_gdi.h"
 #include "../src/pw_present.h"
 #include <assert.h>
 #include <string.h>
 
-enum { OUT_W=16,OUT_H=10,OUT_STRIDE=OUT_W*4+8,OUT_BYTES=OUT_STRIDE*OUT_H,WINDOW=0x10000 };
+enum { OUT_W=16,OUT_H=10,OUT_STRIDE=OUT_W*4+8,OUT_BYTES=OUT_STRIDE*OUT_H };
 
 typedef struct TestSink {
     uint8_t target[OUT_BYTES],scanout[OUT_BYTES];
@@ -152,25 +151,16 @@ static void test_scale(void)
 int main(void)
 {
     test_scale();
-    PwGdi gdi;PwGdiDc dcs[4];PwGdiSurface surfaces[4];uint8_t pixels[1024];
-    assert(pw_gdi_init(&gdi,dcs,4,surfaces,4,pixels,sizeof(pixels))==PW_OK);
-    uint32_t dc;assert(pw_gdi_get_dc(&gdi,WINDOW,4,3,&dc)==PW_OK);
-
-    /* A bottom-up 32-bit DIB: storage row 0 is the bottom scanline.  Blue
-     * encodes the storage row, green the column, and alpha is left zero so
-     * the test proves the presenter makes scanout opaque. */
-    uint8_t info[40]={0},bits[4*3*4]={0};int32_t lines=0;
-    info[0]=40;info[4]=4;info[8]=3;info[12]=1;info[14]=32;
+    /* A top-down image: blue encodes the row from the top (12 down to 10),
+     * green the column, and alpha is left zero so the test proves the
+     * presenter makes scanout opaque. */
+    uint8_t pixels[4*3*4]={0};
     for(unsigned row=0;row<3;row++)for(unsigned x=0;x<4;x++) {
-        uint8_t *pixel=bits+(row*4+x)*4;
-        pixel[0]=(uint8_t)(10+row);pixel[1]=(uint8_t)(20+x);pixel[2]=7;pixel[3]=0;
+        uint8_t *pixel=pixels+(row*4+x)*4;
+        pixel[0]=(uint8_t)(12-row);pixel[1]=(uint8_t)(20+x);pixel[2]=7;pixel[3]=0;
     }
-    assert(pw_gdi_stretch_dibits(&gdi,dc,0,0,4,3,0,0,4,3,bits,sizeof(bits),info,sizeof(info),
-                                 0,PW_GDI_ROP_SRCCOPY,&lines)==PW_OK && lines==3);
-
-    PwGdiTargetView view;PwPresentFrame frame;
-    assert(pw_gdi_target_view(&gdi,WINDOW,&view)==PW_OK);
-    assert(pw_present_frame_from_gdi(&view,&frame)==PW_OK);
+    PwPresentView view={pixels,4,3,16,sizeof(pixels)};PwPresentFrame frame;
+    assert(pw_present_frame_from_view(&view,&frame)==PW_OK);
     assert(frame.width==4 && frame.height==3 && frame.stride==16 &&
            frame.format==PW_PRESENT_BGRX8 && frame.pixels==view.pixels);
 
@@ -187,7 +177,7 @@ int main(void)
     expect_pixel(&sink,3,1,0x10,0x20,0x30);
     expect_pixel(&sink,12,2,0x10,0x20,0x30);
     expect_pixel(&sink,15,9,0x10,0x20,0x30);
-    /* Upright: the first shown scanline is the DIB's top storage row (2). */
+    /* Upright: the first shown scanline is the image's top row. */
     for(uint32_t y=0;y<6;y++)for(uint32_t x=0;x<8;x++)
         expect_pixel(&sink,4+x,2+y,(uint8_t)(12-y/2),(uint8_t)(20+x/2),7);
     /* The padded bytes of each target row belong to the backend. */
@@ -197,10 +187,9 @@ int main(void)
 
     /* After submit returns, the producer may draw again without changing
      * what the backend already copied out. */
-    assert(pw_gdi_bitblt(&gdi,dc,0,0,4,3,0,0,0,PW_GDI_ROP_BLACKNESS)==PW_OK);
+    memset(pixels,0,sizeof(pixels));
     expect_pixel(&sink,4,2,12,20,7);
-    assert(pw_gdi_target_view(&gdi,WINDOW,&view)==PW_OK);
-    assert(pw_present_frame_from_gdi(&view,&frame)==PW_OK);
+    assert(pw_present_frame_from_view(&view,&frame)==PW_OK);
     assert(pw_present_frame(&backend,&frame,0,1,0,42,&placement)==PW_OK);
     assert(placement.scale==1 && placement.left==6 && placement.top==3);
     expect_pixel(&sink,6,3,0,0,0);expect_pixel(&sink,0,0,0,0,0);
@@ -225,13 +214,13 @@ int main(void)
     bad=frame;bad.width=OUT_W+1;bad.stride=(OUT_W+1)*4;
     assert(pw_present_frame(&backend,&bad,0,1,0,1,&placement)==PW_ERR_LIMIT);
     assert(sink.acquires==2);
-    PwGdiTargetView truncated=view;truncated.bytes=view.bytes-1;
-    assert(pw_present_frame_from_gdi(&truncated,&frame)==PW_ERR_TRUNCATED);
-    assert(pw_present_frame_from_gdi(NULL,&frame)==PW_ERR_PRECONDITION);
+    PwPresentView truncated=view;truncated.bytes=view.bytes-1;
+    assert(pw_present_frame_from_view(&truncated,&frame)==PW_ERR_TRUNCATED);
+    assert(pw_present_frame_from_view(NULL,&frame)==PW_ERR_PRECONDITION);
     assert(pw_present_fit(&wide,16,10,0,0,&placement)==PW_ERR_PRECONDITION);
 
     /* An acquire failure is returned without a submit. */
-    assert(pw_present_frame_from_gdi(&view,&frame)==PW_OK);
+    assert(pw_present_frame_from_view(&view,&frame)==PW_OK);
     sink.acquire_status=PW_ERR_VM;
     assert(pw_present_frame(&backend,&frame,0,1,0,43,&placement)==PW_ERR_VM);
     assert(sink.acquires==3 && sink.commits==2 && !sink.abandons);
@@ -260,6 +249,5 @@ int main(void)
     assert(pw_present_compose(&frame,&exact,0,&short_target)==PW_ERR_MALFORMED);
     assert(pw_present_compose(&frame,&exact,0,&small)==PW_OK);
 
-    assert(pw_gdi_release_dc(&gdi,WINDOW,dc)==PW_OK && pw_gdi_reset(&gdi)==PW_OK);
     return 0;
 }

@@ -70,7 +70,7 @@ $(eval $(call test_rule,test_pw_runtime_supervisor,tests/test_pw_runtime_supervi
 $(eval $(call test_rule,test_launcher_model,tests/test_launcher_model.c src/pw_launcher_model.c src/pw_runtime_supervisor.c src/pw_app_profile.c src/pw_ini.c src/pw_prefix.c,))
 $(eval $(call test_rule,test_prefix_launcher,tests/test_prefix_launcher.c src/pw_prefix_registry.c src/pw_launcher_model.c src/pw_runtime_supervisor.c src/pw_app_profile.c src/pw_ini.c src/pw_prefix.c,))
 $(eval $(call test_rule,test_pw_gdi,tests/test_pw_gdi.c src/pw_gdi.c,))
-$(eval $(call test_rule,test_pw_present,tests/test_pw_present.c src/pw_present.c src/pw_gdi.c,))
+$(eval $(call test_rule,test_pw_present,tests/test_pw_present.c src/pw_present.c,))
 $(eval $(call test_rule,test_pw_wine_heap,tests/test_pw_wine_heap.c wine/ps5/pw_wine_heap.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_prx,tests/test_pw_wine_prx.c wine/ps5/pw_wine_prx.c,-I.))
 $(eval $(call test_rule,test_pw_wine_threads,tests/test_pw_wine_threads.c wine/ps5/pw_wine_threads.c,-pthread))

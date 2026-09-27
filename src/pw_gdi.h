@@ -2,6 +2,7 @@
 #ifndef PW_GDI_H
 #define PW_GDI_H
 #include "../include/prospero_win.h"
+#include "pw_present.h"
 
 enum {
     PW_GDI_HANDLE_FIRST=0x00020000u,
@@ -55,10 +56,7 @@ typedef struct PwGdiCounts {
 typedef struct PwGdiBitmapInfo {
     uint32_t width,height,stride,planes,bits_per_pixel;
 } PwGdiBitmapInfo;
-typedef struct PwGdiTargetView {
-    const uint8_t *pixels;
-    uint32_t width,height,stride,bytes;
-} PwGdiTargetView;
+typedef PwPresentView PwGdiTargetView;
 
 int pw_gdi_init(PwGdi *,PwGdiDc *,uint32_t,PwGdiSurface *,uint32_t,
                 uint8_t *,uint32_t);
