@@ -10,8 +10,9 @@
  *   <root>/input/<preset>.input      input presets shared between profiles
  *
  * <root> is /data/prospero-win on the console. Nothing is built in: a game
- * appears by adding its profile. The directory is listed with getdents
- * (a title gets EPERM from opendir) and read with open/read.
+ * appears by adding its profile. An index, when present, says exactly what
+ * is offered; otherwise the directory is listed with getdents (a title gets
+ * EPERM from opendir). Files are read with open/read.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -44,6 +45,13 @@ const PwGameProfile *pw_wine_library_find(const PwWineLibrary *library, const ch
  * missing or refused preset leaves only the profile's lines; the status
  * says why. */
 int pw_wine_library_input(const PwGameProfile *profile, const char *root, PwGameInput *input);
+
+/* Copy the library's profiles, the input presets they name and an index
+ * listing them from the from root to the to root, creating its
+ * directories. The launcher, which does not leave the sandbox, reads the
+ * copy a game made in /download0. PW_OK, or PW_ERR_STATE when a file could
+ * not be copied (the others are). */
+int pw_wine_library_mirror(const PwWineLibrary *library, const char *from, const char *to);
 
 /* The names in a buffer of FreeBSD 11 directory records (struct dirent:
  * u32 fileno, u16 reclen, u8 type, u8 namlen, name): calls found(name,
