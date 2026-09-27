@@ -17,6 +17,7 @@ _Static_assert(offsetof(PwX86State,memory[0].permissions)<=127,
  * none needs no guest EIP stored before it. */
 typedef struct Emitter {
     uint8_t *p; size_t n, cap; int failed; uint32_t flat_low, flat_span; unsigned exits;
+    unsigned no_counters; /* PwX86TranslateOptions.no_counters */
 } Emitter;
 static void byte(Emitter *e, uint8_t value)
 {
@@ -590,14 +591,14 @@ static void emit_chain_exit(Emitter *e, uint32_t count, uint32_t target_pc,
     uint8_t n_dirty = contract ? popcount8(contract->dirty_mask) : 0;
 
     /* 1. add dword ptr [rdi + step_retired], count */
-    byte(e, 0x83); byte(e, 0x47); byte(e, offsetof(PwX86State, step_retired)); byte(e, (uint8_t)count);
+    if (!e->no_counters) { byte(e, 0x83); byte(e, 0x47); byte(e, offsetof(PwX86State, step_retired)); byte(e, (uint8_t)count); }
     /* 2. dec dword ptr [rdi + chain_budget] */
     byte(e, 0xff); byte(e, 0x4f); byte(e, offsetof(PwX86State, chain_budget));
     /* 3. jz safepoint */
     byte(e, 0x74);
     size_t safepoint_patch = e->n++;
     /* 4. inc dword ptr [rdi + step_transitions] */
-    byte(e, 0xff); byte(e, 0x47); byte(e, offsetof(PwX86State, step_transitions));
+    if (!e->no_counters) { byte(e, 0xff); byte(e, 0x47); byte(e, offsetof(PwX86State, step_transitions)); }
     /* 5. movabs $0, %r11 (10 bytes: 49 bb <8 bytes>) */
     byte(e, 0x49); byte(e, 0xbb);
     *patch_offset = e->n;
@@ -614,7 +615,7 @@ static void emit_chain_exit(Emitter *e, uint32_t count, uint32_t target_pc,
     e->p[safepoint_patch] = (uint8_t)(e->n - (safepoint_patch + 1));
     emit_spill_dirty(e, contract);
     if (n_dirty) {
-        byte(e, 0x83); byte(e, 0x47); byte(e, offsetof(PwX86State, reg_stores)); byte(e, n_dirty);
+        if (!e->no_counters) { byte(e, 0x83); byte(e, 0x47); byte(e, offsetof(PwX86State, reg_stores)); byte(e, n_dirty); }
     }
     byte(e, 0x48); byte(e, 0xc7); byte(e, 0x47); byte(e, offsetof(PwX86State, last_exit_slot));
     word(e, 0);
@@ -627,7 +628,7 @@ static void emit_chain_exit(Emitter *e, uint32_t count, uint32_t target_pc,
     e->p[unlinked_patch] = (uint8_t)(e->n - (unlinked_patch + 1));
     emit_spill_dirty(e, contract);
     if (n_dirty) {
-        byte(e, 0x83); byte(e, 0x47); byte(e, offsetof(PwX86State, reg_stores)); byte(e, n_dirty);
+        if (!e->no_counters) { byte(e, 0x83); byte(e, 0x47); byte(e, offsetof(PwX86State, reg_stores)); byte(e, n_dirty); }
     }
     byte(e, 0x4c); byte(e, 0x89); byte(e, 0x5f); byte(e, offsetof(PwX86State, last_exit_slot));
 
@@ -640,10 +641,10 @@ static void emit_chain_exit(Emitter *e, uint32_t count, uint32_t target_pc,
     *reconcile_offset = e->n;
     emit_spill_dirty(e, contract);
     if (n_dirty) {
-        byte(e, 0x83); byte(e, 0x47); byte(e, offsetof(PwX86State, reg_spills)); byte(e, n_dirty);
+        if (!e->no_counters) { byte(e, 0x83); byte(e, 0x47); byte(e, offsetof(PwX86State, reg_spills)); byte(e, n_dirty); }
     }
     /* inc dword ptr [rdi + reg_reconciliations] */
-    byte(e, 0xff); byte(e, 0x47); byte(e, offsetof(PwX86State, reg_reconciliations));
+    if (!e->no_counters) { byte(e, 0xff); byte(e, 0x47); byte(e, offsetof(PwX86State, reg_reconciliations)); }
     /* movabs $link_slot->canonical_code, %r11 */
     byte(e, 0x49); byte(e, 0xbb);
     *reconcile_patch_offset = e->n;
@@ -680,7 +681,7 @@ static void emit_indirect_lookup(Emitter *e, const PwX86IndirectTarget *table, u
     byte(e, (uint8_t)offsetof(PwX86IndirectTarget, host_code));                /* mov r11, [r11+8] */
     byte(e, 0x4d); byte(e, 0x85); byte(e, 0xdb);                               /* test r11, r11 */
     byte(e, 0x74); byte(e, 0); empty_patch = e->n - 1;                                       /* jz out */
-    byte(e, 0xff); byte(e, 0x47); byte(e, offsetof(PwX86State, step_transitions));
+    if (!e->no_counters) { byte(e, 0xff); byte(e, 0x47); byte(e, offsetof(PwX86State, step_transitions)); }
     byte(e, 0x41); byte(e, 0xff); byte(e, 0xe3);                               /* jmp r11 */
     if (e->failed) return;
     e->p[budget_patch] = (uint8_t)(e->n - (budget_patch + 1));
@@ -1415,7 +1416,7 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
                          uint8_t *output, size_t capacity, PwX86Block *block,
                          unsigned residency_enabled, unsigned lazy_flags_enabled)
 {
-    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0 };
+    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0, 0 };
 
     return pw_x86_translate_opts(source, bytes, pc, output, capacity, block, &options);
 }
@@ -1424,13 +1425,14 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
                           uint8_t *output, size_t capacity, PwX86Block *block,
                           const PwX86TranslateOptions *options)
 {
-    Emitter e = {output,0,capacity,0,0,0,0};
+    Emitter e = {output,0,capacity,0,0,0,0,0};
     size_t cursor = 0;
     unsigned count = 0;
     if (!source || !bytes || !output || !capacity || !block || !options)
         return PW_ERR_PRECONDITION;
     const unsigned residency_enabled = options->residency_enabled;
     const unsigned lazy_flags_enabled = options->lazy_flags_enabled;
+    e.no_counters = options->no_counters;
     if (options->flat_high > options->flat_low && options->flat_high - options->flat_low >= 16) {
         e.flat_low = options->flat_low;
         e.flat_span = options->flat_high - options->flat_low;
@@ -2172,7 +2174,7 @@ analyze_and_emit:
     if (block->entry_contract.resident_mask) {
         emit_load_all_resident(&e, &block->entry_contract);
         uint8_t n_res = popcount8(block->entry_contract.resident_mask);
-        byte(&e, 0x83); byte(&e, 0x47); byte(&e, offsetof(PwX86State, reg_loads)); byte(&e, n_res);
+        if (!e.no_counters) { byte(&e, 0x83); byte(&e, 0x47); byte(&e, offsetof(PwX86State, reg_loads)); byte(&e, n_res); }
     }
     block->chain_entry_offset = e.n;
 
@@ -3293,9 +3295,9 @@ analyze_and_emit:
         emit_spill_dirty(&e, &block->exit_contract);
         uint8_t n_dirty = popcount8(block->exit_contract.dirty_mask);
         if (n_dirty) {
-            byte(&e, 0x83); byte(&e, 0x47); byte(&e, offsetof(PwX86State, reg_stores)); byte(&e, n_dirty);
+            if (!e.no_counters) { byte(&e, 0x83); byte(&e, 0x47); byte(&e, offsetof(PwX86State, reg_stores)); byte(&e, n_dirty); }
         }
-        byte(&e, 0x83); byte(&e, 0x47); byte(&e, offsetof(PwX86State, step_retired)); byte(&e, (uint8_t)count);
+        if (!e.no_counters) { byte(&e, 0x83); byte(&e, 0x47); byte(&e, offsetof(PwX86State, step_retired)); byte(&e, (uint8_t)count); }
         if (indirect_exit && options->indirect_targets)
             emit_indirect_lookup(&e, options->indirect_targets, options->indirect_mask);
         byte(&e, 0x48); byte(&e, 0xc7); byte(&e, 0x47); byte(&e, offsetof(PwX86State, last_exit_slot)); word(&e, 0);

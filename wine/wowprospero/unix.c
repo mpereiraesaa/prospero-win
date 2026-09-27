@@ -145,6 +145,8 @@ static struct pw_thread *get_thread(void)
         /* The guest range load_state gives the stack and the one region. */
         if (digits < 5 || modes[4] != '0')
             pw_x86_engine_set_flat_memory( &thread->engine, GUEST_LOW, GUEST_HIGH );
+        /* Nothing here reads the step statistics; PW_WOW_STATS keeps them. */
+        pw_x86_engine_set_counters( &thread->engine, getenv( "PW_WOW_STATS" ) != NULL );
     }
     thread->prefer_host = getenv( "PW_WOW_HOSTEXEC_ALL" ) != NULL;
     if (getenv( "PW_WOW_TRACE" ))

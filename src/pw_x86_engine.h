@@ -52,6 +52,7 @@ typedef struct PwX86Engine {
     PwX86IndirectTarget *indirect_targets;
     /* The flat guest range (PwX86TranslateOptions.flat_low/high), or 0/0. */
     uint32_t flat_low, flat_high;
+    unsigned no_counters;
     unsigned sealed,failed,initialized;
 } PwX86Engine;
 
@@ -77,6 +78,11 @@ int pw_x86_engine_set_indirect(PwX86Engine *, unsigned);
  * that range. The guard is then one compare per access; accesses outside it
  * still go through the region table. low == high turns it off. */
 int pw_x86_engine_set_flat_memory(PwX86Engine *, uint32_t low, uint32_t high);
+/* Leave the statistics counters out of blocks translated from now on (they
+ * are on by default): a step then reports no retired instructions, and the
+ * transition and register totals stay zero. The chain budget, the link
+ * slots and every guest-visible effect are unchanged. */
+int pw_x86_engine_set_counters(PwX86Engine *, unsigned enabled);
 int pw_x86_engine_step(PwX86Engine *,PwX86State *,PwX86StepReport *);
 int pw_x86_engine_reset(PwX86Engine *,uint32_t);
 int pw_x86_engine_destroy(PwX86Engine *);

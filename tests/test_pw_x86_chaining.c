@@ -939,6 +939,44 @@ static void test_indirect_off(void)
     assert(pw_x86_engine_set_indirect(NULL, 1) == PW_ERR_PRECONDITION);
 }
 
+/* Counters off: the same guest results and safepoints, and no statistics. */
+static void test_counters_off(void)
+{
+    uint8_t loop[] = {0x40, 0x49, 0x75, 0xfc, 0xc3};  /* inc eax; dec ecx; jnz; ret */
+    TestSource src = {0x1000, loop, sizeof(loop)};
+    uint32_t retired[2] = {0, 0};
+    uint64_t transitions[2] = {0, 0};
+
+    for (unsigned counters = 0; counters < 2; counters++) {
+        PwVmBackend vm;
+        PwX86Engine engine;
+        PwX86CacheEntry entries[16];
+        PwX86StepReport step;
+        PwX86State state = {.eip = 0x1000, .stack_low = 0x03000000, .stack_high = 0x03010000};
+        unsigned steps = 0;
+
+        state.gpr[4] = 0x0300ff00;
+        *(uint32_t *)(uintptr_t)state.gpr[4] = 0x77777777;
+        state.gpr[1] = 100;
+        assert(pw_vm_posix_backend(&vm) == PW_OK);
+        assert(pw_x86_engine_init(&engine, &vm, entries, 16, 65536, 1, test_source_view, &src) == PW_OK);
+        assert(pw_x86_engine_set_chaining(&engine, 1) == PW_OK);
+        assert(pw_x86_engine_set_quantum(&engine, 32) == PW_OK);
+        assert(pw_x86_engine_set_counters(&engine, counters) == PW_OK);
+        while (state.eip != 0x77777777) {
+            assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK && ++steps < 20);
+            retired[counters] += step.retired;
+        }
+        assert(state.gpr[0] == 100 && state.gpr[1] == 0 && state.gpr[4] == 0x0300ff04);
+        assert(engine.safepoint_returns == 3);
+        transitions[counters] = engine.linked_transitions;
+        assert(pw_x86_engine_destroy(&engine) == PW_OK);
+    }
+    assert(retired[1] == 301 && transitions[1] > 0);
+    assert(retired[0] == 0 && transitions[0] == 0);
+    assert(pw_x86_engine_set_counters(NULL, 0) == PW_ERR_PRECONDITION);
+}
+
 int main(void)
 {
     PwVmBackend vm;
@@ -965,8 +1003,9 @@ int main(void)
     test_indirect_deep_recursion();
     test_indirect_budget();
     test_indirect_off();
+    test_counters_off();
 
     assert(vm.release(vm.context, &stack_region) == PW_OK);
-    printf("all 18 chaining and indirect target tests passed successfully\n");
+    printf("all 19 chaining, indirect target and counter tests passed successfully\n");
     return 0;
 }

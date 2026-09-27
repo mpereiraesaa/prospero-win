@@ -45,8 +45,9 @@ static void reset_state(void)
 static Outcome run(const uint8_t *source, size_t bytes, unsigned flat, unsigned residency,
                    unsigned lazy, uint32_t ebx, uint32_t esp)
 {
-    const PwX86TranslateOptions options = { residency, lazy, NULL, 0, flat ? LOW : 0,
-                                            flat ? HIGH : 0 };
+    const PwX86TranslateOptions options = {
+        .residency_enabled = residency, .lazy_flags_enabled = lazy,
+        .flat_low = flat ? LOW : 0, .flat_high = flat ? HIGH : 0 };
     PwX86Block block;
     Outcome out;
 
@@ -134,8 +135,9 @@ static void stops_name_their_instruction(void)
         /* A helper's failure: the divide by zero at 0x1001. */
         reset_state();
         {
-            const PwX86TranslateOptions options = { residency, lazy, NULL, 0, flat ? LOW : 0,
-                                                    flat ? HIGH : 0 };
+            const PwX86TranslateOptions options = {
+        .residency_enabled = residency, .lazy_flags_enabled = lazy,
+        .flat_low = flat ? LOW : 0, .flat_high = flat ? HIGH : 0 };
             PwX86Block block;
             int status;
 
@@ -154,7 +156,8 @@ static void stops_name_their_instruction(void)
     /* Two instructions can stop (the load and the push), the last one leaves
      * its successor: at most those three stores and the exit's own. */
     {
-        const PwX86TranslateOptions options = { 1, 1, NULL, 0, LOW, HIGH };
+        const PwX86TranslateOptions options = { .residency_enabled = 1, .lazy_flags_enabled = 1,
+        .flat_low = LOW, .flat_high = HIGH };
         uint8_t output[4096];
         PwX86Block block;
         unsigned stores = 0;
@@ -179,8 +182,10 @@ int main(void)
     static const uint8_t load128[] = { 0xf3, 0x0f, 0x6f, 0x03 };
     static const uint8_t push[] = { 0x50 };
     static const uint8_t pop[] = { 0x5a };
-    const PwX86TranslateOptions narrow = { 1, 1, NULL, 0, LOW, LOW + 15 };
-    const PwX86TranslateOptions inverted = { 1, 1, NULL, 0, HIGH, LOW };
+    const PwX86TranslateOptions narrow = { .residency_enabled = 1, .lazy_flags_enabled = 1,
+        .flat_low = LOW, .flat_high = LOW + 15 };
+    const PwX86TranslateOptions inverted = { .residency_enabled = 1, .lazy_flags_enabled = 1,
+        .flat_low = HIGH, .flat_high = LOW };
     PwX86Block block;
     uint8_t scratch[4096], reference[4096];
     size_t reference_bytes;
@@ -211,8 +216,10 @@ int main(void)
     }
     /* The guard is shorter: the point of the mode. */
     {
-        const PwX86TranslateOptions table = { 1, 1, NULL, 0, 0, 0 };
-        const PwX86TranslateOptions flat = { 1, 1, NULL, 0, LOW, HIGH };
+        const PwX86TranslateOptions table = { .residency_enabled = 1, .lazy_flags_enabled = 1,
+        .flat_low = 0, .flat_high = 0 };
+        const PwX86TranslateOptions flat = { .residency_enabled = 1, .lazy_flags_enabled = 1,
+        .flat_low = LOW, .flat_high = HIGH };
         size_t flat_bytes;
 
         assert(pw_x86_translate_opts(load32, sizeof(load32), 0x1000, reference,
@@ -229,6 +236,7 @@ int main(void)
     assert(pw_x86_translate_opts(load32, sizeof(load32), 0x1000, scratch, sizeof(scratch),
                                  &block, &inverted) == PW_OK && block.code_bytes == reference_bytes);
     printf("x86 flat guard passed: %u comparisons (%u accepted, %u refused), 8 forms, "
-           "4 modes, both ends, fault record, shorter code, stops name their instruction\n", compared, accepted, refused);
+           "4 modes, both ends, fault record, shorter code, stops name their instruction\n",
+           compared, accepted, refused);
     return 0;
 }

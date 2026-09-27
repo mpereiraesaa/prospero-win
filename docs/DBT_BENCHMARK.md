@@ -98,6 +98,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 |---|---|---|---|---|
 | Flat guard: one compare per access (`PW_WOW_MODES` 5th digit) | 557 | 622 | +12% | 12.5% |
 | Guest EIP stored only before instructions that can stop the block | 617 | 657 | +6% | 13.2% |
+| No statistics counters in translated code (`PW_WOW_STATS` keeps them) | 657 | 726 | +10% | 14.6% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -112,6 +113,11 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   second. The translator emits each block twice: the first emission finds
   those instructions, and the second, which is kept, stores EIP only there.
   In the benchmark's hot loops that removes most of the stores.
+- **Statistics counters.** Every block exit added to `step_retired` and
+  `step_transitions`, and residency added to the `reg_*` counts. These are
+  read-modify-writes of memory on every block transition, for statistics
+  wowprospero never reads. `pw_x86_engine_set_counters` leaves them out;
+  `PW_WOW_STATS=1` keeps them. The chain budget and the link slots stay.
 
 ## Comparison with published numbers
 

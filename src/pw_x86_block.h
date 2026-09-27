@@ -167,6 +167,10 @@ typedef struct PwX86TranslateOptions {
      * region are both exactly [flat_low, flat_high), and every guest access
      * inside it is checked with one compare. 0/0 uses the region table. */
     uint32_t flat_low, flat_high;
+    /* Leave out the statistics counters (step_retired, step_transitions and
+     * the reg_* counts): a step's report then counts no retired instructions
+     * and the engine's transition and register totals stay zero. */
+    unsigned no_counters;
 } PwX86TranslateOptions;
 
 int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t guest_pc,
