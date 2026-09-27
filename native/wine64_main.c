@@ -25,6 +25,8 @@
 #include "pw_data_mount.h"
 #include "pw_pad_ps5.h"
 #include "pw_videoout_ps5.h"
+#include "pw_wine_library.h"
+#include "../src/pw_present.h"
 #include "pw_wine_display.h"
 #include "../include/prospero_win.h"
 
@@ -48,12 +50,9 @@
 #define PW_WINE64_RUNTIME "/win/wine/lib/wine/x86_64-unix"
 #define PW_SANDBOX_APP0 "/mnt/sandbox/" PW_TITLE_ID "_000/app0"
 static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
-#ifndef PW_WINE64_PREFIX
-#define PW_WINE64_PREFIX "/download0/prospero-win/prefix"  /* sandbox fallback */
-#endif
-#ifndef PW_WINE64_PREFIX_DATA
-#define PW_WINE64_PREFIX_DATA "/data/prospero-win/prefix"  /* when /data is granted */
-#endif
+/* The title's data: profiles/, input/, prefix/ and prefixes/<name>. */
+#define PW_WINE64_ROOT_DATA "/data/prospero-win"            /* when /data is granted */
+#define PW_WINE64_ROOT_SANDBOX "/download0/prospero-win"    /* sandbox fallback */
 #ifndef PW_WINE64_DEBUG
 /* No +seh: WoW64 callback returns unwind with 80000026 many times a second
  * and would flood the sink. */
@@ -73,12 +72,13 @@ static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 #define PW_WINE64_SCRIPT_CYCLES 2
 #endif
 
-/* The title's library. */
-static const PwWineApp catalog[] = {
-    { "pinball", "Space Cadet Pinball", "Windows XP - PE32 through WoW64",
-      "C:\\Games\\Pinball\\PINBALL.EXE" },
-};
-enum { CATALOG_COUNT = sizeof(catalog) / sizeof(catalog[0]) };
+/* The games, from <root>/profiles (native/pw_wine_library.h); nothing is
+ * built in. catalog holds the valid ones for pw_wine_launch. */
+static PwWineLibrary library;
+static PwWineApp catalog[PW_WINE_LIBRARY_MAX];
+static char catalog_detail[PW_WINE_LIBRARY_MAX][64];
+static size_t catalog_count;
+static const char *library_root = PW_WINE64_ROOT_SANDBOX;
 
 /* The largest desktop shown: Wine's PS5 driver defaults to 800x600
  * (WINE_PS5_DESKTOP overrides); bigger frames are counted and dropped. */
@@ -92,11 +92,6 @@ enum { PAD_CREATE = 0x1u, PAD_OPTIONS = 0x8u, PAD_UP = 0x10u, PAD_RIGHT = 0x20u,
  * them with the game's bindings (pw_game_profile). */
 static const PwPadKeyMap pad_open_map[] = { { PAD_CROSS, 0x20, 0, 0, "cross" } };
 
-/* Pinball's bindings, the direct runtime's map, until profiles are read from
- * /data (the same [input] format a shared preset file uses). */
-static const char pinball_input[] =
-    "[input]\nl1 = z\nr1 = slash\ncross = space\nleft = x\nright = period\nup = up\n"
-    "options = f3\nsquare = f2\n";
 
 int sceSystemServiceLoadExec(const char *path, char *const argv[]);
 int32_t sceKernelLoadStartModule(const char *path, size_t argc, const void *argv,
@@ -147,6 +142,23 @@ static int wine_present(void *context, const void *bgra, uint32_t width, uint32_
 {
     (void)context;
     return pw_wine_frame_box_put(&frames, bgra, width, height, stride);
+}
+
+/* Scale a frame onto the whole 1920x1080 screen as the profile asks (fit
+ * keeps the aspect ratio: 800x600 becomes 1440x1080) and flip it. */
+static int show_scaled(PwVideoOutPs5 *video, const PwGdiTargetView *view, int scaling,
+                       uint8_t *screen)
+{
+    const PwPresentFrame frame = { view->pixels, view->width, view->height, view->stride,
+                                   PW_PRESENT_BGRX8 };
+    const PwPresentTarget target = { screen, PW_LAUNCHER_RENDER_WIDTH, PW_LAUNCHER_RENDER_HEIGHT,
+                                     PW_LAUNCHER_RENDER_WIDTH * 4u,
+                                     (uint64_t)PW_LAUNCHER_RENDER_WIDTH * PW_LAUNCHER_RENDER_HEIGHT * 4u };
+    const PwGdiTargetView full = { screen, target.width, target.height, target.stride,
+                                   (uint32_t)target.bytes };
+    int status = pw_present_scale(&frame, scaling, 0x000000u, &target, NULL);
+
+    return status == PW_OK ? pw_videoout_ps5_present(video, &full) : status;
 }
 
 /* ---- fd 2 -> ps5log ---------------------------------------------------- */
@@ -236,6 +248,47 @@ static void on_exit_report(void)
     ps5log_close("wine64-exit");
 }
 
+/* ---- library ------------------------------------------------------------ */
+
+/* Request /data, as a game does, and read the games from it (or from the
+ * sandbox's /download0 when /data does not appear). */
+static void open_library(void)
+{
+    PwDataMountResult mount;
+    int status;
+
+    if (pw_data_mount_request(&mount) == 0) library_root = PW_WINE64_ROOT_DATA;
+    PS5LOG_LOG("PW_WINE64 data_mount data_before=%d wrote=%d write_errno=%d data_after=%d "
+               "waited_ms=%d root=%s", mount.data_before, mount.wrote_request, mount.write_errno,
+               mount.data_after, mount.waited_ms, library_root);
+    status = pw_wine_library_load(&library, library_root);
+    catalog_count = 0;
+    for (uint32_t i = 0; i < library.count; i++) {
+        const PwWineLibraryEntry *entry = &library.entries[i];
+        if (entry->status != PW_OK) {
+            PS5LOG_LOG("PW_WINE64 profile refused file=%s status=%s", entry->file,
+                       pw_result_name(entry->status));
+            continue;
+        }
+        const PwGameProfile *game = &entry->profile;
+        if (game->display.width)
+            snprintf(catalog_detail[catalog_count], sizeof(catalog_detail[0]), "%s  %s  %ux%u",
+                     game->app.architecture == PW_APP_ARCH_PE64 ? "pe64" : "pe32",
+                     game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" : "gdi",
+                     (unsigned)game->display.width, (unsigned)game->display.height);
+        else
+            snprintf(catalog_detail[catalog_count], sizeof(catalog_detail[0]), "%s  %s",
+                     game->app.architecture == PW_APP_ARCH_PE64 ? "pe64" : "pe32",
+                     game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" : "gdi");
+        catalog[catalog_count] = (PwWineApp){ game->app.id, game->app.name,
+                                              catalog_detail[catalog_count], game->app.executable };
+        catalog_count++;
+    }
+    PS5LOG_LOG("PW_WINE64 library status=%s listed_by=%d entries=%u games=%u",
+               pw_result_name(status), library.listed_by, (unsigned)library.count,
+               (unsigned)catalog_count);
+}
+
 /* ---- launcher ----------------------------------------------------------- */
 
 /* Shown until a game is chosen; Wine is not loaded. Does not return. */
@@ -244,30 +297,37 @@ static void run_launcher(void)
     static PwVideoOutPs5 video;
     static PwPadPs5 pad;
     PwPadPs5Ops pad_ops;
-    PwLauncherItem items[CATALOG_COUNT];
+    PwLauncherItem items[PW_WINE_LIBRARY_MAX];
     const size_t frame_bytes = (size_t)PW_LAUNCHER_RENDER_WIDTH * PW_LAUNCHER_RENDER_HEIGHT * 4u;
     uint8_t *frame = mmap(NULL, frame_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    PwLauncherScene scene = { items, CATALOG_COUNT, 0,
-        launch.refused ? "THAT GAME IS NOT IN THE LIBRARY" : launch.cycle ? "WELCOME BACK" : "CHOOSE A GAME" };
+    PwLauncherScene scene = { items, 0, PW_LAUNCHER_RENDER_NONE,
+        launch.refused ? "THAT GAME IS NOT IN THE LIBRARY" :
+        !catalog_count ? "ADD PROFILES TO /DATA/PROSPERO-WIN/PROFILES" :
+        launch.cycle ? "WELCOME BACK" : "CHOOSE A GAME" };
     int video_status = pw_videoout_ps5_open(&video), pad_status = pw_pad_ps5_platform_ops(&pad_ops);
     int dirty = 1, chosen = -1;
 
     if (pad_status == PW_OK)
         pad_status = pw_pad_ps5_open(&pad, &pad_ops, pad_open_map,
                                      sizeof(pad_open_map) / sizeof(pad_open_map[0]));
-    for (size_t i = 0; i < CATALOG_COUNT; i++)
-        items[i] = (PwLauncherItem){ catalog[i].name, catalog[i].detail, 1 };
+    /* The games, then the refused profiles, listed by file as not available. */
+    for (size_t i = 0; i < catalog_count; i++)
+        items[scene.count++] = (PwLauncherItem){ catalog[i].name, catalog[i].detail, 1 };
+    for (uint32_t i = 0; i < library.count; i++)
+        if (library.entries[i].status != PW_OK)
+            items[scene.count++] = (PwLauncherItem){ library.entries[i].file, "profile refused", 0 };
+    if (scene.count) scene.selected = 0;
     PS5LOG_LOG("PW_WINE64 launcher video=%s pad=%s frame=%d apps=%u cycle=%u refused=%u script=%d",
                pw_result_name(video_status), pw_result_name(pad_status), frame != MAP_FAILED,
-               (unsigned)CATALOG_COUNT, (unsigned)launch.cycle, launch.refused, PW_WINE64_SCRIPT);
+               (unsigned)catalog_count, (unsigned)launch.cycle, launch.refused, PW_WINE64_SCRIPT);
     for (uint64_t tick = 1; chosen < 0; tick++) {
         if (pad_status == PW_OK && pw_pad_ps5_read(&pad) == PW_OK) {
-            uint32_t pressed = pad.core.pressed_edges, before = scene.selected;
+            uint32_t pressed = scene.count ? pad.core.pressed_edges : 0, before = scene.selected;
             if ((pressed & PAD_RIGHT) && scene.selected + 1 < scene.count) scene.selected++;
             if ((pressed & PAD_LEFT) && scene.selected) scene.selected--;
             if ((pressed & PAD_DOWN) && scene.selected + 3 < scene.count) scene.selected += 3;
             if ((pressed & PAD_UP) && scene.selected >= 3) scene.selected -= 3;
-            if (pressed & PAD_CROSS) chosen = (int)scene.selected;
+            if ((pressed & PAD_CROSS) && scene.selected < catalog_count) chosen = (int)scene.selected;
             dirty |= scene.selected != before;
         }
         if (PW_WINE64_SCRIPT && tick == 3 * PW_WINE64_TICKS_PER_S) {
@@ -276,7 +336,7 @@ static void run_launcher(void)
                 ps5log_close("wine64-script-done");
                 _exit(0);
             }
-            chosen = 0;
+            if (catalog_count) chosen = 0;
         }
         if (dirty && video_status == PW_OK && frame != MAP_FAILED) {
             const PwPresentTarget target = { frame, PW_LAUNCHER_RENDER_WIDTH, PW_LAUNCHER_RENDER_HEIGHT,
@@ -378,14 +438,16 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 
 int main(int argc, char **argv)
 {
-    static const PwWineStartEnv extra[] = {
+    static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24];
+    static PwWineStartEnv extra[] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
          * starts it from start.exe in a new process, which a title cannot */
         { "WINEARCH", "wow64" },
-        { "HOME", PW_WINE64_PREFIX },
+        { "HOME", prefix },
         { "USER", "prospero" },
         { "WINE_PS5_TRACE_STARTUP", "1" },  /* patch 0560: name startup steps */
+        { "WINE_PS5_DESKTOP", desktop },    /* last: only when the profile sets it */
     };
     static const char *wine_argv[] = { "wine", NULL };
     static char ntdll_dir[256], ntdll_path[288];
@@ -394,14 +456,17 @@ int main(int argc, char **argv)
     static PwWineStartConfig config = {
         .ntdll_path = ntdll_path,
         .ntdll_dir = ntdll_dir,
-        .prefix = PW_WINE64_PREFIX,
-        .extra_env = extra, .extra_env_count = sizeof(extra) / sizeof(extra[0]),
+        .prefix = prefix,
+        .extra_env = extra, .extra_env_count = sizeof(extra) / sizeof(extra[0]) - 1,
         .argc = 2, .argv = wine_argv, .stack_bytes = 16u << 20,
     };
     static PwWineStart start;
     static PwVideoOutPs5 video;
     static PwPadPs5 pad;
     static PwGameInput game_input;
+    static uint8_t *screen;
+    const PwGameProfile *game = NULL;
+    int scaling = PW_PRESENT_SCALE_FIT;
     PwWinePointer pointer = { 0, 0, 0, 0 };
     int (*post_input)(const PwWineInput *) = NULL;
     uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
@@ -414,24 +479,38 @@ int main(int argc, char **argv)
     if (ps5log_load_config(ps5log_default_conf_paths, ps5log_default_conf_path_count,
                            &log_config, NULL) == 0)
         ps5log_init(&log_config, PW_TITLE_ID, PW_APP_NAME, now_ns());
-    (void)pw_wine_launch_parse(argc, argv, catalog, CATALOG_COUNT, &launch);
+    open_library();
+    (void)pw_wine_launch_parse(argc, argv, catalog, catalog_count, &launch);
     PS5LOG_LOG("PW_WINE64 args argc=%d mode=%s profile=%s cycle=%u refused=%u", argc,
                launch.mode == PW_WINE_LAUNCH_GAME ? "game" : "launcher",
                launch.app ? launch.app->id : "-", (unsigned)launch.cycle, launch.refused);
     if (launch.mode != PW_WINE_LAUNCH_GAME) run_launcher();
     wine_argv[1] = launch.executable;
+    /* The game's profile: its prefix, desktop, scaling and input. A bare
+     * path= runs in the default prefix with nothing bound. */
     pw_game_input_init(&game_input);
-    (void)pw_game_input_parse((const uint8_t *)pinball_input, sizeof(pinball_input) - 1, &game_input);
-
-    /* Request /data; keep the /download0 prefix if it does not appear. */
-    {
-        PwDataMountResult mount;
-        if (pw_data_mount_request(&mount) == 0) config.prefix = PW_WINE64_PREFIX_DATA;
-        PS5LOG_LOG("PW_WINE64 data_mount data_before=%d wrote=%d write_errno=%d data_after=%d "
-                   "waited_ms=%d prefix=%s",
-                   mount.data_before, mount.wrote_request, mount.write_errno,
-                   mount.data_after, mount.waited_ms, config.prefix);
+    game = launch.app ? pw_wine_library_find(&library, launch.app->id) : NULL;
+    if (game && strcmp(game->app.prefix, "default"))
+        snprintf(prefix, sizeof(prefix), "%s/prefixes/%s", library_root, game->app.prefix);
+    else
+        snprintf(prefix, sizeof(prefix), "%s/prefix", library_root);
+    if (game) {
+        int input_status = pw_wine_library_input(game, library_root, &game_input);
+        scaling = (int)game->display.scaling;
+        if (game->display.width) {
+            snprintf(desktop, sizeof(desktop), "%ux%u", (unsigned)game->display.width,
+                     (unsigned)game->display.height);
+            config.extra_env_count++;
+        }
+        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d input=%s preset=%s "
+                   "mode=%s mouse=%d", game->app.id, prefix, desktop[0] ? desktop : "default",
+                   scaling, pw_result_name(input_status),
+                   game->input.preset[0] ? game->input.preset : "-",
+                   game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse);
+        if (game_input.mode == PW_GAME_INPUT_XINPUT)
+            PS5LOG_LOG("PW_WINE64 xinput is not available yet: the profile's bindings are used");
     }
+
     for (size_t i = 0; i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
         struct stat st;
         snprintf(ntdll_dir, sizeof(ntdll_dir), "%s" PW_WINE64_RUNTIME, runtime_roots[i]);
@@ -471,6 +550,9 @@ int main(int argc, char **argv)
             if (storage != MAP_FAILED &&
                 pw_wine_frame_box_init(&frames, storage, PW_WINE64_MAX_FRAME) == 0) {
                 frame_shown = storage + PW_WINE64_MAX_FRAME;
+                screen = mmap(NULL, (size_t)PW_LAUNCHER_RENDER_WIDTH * PW_LAUNCHER_RENDER_HEIGHT * 4u,
+                              PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+                if (screen == MAP_FAILED) screen = NULL;
                 if (set_present) set_present(wine_present, NULL);
             }
         }
@@ -510,10 +592,10 @@ int main(int argc, char **argv)
                 else refused++;
             }
         }
-        if (video_status == PW_OK && frame_shown &&
+        if (video_status == PW_OK && frame_shown && screen &&
             pw_wine_frame_box_take(&frames, &shown_sequence, frame_shown, PW_WINE64_MAX_FRAME,
                                    &view) == 1 &&
-            pw_videoout_ps5_present(&video, &view) == PW_OK) {
+            show_scaled(&video, &view, scaling, screen) == PW_OK) {
             shown++;          /* present waits for the vblank */
             presented = 1;
         }

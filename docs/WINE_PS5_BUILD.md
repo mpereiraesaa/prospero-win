@@ -322,8 +322,26 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   (`profile=pinball path=C:\Games\Pinball\PINBALL.EXE cycle=<n>`). A
   restart is a new process that receives its arguments intact in about
   430 ms (see `HARDWARE_VALIDATION.md`).
+- **Library.** Both the launcher and a game request `/data` first, and read the
+  games from `/data/prospero-win` (`native/pw_wine_library.h`), or from
+  `/download0/prospero-win` when `/data` does not appear. Nothing is built
+  in: a game appears by adding `profiles/<name>.profile`, in the format of
+  `src/pw_game_profile.h`. The directory is listed with `getdents`, or read
+  from `profiles/profiles.lst` when it cannot be listed. Refused profiles
+  are listed as not available and logged with the reason.
+  `examples/wine/` has the same layout, with Pinball's profile and its
+  shared input preset.
 - **Game.** Started with `profile=` or `path=`, the title runs that executable
-  in Wine as below.
+  in Wine as below, with the profile's settings:
+  - `prefix = default` uses `<root>/prefix`, any other name
+    `<root>/prefixes/<name>`;
+  - `[display] desktop` sets `WINE_PS5_DESKTOP`, and `scaling` (`fit`,
+    `integer` or `stretch`) scales each frame onto the whole 1920x1080
+    screen. `fit` keeps the aspect ratio, so 800x600 is shown at 1440x1080;
+  - `[input]` binds each DualSense button to a key or a mouse button, and a
+    stick moves the pointer. `preset = <name>` shares a mapping from
+    `<root>/input/<name>.input`. `mode = xinput` is accepted but not wired
+    yet, so the bindings are used instead.
 - **Closing.** Holding Options+Create for a second sends the game Alt+F4. When
   Wine exits, the title restarts into the launcher. If the game has not
   closed after 5 s, the title restarts into the launcher anyway.
