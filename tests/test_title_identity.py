@@ -17,6 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TITLE_ID = "PPSA99995"
 APP_NAME = "prospero-win"
+# What the console shows on the home screen; telemetry keeps APP_NAME.
+DISPLAY_NAME = "Prospero Win"
 CONTENT_ID = "UP9000-PPSA99995_00-PROSPEROWIN00001"
 # Split so the publication audit, which forbids these literals anywhere in
 # the tree, does not trip over the very test that enforces the separation.
@@ -33,7 +35,7 @@ def main() -> int:
     assert param["titleId"] == TITLE_ID, param["titleId"]
     assert param["conceptId"] == "99995", param["conceptId"]
     assert param["contentId"] == CONTENT_ID, param["contentId"]
-    assert param["localizedParameters"]["en-US"]["titleName"] == APP_NAME
+    assert param["localizedParameters"]["en-US"]["titleName"] == DISPLAY_NAME
 
     native = (ROOT / "native/main.c").read_text()
     require(native, f'#define PW_TITLE_ID "{TITLE_ID}"', "native/main.c")
