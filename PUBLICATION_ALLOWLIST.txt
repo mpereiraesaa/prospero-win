@@ -119,6 +119,8 @@ src/pw_ini.c
 src/pw_ini.h
 src/pw_app_profile.c
 src/pw_app_profile.h
+src/pw_audio_mix.c
+src/pw_audio_mix.h
 src/pw_prefix.c
 src/pw_prefix.h
 src/pw_runtime_supervisor.c
@@ -136,6 +138,7 @@ tools/make_win32_catalog.py
 tools/wine_runtime_modules.py
 tests/test_pw_win32.c
 tests/test_pw_audio_ps5.c
+tests/test_pw_audio_mix.c
 tests/test_pw_ini.c
 tests/test_pw_app_profile.c
 examples/profiles/pinball.profile
