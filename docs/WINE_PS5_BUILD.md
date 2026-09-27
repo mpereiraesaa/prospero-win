@@ -227,8 +227,8 @@ input.
   board and edit area.
 - A scripted click at (40,200) opened winemine's board and started its timer.
 - Typed `HI` reached notepad's edit control as `WM_KEYDOWN`/`WM_CHAR` (`h`, `i`).
-- No text is drawn, because the build has no fonts (`--without-freetype`,
-  as on PS5). Fonts for the console are still open.
+- No text was drawn in that host build (`--without-freetype`). The PS5 build
+  now has fonts: see "Fonts" below.
 
 Patch 0410 fixes two window-size errors that this setup causes:
 
@@ -251,6 +251,24 @@ driver and a preloaded sink:
 - the window is at (97,44)-(703,511);
 - the table is presented continuously;
 - Alt+F4 posted through the input queue closes the game.
+
+## Fonts
+
+`tools/build_wine_ps5.sh` builds FreeType from a pinned release (2.13.3,
+SHA-256 checked; `PROSPERO_FREETYPE_TARBALL` names a local copy) with the
+payload SDK. The build keeps only the TrueType, CFF, Type 1 and Windows `.fon`
+drivers, the hinters, the two rasterisers and FreeType's own gzip.
+
+- Wine is configured with FreeType found through `FREETYPE_CFLAGS` and
+  `FREETYPE_LIBS`. Its soname is `libfreetype.so`, the name
+  `dlls/win32u/freetype.c` passes to `dlopen`.
+- The PRX stage links `libfreetype.prx`. Its descriptor exports the 31
+  functions win32u loads with `dlsym`, so Wine's own `dlopen` loads it
+  through `pw_wine_dl`, like `wineserver.so`. It is staged beside
+  `ntdll.prx`.
+- Wine's 13 fonts (`fonts/*.ttf`: Tahoma, MS Sans Serif, Courier, System,
+  Marlett and others) are copied to `<work>/prx/fonts`. They are staged
+  under `share/wine/fonts`, where win32u looks for Wine's fonts.
 
 ## WoW64 CPU backend
 

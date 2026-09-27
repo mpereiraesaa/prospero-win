@@ -34,11 +34,33 @@ set -eu
 
 WINE_COMMIT=490f6d5dcbb2a5047345b8af88d114bbcaad69a8
 MODULE_EXPORTS_COMMIT=30597512539e7edfde079cbcaf4a626bc0a948c5
+# FreeType draws Wine's text. It is built from a pinned release with the
+# payload SDK and linked into libfreetype.prx, which Wine's own
+# dlopen("libfreetype.so") loads through pw_wine_dl, next to ntdll.prx.
+FREETYPE_VERSION=2.13.3
+FREETYPE_SHA256=0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289
+FREETYPE_URL=https://download.savannah.gnu.org/releases/freetype/freetype-$FREETYPE_VERSION.tar.xz
+# Only what Wine's fonts need: TrueType/CFF/Type 1 outlines, Windows .fon
+# bitmaps, hinting and the two rasterisers; gzip (FreeType's own zlib copy)
+# for the compressed WOFF tables sfnt reads.
+FREETYPE_UNITS="base/ftsystem base/ftinit base/ftdebug base/ftbase base/ftbbox base/ftbitmap
+ base/ftglyph base/ftmm base/ftsynth base/fttype1 base/ftfstype base/ftgasp base/ftwinfnt
+ autofit/autofit truetype/truetype type1/type1 cff/cff winfonts/winfnt psaux/psaux
+ psnames/psnames pshinter/pshinter sfnt/sfnt smooth/smooth raster/raster gzip/ftgzip"
+# The functions dlls/win32u/freetype.c loads with dlsym.
+FREETYPE_EXPORTS="FT_Done_Face FT_Get_Char_Index FT_Get_First_Char FT_Get_Next_Char
+ FT_Get_Sfnt_Name FT_Get_Sfnt_Name_Count FT_Get_Sfnt_Table FT_Get_TrueType_Engine_Type
+ FT_Get_WinFNT_Header FT_Init_FreeType FT_Library_SetLcdFilter FT_Library_Version
+ FT_Load_Glyph FT_Load_Sfnt_Table FT_Matrix_Multiply FT_MulDiv FT_MulFix FT_New_Face
+ FT_New_Memory_Face FT_Outline_Embolden FT_Outline_Get_Bitmap FT_Outline_Get_CBox
+ FT_Outline_Transform FT_Outline_Translate FT_Property_Set FT_Render_Glyph FT_Set_Charmap
+ FT_Set_Pixel_Sizes FT_Vector_Length FT_Vector_Transform FT_Vector_Unit"
 TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver"
-# Everything optional is off: the console has none of these libraries, and a
-# configure-time probe against the payload SDK must not pick up host headers.
+# Everything optional but FreeType (built below) is off: the console has none
+# of these libraries, and a configure-time probe against the payload SDK must
+# not pick up host headers.
 CONFIGURE_ARGS="--host=x86_64-unknown-freebsd11 --build=x86_64-pc-linux-gnu
- --enable-archs=x86_64 --disable-tests --without-x --without-freetype
+ --enable-archs=x86_64 --disable-tests --without-x
  --without-fontconfig --without-gnutls --without-alsa --without-pulse
  --without-dbus --without-gstreamer --without-sdl --without-udev --without-usb
  --without-v4l2 --without-vulkan --without-wayland --without-opengl --without-oss
@@ -112,6 +134,43 @@ sdk=${sdk:-$foundation/.deps/native/ps5-payload-sdk}
 
 # A private copy keeps the shared checkout pristine for the host build.
 mkdir -p "$work"
+
+# FreeType, once per pinned release: a static archive for configure and the
+# objects the PRX stage links. PROSPERO_FREETYPE_TARBALL names a local copy.
+ft=$work/freetype
+ft_stamp=$(printf '%s\n' "$FREETYPE_SHA256" "$FREETYPE_UNITS" | sha256sum | cut -c1-64)
+if [ "$(cat "$ft/.prospero-stamp" 2>/dev/null)" != "$ft_stamp" ]; then
+    rm -rf "$ft"
+    mkdir -p "$ft/src" "$ft/obj" "$ft/config"
+    tarball=${PROSPERO_FREETYPE_TARBALL:-$ft/freetype-$FREETYPE_VERSION.tar.xz}
+    [ -f "$tarball" ] || curl -sSfL -o "$tarball" "$FREETYPE_URL" ||
+        fail "cannot download $FREETYPE_URL"
+    [ "$(sha256sum "$tarball" | cut -c1-64)" = "$FREETYPE_SHA256" ] ||
+        fail "$tarball does not match FreeType $FREETYPE_VERSION's pinned SHA-256"
+    tar -xJf "$tarball" -C "$ft/src" --strip-components=1
+    cat > "$ft/config/ftmodule_ps5.h" <<'EOF'
+FT_USE_MODULE( FT_Module_Class, autofit_module_class )
+FT_USE_MODULE( FT_Driver_ClassRec, tt_driver_class )
+FT_USE_MODULE( FT_Driver_ClassRec, t1_driver_class )
+FT_USE_MODULE( FT_Driver_ClassRec, cff_driver_class )
+FT_USE_MODULE( FT_Driver_ClassRec, winfnt_driver_class )
+FT_USE_MODULE( FT_Module_Class, psaux_module_class )
+FT_USE_MODULE( FT_Module_Class, psnames_module_class )
+FT_USE_MODULE( FT_Module_Class, pshinter_module_class )
+FT_USE_MODULE( FT_Module_Class, sfnt_module_class )
+FT_USE_MODULE( FT_Renderer_Class, ft_smooth_renderer_class )
+FT_USE_MODULE( FT_Renderer_Class, ft_raster1_renderer_class )
+EOF
+    for unit in $FREETYPE_UNITS; do
+        "$sdk/bin/prospero-clang" -std=c99 -O2 -fPIC -DFT2_BUILD_LIBRARY \
+            '-DFT_CONFIG_MODULES_H=<ftmodule_ps5.h>' -I"$ft/config" -I"$ft/src/include" \
+            -c "$ft/src/src/$unit.c" -o "$ft/obj/$(basename "$unit").o" ||
+            fail "cannot compile FreeType $unit.c"
+    done
+    "$sdk/bin/llvm-ar" rcs "$ft/libfreetype.a" "$ft"/obj/*.o
+    echo "$ft_stamp" > "$ft/.prospero-stamp"
+    echo "built FreeType $FREETYPE_VERSION"
+fi
 tree=$work/source
 if [ ! -d "$tree/.git" ]; then
     git clone -q --shared --no-checkout "$source_dir" "$tree"
@@ -125,14 +184,18 @@ done
 
 # Reconfigure whenever the patches or the arguments change.
 stamp=$(
-    { printf '%s\n' "$WINE_COMMIT" "$CONFIGURE_ARGS" "$sdk"
+    { printf '%s\n' "$WINE_COMMIT" "$CONFIGURE_ARGS" "$sdk" "$FREETYPE_SHA256"
       for patch in $ordered; do cat "$patches/$patch"; done; } | sha256sum | cut -c1-64)
 build=$work/build
 if [ ! -f "$build/Makefile" ] || [ "$(cat "$build/.prospero-stamp" 2>/dev/null)" != "$stamp" ]; then
     rm -rf "$build"
     mkdir -p "$build"
     # shellcheck disable=SC2086
+    # FreeType is found by its flags; its soname is the name Wine dlopens,
+    # which pw_wine_dl turns into libfreetype.prx beside ntdll.prx.
     (cd "$build" && "$tree/configure" $CONFIGURE_ARGS CC="$sdk/bin/prospero-clang" \
+        FREETYPE_CFLAGS="-I$ft/src/include" FREETYPE_LIBS="$ft/libfreetype.a" \
+        ac_cv_lib_soname_freetype=libfreetype.so \
         --with-wine-tools="$host_tools" > "$work/configure.log" 2>&1) ||
         fail "configure failed; see $work/configure.log"
     echo "$stamp" > "$build/.prospero-stamp"
@@ -240,7 +303,9 @@ if [ "$prx_status" = 0 ]; then
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \
         pw_wineserver_connect pw_wine_thread_register
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wowprospero_desc.c" __wine_unix_call_funcs
-    for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc; do
+    # shellcheck disable=SC2086
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libfreetype_desc.c" $FREETYPE_EXPORTS
+    for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc libfreetype_desc; do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
@@ -269,6 +334,10 @@ if [ "$prx_status" = 0 ]; then
     (cd "$prx/obj" && "$sdk/bin/llvm-ar" x "$sdk/target/lib/libc.a" emutls.o) ||
         fail "no emutls.o in the payload SDK's libc.a"
     link_prx wowprospero - "$wow $prx/obj/emutls.o $prx/obj/wowprospero_desc.o" "$prx/ntdll.shared.elf"
+    link_prx libfreetype - "$ft/obj/*.o $prx/obj/libfreetype_desc.o"
+    # Wine's own fonts, staged under share/wine/fonts beside the runtime.
+    mkdir -p "$prx/fonts"
+    cp "$tree"/fonts/*.ttf "$prx/fonts/"
 fi
 
 if python3 - "$build" "$work/make.log" "$work/report.json" "$sdk" "$WINE_COMMIT" "$prx" "$prx_status" \
@@ -324,7 +393,7 @@ title_exports = exports("libkernel.so") | exports("libSceLibcInternal.so")
 objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{sdk}/bin/llvm-objdump"
 SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
-for name in ("ntdll", "win32u", "wineserver", "wowprospero") if not prx_status.startswith("skipped") else ():
+for name in ("ntdll", "win32u", "wineserver", "wowprospero", "libfreetype") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
     link_text = link_log.read_text(errors="replace") if link_log.is_file() else ""
