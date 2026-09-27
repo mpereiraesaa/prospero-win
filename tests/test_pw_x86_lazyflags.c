@@ -1011,6 +1011,151 @@ static void test_parity_lazy_flags_switch(void)
     assert(pw_x86_engine_destroy(&engine_eager) == PW_OK);
 }
 
+
+/* 12. Every condition after every common producer, against the host CPU:
+ * right after the producer (the branch tests the flags it captured), with an
+ * instruction in between (the branch merges the pending flags first), with
+ * the carry in both states, in all four modes. */
+typedef uint64_t (*NativeFlags)(uint32_t a, uint32_t b, uint32_t carry);
+#if defined(__clang__)
+__attribute__((no_sanitize("function")))
+#endif
+static uint64_t call_native(NativeFlags fn, uint32_t a, uint32_t b, uint32_t carry)
+{
+    return fn(a, b, carry);
+}
+typedef int (*BlockFn)(PwX86State *);
+#if defined(__clang__)
+__attribute__((no_sanitize("function")))
+#endif
+static int call_block(BlockFn fn, PwX86State *state) { return fn(state); }
+
+static int condition_holds(unsigned condition, uint64_t f)
+{
+    const int cf = (f & 1) != 0, pf = (f & 4) != 0, zf = (f & 0x40) != 0, sf = (f & 0x80) != 0,
+              of = (f & 0x800) != 0;
+    int value;
+
+    switch (condition >> 1) {
+        case 0: value = of; break;
+        case 1: value = cf; break;
+        case 2: value = zf; break;
+        case 3: value = cf || zf; break;
+        case 4: value = sf; break;
+        case 5: value = pf; break;
+        case 6: value = sf != of; break;
+        default: value = zf || sf != of; break;
+    }
+    return (condition & 1) ? !value : value;
+}
+
+static void test_jcc_against_native(void)
+{
+    static const struct { uint8_t bytes[3]; uint8_t length; } producers[] = {
+        { { 0x39, 0xc8 }, 2 }, /* cmp eax, ecx */
+        { { 0x29, 0xc8 }, 2 }, /* sub eax, ecx */
+        { { 0x01, 0xc8 }, 2 }, /* add eax, ecx */
+        { { 0x85, 0xc8 }, 2 }, /* test eax, ecx */
+        { { 0x21, 0xc8 }, 2 }, /* and eax, ecx */
+        { { 0x09, 0xc8 }, 2 }, /* or eax, ecx */
+        { { 0x31, 0xc8 }, 2 }, /* xor eax, ecx */
+        { { 0x11, 0xc8 }, 2 }, /* adc eax, ecx */
+        { { 0x19, 0xc8 }, 2 }, /* sbb eax, ecx */
+        { { 0xff, 0xc0 }, 2 }, /* inc eax: CF is the incoming one */
+        { { 0xff, 0xc8 }, 2 }, /* dec eax */
+        { { 0xf7, 0xd8 }, 2 }, /* neg eax */
+        { { 0xd1, 0xe0 }, 2 }, /* shl eax, 1 */
+        { { 0xd1, 0xf8 }, 2 }, /* sar eax, 1 */
+        { { 0x83, 0xf8, 0x05 }, 3 }, /* cmp eax, 5 */
+    };
+    static const uint32_t values[] = { 0, 1, 5, 0x7fffffffu, 0x80000000u, 0xfffffffeu,
+                                       0xffffffffu };
+    PwVmBackend vm;
+    PwVmRegion native, code;
+    PwX86Block block;
+    unsigned checked = 0;
+
+    assert(pw_vm_posix_backend(&vm) == PW_OK);
+    assert(vm.reserve(vm.context, 4096, vm.page_bytes, &native) == PW_OK);
+    assert(vm.reserve(vm.context, 8192, vm.page_bytes, &code) == PW_OK);
+    for (size_t p = 0; p < sizeof(producers) / sizeof(producers[0]); p++) {
+        /* mov eax, edi; mov ecx, esi; bt edx, 0 (CF = carry); producer;
+         * pushfq; pop rax; ret */
+        uint8_t host[32];
+        size_t n = 0;
+        const uint8_t head[] = { 0x89, 0xf8, 0x89, 0xf1, 0x0f, 0xba, 0xe2, 0x00 };
+
+        memcpy(host, head, sizeof(head)); n = sizeof(head);
+        memcpy(host + n, producers[p].bytes, producers[p].length); n += producers[p].length;
+        host[n++] = 0x9c; host[n++] = 0x58; host[n++] = 0xc3;
+        assert(vm.commit(vm.context, &native, 0, native.bytes, PW_PROT_READ | PW_PROT_WRITE) ==
+               PW_OK);
+        memcpy(native.write_base, host, n);
+        assert(vm.protect(vm.context, &native, 0, native.bytes, PW_PROT_READ | PW_PROT_EXEC) ==
+               PW_OK);
+        for (unsigned condition = 0; condition < 16; condition++)
+            for (unsigned between = 0; between < 2; between++) {
+                /* mov eax, A; mov ecx, B; [mov edx, 1;] producer; jcc +0x10 */
+                uint8_t guest[32];
+                size_t g = 0;
+
+                guest[g++] = 0xb8; g += 4;
+                guest[g++] = 0xb9; g += 4;
+                if (between) { guest[g++] = 0xba; guest[g++] = 1; guest[g++] = 0; guest[g++] = 0;
+                               guest[g++] = 0; }
+                memcpy(guest + g, producers[p].bytes, producers[p].length);
+                g += producers[p].length;
+                guest[g++] = (uint8_t)(0x70 + condition);
+                guest[g++] = 0x10;
+                for (unsigned mode = 0; mode < 4; mode++) {
+                    const PwX86TranslateOptions options = {
+                        .residency_enabled = mode & 1, .lazy_flags_enabled = mode >> 1 };
+
+                    assert(vm.commit(vm.context, &code, 0, code.bytes,
+                                     PW_PROT_READ | PW_PROT_WRITE) == PW_OK);
+                    for (size_t a = 0; a < sizeof(values) / sizeof(values[0]); a++)
+                        for (size_t b = 0; b < sizeof(values) / sizeof(values[0]); b++) {
+                            memcpy(guest + 1, &values[a], 4);
+                            memcpy(guest + 6, &values[b], 4);
+                            assert(vm.protect(vm.context, &code, 0, code.bytes,
+                                              PW_PROT_READ | PW_PROT_WRITE) == PW_OK);
+                            assert(pw_x86_translate_opts(guest, g, 0x2000, code.write_base,
+                                                         code.bytes, &block, &options) == PW_OK);
+                            assert(block.source_bytes == g);
+                            assert(vm.protect(vm.context, &code, 0, code.bytes,
+                                              PW_PROT_READ | PW_PROT_EXEC) == PW_OK);
+                            for (uint32_t carry = 0; carry < 2; carry++) {
+                                PwX86State state;
+                                const uint64_t flags = call_native(
+                                    (NativeFlags)native.exec_base, values[a], values[b], carry);
+                                const uint32_t taken = 0x2000u + (uint32_t)g + 0x10u;
+
+                                memset(&state, 0, sizeof(state));
+                                state.eflags = 0x2u | carry;
+                                state.chain_budget = 8;
+                                assert(call_block((BlockFn)code.exec_base, &state) == 0);
+                                pw_x86_commit_canonical_flags(&state);
+                                /* AF is undefined for some producers. */
+                                if ((state.eip == taken) != condition_holds(condition, flags) ||
+                                    ((state.eflags ^ (uint32_t)flags) & 0x8c5u)) {
+                                    fprintf(stderr, "producer %zu condition %u between %u mode %u"
+                                            " a=%08x b=%08x cf=%u eip=%08x eflags=%08x"
+                                            " native=%08llx\n", p, condition, between, mode,
+                                            values[a], values[b], carry, state.eip,
+                                            state.eflags, (unsigned long long)flags);
+                                    assert(0);
+                                }
+                                checked++;
+                            }
+                        }
+                }
+            }
+    }
+    assert(checked == 15u * 16u * 2u * 4u * 49u * 2u);
+    assert(vm.release(vm.context, &code) == PW_OK);
+    assert(vm.release(vm.context, &native) == PW_OK);
+}
+
 int main(void)
 {
     PwVmBackend vm;
@@ -1030,8 +1175,9 @@ int main(void)
     test_reconciliation_with_residency_and_invalidation();
     test_adc_width_and_address_temporaries();
     test_parity_lazy_flags_switch();
+    test_jcc_against_native();
 
     assert(vm.release(vm.context, &stack_region) == PW_OK);
-    printf("all 11 lazy arithmetic flags tests passed successfully\n");
+    printf("all 12 lazy arithmetic flags tests passed successfully\n");
     return 0;
 }

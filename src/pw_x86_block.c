@@ -18,6 +18,11 @@ _Static_assert(offsetof(PwX86State,memory[0].permissions)<=127,
 typedef struct Emitter {
     uint8_t *p; size_t n, cap; int failed; uint32_t flat_low, flat_span; unsigned exits;
     unsigned no_counters; /* PwX86TranslateOptions.no_counters */
+    /* rcx holds the rcx_flags_mask bits of the last flag producer's host
+     * flags, and nothing has been emitted since (end is e->n + 1; 0: none). */
+    size_t rcx_flags_end; uint32_t rcx_flags_mask;
+    /* Likewise when the host flags themselves are still the producer's. */
+    size_t host_flags_end;
 } Emitter;
 static void byte(Emitter *e, uint8_t value)
 {
@@ -693,13 +698,38 @@ static void emit_materialize_flags(Emitter *e, uint32_t mask);
 static uint32_t branch_condition_flags(unsigned condition);
 
 static void conditional_target(Emitter *e, unsigned condition, uint32_t next, uint32_t target,
-                               PwX86Block *block, uint32_t count)
+                               PwX86Block *block, uint32_t count, uint32_t rcx_flags,
+                               unsigned host_flags)
 {
     unsigned c = condition >> 1;
     unsigned invert = condition & 1;
     uint8_t jump_op = invert ? 0x84 : 0x85;
     size_t branch_patch = 0;
-    emit_materialize_flags(e,branch_condition_flags(condition));
+    static const uint32_t single[6] = { 0x800, 0x001, 0x040, 0x041, 0x080, 0x004 };
+    const uint32_t needed = branch_condition_flags(condition);
+    if (host_flags) {
+        /* The host flags are still the producer's: branch on them. */
+        byte(e,0x0f);byte(e,(uint8_t)(0x80u + condition)); branch_patch = e->n; word(e, 0);
+    } else if ((needed & ~rcx_flags) == 0) {
+        /* The instruction just before produced every flag the condition
+         * reads, and rcx still holds them: test them there instead of
+         * merging the pending flags into EFLAGS first. The pending flags
+         * stay pending, exactly as they were. */
+        if (c < 6) {
+            byte(e,0xf7);byte(e,0xc1);word(e,single[c]);        /* test ecx, bits */
+        } else {
+            byte(e,0x89);byte(e,0xc8);                          /* mov eax, ecx */
+            byte(e,0xc1);byte(e,0xe8);byte(e,4);                /* shr eax, 4: OF to bit 7 */
+            byte(e,0x31);byte(e,0xc8);                          /* xor eax, ecx: SF ^ OF */
+            byte(e,0x25);word(e,0x80);                          /* and eax, 0x80 */
+            if (c == 7) {
+                byte(e,0x83);byte(e,0xe1);byte(e,0x40);         /* and ecx, ZF */
+                byte(e,0x09);byte(e,0xc8);                      /* or eax, ecx */
+            }
+        }
+        byte(e,0x0f);byte(e,jump_op); branch_patch = e->n; word(e, 0);
+    } else {
+    emit_materialize_flags(e,needed);
     if (c == 0) { /* OF: bit 11 in eflags (bit 3 of byte [rdi+53]) */
         byte(e,0xf6);byte(e,0x47);byte(e,offsetof(PwX86State,eflags)+1);byte(e,0x08);
         byte(e,0x0f);byte(e,jump_op); branch_patch = e->n; word(e, 0);
@@ -722,6 +752,7 @@ static void conditional_target(Emitter *e, unsigned condition, uint32_t next, ui
         condition_value(e,condition);
         byte(e,0x85);byte(e,0xc0);
         byte(e,0x0f);byte(e,0x85); branch_patch = e->n; word(e, 0);
+    }
     }
     emit_chain_exit(e, count, next, &block->exit_contract,
                     &block->exit.fallthrough_patch_offset, &block->exit.fallthrough_stub_offset,
@@ -861,6 +892,8 @@ static void save_arithmetic_flags(Emitter *e,uint32_t mask)
     byte(e,0x81); byte(e,0xe2); word(e,~mask);
     byte(e,0x09); byte(e,0xca);
     byte(e,0x89); byte(e,0x57); byte(e,offsetof(PwX86State,eflags));
+    e->rcx_flags_end = e->n + 1;
+    e->rcx_flags_mask = mask;
 }
 
 static void load_edx_disp32(Emitter *e,size_t offset)
@@ -885,9 +918,11 @@ static void defer_arithmetic_flags(Emitter *e,uint32_t mask)
 
     byte(e,0x9c);byte(e,0x59);                 /* pushfq; pop rcx */
     if(mask==0x8d5) {
-        /* Every deferred arithmetic bit is replaced, so no merge is needed. */
+        /* Every deferred arithmetic bit is replaced, so no merge is needed.
+         * Nothing here changes the host flags. */
         byte(e,0x89);byte(e,0x8f);word(e,(uint32_t)result_offset);
         store_imm_disp32(e,known_offset,mask);
+        e->host_flags_end = e->n + 1;
     } else {
         byte(e,0x81);byte(e,0xe1);word(e,mask); /* and ecx, mask */
         load_edx_disp32(e,result_offset);
@@ -896,6 +931,8 @@ static void defer_arithmetic_flags(Emitter *e,uint32_t mask)
         store_edx_disp32(e,result_offset);
         byte(e,0x81);byte(e,0x8f);word(e,(uint32_t)known_offset);word(e,mask);
     }
+    e->rcx_flags_end = e->n + 1;
+    e->rcx_flags_mask = mask;
 }
 
 static void emit_save_flags(Emitter *e, uint32_t mask, unsigned lazy_flags_enabled,
@@ -1425,7 +1462,7 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
                           uint8_t *output, size_t capacity, PwX86Block *block,
                           const PwX86TranslateOptions *options)
 {
-    Emitter e = {output,0,capacity,0,0,0,0,0};
+    Emitter e = {output,0,capacity,0,0,0,0,0,0,0,0};
     size_t cursor = 0;
     unsigned count = 0;
     if (!source || !bytes || !output || !capacity || !block || !options)
@@ -2168,6 +2205,8 @@ analyze_and_emit:
         *block = planned;
         e.n = 0;
         e.exits = 0;
+        e.rcx_flags_end = 0;
+        e.host_flags_end = 0;
         indirect_exit = 0;
     }
     block->canonical_entry_offset = e.n;
@@ -2229,6 +2268,10 @@ analyze_and_emit:
 
         uint32_t next = pc + (uint32_t)cursor + (uint32_t)length;
         const unsigned exits_before = e.exits;
+        /* What rcx holds of the flags when the previous instruction's code
+         * ends with its flag capture: the prologue below leaves rcx alone. */
+        const uint32_t rcx_flags = e.rcx_flags_end == e.n + 1 ? e.rcx_flags_mask : 0;
+        const unsigned host_flags = e.host_flags_end == e.n + 1;
         /* Fault exits preserve the PC of the faulting guest instruction. */
         if (needs_eip[i]) store(&e,offsetof(PwX86State,eip),pc+(uint32_t)cursor);
         if (d->can_fault || string_op || x87) {
@@ -3071,7 +3114,8 @@ analyze_and_emit:
             block->exit.chainable = 1;
             block->exit.target_pc = next + delta;
             block->exit.fallthrough_pc = next;
-            conditional_target(&e,condition,next,next+delta,block,count);terminal=1;
+            conditional_target(&e,condition,next,next+delta,block,count,rcx_flags,host_flags);
+            terminal=1;
         } else if(op==0xff && operand.reg<2) {
             if(operand.mod==3)load_guest_reg(&e, &block->exit_contract, operand.rm);
             else {effective_address(&e,&operand,&block->exit_contract);memory_address_width(&e,2,4);}

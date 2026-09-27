@@ -99,6 +99,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | Flat guard: one compare per access (`PW_WOW_MODES` 5th digit) | 557 | 622 | +12% | 12.5% |
 | Guest EIP stored only before instructions that can stop the block | 617 | 657 | +6% | 13.2% |
 | No statistics counters in translated code (`PW_WOW_STATS` keeps them) | 657 | 726 | +10% | 14.6% |
+| Conditional branches on the producer's flags | 650 | 788 | +21% | 19.5% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -118,6 +119,15 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   read-modify-writes of memory on every block transition, for statistics
   wowprospero never reads. `pw_x86_engine_set_counters` leaves them out;
   `PW_WOW_STATS=1` keeps them. The chain budget and the link slots stay.
+- **Branches on the producer's flags.** A conditional branch merged the
+  pending flags into EFLAGS in memory (eight instructions and three loads)
+  and then tested EFLAGS. When the instruction just before the branch
+  produced every flag the condition reads, those flags are still in the
+  host: in the host flags themselves when the producer defines all six
+  (`jcc` as is), or in `rcx`, which holds its captured flags, otherwise
+  (`test ecx` and at most five instructions). The pending flags stay
+  pending, exactly as before. From here the native baseline is taken from
+  the same rounds (4032 MIPS, on another core); the ratio uses it.
 
 ## Comparison with published numbers
 
