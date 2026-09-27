@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 10:00:00 +0200
+Subject: [PATCH] win32u: Size windows right without fonts and with a
+ server-created desktop.
+
+Two things made Pinball place its window at (-303,-32768) with a height
+of millions of pixels, so it never painted after its first frames:
+
+- Without fonts (--without-freetype, as on PS5) NtGdiGetTextMetricsW
+  fails and get_text_metr_size() left the caller's TEXTMETRICW
+  uninitialised, so normalize_nonclientmetrics() took stack garbage as
+  the menu height (SM_CYMENU 6750319) and wineboot stored it in the
+  prefix as MenuHeight. The metrics are now zeroed first.
+- With the PS5 user driver the server creates the desktop window for the
+  process, which holds no WND for it: get_win_ptr() returned NULL and
+  GetWindowRect(GetDesktopWindow()) failed, leaving the caller's rect
+  uninitialised. The desktop is now WND_DESKTOP there too.
+---
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index 6ed5b77232..d18d866860 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -5480,6 +5480,8 @@ static void get_text_metr_size( HDC hdc, LOGFONTW *lf, TEXTMETRICW *metric, UINT
+     TEXTMETRICW tm;
+     UINT ret;
+     if (!metric) metric = &tm;
++    /* without fonts the metrics are not filled in: callers read zeros */
++    memset( metric, 0, sizeof(*metric) );
+     hfont = NtGdiHfontCreate( lf, sizeof(*lf), 0, 0, NULL );
+     if (!hfont || !(hfontsav = NtGdiSelectFont( hdc, hfont )))
+     {
+diff --git a/dlls/win32u/window.c b/dlls/win32u/window.c
+index ef46718035..923d32559e 100644
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -595,6 +595,10 @@ WND *get_win_ptr( HWND hwnd )
+     {
+         if (is_desktop_window( hwnd )) win = WND_DESKTOP;
+     }
++#ifdef WINE_PS5_USER_DRIVER
++    /* the server created the desktop for this process, which holds no WND for it */
++    else if (!win && is_desktop_window( hwnd )) win = WND_DESKTOP;
++#endif
+     return win;
+ }
+ 
+-- 
+2.43.0

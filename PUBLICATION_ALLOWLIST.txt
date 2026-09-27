@@ -365,6 +365,7 @@ wine/patches/0102-server-user-shared-data-fills-a-host-page.patch
 wine/patches/0110-server-run-in-process-on-ps5.patch
 wine/patches/0111-ntdll-connect-to-the-in-process-server.patch
 wine/patches/0400-win32u-ps5-user-driver.patch
+wine/patches/0410-win32u-ps5-fontless-metrics-and-server-desktop.patch
 wine/patches/0560-ntdll-stderr-output-sink.patch
 wine/patches/0570-ntdll-ps5-reserve-virtual-range.patch
 wine/patches/0580-ntdll-ps5-config-dir-parent-ownership.patch

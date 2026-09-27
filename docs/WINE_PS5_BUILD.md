@@ -230,6 +230,28 @@ input.
 - No text is drawn, because the build has no fonts (`--without-freetype`,
   as on PS5). Fonts for the console are still open.
 
+Patch 0410 fixes two window-size errors that this setup causes:
+
+- **Menu height without fonts.** `NtGdiGetTextMetricsW` fails when there
+  are no fonts, and `get_text_metr_size()` left the caller's `TEXTMETRICW`
+  uninitialised. The menu height (`SM_CYMENU`) became stack garbage
+  (6,750,319). A font-less `wineboot` also stored it in the prefix as
+  `MenuHeight`, so a prefix initialised before 0410 needs that value
+  removed from `user.reg`. The metrics are now zeroed first.
+- **Desktop rectangle.** With this driver the server creates the desktop
+  window for the process, and the process holds no `WND` for it.
+  `GetWindowRect(GetDesktopWindow())` failed and left the caller's
+  rectangle uninitialised. The desktop is now treated as `WND_DESKTOP`.
+
+Pinball sizes and centres its window from these values. Before 0410 it
+placed the window at (-303,-32768), so the window was off-screen: it
+painted once and never again. With 0410, on a host WoW64 build with this
+driver and a preloaded sink:
+
+- the window is at (97,44)-(703,511);
+- the table is presented continuously;
+- Alt+F4 posted through the input queue closes the game.
+
 ## WoW64 CPU backend
 
 The PRX stage also links `wowprospero.prx`, the Unix side of the WoW64 CPU
@@ -508,6 +530,30 @@ What the integrated runs establish:
 The wine64 title does not yet install the present sink or input source, so
 the game's window is not shown. The next step is connecting the user
 driver's present sink and input to the title, plus an audio driver.
+
+Runs 13–15 (FW 12.02, 2026-09-27; baseline restored and runtime removed
+after each) use the title's present sink and pad input (#98, #99) and the
+launcher (#104):
+
+- **Run 13** (main at `4581edd`, ps5log `20260926T232940137Z`).
+  - Pinball's frames reach the sink, but only two: at 31 s and 38 s.
+  - Pinball had placed its window off-screen (see patch 0410), so the idle
+    message loop of runs 12 and 13 was a window that never repainted.
+- **Run 14** (patch 0410; `MenuHeight` removed from the console prefix;
+  ps5log `20260927T061107832Z`).
+  - From about 42 s the table is presented continuously: about 210 frames a
+    second reach the sink, and the title shows 60 a second (`rejected=0`).
+- **Run 15** (0410, `PW_WINE64_SCRIPT=1`, `PW_WINE64_SECONDS=75`; ps5log
+  `20260927T061541751Z` to `20260927T061822316Z`).
+  - launcher → Pinball → launcher → Pinball → launcher, then
+    `wine64-script-done`.
+  - Both Pinball runs present continuously. At the deadline the title posts
+    Alt+F4, and Wine exits 1.25 s later (`reason=wine-exit`), inside the
+    5 s wait before a forced close.
+
+When a game exits, the launcher restarts the title with `LoadExec`. A test
+script must therefore close the title until it stays closed before
+restoring the eboot; otherwise the upload fails with `550 Text file busy`.
 
 ## Measured result
 
