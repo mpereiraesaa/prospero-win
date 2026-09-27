@@ -28,6 +28,11 @@ extern int sceVideoOutRegisterBuffers2(int32_t,int32_t,int32_t,void *,int32_t,vo
 extern int sceVideoOutWaitVblank(int32_t);
 extern int sceSystemServiceHideSplashScreen(void);
 
+static inline uint32_t bgrx_to_rgbx(uint32_t pixel)
+{
+    return 0xff000000u|(pixel&0x0000ff00u)|((pixel>>16)&0xffu)|((pixel&0xffu)<<16);
+}
+
 /* Column and row parts of the tiled index, filled once at open. */
 static PwVideoOutTiles tiles;
 
@@ -101,7 +106,9 @@ int pw_videoout_ps5_present(PwVideoOutPs5 *video,const PwGdiTargetView *view)
     unsigned index=video->index^1u;
     uint32_t *output=(uint32_t *)((uint8_t *)video->memory+2u*video->frame_bytes);
     void *scanout=(uint8_t *)video->memory+(size_t)index*video->frame_bytes;
-    uint32_t background=0xff101018u;
+    /* The scanout is registered A8B8G8R8 (red in the low byte) while GDI,
+     * Wine and the launcher hand over B,G,R,X rows: swap red and blue. */
+    uint32_t background=0xff181010u;
     /* A target larger than the scanout is cropped, never placed at an
      * underflowed offset: the old centring wrote outside the scratch frame. */
     PwVideoOutLayout layout;
@@ -120,7 +127,7 @@ int pw_videoout_ps5_present(PwVideoOutPs5 *video,const PwGdiTargetView *view)
             for(uint32_t sx=0;sx<layout.source_width;sx++)for(uint32_t xx=0;xx<scale;xx++) {
                 const uint32_t x=layout.left+sx*scale+xx;
                 output[tiles.column_base[x]+row_base+(tiles.column_swizzle[x]^row_swizzle)]=
-                    source[sx]|0xff000000u;
+                    bgrx_to_rgbx(source[sx]);
             }
         }
     }
