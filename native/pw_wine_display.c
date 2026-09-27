@@ -95,6 +95,39 @@ size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t 
     return add_edges(input, pressed, 1, out, used, max);
 }
 
+static const struct { uint32_t dualsense; uint16_t xinput; } pad_buttons[] = {
+    { 0x4000u, 0x1000u }, { 0x2000u, 0x2000u }, { 0x8000u, 0x4000u }, { 0x1000u, 0x8000u },
+    { 0x400u, 0x0100u }, { 0x800u, 0x0200u }, { 0x2u, 0x0040u }, { 0x4u, 0x0080u },
+    { 0x10u, 0x0001u }, { 0x40u, 0x0002u }, { 0x80u, 0x0004u }, { 0x20u, 0x0008u },
+    { 0x8u, 0x0010u }, { 0x1u, 0x0020u }, { 0x100000u, 0x0400u },
+};
+
+/* One stick axis (0..255, 0x80 centred) as XInput's -32768..32767, centre
+ * 0; up is 0 on the DualSense and positive in XInput. */
+static int16_t pad_axis(uint8_t raw, int up)
+{
+    int32_t d = up ? 0x80 - (int32_t)raw : (int32_t)raw - 0x80;   /* -127..128 or -128..127 */
+    int32_t reach = d < 0 ? (up ? 127 : 128) : (up ? 128 : 127);
+    return (int16_t)(d * (d < 0 ? 32768 : 32767) / reach);
+}
+
+int pw_wine_game_pad(const PwPadPs5 *pad, PwWinePad *out)
+{
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    if (!pad || !pad->core.connected) return 0;
+    out->connected = 1;
+    for (size_t i = 0; i < sizeof(pad_buttons) / sizeof(pad_buttons[0]); i++)
+        if (pad->core.previous_buttons & pad_buttons[i].dualsense) out->buttons |= pad_buttons[i].xinput;
+    out->left_trigger = pad->l2;
+    out->right_trigger = pad->r2;
+    out->thumb_lx = pad_axis(pad->left_stick.x, 0);
+    out->thumb_ly = pad_axis(pad->left_stick.y, 1);
+    out->thumb_rx = pad_axis(pad->right_stick.x, 0);
+    out->thumb_ry = pad_axis(pad->right_stick.y, 1);
+    return 1;
+}
+
 void pw_wine_pointer_init(PwWinePointer *pointer, uint32_t width, uint32_t height)
 {
     if (!pointer) return;

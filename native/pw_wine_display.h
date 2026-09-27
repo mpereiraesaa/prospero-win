@@ -9,7 +9,8 @@
  * newest frame and shows it, so the display backend never runs on a Wine
  * thread and a slow flip never stalls Wine. The same thread reads the pad and
  * turns it into Wine input with the game profile's bindings: buttons send
- * keys or mouse buttons, and a stick can move the pointer.
+ * keys or mouse buttons, and a stick can move the pointer. In xinput mode it
+ * also becomes the game's XInput controller (the sink's gamepad slot).
  */
 #include <pthread.h>
 #include <stddef.h>
@@ -17,6 +18,7 @@
 #include "../src/pw_gdi.h"
 #include "../src/pw_game_profile.h"
 #include "../wine/ps5/pw_wine_sink.h"
+#include "pw_pad_ps5.h"
 
 typedef struct PwWineFrameBox {
     pthread_mutex_t lock;
@@ -48,6 +50,14 @@ int pw_wine_frame_box_take(PwWineFrameBox *box, uint64_t *seen, uint8_t *out,
  * most max). */
 size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t released,
                            PwWineInput *out, size_t max);
+
+/* The DualSense as an XInput gamepad: its held buttons (Cross A, Circle B,
+ * Square X, Triangle Y, L1/R1 shoulders, L3/R3 thumbs, Options Start,
+ * Create Back, the touchpad Guide), the analog triggers, and the sticks
+ * scaled to -32768..32767 with y up. 1 and the state in out while the pad
+ * is connected; 0 and a neutral state otherwise. The sink numbers the
+ * packets. */
+int pw_wine_game_pad(const PwPadPs5 *pad, PwWinePad *out);
 
 /* A pointer a stick moves over Wine's desktop, in 1/65536 pixels. */
 typedef struct PwWinePointer {

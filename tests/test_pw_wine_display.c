@@ -180,6 +180,65 @@ static void test_pointer_resize(void)
     pw_wine_pointer_resize(NULL, 1, 1);
 }
 
+static void test_pad(void)
+{
+    PwPadPs5 pad;
+    PwWinePad xinput;
+
+    memset(&pad, 0, sizeof(pad));
+    pad.left_stick = pad.right_stick = (PwPadPs5Stick){ 0x80, 0x80 };
+    /* Disconnected: nothing, and a neutral state. */
+    memset(&xinput, 0x5a, sizeof(xinput));
+    assert(pw_wine_game_pad(&pad, &xinput) == 0);
+    assert(!xinput.connected && !xinput.buttons && !xinput.thumb_lx && !xinput.left_trigger);
+    assert(pw_wine_game_pad(NULL, &xinput) == 0 && pw_wine_game_pad(&pad, NULL) == 0);
+
+    /* Centred and released. */
+    pad.core.connected = 1;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1 && xinput.connected == 1 && xinput.packet == 0);
+    assert(!xinput.buttons && !xinput.left_trigger && !xinput.right_trigger);
+    assert(!xinput.thumb_lx && !xinput.thumb_ly && !xinput.thumb_rx && !xinput.thumb_ry);
+
+    /* Each DualSense button, alone, as its XInput bit. */
+    static const struct { uint32_t dualsense; uint16_t xinput; } buttons[] = {
+        { 0x4000u, 0x1000u /* cross: A */ }, { 0x2000u, 0x2000u /* circle: B */ },
+        { 0x8000u, 0x4000u /* square: X */ }, { 0x1000u, 0x8000u /* triangle: Y */ },
+        { 0x400u, 0x0100u /* l1 */ }, { 0x800u, 0x0200u /* r1 */ },
+        { 0x2u, 0x0040u /* l3 */ }, { 0x4u, 0x0080u /* r3 */ },
+        { 0x10u, 0x0001u /* up */ }, { 0x40u, 0x0002u /* down */ },
+        { 0x80u, 0x0004u /* left */ }, { 0x20u, 0x0008u /* right */ },
+        { 0x8u, 0x0010u /* options: start */ }, { 0x1u, 0x0020u /* create: back */ },
+        { 0x100000u, 0x0400u /* touchpad: guide */ },
+    };
+    for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+        pad.core.previous_buttons = buttons[i].dualsense;
+        assert(pw_wine_game_pad(&pad, &xinput) == 1 && xinput.buttons == buttons[i].xinput);
+    }
+    /* L2/R2 are analog triggers, not buttons; unknown bits are dropped. */
+    pad.core.previous_buttons = 0x100u | 0x200u | 0x80000000u;
+    pad.l2 = 1;
+    pad.r2 = 255;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1 && !xinput.buttons);
+    assert(xinput.left_trigger == 1 && xinput.right_trigger == 255);
+    pad.core.previous_buttons = 0x4000u | 0x8u | 0x10u;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1 && xinput.buttons == (0x1000u | 0x0010u | 0x0001u));
+
+    /* Sticks: full reach both ways, centre 0, y up. */
+    pad.left_stick = (PwPadPs5Stick){ 0x00, 0x00 };     /* left, up */
+    pad.right_stick = (PwPadPs5Stick){ 0xff, 0xff };    /* right, down */
+    assert(pw_wine_game_pad(&pad, &xinput) == 1);
+    assert(xinput.thumb_lx == -32768 && xinput.thumb_ly == 32767);
+    assert(xinput.thumb_rx == 32767 && xinput.thumb_ry == -32768);
+    pad.left_stick = (PwPadPs5Stick){ 0x81, 0x7f };     /* a step right, a step up */
+    pad.right_stick = (PwPadPs5Stick){ 0x7f, 0x81 };
+    assert(pw_wine_game_pad(&pad, &xinput) == 1);
+    assert(xinput.thumb_lx == 32767 / 127 && xinput.thumb_ly == 32767 / 128);
+    assert(xinput.thumb_rx == -32768 / 128 && xinput.thumb_ry == -32768 / 127);
+    pad.left_stick = (PwPadPs5Stick){ 0xc0, 0x40 };     /* halfway right and up */
+    assert(pw_wine_game_pad(&pad, &xinput) == 1);
+    assert(xinput.thumb_lx == 64 * 32767 / 127 && xinput.thumb_ly == 64 * 32767 / 128);
+}
+
 int main(void)
 {
     test_frames();
@@ -187,7 +246,9 @@ int main(void)
     test_inputs();
     test_pointer();
     test_pointer_resize();
+    test_pad();
     printf("wine display passed: frame box copy, newest frame, refusals, concurrent put/take, "
-           "profile bindings to keys and mouse buttons, stick pointer, resized frames\n");
+           "profile bindings to keys and mouse buttons, stick pointer, resized frames, "
+           "DualSense as XInput\n");
     return 0;
 }
