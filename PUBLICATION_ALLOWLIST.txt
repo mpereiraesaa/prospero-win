@@ -191,6 +191,7 @@ wine/patches/0580-ntdll-ps5-config-dir-parent-ownership.patch
 wine/patches/0590-ntdll-ps5-repair-null-fs-on-unix-entry.patch
 wine/patches/0600-ntdll-ps5-direct-memory-for-anonymous-memory.patch
 wine/patches/0601-ntdll-ps5-keep-i386-images-below-4gib.patch
+wine/patches/0610-ntdll-ps5-segv-hook-for-the-wow64-cpu.patch
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c

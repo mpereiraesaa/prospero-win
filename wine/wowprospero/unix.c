@@ -76,7 +76,9 @@ static __thread struct pw_thread *self;
  * code ranges from this table rather than thread-local storage. */
 enum { MAX_ARENAS = 1024 };
 static struct { uintptr_t low, high; } arenas[MAX_ARENAS];
+#ifndef __PROSPERO__
 static struct sigaction wine_segv;
+#endif
 static int fault_markers;
 static void register_arena( struct pw_thread *thread, int add );
 static PwWowHostMemory host_memory;
@@ -343,29 +345,37 @@ static uintptr_t *context_rip( void *context )
 #endif
 }
 
-static void segv_handler( int signal, siginfo_t *info, void *context )
+/* Resumes a fault at a marked access outside the guest range at the
+ * access's refused-access path; nonzero when it did. */
+static int redirect_fault( siginfo_t *info, void *context )
 {
     const uintptr_t address = (uintptr_t)info->si_addr;
     uintptr_t *rip = context_rip( context ), target = 0;
 
-    if (address < GUEST_LOW || address >= GUEST_HIGH)
+    if (address >= GUEST_LOW && address < GUEST_HIGH) return 0;
+    for (unsigned int i = 0; i < MAX_ARENAS && !target; i++)
     {
-        for (unsigned int i = 0; i < MAX_ARENAS && !target; i++)
-        {
-            uintptr_t low = __atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE );
-            uintptr_t high = __atomic_load_n( &arenas[i].high, __ATOMIC_ACQUIRE );
-            if (low && *rip >= low && *rip < high) target = pw_x86_fault_redirect( *rip, low, high );
-        }
+        uintptr_t low = __atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE );
+        uintptr_t high = __atomic_load_n( &arenas[i].high, __ATOMIC_ACQUIRE );
+        if (low && *rip >= low && *rip < high) target = pw_x86_fault_redirect( *rip, low, high );
     }
-    if (target)
-    {
-        *rip = target;
-        return;
-    }
+    if (!target) return 0;
+    *rip = target;
+    return 1;
+}
+
+#ifdef __PROSPERO__
+/* On the PS5, Wine's own handler calls redirect_fault first (patch 0610). */
+extern void __wine_ps5_set_segv_hook( int (*hook)( siginfo_t *info, void *context ) );
+#else
+static void segv_handler( int signal, siginfo_t *info, void *context )
+{
+    if (redirect_fault( info, context )) return;
     if (wine_segv.sa_flags & SA_SIGINFO) wine_segv.sa_sigaction( signal, info, context );
     else if (wine_segv.sa_handler != SIG_DFL && wine_segv.sa_handler != SIG_IGN) wine_segv.sa_handler( signal );
     else sigaction( SIGSEGV, &wine_segv, NULL );  /* the default action on the retry */
 }
+#endif
 
 static void register_arena( struct pw_thread *thread, int add )
 {
@@ -399,16 +409,24 @@ static NTSTATUS process_init( void *args )
     {
         /* PW_WOW_FAULT_MARKERS=0 keeps the checks. */
         const char *markers = getenv( "PW_WOW_FAULT_MARKERS" );
-        struct sigaction action;
 
-        memset( &action, 0, sizeof(action) );
-        if ((!markers || strcmp( markers, "0" )) && context_rip( &action ) &&
-            !sigaction( SIGSEGV, NULL, &wine_segv ))
+        if (!markers || strcmp( markers, "0" ))
         {
-            action.sa_sigaction = segv_handler;
-            action.sa_mask = wine_segv.sa_mask;
-            action.sa_flags = wine_segv.sa_flags | SA_SIGINFO | SA_ONSTACK;
-            fault_markers = !sigaction( SIGSEGV, &action, NULL );
+#ifdef __PROSPERO__
+            __wine_ps5_set_segv_hook( redirect_fault );
+            fault_markers = 1;
+#else
+            struct sigaction action;
+
+            memset( &action, 0, sizeof(action) );
+            if (context_rip( &action ) && !sigaction( SIGSEGV, NULL, &wine_segv ))
+            {
+                action.sa_sigaction = segv_handler;
+                action.sa_mask = wine_segv.sa_mask;
+                action.sa_flags = wine_segv.sa_flags | SA_SIGINFO | SA_ONSTACK;
+                fault_markers = !sigaction( SIGSEGV, &action, NULL );
+            }
+#endif
         }
     }
     return STATUS_SUCCESS;

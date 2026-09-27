@@ -195,10 +195,15 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   (`lea`, `cmp`, `ja`, and `lahf`/`seto`/`sahf` around them when the flags
   are live). An 8-byte `nopl` before the access points at its
   refused-access path instead; the access itself faults when it falls
-  outside the guest range, and wowprospero's SIGSEGV handler moves the RIP
-  there, so the guest gets the access violation the guard reported, now
-  with its real flags too. Only faults outside the guest range are taken:
-  one inside it (a guard page, a write watch) stays Wine's. Three rounds
+  outside the guest range, and wowprospero moves the RIP there, so the
+  guest gets the access violation the guard reported, now with its real
+  flags too. Only faults outside the guest range are taken: one inside it
+  (a guard page, a write watch) stays Wine's. On a Unix host wowprospero
+  installs a SIGSEGV handler that chains to Wine's; on the PS5, where the
+  previous action `sigaction` reports lies outside ntdll, Wine's own
+  handler calls wowprospero first (patch 0610). On
+  the console the null test's loads and stores are resumed exactly as on
+  the host. Three rounds
   each, medians 1607/1607/1627 against 1881/1961/1877, native 5819 in the
   same session; compression gains 24% to 30%.
   `PW_WOW_FAULT_MARKERS=0` keeps the guard.

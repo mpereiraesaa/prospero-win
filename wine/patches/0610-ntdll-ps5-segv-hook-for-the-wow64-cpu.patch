@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 23:30:00 +0200
+Subject: [PATCH] ntdll: Let a PS5 WoW64 CPU backend see SIGSEGV first.
+
+A WoW64 CPU backend that lets translated accesses fault instead of
+checking them has to resume those faults before Wine turns them into
+exceptions. On the PS5 the previous action sigaction reports for SIGSEGV
+lies outside ntdll, so a second handler chaining to it would depend on
+calling into libkernel's signal dispatch. __wine_ps5_set_segv_hook
+registers a hook that segv_handler calls before anything else instead;
+when it returns nonzero the fault has been resumed.
+---
+ dlls/ntdll/unix/signal_x86_64.c | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index 4c21268..1aae754 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -2288,6 +2288,20 @@ static inline BOOL check_invalid_gsbase( struct thread_data *data, ucontext_t *u
+ }
+ 
+ 
++#ifdef __PROSPERO__
++/* A WoW64 CPU backend that lets translated accesses fault instead of
++ * checking them resumes those faults itself, through this hook rather than
++ * a SIGSEGV handler of its own: the previous action sigaction reports here
++ * lies outside ntdll. The hook runs before anything else and returns
++ * nonzero when it has resumed the fault. */
++static int (*segv_hook)( siginfo_t *siginfo, void *sigcontext );
++
++DECLSPEC_EXPORT void __wine_ps5_set_segv_hook( int (*hook)( siginfo_t *siginfo, void *sigcontext ) )
++{
++    segv_hook = hook;
++}
++#endif
++
+ /**********************************************************************
+  *		segv_handler
+  *
+@@ -2296,10 +2310,14 @@ static inline BOOL check_invalid_gsbase( struct thread_data *data, ucontext_t *u
+ static void segv_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+ {
+     ucontext_t *sigcontext = _sigcontext;
+-    struct thread_data *data = init_handler( sigcontext );
++    struct thread_data *data;
+     struct xcontext context;
+     EXCEPTION_RECORD rec = { .ExceptionAddress = (void *)RIP_sig(sigcontext) };
+ 
++#ifdef __PROSPERO__
++    if (segv_hook && segv_hook( siginfo, _sigcontext )) return;
++#endif
++    data = init_handler( sigcontext );
+     save_context( data, &context, sigcontext );
+ 
+     switch(TRAP_sig(sigcontext))
+-- 
+2.43.0
+
