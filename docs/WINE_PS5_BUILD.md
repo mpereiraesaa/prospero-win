@@ -417,7 +417,7 @@ best-effort — if the helper is not running, the title keeps using
 
 ## Starting Wine in the title
 
-`PW_NATIVE_MODE=wine64` builds the title around `native/wine64_main.c`.
+`tools/build_native.sh` builds the title around `native/wine64_main.c`.
 The title runs one game per process (`src/pw_wine_launch.h`):
 
 - **Launcher.** Started with no game (as the system starts it), the title
@@ -497,8 +497,7 @@ The present sink runs on Wine's threads and only copies the frame into a
 frame through `pw_videoout_ps5_present`, which scales it into the 1920x1080
 scanout and waits for the vblank. The same thread reads the pad and posts
 Pinball's keys with `pw_wine_post_input`: L1 and R1 flip, Cross plunges, the
-d-pad nudges, Options pauses and Square starts a new game, the same map the
-direct runtime uses. Frames up to 1280x1024 are shown; larger ones are
+d-pad nudges, Options pauses and Square starts a new game. Frames up to 1280x1024 are shown; larger ones are
 counted as rejected.
 
 Until Wine installs its own handlers, a fault is reported with its RIP
@@ -745,9 +744,8 @@ The PRX link of the same objects (host run on 2026-09-26, foundation
   so ntdll needs only the libc and libkernel modules.
 ## Console result
 
-The gate build (`PW_NATIVE_MODE=gate`) runs `wine/ps5/pw_wine_unix_probe.c`
-when `PW_WINE_PS5_PRX_DIR` has packaged the two modules under `win/wine`.
-It logs each step as `PW_WINE_UNIX` before running it.
+A probe build (since removed) loaded the two modules packaged under
+`win/wine` and logged each step as `PW_WINE_UNIX` before running it.
 
 On FW 12.02 (2026-09-26, log `20260926T105641663Z`), every step passed:
 

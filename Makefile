@@ -125,7 +125,6 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_gen_prx_descriptor.py
 	python3 tests/test_test_reachability.py
 	python3 tests/test_status_vocabulary.py
-	python3 tests/test_support_matrix.py
 	python3 tests/test_classify_x86.py
 	python3 tests/test_box86_opcode_catalog.py
 	python3 tests/test_startup_x87_contract.py

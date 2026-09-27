@@ -5,15 +5,10 @@ docs/ARCHITECTURE.md
 docs/CASE_STUDY_PINBALL.md
 docs/DEVELOPMENT.md
 docs/HARDWARE_VALIDATION.md
-docs/GDI.md
-docs/PREFIX_REGISTRY_DESIGN.md
-docs/GDI_PRESENTATION.md
 docs/WINE_INTEGRATION.md
 docs/WINE_PS5_BUILD.md
-docs/SUPPORT_MATRIX.json
 docs/README.md
 docs/ROADMAP.md
-docs/TECHNICAL_DETAILS.md
 docs/TELEMETRY.md
 .gitignore
 include/prospero_win.h
@@ -81,7 +76,6 @@ examples/wine/profiles/pinball.profile
 tests/test_pw_pad.c
 tests/test_pw_pad_ps5.c
 tests/test_status_vocabulary.py
-tests/test_support_matrix.py
 tests/test_classify_x86.py
 tests/test_startup_x87_contract.py
 tests/test_pw_guest_call.c

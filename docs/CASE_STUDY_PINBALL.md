@@ -1,10 +1,10 @@
 # Case study: Space Cadet Pinball
 
 Space Cadet Pinball is prospero-win's first playable compatibility target. It
-is useful because one unchanged PE32 application exercises the loader, IA-32
-DBT, Win32 imports, GDI presentation, PCM audio, input, persistence and orderly
-shutdown. It is a regression target, not the architecture or scope of the
-project.
+is useful because one unchanged PE32 application exercises the IA-32 DBT
+under Wine's WoW64 layer, GDI through Wine's PS5 user driver, PCM audio,
+input, persistence and orderly shutdown. It is a regression target, not the
+architecture or scope of the project.
 
 The original Windows executable and its resources are not distributed here.
 Testing uses an owner-supplied installation whose identity is checked before
@@ -13,35 +13,29 @@ building a native package.
 ## Verified result
 
 On an owned PS5 running firmware 12.02, the original executable runs without
-recompilation through the native PE32 path:
-
-- its IA-32 code executes through the dynamic binary translator;
-- software GDI composition is uploaded and presented through AGC/VideoOut;
-- original PCM effects reach SceAudioOut through the asynchronous audio queue;
-- DualSense events enter the Win32 message path;
-- registry state survives a title restart; and
-- operator close performs ordered video, audio, input and memory teardown.
-
-Physical play has verified launch, both flippers, scoring, ball loss,
-pause/resume and new-game restart. The accepted artifact and telemetry
-requirements are recorded in [hardware validation](HARDWARE_VALIDATION.md).
-This result does not imply general GDI, WinMM or Windows compatibility, and it
-does not demonstrate Direct3D.
+recompilation through Wine in the title: its IA-32 code and Wine's i386
+modules execute through the DBT, Wine's PS5 user driver hands its frames to
+the title, which scales them to the full screen, and DualSense buttons reach
+it as keys through the profile's bindings. It was first made playable on the
+earlier direct Win32 runtime, since removed. The accepted artifact and
+telemetry requirements are recorded in
+[hardware validation](HARDWARE_VALIDATION.md). This result does not imply
+general Windows compatibility, and it does not demonstrate Direct3D.
 
 ## Input profile
 
-| DualSense | Win32 action |
-| --- | --- |
-| L1 / R1 | left / right flipper |
-| Cross | plunger |
-| D-pad left / right / up | table nudge |
-| Options | pause or resume |
-| Square | new game |
-| Create | orderly `WM_QUIT` |
+`examples/wine/profiles/pinball.profile` uses the shared preset
+`examples/wine/input/pinball.input`:
 
-Events preserve press/release order. Held keys are neutralized on disconnect,
-controller-generation change and shutdown; Create is a lifecycle action rather
-than a fabricated guest key.
+| DualSense | Key |
+| --- | --- |
+| L1 / R1 | Z / slash: left / right flipper |
+| Cross | space: plunger |
+| D-pad left / right / up | X / period / up: table nudge |
+| Options | F3: pause or resume |
+| Square | F2: new game |
+
+Holding Options+Create closes the game (Alt+F4) and returns to the launcher.
 
 ## What the target taught the runtime
 
@@ -67,8 +61,7 @@ resources are included in this repository.
 
 ## Architectural boundary
 
-Pinball currently uses the direct Win32 bootstrap described in
-[technical details](TECHNICAL_DETAILS.md). New application support is intended
-to use Wine's PE modules and the common native service boundary instead of
-adding title-specific wrappers. The validated AGC, AudioOut, Pad, telemetry and
-teardown ownership rules remain reusable in both paths.
+Nothing in the runtime is specific to Pinball: its bindings are a profile and
+an input preset. Gaps it exposes are fixed in the DBT or in Wine's PS5
+patches and drivers, where other applications benefit too, never with
+title-specific code.

@@ -9,13 +9,21 @@ implicitly.
 
 ## Independently authored
 
-The PE reader, layout planner, relocation engine, import reader, manual
-mapper, dependency loader, gate report, memory and file contracts, host
-tools, synthetic PE encoders and evidence validator in this repository are
-written for this project. No Windows loader source, no Wine source and no
-proprietary SDK file is copied into it.
+The IA-32 translator, its memory contract, the title, its launcher, the
+profile parsers, the presentation and pad code, the Wine PS5 shims
+(`wine/ps5`), the host tools and the synthetic PE encoder in this repository
+are written for this project. No proprietary SDK file is copied into it.
 
-The PE/COFF structures the reader parses are described by Microsoft's
+## Derived from Wine
+
+Wine is LGPL-2.1-or-later, like this project. The patches in `wine/patches`
+apply to the pinned upstream revision at build time. Two modules are derived
+from Wine source and say so in their headers, keeping the original notices:
+the PE side of the WoW64 CPU backend (`wine/wowprospero/cpu.c`, from
+`dlls/wow64cpu`) and the PS5 audio driver (`wine/wineps5`, whose stream,
+buffer and timing code follows `dlls/wineoss.drv`).
+
+The PE/COFF structures the test encoder writes are described by Microsoft's
 published PE format specification. Only field offsets and semantics are
 used; no Microsoft code, header or binary is included.
 
@@ -43,9 +51,8 @@ Several design decisions follow limits the laboratory measured on FW 12.02
 for its own ports rather than anything discovered here: the libc heap
 ceiling and the resulting use of anonymous mappings for large allocations,
 the unusability of libc directory listing on the read-only application
-image, `sceKernelOpen` with libc `read`/`lseek` as the working file path, the
-measured support for read-write to read-execute transitions, and the rule
-that a title must not return from `main()`. Each is cited where it shapes the
+image, the measured support for read-write to read-execute transitions, and
+the rule that a title must not return from `main()`. Each is cited where it shapes the
 code.
 
 ## Not included

@@ -10,69 +10,49 @@
 </p>
 
 **prospero-win** is an experimental Windows compatibility runtime for native
-PlayStation 5 homebrew. It combines Wine's Windows subsystem with a PS5-native
-platform layer, translating 32-bit x86 code while connecting guest applications
-to native system services.
+PlayStation 5 homebrew. It runs Wine itself inside a PS5 title: Wine's PE
+modules, its Unix side and its object server, with prospero-win's IA-32
+dynamic binary translator as Wine's WoW64 CPU for 32-bit code.
 
 ```text
-Windows application → Wine → prospero-win → PS5 services
-                                      └── graphics: GDI / DXVK → ps5-vulkan → AGC
+Windows application → Wine (PE + Unix side, in the title) → prospero-win → PS5 services
+      PE32 code ──► prospero-win DBT (WoW64 CPU)        graphics: GDI → PS5 user driver → VideoOut
 ```
 
 ## Current status
 
-The first playable title is the original Windows Space Cadet Pinball
-executable. It is a compatibility regression target for the general runtime,
-not a project-specific architecture. On an owned
-PS5 running firmware 12.02, the direct Win32 path has been validated for
-playable video, asynchronous audio, DualSense input, persistent registry state,
-and close/relaunch.
+On an owned PS5 running firmware 12.02, the title boots into its own
+launcher, which lists the games described by profiles under
+`/data/prospero-win`. Each game runs in its own title process through Wine.
+The original Windows Space Cadet Pinball (PE32, through the DBT) has been
+played full-screen with the DualSense, and Wine's Minesweeper (PE64) with a
+stick-driven cursor drawn by Wine's PS5 user driver. A profile chooses the
+prefix, the desktop size and scaling, the button bindings or an XInput
+controller, and the pointer.
 
-The IA-32 dynamic binary translator includes direct block chaining, cross-block
-guest-register residency, dead-flag elimination and lazy arithmetic flags.
-Supported host execution modes produce identical guest CPU state in the exact
-regression matrix.
-
-The separate native Wine bootstrap has reached a generated PE32 fixture's
-entrypoint on hardware. That fixture then stopped at an unsupported
-`NtTerminateThread` service. This validates the bootstrap path, not general
-Wine application compatibility. Persistent prefixes, broader Wine services,
-and a user-supplied copy-and-run workflow remain in progress. PE64 applications
-also need their Windows/native ABI and loader boundaries completed.
-
-## Next milestone
-
-Run a user-supplied installed application from an isolated, persistent Wine
-prefix using a shared runtime and application manifest. Graphical installers,
-Explorer and store clients are not prerequisites for this first reusable
-workflow.
+Fonts, audio through Wine's PS5 driver, the XInput controller and the latest
+DBT and startup work are built and host-tested; their console validation is
+recorded in [hardware validation](docs/HARDWARE_VALIDATION.md) as it lands.
+Direct3D through DXVK over `ps5-vulkan` is not yet available.
 
 ## Build and test
 
 ```sh
-make -j2 all
+make -j2 all          # host tests, publication audit, whitespace
 make -j2 sanitize
-make inspect-only PE_INPUT=/private/path/APPLICATION.EXE
+tools/build_native.sh # the PS5 title (needs the pinned payload SDK)
 ```
 
-To build a native package, provide legally obtained Windows files from an
-external directory:
-
-```sh
-PW_FOUNDATION_READY=1 \
-PW_STAGE_INPUT=/private/path/application \
-PW_ROOT_MODULE=application.exe \
-tools/build_native.sh
-```
-
-Private applications are staged only under the ignored `dist/` tree. Do not
-commit Windows binaries, game data, captures, telemetry transcripts, SDK files
-or private paths.
+Wine's PRXs are built by `tools/build_wine_ps5.sh`; see
+[development](docs/DEVELOPMENT.md). Games are user-supplied: copy an
+installed game into a prefix under `/data/prospero-win` and add a profile
+next to the examples in `examples/wine/`. Do not commit Windows binaries,
+game data, captures, telemetry transcripts, SDK files or private paths.
 
 ## Documentation
 
-- [Technical details](docs/TECHNICAL_DETAILS.md)
 - [Architecture](docs/ARCHITECTURE.md) · [Wine integration](docs/WINE_INTEGRATION.md)
+- [Wine on the PS5](docs/WINE_PS5_BUILD.md): build, patches, drivers, profiles
 - [Hardware validation](docs/HARDWARE_VALIDATION.md) · [Roadmap](docs/ROADMAP.md)
 - [Development](docs/DEVELOPMENT.md) · [Contributing](CONTRIBUTING.md)
 
