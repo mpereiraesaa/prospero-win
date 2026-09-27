@@ -73,39 +73,6 @@ static void test_load(void)
     assert(pw_wine_library_input(NULL, root, &input) == PW_ERR_PRECONDITION);
     assert(pw_wine_library_load(NULL, root) == PW_ERR_PRECONDITION);
 
-    /* The launcher reads a copy a game made: profiles, their presets and an
-     * index, loaded back by the index. */
-    {
-        char mirror[96], path[160];
-        PwWineLibrary copy;
-        struct stat st;
-        snprintf(mirror, sizeof(mirror), "%s/mirror", root);
-        assert(pw_wine_library_mirror(&library, root, mirror) == PW_OK);
-        snprintf(path, sizeof(path), "%s/input/pinball.input", mirror);
-        assert(!stat(path, &st) && st.st_size > 0);
-        snprintf(path, sizeof(path), "%s/input/missing.input", mirror);
-        assert(!stat(path, &st));                        /* copied as is; the profile reports it */
-        assert(pw_wine_library_load(&copy, mirror) == PW_OK && copy.listed_by == PW_WINE_LIBRARY_INDEXED);
-        assert(copy.count == 3 && pw_wine_library_find(&copy, "pinball") && pw_wine_library_find(&copy, "solitaire"));
-        assert(copy.entries[0].status != PW_OK);         /* broken.profile stays listed as refused */
-        assert(pw_wine_library_input(pw_wine_library_find(&copy, "pinball"), mirror, &input) == PW_OK);
-        assert(input.bindings[4].code == 'Z');
-        /* Mirroring again replaces the copy; an unwritable target fails. */
-        assert(pw_wine_library_mirror(&library, root, mirror) == PW_OK);
-        snprintf(path, sizeof(path), "%s/profiles", mirror);
-        if (geteuid() != 0) {
-            assert(!chmod(path, 0555));
-            assert(pw_wine_library_mirror(&library, root, mirror) == PW_ERR_STATE);
-            assert(!chmod(path, 0755));
-        }
-        assert(pw_wine_library_mirror(&library, root, "/nonexistent/dir/x") == PW_ERR_STATE);
-        assert(pw_wine_library_mirror(NULL, root, mirror) == PW_ERR_PRECONDITION);
-        PwWineLibrary lost = library;
-        snprintf(lost.entries[1].file, sizeof(lost.entries[1].file), "gone.profile");
-        assert(pw_wine_library_mirror(&lost, root, mirror) == PW_ERR_STATE);
-        assert(pw_wine_library_load(&copy, mirror) == PW_OK && copy.count == 2);  /* gone is not indexed */
-    }
-
     /* A file larger than any valid profile is refused as too large. */
     {
         static char big[PW_APP_PROFILE_MAX_BYTES + 64];

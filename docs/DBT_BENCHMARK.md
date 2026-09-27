@@ -310,7 +310,7 @@ under the title:
 1. Copy the i386 `7za.exe` from the pinned package to the prefix's
    `drive_c/Tools`.
 2. Add the profile to the library's `profiles/` directory, then start the
-   title and sync the library (Triangle).
+   title.
 3. Choose "7-Zip benchmark". The profile's `arguments` line
    (`b -mmt1 -md22`) is passed to the program. The title forwards its
    standard output (fd 1) to ps5log as `STDOUT` lines. This path has not yet

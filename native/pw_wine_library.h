@@ -47,13 +47,6 @@ const PwGameProfile *pw_wine_library_find(const PwWineLibrary *library, const ch
  * says why. */
 int pw_wine_library_input(const PwGameProfile *profile, const char *root, PwGameInput *input);
 
-/* Copy the library's profiles, the input presets they name and an index
- * listing them from the from root to the to root, creating its
- * directories. The launcher, which does not leave the sandbox, reads the
- * copy a game made in /download0. PW_OK, or PW_ERR_STATE when a file could
- * not be copied (the others are). */
-int pw_wine_library_mirror(const PwWineLibrary *library, const char *from, const char *to);
-
 /* The names in a buffer of FreeBSD 11 directory records (struct dirent:
  * u32 fileno, u16 reclen, u8 type, u8 namlen, name): calls found(name,
  * length, context) for each regular file or unknown-type entry. Returns

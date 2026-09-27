@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
 #ifndef __linux__
@@ -220,77 +219,5 @@ int pw_wine_library_input(const PwGameProfile *profile, const char *root, PwGame
             status = pw_game_input_parse(text, (size_t)length, input);
     }
     pw_game_input_overlay(input, &profile->input);
-    return status;
-}
-
-/* Write length bytes to path through a temporary name, so a reader never
- * sees half a file. 0, or -1. */
-static int write_file(const char *path, const uint8_t *bytes, size_t length)
-{
-    char temporary[PW_WINE_LIBRARY_PATH + PW_WINE_LIBRARY_NAME + 8];
-    size_t done = 0;
-    int fd;
-
-    if (snprintf(temporary, sizeof(temporary), "%s.new", path) >= (int)sizeof(temporary)) return -1;
-    if ((fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) return -1;
-    while (done < length) {
-        ssize_t wrote = write(fd, bytes + done, length - done);
-        if (wrote <= 0) { close(fd); return -1; }
-        done += (size_t)wrote;
-    }
-    if (close(fd) || rename(temporary, path)) return -1;
-    return 0;
-}
-
-/* Copy <from>/<relative> to <to>/<relative>; 0, or -1. */
-static int copy_file(const char *from, const char *to, const char *relative)
-{
-    static uint8_t bytes[PW_APP_PROFILE_MAX_BYTES + 1];
-    char source[PW_WINE_LIBRARY_PATH + PW_WINE_LIBRARY_NAME + 8], target[sizeof(source)];
-    ssize_t length;
-
-    if (snprintf(source, sizeof(source), "%s/%s", from, relative) >= (int)sizeof(source) ||
-        snprintf(target, sizeof(target), "%s/%s", to, relative) >= (int)sizeof(target))
-        return -1;
-    if ((length = read_file(source, bytes, sizeof(bytes) - 1)) < 0 || length >= (ssize_t)sizeof(bytes) - 1)
-        return -1;
-    return write_file(target, bytes, (size_t)length);
-}
-
-static int make_directory(const char *root, const char *name)
-{
-    char path[PW_WINE_LIBRARY_PATH + 16];
-
-    if (snprintf(path, sizeof(path), "%s%s%s", root, name[0] ? "/" : "", name) >= (int)sizeof(path))
-        return -1;
-    return mkdir(path, 0777) && errno != EEXIST ? -1 : 0;
-}
-
-int pw_wine_library_mirror(const PwWineLibrary *library, const char *from, const char *to)
-{
-    static char index[PW_WINE_LIBRARY_MAX * (PW_WINE_LIBRARY_NAME + 1) + 1];
-    char relative[PW_WINE_LIBRARY_NAME + 16], path[PW_WINE_LIBRARY_PATH + 32];
-    size_t used = 0;
-    int status = PW_OK;
-
-    if (!library || !from || !to) return PW_ERR_PRECONDITION;
-    if (make_directory(to, "") || make_directory(to, "profiles") || make_directory(to, "input"))
-        return PW_ERR_STATE;
-    for (uint32_t i = 0; i < library->count; i++) {
-        const PwWineLibraryEntry *entry = &library->entries[i];
-        size_t length = strlen(entry->file);
-        snprintf(relative, sizeof(relative), "profiles/%s", entry->file);
-        if (copy_file(from, to, relative)) { status = PW_ERR_STATE; continue; }
-        memcpy(index + used, entry->file, length);
-        index[used + length] = '\n';
-        used += length + 1;
-        if (entry->status == PW_OK && entry->profile.input.preset[0]) {
-            snprintf(relative, sizeof(relative), "input/%s.input", entry->profile.input.preset);
-            (void)copy_file(from, to, relative);   /* a missing preset is the profile's to report */
-        }
-    }
-    if (snprintf(path, sizeof(path), "%s/profiles/profiles.lst", to) >= (int)sizeof(path) ||
-        write_file(path, (const uint8_t *)index, used))
-        return PW_ERR_STATE;
     return status;
 }

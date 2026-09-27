@@ -56,9 +56,8 @@ The title runs one game per process. Started by the system it shows the
 launcher without loading Wine; choosing a game restarts the title with
 `sceSystemServiceLoadExec` and the game's arguments, and closing the game
 restarts it into the launcher, so every game starts Wine in a clean process.
-The launcher stays in the title's sandbox and reads a copy of the library in
-`/download0/prospero-win`, which a game (granted `/data`) or a `sync=1` run
-writes. [WINE_PS5_BUILD.md](WINE_PS5_BUILD.md#starting-wine-in-the-title)
+The launcher and each game request `/data`, where the library lives.
+[WINE_PS5_BUILD.md](WINE_PS5_BUILD.md#starting-wine-in-the-title)
 describes the profiles, the prefix layout, scaling, bindings and closing.
 
 In a game, the title loads `ntdll.prx`, starts `__wine_main` on its own
