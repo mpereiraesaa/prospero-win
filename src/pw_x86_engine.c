@@ -121,6 +121,19 @@ int pw_x86_engine_set_reencode(PwX86Engine *engine, unsigned enabled)
     return PW_OK;
 }
 
+int pw_x86_engine_set_fault_markers(PwX86Engine *engine, unsigned enabled)
+{
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    engine->fault_markers = enabled ? 1 : 0;
+    return PW_OK;
+}
+
+uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *engine, uintptr_t rip)
+{
+    const uintptr_t low = (uintptr_t)engine->code.exec_base;
+    return pw_x86_fault_redirect(rip, low, low + engine->code.bytes);
+}
+
 int pw_x86_engine_set_counters(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
@@ -173,7 +186,8 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         PW_X86_ENGINE_INDIRECT_SLOTS - 1, engine->flat_low, engine->flat_high,
         engine->no_counters,
         engine->reencode_enabled ? engine->chain_targets : NULL,
-        engine->residency_enabled ? engine->global_resident : (uint8_t)0 };
+        engine->residency_enabled ? engine->global_resident : (uint8_t)0,
+        engine->fault_markers };
     int last = PW_ERR_UNSUPPORTED;
     if (engine->reencode_enabled) {
         last = pw_x86_reencode(source, available, pc, scratch, sizeof(scratch), &best, &options);

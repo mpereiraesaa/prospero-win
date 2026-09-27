@@ -184,7 +184,39 @@ typedef struct PwX86TranslateOptions {
      * block without a helper call, so linked blocks pass them on without a
      * store or load; at most seven. 0 keeps the per-block allocator. */
     uint8_t global_resident;
+    /* Re-encoded blocks (pw_x86_reencode.h) check no access against the flat
+     * range: each guest memory access is preceded by a fault marker instead,
+     * and a host fault on it becomes the refused access the check would have
+     * reported, through pw_x86_fault_redirect. The caller must reserve the
+     * rest of the guest's 4 GiB so an access outside the range faults, and
+     * send the host faults in its code region to pw_x86_fault_redirect. The
+     * older emitter keeps its checks. */
+    unsigned fault_markers;
 } PwX86TranslateOptions;
+
+/* The fault marker: `nopl 0x0(%rax,%rax,1)` with a 32-bit displacement,
+ * right before the host instruction that makes a guest access. The
+ * displacement is the distance from the end of the marker to the access's
+ * refused-access path. */
+enum { PW_X86_FAULT_MARKER_BYTES = 8 };
+
+/* A host fault at rip, in code between low and high: when a fault marker
+ * ends at rip, the address of the path that reports the access as refused
+ * (resume there with the faulting registers and flags), else 0. */
+static inline uintptr_t pw_x86_fault_redirect(uintptr_t rip, uintptr_t low, uintptr_t high)
+{
+    const uint8_t *marker = (const uint8_t *)(rip - PW_X86_FAULT_MARKER_BYTES);
+    int32_t displacement;
+    uintptr_t target;
+
+    if (rip < low + PW_X86_FAULT_MARKER_BYTES || rip >= high) return 0;
+    if (marker[0] != 0x0f || marker[1] != 0x1f || marker[2] != 0x84 || marker[3] != 0x00) return 0;
+    displacement = (int32_t)((uint32_t)marker[4] | (uint32_t)marker[5] << 8 |
+                             (uint32_t)marker[6] << 16 | (uint32_t)marker[7] << 24);
+    if (displacement <= 0) return 0;
+    target = rip + (uintptr_t)(intptr_t)displacement;
+    return target > rip && target < high ? target : 0;
+}
 
 /* The host register the global assignment gives guest GPR gpr under mask,
  * or -1: the set bits take ids 0, 1, 2, 4, 5, 6, 7 in order. */

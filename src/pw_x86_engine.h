@@ -61,6 +61,8 @@ typedef struct PwX86Engine {
     PwVmRegion chain;
     PwX86IndirectTarget *chain_targets;
     uint64_t reencoded_blocks;
+    /* PwX86TranslateOptions.fault_markers for blocks translated from now on. */
+    unsigned fault_markers;
     unsigned sealed,failed,initialized;
 } PwX86Engine;
 
@@ -94,6 +96,15 @@ int pw_x86_engine_set_reencode(PwX86Engine *, unsigned enabled);
  * that range. The guard is then one compare per access; accesses outside it
  * still go through the region table. low == high turns it off. */
 int pw_x86_engine_set_flat_memory(PwX86Engine *, uint32_t low, uint32_t high);
+/* Re-encoded blocks translated from now on mark their accesses instead of
+ * checking them (PwX86TranslateOptions.fault_markers); the caller then sends
+ * every host fault in the engine's code region to
+ * pw_x86_engine_fault_redirect. */
+int pw_x86_engine_set_fault_markers(PwX86Engine *, unsigned enabled);
+/* Where to resume a host fault at rip: the refused-access path of the
+ * marked access that faulted, or 0 when rip is not one (not ours). Safe in
+ * a signal handler: it reads only the engine and its code. */
+uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *, uintptr_t rip);
 /* Leave the statistics counters out of blocks translated from now on (they
  * are on by default): a step then reports no retired instructions, and the
  * transition and register totals stay zero. The chain budget, the link

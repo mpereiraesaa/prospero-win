@@ -463,6 +463,7 @@ typedef struct Cold {
 typedef struct Ctx {
     Out o;
     uint32_t flat_low, flat_span;
+    unsigned fault_markers;
     const PwX86IndirectTarget *table, *chain_table;
     uint32_t mask;
     Cold cold[MAX_COLD];
@@ -501,6 +502,15 @@ static void guard_fs(Ctx *c, const Ea *e, unsigned fs, unsigned width, unsigned 
         b(o, 0x47); b(o, 0x8d); b(o, 0x1c); b(o, 0x0b);                  /* lea r11d, [r11+r9] */
     }
     if (c->cold_count >= MAX_COLD) { o->failed = 1; return; }
+    if (c->fault_markers) {
+        /* No check: the access right after the marker faults instead, and
+         * the fault is sent to the cold path with the flags still live. */
+        b(o, 0x0f); b(o, 0x1f); b(o, 0x84); b(o, 0x00);             /* nopl 0(rax,rax,1) */
+        cold = &c->cold[c->cold_count++];
+        cold->patch = o->n; w32(o, 0);
+        cold->width = (uint8_t)width; cold->write = (uint8_t)write; cold->saved = 0;
+        return;
+    }
     if (keep) save_flags(o);
     b(o, 0x45); b(o, 0x8d); b(o, 0x8b); w32(o, 0u - c->flat_low);    /* lea r9d, [r11-low] */
     b(o, 0x41); b(o, 0x81); b(o, 0xf9); w32(o, c->flat_span - width); /* cmp r9d, span-width */
@@ -735,6 +745,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     c.o.p = output; c.o.cap = capacity;
     c.flat_low = options->flat_low;
     c.flat_span = options->flat_high - options->flat_low;
+    c.fault_markers = options->fault_markers;
     c.table = options->indirect_targets;
     c.chain_table = options->indirect_targets ? options->chain_targets : NULL;
     c.mask = options->indirect_mask;
