@@ -10,8 +10,9 @@ enum { I0 = 0, IB = 1, IW = 2, IZ = 3, IO = 4 }; /* none, 8, 16, 16/32, moffs32 
 /* Primary-map ModRM presence (M), refusal (X) and immediate class. Refused:
  * control transfers, implicit stack users, forms invalid in 64-bit mode
  * (BCD, INC/DEC 40-4F, PUSHA/POPA, BOUND, ARPL, LES/LDS, INTO, 82), segment
- * register moves, I/O, HLT, CLI/STI, INT, and LEA (whose operand is not a
- * memory access and must not receive the FS base). */
+ * register loads (stores, 8C, are planned apart), I/O, HLT, CLI/STI, INT, and
+ * LEA (whose operand is not a memory access and must not receive the FS
+ * base). */
 static const uint8_t primary_class[256] = {
 /*        0 1 2 3 4 5 6 7 8 9 a b c d e f */
 /* 0 */   M,M,M,M,N,N,X,X,M,M,M,M,N,N,X,N,
@@ -136,6 +137,54 @@ static int modrm_address(const PwX86State *s, const uint8_t *p, size_t n,
     return (int)len;
 }
 
+/* The selectors a WoW64 guest sees, as on Windows: CS 0x23, FS 0x53 (the
+ * TEB), and 0x2b for the flat data segments. ES CS SS DS FS GS by ModRM.reg;
+ * 6 and 7 are not segment registers. */
+static const uint16_t guest_selector[6] = { 0x2b, 0x23, 0x2b, 0x2b, 0x53, 0x2b };
+
+/* MOV r/m16, Sreg (8C /r): the selector is a constant here, so the host runs
+ * "mov word [address], selector" or, for a register, "mov r32, selector"
+ * (32-bit forms zero-extend it, as every processor since the Pentium Pro
+ * does). i386 ntdll's context capture stores all six this way. */
+static int segment_store(const PwX86State *s, const uint8_t *src, size_t n, size_t at,
+                         unsigned fs, unsigned opsize, PwX86HostExecPlan *plan)
+{
+    uint8_t modrm, reg;
+    uint16_t selector;
+    int addr_len;
+
+    if (at + 1 >= n) return PW_ERR_TRUNCATED;
+    modrm = src[at + 1];
+    reg = (modrm >> 3) & 7;
+    if (reg > 5) return PW_ERR_UNSUPPORTED;
+    selector = guest_selector[reg];
+    plan->out_bytes = 0;
+    if ((modrm >> 6) == 3) {
+        if ((modrm & 7) == 4) return PW_ERR_UNSUPPORTED;       /* ESP */
+        if (opsize) plan->out[plan->out_bytes++] = 0x66;
+        plan->out[plan->out_bytes++] = (uint8_t)(0xb8 | (modrm & 7));
+        plan->out[plan->out_bytes++] = (uint8_t)selector;
+        plan->out[plan->out_bytes++] = (uint8_t)(selector >> 8);
+        if (!opsize) { plan->out[plan->out_bytes++] = 0; plan->out[plan->out_bytes++] = 0; }
+        plan->length = (uint8_t)(at + 2);
+        return PW_OK;
+    }
+    addr_len = modrm_address(s, src + at + 1, n - at - 1, &plan->address);
+    if (addr_len < 0) return addr_len;
+    if (fs) plan->address += s->fs_base;
+    plan->mem_form = 1;
+    plan->address_reg = 6;
+    plan->out[plan->out_bytes++] = 0x67;
+    plan->out[plan->out_bytes++] = 0x66;
+    plan->out[plan->out_bytes++] = 0xc7;
+    plan->out[plan->out_bytes++] = 0x06;                       /* [esi] */
+    plan->out[plan->out_bytes++] = (uint8_t)selector;
+    plan->out[plan->out_bytes++] = (uint8_t)(selector >> 8);
+    if (at + 1 + (size_t)addr_len > 15) return PW_ERR_UNSUPPORTED;
+    plan->length = (uint8_t)(at + 1 + (size_t)addr_len);
+    return PW_OK;
+}
+
 int pw_x86_hostexec_plan(const PwX86State *s, const uint8_t *src, size_t n,
                          PwX86HostExecPlan *plan)
 {
@@ -197,6 +246,7 @@ int pw_x86_hostexec_plan(const PwX86State *s, const uint8_t *src, size_t n,
             gpr_fields = F_RM;
         else gpr_fields = F_REG | F_RM;
     }
+    if (op_bytes == 1 && op == 0x8c) return segment_store(s, src, n, at, fs, opsize, plan);
     if (klass == X) return PW_ERR_UNSUPPORTED;
     at += op_bytes;
     if (op_bytes == 3 && src[opcode_at + 1] == 0x01) klass = N;

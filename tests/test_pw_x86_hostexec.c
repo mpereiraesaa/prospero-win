@@ -223,6 +223,48 @@ static void test_guest_mxcsr(void)
     _mm_setcsr(host);
 }
 
+/* 8C: the six selectors, to memory (a word, even with a 32-bit operand
+ * size), FS-relative memory and registers (zero-extended, or just the low
+ * word with 66). */
+static void test_segment_stores(void)
+{
+    static const uint16_t selectors[6] = { 0x2b, 0x23, 0x2b, 0x2b, 0x53, 0x2b };
+    PwX86State s;
+    PwX86HostExecPlan plan;
+    uint16_t word;
+
+    for (unsigned reg = 0; reg < 6; reg++) {
+        reset_state(&s);
+        s.gpr[0] = addr(0x600);
+        memset(guest + 0x600, 0xee, 0x100);
+        /* mov [eax+0x8c], sreg */
+        assert(run(&s, (const uint8_t[]){0x8c, (uint8_t)(0x80 | reg << 3), 0x8c, 0, 0, 0}, 6) == PW_OK);
+        memcpy(&word, guest + 0x600 + 0x8c, 2);
+        assert(word == selectors[reg] && guest[0x600 + 0x8e] == 0xee && s.eip == 0x1006);
+        /* mov ecx, sreg */
+        s.gpr[1] = 0xffffffffu;
+        assert(run(&s, (const uint8_t[]){0x8c, (uint8_t)(0xc1 | reg << 3)}, 2) == PW_OK);
+        assert(s.gpr[1] == selectors[reg]);
+    }
+    /* 66 8C E1: mov cx, fs keeps the upper half. */
+    reset_state(&s);
+    s.gpr[1] = 0x12345678u;
+    assert(run(&s, (const uint8_t[]){0x66, 0x8c, 0xe1}, 3) == PW_OK && s.gpr[1] == 0x12340053u);
+    /* 64 8C 1D disp32: mov fs:[0x10], ds. */
+    reset_state(&s);
+    memset(guest + 0x4010, 0, 2);
+    assert(run(&s, (const uint8_t[]){0x64, 0x8c, 0x1d, 0x10, 0, 0, 0}, 7) == PW_OK);
+    memcpy(&word, guest + 0x4010, 2);
+    assert(word == 0x2b && s.eip == 0x1007);
+    /* Neither ESP as the destination nor a ModRM.reg that is no segment. */
+    assert(pw_x86_hostexec_plan(&s, (const uint8_t[]){0x8c, 0xdc}, 2, &plan) == PW_ERR_UNSUPPORTED);
+    assert(pw_x86_hostexec_plan(&s, (const uint8_t[]){0x8c, 0xf0}, 2, &plan) == PW_ERR_UNSUPPORTED);
+    assert(pw_x86_hostexec_plan(&s, (const uint8_t[]){0x8c}, 1, &plan) == PW_ERR_TRUNCATED);
+    assert(pw_x86_hostexec_plan(&s, (const uint8_t[]){0x8c, 0x80, 0}, 3, &plan) == PW_ERR_TRUNCATED);
+    /* Loads (8E) stay refused. */
+    assert(pw_x86_hostexec_plan(&s, (const uint8_t[]){0x8e, 0xd8}, 2, &plan) == PW_ERR_UNSUPPORTED);
+}
+
 static void test_refusals_and_cache(void)
 {
     PwX86State s;
@@ -274,9 +316,10 @@ int main(void)
     test_integer_forms();
     test_fp_forms();
     test_guest_mxcsr();
+    test_segment_stores();
     test_refusals_and_cache();
     assert(pw_x86_hostexec_destroy(&hx) == PW_OK);
-    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR; %llu stubs\n",
+    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR, segment stores; %llu stubs\n",
            (unsigned long long)hx.compiled);
     return 0;
 }

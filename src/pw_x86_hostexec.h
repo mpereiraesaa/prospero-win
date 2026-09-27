@@ -15,10 +15,12 @@
  * registers and MXCSR, executes it and stores them back, preserving the host
  * FPU control word, MXCSR and callee-saved registers.
  *
+ * A segment-register store (8C) stores the selector a WoW64 guest sees.
+ *
  * Refused (PW_ERR_UNSUPPORTED): control transfers, implicit stack users,
- * instructions invalid in 64-bit mode, segment-register and privileged or I/O
- * forms, a guest 0x67 prefix, GS overrides and register uses of ESP. Those
- * stay with the translator or dedicated emulation.
+ * instructions invalid in 64-bit mode, segment-register loads, privileged or
+ * I/O forms, a guest 0x67 prefix, GS overrides and register uses of ESP.
+ * Those stay with the translator or dedicated emulation.
  *
  * Stubs depend only on the instruction bytes, so they are cached per guest PC
  * and published once through the W^X VM backend.
