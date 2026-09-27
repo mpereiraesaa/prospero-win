@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Generate synthetic PE images for prospero-win gates.
+"""Encode synthetic PE images for tests.
 
-No Windows binary is committed to this repository and none is needed to
-exercise the loader. This tool writes complete PE32 and PE32+ images with
-real section tables, import descriptors and base-relocation blocks, so the
-hardware gate can be staged from bytes the laboratory produced itself.
-
-It is a second, independent encoder: `tests/test_make_test_pe.py` feeds its
-output to the C parser through `inspect_pe`, so an error in either encoder
-cannot silently certify the other.
+No Windows binary is committed to this repository. This encoder writes
+complete PE32 and PE32+ images with real section tables, import
+descriptors and base-relocation blocks, from which the Wine runtime
+manifest tests (tests/test_wine_runtime_manifest.py) build their inputs.
 """
 
 from __future__ import annotations
 
-import argparse
 import struct
 from dataclasses import dataclass, field
-from pathlib import Path
 
 DOS_MAGIC = 0x5A4D
 NT_SIGNATURE = 0x00004550
@@ -510,153 +504,3 @@ def build_pe(spec: Spec) -> bytes:
         image[start:start + len(data)] = data
 
     return bytes(image)
-
-
-# The tranche-2 application fixture. Fixed image bases keep the trace slots and
-# the callback code computable at build time; every module is PE32/i386 and
-# below 4 GiB, which is what the guest mapper needs.
-APP_IMAGE_BASE = 0x10000000
-A_IMAGE_BASE = 0x10100000
-B_IMAGE_BASE = 0x10200000
-TRACE_RVA = 0x2040                       # four dwords in the EXE's data
-DATA_RVA = 0x2000                        # the .data section of a DLL
-TEXT_RVA = 0x1000
-TEXT_CHARACTERISTICS = 0x60000020        # code, execute, read
-DATA_CHARACTERISTICS = 0xC0000040        # initialized data, read, write
-
-
-def _record(slot_address: int, value: int) -> bytes:
-    """`mov dword ptr [slot_address], value`: what a callback records."""
-    return struct.pack("<BBII", 0xC7, 0x05, slot_address, value)
-
-
-def _callback(slot_address: int, value: int) -> bytes:
-    return _record(slot_address, value) + b"\xc3"      # then return
-
-
-def application_diamond() -> dict[str, bytes]:
-    """The generated application: an EXE, two DLLs, a diamond and TLS order.
-
-    Graph: app.exe imports a.dll by *name* and b.dll by *ordinal*; a.dll
-    forwards one of its exports to b.dll; both DLLs import kernel32.dll by
-    name, so the load graph is a diamond. Each DLL has an entry point (DllMain)
-    and a TLS callback, and each of those records a distinct value into one of
-    four trace dwords in the EXE, so a run that calls them in the wrong order -
-    or not at all - leaves a different trace than the one the fixture expects.
-    """
-    trace = APP_IMAGE_BASE + TRACE_RVA
-    slots = [trace + index * 4 for index in range(4)]
-    # DllMain at offset 0 and the TLS callback at 0x10, per DLL.
-
-    text_a = _callback(slots[0], 0xA1).ljust(0x10, b"\x90") + \
-        _callback(slots[1], 0xA2)
-    text_b = _callback(slots[2], 0xB1).ljust(0x10, b"\x90") + \
-        _callback(slots[3], 0xB2)
-
-    app = build_pe(Spec(
-        name="app.exe", pe32plus=False, image_base=APP_IMAGE_BASE,
-        entry_point_offset=0,
-        sections=[
-            Section(".text", TEXT_CHARACTERISTICS, b"\xb8\x01\x00\x00\x00\xc3"),
-            Section(".data", DATA_CHARACTERISTICS, b"\x00" * 16,
-                    virtual_size=0x1000),
-        ],
-        imports=[Import("a.dll", names=("Provide",)),
-                 Import("b.dll", ordinals=(1,))],
-    ))
-    first = build_pe(Spec(
-        name="a.dll", pe32plus=False, dll=True, image_base=A_IMAGE_BASE,
-        entry_point_offset=0,
-        sections=[
-            Section(".text", TEXT_CHARACTERISTICS, text_a),
-            Section(".data", DATA_CHARACTERISTICS, b"\x00" * 4,
-                    virtual_size=0x1000),
-        ],
-        exports=[Export("Provide", rva=TEXT_RVA),
-                 Export("Forwarded", forwarder="b.dll.Provided")],
-        imports=[Import("kernel32.dll", names=("GetLastError",))],
-        # The directory's fields are RVAs, not virtual addresses: the loader
-        # adds the image base when it builds the callback list.
-        tls=Tls(callbacks=(TEXT_RVA + 0x10,), index_rva=DATA_RVA),
-    ))
-    second = build_pe(Spec(
-        name="b.dll", pe32plus=False, dll=True, image_base=B_IMAGE_BASE,
-        entry_point_offset=0,
-        sections=[
-            Section(".text", TEXT_CHARACTERISTICS, text_b),
-            Section(".data", DATA_CHARACTERISTICS, b"\x00" * 4,
-                    virtual_size=0x1000),
-        ],
-        exports=[Export("Provided", rva=TEXT_RVA)],
-        imports=[Import("kernel32.dll", names=("GetLastError",))],
-        tls=Tls(callbacks=(TEXT_RVA + 0x10,), index_rva=DATA_RVA),
-    ))
-    return {"app.exe": app, "a.dll": first, "b.dll": second}
-
-
-def sample_chain(pe32plus: bool = True) -> dict[str, bytes]:
-    """A root executable, a third-party DLL it needs, and one host import.
-
-    The shape mirrors a real classic PC game: the executable pulls in a
-    vendor codec DLL that must be mapped for real, plus Win32 modules that
-    prospero-win implements itself and never loads from disk.
-    """
-    code = bytes([0x48, 0x31, 0xC0, 0xC3]) if pe32plus else bytes([0x31, 0xC0, 0xC3])
-    pointer = struct.pack("<Q" if pe32plus else "<I", 0)
-
-    root = Spec(
-        name="sample.exe",
-        pe32plus=pe32plus,
-        sections=[
-            Section(".text", SCN_CNT_CODE | SCN_MEM_READ | SCN_MEM_EXECUTE,
-                    code.ljust(64, b"\x90")),
-            Section(".data", SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ |
-                    SCN_MEM_WRITE, pointer.ljust(64, b"\0")),
-            Section(".bss", SCN_CNT_UNINITIALIZED_DATA | SCN_MEM_READ |
-                    SCN_MEM_WRITE, b"", virtual_size=0x2000),
-        ],
-        imports=[
-            Import("binkw32.dll", names=("BinkOpen", "BinkDoFrame")),
-            Import("KERNEL32.dll", names=("CreateFileA",), ordinals=(0x0123,)),
-        ],
-    )
-    codec = Spec(
-        name="binkw32.dll",
-        pe32plus=pe32plus,
-        dll=True,
-        image_base=(0x180000000 if pe32plus else 0x10000000),
-        sections=[
-            Section(".text", SCN_CNT_CODE | SCN_MEM_READ | SCN_MEM_EXECUTE,
-                    code.ljust(64, b"\x90")),
-            Section(".data", SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ |
-                    SCN_MEM_WRITE, pointer.ljust(32, b"\0")),
-        ],
-        imports=[Import("msvcrt.dll", names=("malloc", "free"))],
-    )
-    return {spec.name: build_pe(spec) for spec in (root, codec)}
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", required=True, type=Path,
-                        help="directory to write the sample chain into")
-    parser.add_argument("--i386", action="store_true",
-                        help="emit PE32/i386 instead of PE32+/amd64")
-    parser.add_argument("--application", action="store_true",
-                        help="emit the tranche-2 application diamond "
-                             "(app.exe plus two DLLs) instead of the sample "
-                             "chain")
-    arguments = parser.parse_args()
-
-    arguments.out_dir.mkdir(parents=True, exist_ok=True)
-    written = (application_diamond() if arguments.application
-               else sample_chain(pe32plus=not arguments.i386))
-    for name, data in written.items():
-        path = arguments.out_dir / name
-        path.write_bytes(data)
-        print(f"{path} {len(data)} bytes")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

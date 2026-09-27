@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Keep the package, runtime telemetry, builder and validator identities in
-lockstep.
+"""Keep the package, title telemetry and builder identities in lockstep.
 
 `PPSA99995` is a local development identifier dedicated to prospero-win, not
 a Sony assignment. It must not collide with the identities already installed
@@ -48,15 +47,8 @@ def main() -> int:
     require(builder, 'build="$root/build/native$output_suffix"',
             "tools/build_native.sh")
 
-    validator = (ROOT / "tools/validate_pe_map_evidence.py").read_text()
-    require(validator, f'TITLE = "{TITLE_ID}"',
-            "tools/validate_pe_map_evidence.py")
-    require(validator, f'APP = "{APP_NAME}"',
-            "tools/validate_pe_map_evidence.py")
-
     # A helper pinned to another title would launch the wrong application.
     for source in ("native/wine64_main.c", "tools/build_native.sh",
-                   "tools/validate_pe_map_evidence.py",
                    "sce_sys/param.json"):
         text = (ROOT / source).read_text()
         for foreign in FOREIGN_TITLES:

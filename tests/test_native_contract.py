@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Static contract for the loader core and the PS5 adapter.
+"""Static contract for the portable core and the PS5 title.
 
-The adapter cannot be compiled by `make test`: it needs the pinned Prospero
+The title cannot be compiled by `make test`: it needs the pinned Prospero
 toolchain. These checks therefore hold the properties that a host compiler
 would not catch anyway, and that the porting playbook says decide whether a
 port survives its first boot.
 
 The central rule is principle 1: on this firmware a platform symbol that is
-merely exported is not a working one. The loader core is written to import
-almost nothing, and the calls the adapter does depend on are the ones the
-laboratory has already measured, each covered by a boot-time smoke test.
+merely exported is not a working one. The portable core (the DBT, profiles,
+presentation) is written to import almost nothing.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ CORE_HEADERS = {"<stddef.h>", "<stdint.h>", "<string.h>", "<limits.h>"}
 #   strcasestr: its FW 12.02 provider is unusable (playbook post-mortem).
 #   getcwd/chdir/access/opendir: measured EPERM or faulting from a title.
 #   malloc family: the libc heap is ~8 MiB and cannot be grown.
-#   snprintf/printf: formatting belongs to the gate's own bounded helpers.
+#   snprintf/printf: the core formats nothing; the title does its own logging.
 #   dlopen/execve: unavailable, and no part of this design needs them.
 FORBIDDEN_CORE = (
     "strcasestr", "strcasecmp", "strncasecmp", "getcwd", "chdir", "access",
@@ -37,10 +36,7 @@ FORBIDDEN_CORE = (
     "setlocale", "tolower", "toupper",
 )
 
-CORE_SOURCES = sorted(
-    path.name for path in (ROOT / "src").glob("*.c")
-    if path.name != "pw_file_posix.c"
-)
+CORE_SOURCES = sorted(path.name for path in (ROOT / "src").glob("*.c"))
 
 
 def read(relative: str) -> str:
@@ -100,27 +96,6 @@ def test_posix_backend_is_narrow() -> None:
     assert "open(" not in text
 
 
-def test_module_classification_is_explicit() -> None:
-    text = read("src/pw_module_name.c")
-    # The Win32 surface prospero-win implements itself, never loads.
-    for name in ("kernel32.dll", "user32.dll", "msvcrt.dll", "ntdll.dll"):
-        assert f'"{name}"' in text, name
-    # Third-party modules must stay absent so they are manually mapped.
-    for name in ("binkw32.dll", "mss32.dll", "smackw32.dll"):
-        assert f'"{name}"' not in text, name
-
-
-def test_compat32_stub_stays_below_two_gib() -> None:
-    text = read("src/pw_compat32.c")
-    # `mov rsp, imm32` sign-extends and every far pointer holds a 32-bit
-    # offset, so both pages must sit in the low 2 GiB.
-    assert "base < 0x80000000u" in text
-    # The mode proof must be the three bytes that only decode as `inc eax`
-    # in 32-bit mode; a plain magic constant would prove nothing.
-    assert text.count("0x40,") >= 3
-    assert "PW_COMPAT32_EXPECTED_RESULT" in read("src/pw_compat32.h")
-
-
 def test_builder_builds_the_wine64_title() -> None:
     builder = read("tools/build_native.sh")
     sources = builder[builder.index("sources=("):]
@@ -129,26 +104,11 @@ def test_builder_builds_the_wine64_title() -> None:
     assert listed[0] == "native/wine64_main.c"
     for name in listed:
         assert (ROOT / name).is_file(), f"tools/build_native.sh compiles missing {name}"
-    # The host-only provider depends on dirent and stdio, both unusable on
-    # the console image; linking it in would only fail on target.
-    assert "pw_file_posix.c" not in sources
     for name in ("native/pw_audio_ps5.c", "native/pw_agc_submit_lifecycle.c",
                  "native/pw_data_mount.c", "native/pw_wine_library.c"):
         assert name in sources, name
     # The banned import is rejected by the build, not merely documented.
     assert "strcasestr" in builder
-
-def test_prefix_registry_names_match_pinned_wine_contract() -> None:
-    header = read("src/pw_prefix.h")
-    source = read("src/pw_prefix.c")
-    docs = read("docs/WINE_INTEGRATION.md")
-    assert "PW_PREFIX_HIVE_COUNT = 3" in header
-    for name in ("system.reg", "user.reg", "userdef.reg"):
-        assert f'"{name}"' in source
-        assert name in docs
-    assert "classes.reg" not in source
-    assert "no separate `classes.reg`" in docs
-
 
 def test_agc_submit_establishes_a_suspend_point() -> None:
     adapter = read("native/pw_agc_ps5.c")
@@ -157,17 +117,6 @@ def test_agc_submit_establishes_a_suspend_point() -> None:
     assert "pw_agc_submit_and_suspend(&submit,sceAgcDriverSubmitDcb," in adapter
     assert "sceAgcSuspendPoint);" in adapter
     assert "int32_t sceAgcSuspendPoint(void)" in stub
-
-
-def test_gate_records_stay_within_the_transport_budget() -> None:
-    text = read("src/pw_gate.h")
-    line_max = int(re.search(r"PW_GATE_LINE_MAX = (\d+)", text).group(1))
-    protocol = read("native/ps5log/ps5log.h")
-    record_max = int(re.search(r"define PS5LOG_MAX_LINE (\d+)",
-                               protocol).group(1))
-    # An oversized record would be truncated by the transport and the
-    # manifest would report it, failing the run for a formatting reason.
-    assert line_max < record_max, (line_max, record_max)
 
 
 def main() -> int:
