@@ -3,6 +3,8 @@
 #define PW_VIDEOOUT_TILE_H
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
+#include "../src/pw_present.h"
 
 /* The scanout's tiled layout: 512x128-pixel tiles, and inside a tile a
  * swizzle of the column and row bits. The swizzle of (x, y) is the XOR of
@@ -50,5 +52,90 @@ static inline size_t pw_videoout_tiles_index(const PwVideoOutTiles *tiles, uint3
 {
     return (size_t)tiles->column_base[x] + tiles->row_base[y] +
            (tiles->column_swizzle[x] ^ tiles->row_swizzle[y]);
+}
+
+/* The scanout is registered A8B8G8R8 (red in the low byte) while GDI, Wine
+ * and the launcher hand over B,G,R,X pixels: swap red and blue. */
+static inline uint32_t pw_videoout_rgbx(uint32_t bgrx)
+{
+    return 0xff000000u | (bgrx & 0x0000ff00u) | ((bgrx >> 16) & 0xffu) | ((bgrx & 0xffu) << 16);
+}
+
+/* Scratch for pw_videoout_tiles_scale, kept off the stack: the source
+ * column of each shown column, and scanout rows converted ahead of tiling
+ * (four, and one of background). */
+typedef struct PwVideoOutScaleRows {
+    uint32_t source_column[PW_VIDEOOUT_TILE_WIDTH];
+    uint32_t row[5][PW_VIDEOOUT_TILE_WIDTH];
+} PwVideoOutScaleRows;
+
+/* Scale frame into the whole tiled scanout in one pass: the shown rectangle
+ * of placement (pw_present_scale_placement for 1920x1080) nearest-neighbour,
+ * the rest background (B,G,R), every pixel converted for the scanout. The
+ * result is what pw_present_scale onto a linear 1920x1080 target followed
+ * by a tiled copy produces, without the intermediate 8 MB image.
+ *
+ * A tile keeps each 4x4 block of pixels in 64 contiguous bytes, one cache
+ * line, so four scanout rows are converted into rows first and then written
+ * a block at a time; a row repeating the one above (vertical scaling) is
+ * converted once. Source columns come from a table filled once per frame
+ * and rows from one division each, so no pixel divides. placement must lie
+ * inside the scanout and frame must be valid (pw_present_validate). */
+static inline void pw_videoout_tiles_scale(const PwVideoOutTiles *tiles, PwVideoOutScaleRows *rows,
+                                           const PwPresentFrame *frame,
+                                           const PwPresentPlacement *placement, uint32_t background,
+                                           uint32_t *output)
+{
+    enum { W = PW_VIDEOOUT_TILE_WIDTH, H = PW_VIDEOOUT_TILE_HEIGHT };
+    _Static_assert(W % 4 == 0 && H % 4 == 0, "4x4 blocks divide the scanout");
+    const uint32_t left = placement->left, right = placement->left + placement->shown_width;
+    const uint32_t top = placement->top, bottom = placement->top + placement->shown_height;
+    const uint32_t fill = pw_videoout_rgbx(background);
+    uint32_t *const background_row = rows->row[4];
+
+    /* floor(i * width / shown_width), stepped without dividing */
+    for (uint32_t i = 0, column = 0, remainder = 0; i < placement->shown_width; i++) {
+        rows->source_column[i] = column;
+        remainder += frame->width;
+        while (remainder >= placement->shown_width) {
+            remainder -= placement->shown_width;
+            column++;
+        }
+    }
+    for (uint32_t x = 0; x < W; x++) background_row[x] = fill;
+    for (uint32_t y = 0; y < H; y += 4) {
+        const uint32_t *line[4];
+        const uint8_t *previous = NULL;
+
+        for (uint32_t j = 0; j < 4; j++) {
+            if (y + j < top || y + j >= bottom) {
+                line[j] = background_row;
+                previous = NULL;
+                continue;
+            }
+            const uint8_t *source_row = frame->pixels +
+                (size_t)((uint64_t)(y + j - top) * frame->height / placement->shown_height) * frame->stride;
+            if (source_row == previous) {
+                line[j] = line[j - 1];
+                continue;
+            }
+            const uint32_t *source = (const uint32_t *)(const void *)source_row;
+            uint32_t *converted = rows->row[j];
+            for (uint32_t x = 0; x < left; x++) converted[x] = fill;
+            for (uint32_t x = left; x < right; x++)
+                converted[x] = pw_videoout_rgbx(source[rows->source_column[x - left]]);
+            for (uint32_t x = right; x < W; x++) converted[x] = fill;
+            line[j] = converted;
+            previous = source_row;
+        }
+        const uint32_t row_base = tiles->row_base[y], row_swizzle = tiles->row_swizzle[y];
+        for (uint32_t x = 0; x < W; x += 4) {
+            uint32_t *block = output + tiles->column_base[x] + row_base + (tiles->column_swizzle[x] ^ row_swizzle);
+            memcpy(block, line[0] + x, 16);
+            memcpy(block + 4, line[1] + x, 16);
+            memcpy(block + 8, line[2] + x, 16);
+            memcpy(block + 12, line[3] + x, 16);
+        }
+    }
 }
 #endif

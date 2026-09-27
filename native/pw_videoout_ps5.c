@@ -28,13 +28,10 @@ extern int sceVideoOutRegisterBuffers2(int32_t,int32_t,int32_t,void *,int32_t,vo
 extern int sceVideoOutWaitVblank(int32_t);
 extern int sceSystemServiceHideSplashScreen(void);
 
-static inline uint32_t bgrx_to_rgbx(uint32_t pixel)
-{
-    return 0xff000000u|(pixel&0x0000ff00u)|((pixel>>16)&0xffu)|((pixel&0xffu)<<16);
-}
-
-/* Column and row parts of the tiled index, filled once at open. */
+/* Column and row parts of the tiled index, filled once at open, and the
+ * scaler's rows. */
 static PwVideoOutTiles tiles;
+static PwVideoOutScaleRows scale_rows;
 
 int pw_videoout_ps5_open(PwVideoOutPs5 *video)
 {
@@ -99,15 +96,36 @@ int pw_videoout_ps5_close(PwVideoOutPs5 *video)
     video->memory=NULL;video->physical=-1;video->bytes=video->frame_bytes=0;
     return status;
 }
+/* The tiled image is drawn in the third frame of video memory, then copied
+ * to the scanout buffer not on screen and flipped to at the vblank. */
+static uint32_t *draw_frame(PwVideoOutPs5 *video)
+{
+    return (uint32_t *)((uint8_t *)video->memory+2u*video->frame_bytes);
+}
+static int flip(PwVideoOutPs5 *video)
+{
+    unsigned index=video->index^1u;
+    void *scanout=(uint8_t *)video->memory+(size_t)index*video->frame_bytes;
+    int status=pw_agc_ps5_copy_flip(&video->agc,video->handle,(int)index,draw_frame(video),
+                                    scanout,(uint32_t)video->frame_bytes,video->flips+1);
+    if(status!=PW_OK)return status;
+    (void)sceVideoOutWaitVblank(video->handle);video->index=index;video->flips++;return PW_OK;
+}
+int pw_videoout_ps5_present_scaled(PwVideoOutPs5 *video,const PwPresentFrame *frame,int mode,
+                                   uint32_t background)
+{
+    if(!video || !video->opened)return PW_ERR_PRECONDITION;
+    PwPresentPlacement placement;
+    int status=pw_present_scale_placement(frame,mode,WIDTH,HEIGHT,&placement);
+    if(status!=PW_OK)return status;
+    pw_videoout_tiles_scale(&tiles,&scale_rows,frame,&placement,background,draw_frame(video));
+    return flip(video);
+}
 int pw_videoout_ps5_present(PwVideoOutPs5 *video,const PwGdiTargetView *view)
 {
     if(!video || !video->opened || !view || !view->pixels || !view->width || !view->height)
         return PW_ERR_PRECONDITION;
-    unsigned index=video->index^1u;
-    uint32_t *output=(uint32_t *)((uint8_t *)video->memory+2u*video->frame_bytes);
-    void *scanout=(uint8_t *)video->memory+(size_t)index*video->frame_bytes;
-    /* The scanout is registered A8B8G8R8 (red in the low byte) while GDI,
-     * Wine and the launcher hand over B,G,R,X rows: swap red and blue. */
+    uint32_t *output=draw_frame(video);
     uint32_t background=0xff181010u;
     /* A target larger than the scanout is cropped, never placed at an
      * underflowed offset: the old centring wrote outside the scratch frame. */
@@ -127,12 +145,9 @@ int pw_videoout_ps5_present(PwVideoOutPs5 *video,const PwGdiTargetView *view)
             for(uint32_t sx=0;sx<layout.source_width;sx++)for(uint32_t xx=0;xx<scale;xx++) {
                 const uint32_t x=layout.left+sx*scale+xx;
                 output[tiles.column_base[x]+row_base+(tiles.column_swizzle[x]^row_swizzle)]=
-                    bgrx_to_rgbx(source[sx]);
+                    pw_videoout_rgbx(source[sx]);
             }
         }
     }
-    status=pw_agc_ps5_copy_flip(&video->agc,video->handle,(int)index,output,
-                                    scanout,(uint32_t)video->frame_bytes,video->flips+1);
-    if(status!=PW_OK)return status;
-    (void)sceVideoOutWaitVblank(video->handle);video->index=index;video->flips++;return PW_OK;
+    return flip(video);
 }

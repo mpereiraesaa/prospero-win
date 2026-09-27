@@ -152,7 +152,7 @@ $(eval $(call test_rule,test_pw_audio_ps5,tests/test_pw_audio_ps5.c native/pw_au
 $(eval $(call test_rule,test_pw_audio_mix,tests/test_pw_audio_mix.c src/pw_audio_mix.c,-lm))
 $(eval $(call test_rule,test_pw_agc_submit_lifecycle,tests/test_pw_agc_submit_lifecycle.c native/pw_agc_submit_lifecycle.c,))
 $(eval $(call test_rule,test_pw_videoout_layout,tests/test_pw_videoout_layout.c,))
-$(eval $(call test_rule,test_pw_videoout_tile,tests/test_pw_videoout_tile.c,))
+$(eval $(call test_rule,test_pw_videoout_tile,tests/test_pw_videoout_tile.c src/pw_present.c,))
 $(eval $(call test_rule,test_pw_pad_ps5,tests/test_pw_pad_ps5.c native/pw_pad_ps5.c src/pw_pad.c src/pw_user32.c,-DPW_PAD_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_state_ps5,tests/test_pw_state_ps5.c native/pw_state_ps5.c src/pw_registry_store.c src/pw_registry.c,-DPW_STATE_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_data_mount,tests/test_pw_data_mount.c native/pw_data_mount.c,))

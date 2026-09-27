@@ -170,21 +170,15 @@ static int wine_audio(void *context, const int16_t *frames)
     return audio_ops.output(audio_port, frames) < 0 ? -1 : 0;
 }
 
-/* Scale a frame onto the whole 1920x1080 screen as the profile asks (fit
- * keeps the aspect ratio: 800x600 becomes 1440x1080) and flip it. */
-static int show_scaled(PwVideoOutPs5 *video, const PwGdiTargetView *view, int scaling,
-                       uint8_t *screen)
+/* Scale a frame onto the whole screen as the profile asks (fit keeps the
+ * aspect ratio: 800x600 becomes 1440x1080), straight into the scanout, and
+ * flip it. */
+static int show_scaled(PwVideoOutPs5 *video, const PwGdiTargetView *view, int scaling)
 {
     const PwPresentFrame frame = { view->pixels, view->width, view->height, view->stride,
                                    PW_PRESENT_BGRX8 };
-    const PwPresentTarget target = { screen, PW_LAUNCHER_RENDER_WIDTH, PW_LAUNCHER_RENDER_HEIGHT,
-                                     PW_LAUNCHER_RENDER_WIDTH * 4u,
-                                     (uint64_t)PW_LAUNCHER_RENDER_WIDTH * PW_LAUNCHER_RENDER_HEIGHT * 4u };
-    const PwGdiTargetView full = { screen, target.width, target.height, target.stride,
-                                   (uint32_t)target.bytes };
-    int status = pw_present_scale(&frame, scaling, 0x000000u, &target, NULL);
 
-    return status == PW_OK ? pw_videoout_ps5_present(video, &full) : status;
+    return pw_videoout_ps5_present_scaled(video, &frame, scaling, 0x000000u);
 }
 
 /* ---- fd 2 -> ps5log ---------------------------------------------------- */
@@ -518,7 +512,6 @@ int main(int argc, char **argv)
     static PwVideoOutPs5 video;
     static PwPadPs5 pad;
     static PwGameInput game_input;
-    static uint8_t *screen;
     const PwGameProfile *game = NULL;
     int scaling = PW_PRESENT_SCALE_FIT;
     PwWinePointer pointer = { 0, 0, 0, 0 };
@@ -613,9 +606,6 @@ int main(int argc, char **argv)
             if (storage != MAP_FAILED &&
                 pw_wine_frame_box_init(&frames, storage, PW_WINE64_MAX_FRAME) == 0) {
                 frame_shown = storage + PW_WINE64_MAX_FRAME;
-                screen = mmap(NULL, (size_t)PW_LAUNCHER_RENDER_WIDTH * PW_LAUNCHER_RENDER_HEIGHT * 4u,
-                              PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-                if (screen == MAP_FAILED) screen = NULL;
                 if (set_present) set_present(wine_present, NULL);
             }
         }
@@ -668,10 +658,10 @@ int main(int argc, char **argv)
                 else refused++;
             }
         }
-        if (video_status == PW_OK && frame_shown && screen &&
+        if (video_status == PW_OK && frame_shown &&
             pw_wine_frame_box_take(&frames, &shown_sequence, frame_shown, PW_WINE64_MAX_FRAME,
                                    &view) == 1 &&
-            show_scaled(&video, &view, scaling, screen) == PW_OK) {
+            show_scaled(&video, &view, scaling) == PW_OK) {
             shown++;          /* present waits for the vblank */
             presented = 1;
         }
