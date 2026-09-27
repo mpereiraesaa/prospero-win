@@ -101,6 +101,11 @@ typedef struct PwX86ExitDesc {
     size_t fallthrough_reconcile_offset; /* offset in emitted code of reconciliation stub for fallthrough */
     size_t target_reconcile_patch_offset; /* offset in code of canonical_code pointer for target */
     size_t fallthrough_reconcile_patch_offset; /* offset in code of canonical_code pointer for fallthrough */
+    /* Offset of a rel32 that jumps to the link slot's target_code, which the
+     * engine rewrites whenever it sets target_code (re-encoded blocks link
+     * directly instead of jumping through the slot), or 0. */
+    size_t target_direct_offset;
+    size_t fallthrough_direct_offset;
 } PwX86ExitDesc;
 
 typedef struct PwX86Block {
@@ -216,6 +221,22 @@ static inline uintptr_t pw_x86_fault_redirect(uintptr_t rip, uintptr_t low, uint
     if (displacement <= 0) return 0;
     target = rip + (uintptr_t)(intptr_t)displacement;
     return target > rip && target < high ? target : 0;
+}
+
+/* The guest EIP a refused-access path reports: the path begins with
+ * `mov dword [rdi+eip], imm32`. A fault handler that leaves a fault inside
+ * the guest range to someone else reads it to keep PwX86State.eip exact,
+ * since re-encoded blocks with fault markers store no EIP before accesses.
+ * 1 and *eip when path begins that way, else 0. */
+static inline int pw_x86_cold_path_eip(uintptr_t path, uint32_t *eip)
+{
+    const uint8_t *p = (const uint8_t *)path;
+
+    if (offsetof(PwX86State, eip) >= 128 || p[0] != 0xc7 || p[1] != 0x47 ||
+        p[2] != (uint8_t)offsetof(PwX86State, eip))
+        return 0;
+    *eip = (uint32_t)p[3] | (uint32_t)p[4] << 8 | (uint32_t)p[5] << 16 | (uint32_t)p[6] << 24;
+    return 1;
 }
 
 /* The host register the global assignment gives guest GPR gpr under mask,

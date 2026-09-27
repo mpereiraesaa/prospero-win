@@ -468,6 +468,8 @@ typedef struct Ctx {
     uint32_t mask;
     Cold cold[MAX_COLD];
     unsigned cold_count;
+    uint32_t here;  /* the guest EIP of the instruction being translated */
+    uint32_t block_pc;
 } Ctx;
 
 static void save_flags(Out *o)
@@ -508,6 +510,7 @@ static void guard_fs(Ctx *c, const Ea *e, unsigned fs, unsigned width, unsigned 
         b(o, 0x0f); b(o, 0x1f); b(o, 0x84); b(o, 0x00);             /* nopl 0(rax,rax,1) */
         cold = &c->cold[c->cold_count++];
         cold->patch = o->n; w32(o, 0);
+        cold->pc = c->here;
         cold->width = (uint8_t)width; cold->write = (uint8_t)write; cold->saved = 0;
         return;
     }
@@ -517,6 +520,7 @@ static void guard_fs(Ctx *c, const Ea *e, unsigned fs, unsigned width, unsigned 
     b(o, 0x0f); b(o, 0x87);                                          /* ja cold */
     cold = &c->cold[c->cold_count++];
     cold->patch = o->n; w32(o, 0);
+    cold->pc = c->here;
     cold->width = (uint8_t)width; cold->write = (uint8_t)write; cold->saved = (uint8_t)keep;
     if (keep) restore_flags(o);
 }
@@ -571,42 +575,62 @@ static void operand_r10(Ctx *c, const Inst *in, unsigned keep)
 }
 
 typedef struct ExitSlots {
-    size_t patch, stub, reconcile, reconcile_patch;
+    size_t patch, stub, reconcile, reconcile_patch, direct;
 } ExitSlots;
 
-/* A direct exit to target: through the link slot when the chain budget
- * allows, flag-free, with the unlinked and reconciliation stubs. */
-static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots)
+/* jmp rel32 to a later offset, patched by land32. */
+static size_t jump32(Out *o) { b(o, 0xe9); w32(o, 0); return o->n - 4; }
+static void land32(Out *o, size_t rel) { put32(o, rel, (uint32_t)(o->n - (rel + 4))); }
+
+/* The budget a backward exit spends: the chain returns to the dispatcher
+ * when it runs out. Every cycle of linked blocks has an exit whose target
+ * is at or before its block's PC, so charging only those bounds a chain.
+ * Flag-free: mov, lea, xchg, jrcxz. Returns the rel8 of the jrcxz taken
+ * when the budget is spent. */
+static size_t emit_budget(Out *o)
 {
-    Out *o = &c->o;
     const size_t budget = offsetof(PwX86State, chain_budget);
-    size_t to_safe, to_null, to_stub;
+    size_t to_spent;
 
     load_state(o, R11, budget);
     b(o, 0x45); b(o, 0x8d); b(o, 0x5b); b(o, 0xff);                 /* lea r11d, [r11-1] */
     store_state(o, R11, budget);
     xchg_rcx_r11(o);
-    to_safe = jump8(o, 0xe3);                                       /* jrcxz safepoint */
+    to_spent = jump8(o, 0xe3);                                      /* jrcxz spent */
     xchg_rcx_r11(o);
-    b(o, 0x49); b(o, 0xbb); slots->patch = o->n; w64(o, 0);         /* movabs r11, slot */
-    xchg_rcx_r11(o);
-    to_null = jump8(o, 0xe3);                                       /* jrcxz no slot */
-    xchg_rcx_r11(o);
-    b(o, 0x41); b(o, 0xff); b(o, 0x23);                             /* jmp [r11] */
-    /* No slot: r11 is 0, stored as the exit slot below. */
-    land8(o, to_null);
-    xchg_rcx_r11(o);
-    to_stub = jump8(o, 0xeb);
-    /* Budget spent: r11 is 0 here as well. */
-    land8(o, to_safe);
-    xchg_rcx_r11(o);
-    /* Unlinked (entered with r11 = the slot) and the two above. */
+    return to_spent;
+}
+
+/* A direct exit to target. The exit is a rel32 (slots->direct: the jcc's
+ * own when jcc_rel is set, else a jmp here) that points at the unlinked
+ * stub until the engine links it to the target's chain entry. */
+static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots, size_t jcc_rel)
+{
+    Out *o = &c->o;
+    const int backward = target <= c->block_pc;
+    size_t to_spent = 0, spent_rel = 0, stub_store;
+
+    if (backward) {
+        if (jcc_rel) { land32(o, jcc_rel); jcc_rel = 0; }
+        to_spent = emit_budget(o);
+    }
+    if (jcc_rel) slots->direct = jcc_rel;
+    else slots->direct = jump32(o);
+    if (backward) {
+        land8(o, to_spent);
+        xchg_rcx_r11(o);                                            /* r11 = 0 */
+        spent_rel = jump32(o);
+    }
+    /* Unlinked: record the slot for the dispatcher to link. */
     slots->stub = o->n;
-    land8(o, to_stub);
+    land32(o, slots->direct);
+    b(o, 0x49); b(o, 0xbb); slots->patch = o->n; w64(o, 0);         /* movabs r11, slot */
+    stub_store = o->n;
     b(o, 0x4c); b(o, 0x89); b(o, 0x5f); b(o, (uint8_t)offsetof(PwX86State, last_exit_slot));
     emit_leave(o);
     store_state_imm(o, offsetof(PwX86State, eip), target);
     b(o, 0x31); b(o, 0xc0); b(o, 0xc3);                             /* xor eax, eax; ret */
+    if (backward) put32(o, spent_rel, (uint32_t)(stub_store - (spent_rel + 4)));
     /* A linked block with another contract: its canonical entry. */
     slots->reconcile = o->n;
     emit_leave(o);
@@ -687,6 +711,8 @@ static void emit_cold_paths(Ctx *c)
     for (unsigned k = 0; k < c->cold_count; k++) {
         const Cold *cold = &c->cold[k];
         put32(o, cold->patch, (uint32_t)(o->n - (cold->patch + 4)));
+        /* First, so a fault handler can read it (pw_x86_cold_path_eip). */
+        store_state_imm(o, offsetof(PwX86State, eip), cold->pc);
         if (cold->saved) restore_flags(o);
         store_state(o, R11, offsetof(PwX86State, fault_address));
         store_state_imm(o, offsetof(PwX86State, fault_width), cold->width);
@@ -749,6 +775,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     c.table = options->indirect_targets;
     c.chain_table = options->indirect_targets ? options->chain_targets : NULL;
     c.mask = options->indirect_mask;
+    c.block_pc = pc;
 
     block->entry_contract.resident_mask = 0xff;
     for (unsigned g = 0; g < 8; g++)
@@ -768,7 +795,11 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         const unsigned keep = (in->use | (live[k] & ~in->def)) != 0;
         Out *o = &c.o;
 
-        if (can_fault(in)) store_state_imm(o, offsetof(PwX86State, eip), here);
+        /* A marked access's refused-access path stores its own EIP, and a
+         * fault handler can read it from there; only the guard stores it
+         * before the access. */
+        c.here = here;
+        if (!c.fault_markers && can_fault(in)) store_state_imm(o, offsetof(PwX86State, eip), here);
         switch (in->kind) {
         case K_RM:
             if (in->mod != 3) guard_fs(&c, &in->ea, in->fs, in->width, in->write, keep);
@@ -840,7 +871,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         case K_CALL: {
             ExitSlots slots;
             emit_push(&c, -1, next, keep);
-            emit_chain_exit(&c, in->target, &slots);
+            emit_chain_exit(&c, in->target, &slots, 0);
             block->exit.kind = PW_X86_EXIT_DIRECT_JUMP;
             block->exit.chainable = 1;
             block->exit.target_pc = in->target;
@@ -848,6 +879,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
             block->exit.target_stub_offset = slots.stub;
             block->exit.target_reconcile_offset = slots.reconcile;
             block->exit.target_reconcile_patch_offset = slots.reconcile_patch;
+            block->exit.target_direct_offset = slots.direct;
             break;
         }
         case K_CALLRM:
@@ -872,7 +904,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
             break;
         case K_JMP: {
             ExitSlots slots;
-            emit_chain_exit(&c, in->target, &slots);
+            emit_chain_exit(&c, in->target, &slots, 0);
             block->exit.kind = PW_X86_EXIT_DIRECT_JUMP;
             block->exit.chainable = 1;
             block->exit.target_pc = in->target;
@@ -880,15 +912,15 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
             block->exit.target_stub_offset = slots.stub;
             block->exit.target_reconcile_offset = slots.reconcile;
             block->exit.target_reconcile_patch_offset = slots.reconcile_patch;
+            block->exit.target_direct_offset = slots.direct;
             break;
         }
         case K_JCC: {
             ExitSlots taken, fall;
             size_t to_taken;
             b(o, 0x0f); b(o, (uint8_t)(0x80 | in->cond)); to_taken = o->n; w32(o, 0);
-            emit_chain_exit(&c, next, &fall);
-            put32(o, to_taken, (uint32_t)(o->n - (to_taken + 4)));
-            emit_chain_exit(&c, in->target, &taken);
+            emit_chain_exit(&c, next, &fall, 0);
+            emit_chain_exit(&c, in->target, &taken, to_taken);
             block->exit.kind = PW_X86_EXIT_CONDITIONAL;
             block->exit.chainable = 1;
             block->exit.target_pc = in->target;
@@ -897,10 +929,12 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
             block->exit.target_stub_offset = taken.stub;
             block->exit.target_reconcile_offset = taken.reconcile;
             block->exit.target_reconcile_patch_offset = taken.reconcile_patch;
+            block->exit.target_direct_offset = taken.direct;
             block->exit.fallthrough_patch_offset = fall.patch;
             block->exit.fallthrough_stub_offset = fall.stub;
             block->exit.fallthrough_reconcile_offset = fall.reconcile;
             block->exit.fallthrough_reconcile_patch_offset = fall.reconcile_patch;
+            block->exit.fallthrough_direct_offset = fall.direct;
             break;
         }
         }
@@ -912,7 +946,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
          * length limit: continue at the next one, linked like a jump. */
         ExitSlots slots;
         const uint32_t next = pc + (uint32_t)cursor;
-        emit_chain_exit(&c, next, &slots);
+        emit_chain_exit(&c, next, &slots, 0);
         block->exit.kind = PW_X86_EXIT_DIRECT_JUMP;
         block->exit.chainable = 1;
         block->exit.target_pc = next;
@@ -920,6 +954,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         block->exit.target_stub_offset = slots.stub;
         block->exit.target_reconcile_offset = slots.reconcile;
         block->exit.target_reconcile_patch_offset = slots.reconcile_patch;
+        block->exit.target_direct_offset = slots.direct;
     }
     emit_cold_paths(&c);
     if (c.o.failed) return PW_ERR_LIMIT;

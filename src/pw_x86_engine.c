@@ -22,6 +22,28 @@ static int protection(PwX86Engine *engine,size_t offset,size_t bytes,unsigned va
     return status;
 }
 
+/* A re-encoded exit jumps straight to its slot's target_code through a
+ * rel32 (PwX86ExitDesc.*_direct_offset): rewrite it whenever target_code
+ * changes. */
+static void sync_direct(PwX86Engine *engine, const PwX86CacheEntry *entry, unsigned side)
+{
+    const size_t at = side ? entry->exit.fallthrough_direct_offset : entry->exit.target_direct_offset;
+    if(!at || !entry->link_slots[side].target_code) return;
+    const size_t offset = entry->code_offset + at;
+    const uint8_t *next = (const uint8_t *)engine->code.exec_base + offset + 4;
+    const int32_t rel = (int32_t)((const uint8_t *)entry->link_slots[side].target_code - next);
+    const size_t page = engine->backend->page_bytes, first = (offset / page) * page;
+    const size_t end = ((offset + 4 + page - 1) / page) * page;
+    const unsigned was_sealed = engine->sealed;
+
+    if(was_sealed && protection(engine, first, end - first, PW_PROT_READ|PW_PROT_WRITE) != PW_OK) {
+        engine->failed = 1; return;
+    }
+    memcpy((uint8_t *)engine->code.write_base + offset, &rel, sizeof(rel));
+    if(was_sealed && protection(engine, first, end - first, PW_PROT_READ|PW_PROT_EXEC) != PW_OK)
+        engine->failed = 1;
+}
+
 /* The bucket an exit waits in until its target PC is compiled: the target's
  * home slot in the cache's hash. */
 static uint32_t target_bucket(const PwX86Cache *cache,uint32_t target_pc)
@@ -282,6 +304,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
                     e_mut->link_slots[0].is_reconciled = 1;
                 }
                 e_mut->link_slots[0].is_linked = 1;
+                sync_direct(engine, e_mut, 0);
                 engine->successful_links++;
             }
             if(best.exit.kind == PW_X86_EXIT_CONDITIONAL) {
@@ -297,6 +320,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
                         e_mut->link_slots[1].is_reconciled = 1;
                     }
                     e_mut->link_slots[1].is_linked = 1;
+                    sync_direct(engine, e_mut, 1);
                     engine->successful_links++;
                 }
             }
@@ -332,6 +356,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
                     slot->is_reconciled = 1;
                 }
                 slot->is_linked = 1;
+                sync_direct(engine, cand, side);
                 engine->successful_links++;
             }
             /* Linked now, or earlier on the dispatch path: stop waiting. */
@@ -378,6 +403,9 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
                     last_slot->is_reconciled = 0;
                 }
                 last_slot->is_linked = 1;
+                if(source_entry && (last_slot == &source_entry->link_slots[0] ||
+                                    last_slot == &source_entry->link_slots[1]))
+                    sync_direct(engine, source_entry, last_slot == &source_entry->link_slots[1]);
                 engine->successful_links++;
             }
         }
