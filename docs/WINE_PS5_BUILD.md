@@ -74,6 +74,7 @@ of the port never collide:
 | 0570 | `ntdll`: reserve address space with a fixed, no-overwrite `sceKernelReserveVirtualRange`, since `MAP_FIXED \| MAP_EXCL` replaces existing mappings on FW 12.02; the view heap gets 64 MiB above 4 GiB |
 | 0580 | `ntdll`: skip the configuration directory's parent ownership check on PS5, as 0111 skips the one after `chdir` |
 | 0600 | `ntdll`: anonymous memory in the reserved areas is direct memory, not flexible memory; a 16 GiB area at `0x1000000000` takes the allocations free to go anywhere; see [Direct memory](#direct-memory) |
+| 0601 | `ntdll`: an i386 image is never mapped above 4 GiB, so a relocatable exe whose preferred base is taken stays in the low reserved areas instead of the high one |
 
 ## Allocator
 
@@ -135,7 +136,9 @@ and frees it; if the console refuses any step, every call passes through as
 before and the log says so. A 16 GiB reserved area at `0x1000000000`, where
 the kernel grants the whole range at the hint, takes the views whose limits
 allow it before the low areas are searched, so the i386 guest keeps the low
-4 GiB. The host tests run the policy against a model of the kernel (a memfd
+4 GiB. An i386 image's limit is 4 GiB (0601): the main exe is mapped where
+it can when its preferred base is taken, and before 0601 that was the high
+area, where the guest saw its base truncated to 32 bits. The host tests run the policy against a model of the kernel (a memfd
 for physical memory, reservations that refuse to overlap, execute refused at
 map time) with 20,000 random operations checked page by page.
 

@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 23:50:00 +0200
+Subject: [PATCH] ntdll: Keep i386 images below 4 GiB on the PS5.
+
+Since 0600, map_view gives an allocation free to go anywhere from the
+high reserved area at 0x1000000000 first. A relocatable i386 exe whose
+preferred base was taken reached that last resort and was mapped there;
+the guest saw its base truncated to 32 bits, and RtlImageNtHeader on it
+faulted before the program started. An i386 image's limit is now 4 GiB,
+so its last resort is the low reserved areas, as before 0600.
+---
+ dlls/ntdll/unix/virtual.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 17160e976c..08e048d798 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -3598,6 +3598,12 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+ 
+     limit_low = max( limit_low, (ULONG_PTR)address_space_start );  /* make sure the DOS area remains free */
+     if (!limit_high) limit_high = (ULONG_PTR)user_space_limit;
++#ifdef __PROSPERO__
++    /* An i386 image only runs below 4 GiB. When its preferred base is taken,
++     * the last resort below is any address, which map_view gives from the
++     * high reserved area first (0600). */
++    if (image_info->machine == IMAGE_FILE_MACHINE_I386) limit_high = min( limit_high, limit_4g - 1 );
++#endif
+ 
+     /* first try the specified base */
+ 
+-- 
+2.43.0
+
