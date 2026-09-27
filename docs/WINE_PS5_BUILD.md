@@ -13,9 +13,12 @@ applies `wine/patches/*.patch` in numeric order and configures it out of
 tree for `x86_64-unknown-freebsd11` with the PS5 payload SDK's
 `prospero-clang`. The PS5 compiler defines `__FreeBSD__` and the SDK ships
 FreeBSD headers, so Wine selects its FreeBSD paths (kqueue instead of epoll,
-sysctl), and `__PROSPERO__` selects the PS5 patches. PE modules are not built
-here; winebuild and widl come from the host build that
-`tools/build_wine_runtime.sh` produces.
+sysctl), and `__PROSPERO__` selects the PS5 patches. PE modules come from
+the host build that `tools/build_wine_runtime.sh` produces, which also
+supplies winebuild and widl. The exception is the few PE modules a patch
+changes (`PE_MODULES`, today the xinput DLLs), which are built from the
+patched tree for i386 and x86_64 into `.deps/wine-ps5/pe`. That needs both
+MinGW cross compilers.
 
 ~~~sh
 tools/build_wine_ps5.sh --check-patches   # validate and print the series
@@ -57,6 +60,7 @@ of the port never collide:
 | 0111 | `ntdll`: connect through `pw_wineserver_connect()` from `wineserver.so` beside ntdll (`wineserver.prx` on PS5) instead of the socket file, and register each thread's kernel id with the server module |
 | 0120 | `server`: when the current user names no audio driver, default `HKCU\Software\Wine\Drivers\Audio` to `ps5`; see [Audio](#audio) |
 | 0400 | `win32u`: in-process PS5 user driver (`WINE_PS5_USER_DRIVER`, set on PS5); see [User driver](#user-driver) |
+| 0470 | `xinput`: controller 0 is the PS5 title's, read through a Unix library (`xinput1_3.so`) from the title's sink; elsewhere xinput uses HID as before; see [XInput controller](#xinput-controller) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
 | 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
 | 0520 | `ntdll`: name the ntdll directory with `WINE_PS5_NTDLL_DIR` when `dladdr` cannot (PRX) |
@@ -314,6 +318,45 @@ Wine's OSS driver.
 To use it on the console, stage `wineps5.prx` beside `ntdll.prx`. The game
 log then shows `PW_WINE64 audio sink=1 port=<handle> status=ok`.
 
+## XInput controller
+
+Games played with a controller ask XInput for one. Wine's xinput normally
+finds controllers through its HID stack (winebus and hidclass), which runs
+in `winedevice.exe`. A title cannot start that process (patch 0550), so on
+the console xinput never found a controller. Patch 0470 lets xinput read
+the title's DualSense instead:
+
+- The title keeps the pad's state in its sink, in `XINPUT_GAMEPAD` terms.
+  It calls `pw_wine_set_pad` in `wine/ps5/pw_wine_sink.h`, and the sink
+  numbers a packet each time the state changes.
+- xinput gains a Unix library, `xinput1_3.so`. Every xinput DLL built from
+  `xinput1_3`'s source loads it by name: 1.1, 1.2, 1.3, 1.4 and uap;
+  9.1.0 forwards to 1.4.
+  - Its init finds `pw_wine_pad` and `pw_wine_set_rumble` with `dlsym`.
+    Anywhere but in a title they are missing, and xinput keeps using HID.
+  - With a title, controller 0 is the title's and no HID thread starts.
+    `XInputGetState(Ex)` and `XInputGetKeystroke` read the sink, and
+    `XInputSetState` and `XInputEnable` pass the rumble back.
+    `XInputGetCapabilities(Ex)` reports a wired Xbox 360 controller
+    (`045e:028e`), which games look for.
+- The parameters hold no pointers, so a 32-bit game's calls go through the
+  same functions under WoW64.
+- The PRX stage links `xinput1_3.prx`. Its descriptor exports
+  `__wine_unix_call_funcs` and `__wine_unix_call_wow64_funcs`, and it
+  imports ntdll's `dlsym`, like `wowprospero.prx`.
+- The patched PE modules (`xinput1_1`, `xinput1_2`, `xinput1_3`,
+  `xinput1_4` and `xinputuap`) are built for i386 and x86_64 into
+  `.deps/wine-ps5/pe/<arch>-windows`. `report.json` lists them under `pe`
+  with their hashes.
+
+To use it on the console:
+- stage `xinput1_3.prx` beside `ntdll.prx`;
+- replace the runtime's xinput DLLs in `lib/wine/i386-windows` and
+  `lib/wine/x86_64-windows` with those from `pe/`, and also the copies in
+  the prefix's `syswow64` (i386) and `system32` (x86_64);
+- give the game's profile `[input] mode = xinput` (see
+  [Starting Wine in the title](#starting-wine-in-the-title)).
+
 ## WoW64 CPU backend
 
 The PRX stage also links `wowprospero.prx`, the Unix side of the WoW64 CPU
@@ -459,7 +502,8 @@ process sees the real root, where `/app0` does not exist.
 
 The runtime is staged beside the title:
 - `ntdll.prx`, `win32u.prx` and `wineserver.prx` under
-  `win/wine/lib/wine/x86_64-unix`;
+  `win/wine/lib/wine/x86_64-unix`, with `xinput1_3.prx` for games played in
+  xinput mode;
 - Wine's NLS files under `win/wine/share/wine/nls`.
 
 ## Console bring-up

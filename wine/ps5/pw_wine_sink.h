@@ -11,7 +11,7 @@
  * fills from the DualSense and the driver drains in ProcessEvents. A
  * game's XInput controller is one more slot: the title keeps the newest
  * gamepad state in it, Wine's xinput reads it (its Unix library, patch
- * 0440, finds these calls with dlsym) and leaves the rumble it asks for.
+ * 0470, finds these calls with dlsym) and leaves the rumble it asks for.
  * Sound goes out like frames: Wine's audio driver (wine/wineps5) hands its
  * mix to the title's one audio port, one grain at a time. */
 

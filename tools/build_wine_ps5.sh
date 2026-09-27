@@ -7,9 +7,11 @@
 # series in wine/patches is applied in numeric order, and the copy is
 # configured for FreeBSD with the PS5 payload SDK: the PS5 compiler defines
 # __FreeBSD__ and ships FreeBSD headers, so Wine takes its FreeBSD paths
-# (kqueue, sysctl) and __PROSPERO__ selects the PS5 patches. PE modules are
-# not built here; they come from the host build (tools/build_wine_runtime.sh),
-# whose tools/ directory also supplies winebuild and widl.
+# (kqueue, sysctl) and __PROSPERO__ selects the PS5 patches. PE modules come
+# from the host build (tools/build_wine_runtime.sh), whose tools/ directory
+# also supplies winebuild and widl, except the few a patch changes
+# (PE_TARGETS), which are built here from the patched tree for both
+# architectures into <work>/pe.
 #
 # Patch numbers are owned by range: 0100-0499 services, loader and
 # presentation; 0500-0899 execution core (signals, TEB, virtual memory).
@@ -56,11 +58,15 @@ FREETYPE_EXPORTS="FT_Done_Face FT_Get_Char_Index FT_Get_First_Char FT_Get_Next_C
  FT_Outline_Transform FT_Outline_Translate FT_Property_Set FT_Render_Glyph FT_Set_Charmap
  FT_Set_Pixel_Sizes FT_Vector_Length FT_Vector_Transform FT_Vector_Unit"
 TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver"
+# The PE modules the patches change: every xinput built from xinput1_3's
+# source reads the title's controller (patch 0470); xinput9_1_0 forwards to
+# xinput1_4.
+PE_MODULES="xinput1_1 xinput1_2 xinput1_3 xinput1_4 xinputuap"
 # Everything optional but FreeType (built below) is off: the console has none
 # of these libraries, and a configure-time probe against the payload SDK must
 # not pick up host headers.
 CONFIGURE_ARGS="--host=x86_64-unknown-freebsd11 --build=x86_64-pc-linux-gnu
- --enable-archs=x86_64 --disable-tests --without-x
+ --enable-archs=i386,x86_64 --disable-tests --without-x
  --without-fontconfig --without-gnutls --without-alsa --without-pulse
  --without-dbus --without-gstreamer --without-sdl --without-udev --without-usb
  --without-v4l2 --without-vulkan --without-wayland --without-opengl --without-oss
@@ -228,6 +234,16 @@ for step in "dlls/ntdll/ntdll.so|$heap" "dlls/win32u/win32u.so|" "server/wineser
     make -C "$build" -k -j"$jobs" LDFLAGS="$objects $base" "$target" \
         >> "$work/make.log" 2>&1 || status=$?
 done
+# The patched PE modules, built by the PE cross compilers into <work>/pe.
+rm -rf "$work/pe"
+for arch in i386 x86_64; do
+    mkdir -p "$work/pe/$arch-windows"
+    for module in $PE_MODULES; do
+        target=dlls/$module/$arch-windows/$module.dll
+        make -C "$build" -k -j"$jobs" "$target" >> "$work/make.log" 2>&1 || status=$?
+        [ ! -f "$build/$target" ] || cp "$build/$target" "$work/pe/$arch-windows/"
+    done
+done
 
 # The PRX link. Each module takes the objects of its ELF link (read back
 # from make.log), the shims, and a descriptor naming what its loader
@@ -307,10 +323,12 @@ if [ "$prx_status" = 0 ]; then
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wowprospero_desc.c" __wine_unix_call_funcs
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineps5_desc.c" \
         __wine_unix_call_funcs __wine_unix_call_wow64_funcs
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/xinput_desc.c" \
+        __wine_unix_call_funcs __wine_unix_call_wow64_funcs
     # shellcheck disable=SC2086
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libfreetype_desc.c" $FREETYPE_EXPORTS
     for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc wineps5_desc \
-            libfreetype_desc; do
+            libfreetype_desc xinput_desc; do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
@@ -357,6 +375,13 @@ if [ "$prx_status" = 0 ]; then
         audio="$audio $object"
     done
     link_prx wineps5 - "$audio $prx/obj/wineps5_desc.o" "$prx/ntdll.shared.elf"
+    # xinput's Unix library (patch 0470), which every xinput loads by name:
+    # it reads the title's controller through ntdll's dlsym.
+    "$sdk/bin/prospero-clang" -std=gnu11 -O2 -Wall -Werror -fPIC -D__WINESRC__ -DWINE_UNIX_LIB \
+        -D_REENTRANT -I"$tree/dlls/xinput1_3" -I"$build/include" -I"$tree/include" \
+        -c "$tree/dlls/xinput1_3/unixlib.c" -o "$prx/obj/xinput_unixlib.o" ||
+        fail "cannot compile xinput's unixlib.c"
+    link_prx xinput1_3 - "$prx/obj/xinput_unixlib.o $prx/obj/xinput_desc.o" "$prx/ntdll.shared.elf"
     # Wine's own fonts, staged under share/wine/fonts beside the runtime.
     mkdir -p "$prx/fonts"
     cp "$tree"/fonts/*.ttf "$prx/fonts/"
@@ -415,7 +440,7 @@ title_exports = exports("libkernel.so") | exports("libSceLibcInternal.so")
 objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{sdk}/bin/llvm-objdump"
 SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
-for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfreetype") if not prx_status.startswith("skipped") else ():
+for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfreetype", "xinput1_3") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
     link_text = link_log.read_text(errors="replace") if link_log.is_file() else ""
@@ -434,7 +459,8 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
         # stay 0 and a call to one jumps to 0 (measured, FW 12.02).
         imports = {fields[7].split("@")[0] for fields in (line.split() for line in symbols.splitlines())
                    if len(fields) >= 8 and fields[6] == "UND"}
-        provided = title_exports | (ntdll_exports if name in ("win32u", "wowprospero", "wineps5") else set())
+        provided = title_exports | (ntdll_exports if name in ("win32u", "wowprospero", "wineps5",
+                                                              "xinput1_3") else set())
         entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
         # The kernel kills a title that executes a syscall instruction outside
         # libkernel (measured: SYSTEM_ILLEGAL_FUNCTION_CALL). Wine's dispatchers
@@ -453,6 +479,9 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
         data = module.read_bytes()
         entry.update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
     result["prx"]["modules"][name] = entry
+# The patched PE modules, beside the PRXs.
+result["pe"] = {str(path.relative_to(Path(prx).parent / "pe")): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in sorted((Path(prx).parent / "pe").glob("*-windows/*.dll"))}
 Path(report).write_text(json.dumps(result, indent=2) + "\n")
 for target, entry in result["targets"].items():
     print(f"{target}: built={entry['built']} malloc={entry.get('malloc', '-')} "
@@ -469,6 +498,7 @@ for name, entry in result["prx"]["modules"].items():
         print(f"  unbound in a title (libkernel_sys only): {','.join(entry['title_unbound'])}")
     if entry.get("raw_syscalls"):
         print(f"  raw syscall instructions (fatal in a title): {','.join(entry['raw_syscalls'])}")
+print(f"pe: {', '.join(result['pe']) or 'none'}")
 modules = result["prx"]["modules"].values()
 sys.exit(3 if any(e.get("title_unbound") for e in modules) else
          4 if any(e.get("raw_syscalls") for e in modules) else 0)
