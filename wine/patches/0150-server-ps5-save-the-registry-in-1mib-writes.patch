@@ -1,0 +1,35 @@
+From 595ecbb00602dffff3ac925e47a5f1fc1bc2b6d1 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 27 Sep 2026 21:57:40 +0200
+Subject: [PATCH] server: Save the registry in 1 MiB writes on PS5.
+
+Each write() costs about 3.3 ms on the console whatever its size, and
+stdio issues one per st_blksize, 64 KiB on /data: saving a 3.2 MB
+system.reg took 154 ms (measured on FW 12.02), during which the
+in-process server answers no request. A 1 MiB buffer makes it four
+writes.
+---
+ server/registry.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/server/registry.c b/server/registry.c
+index 2444e20bd8..364b72e529 100644
+--- a/server/registry.c
++++ b/server/registry.c
+@@ -1991,6 +1991,13 @@ void init_registry(void)
+ /* save a registry branch to a file */
+ static void save_all_subkeys( struct key *key, FILE *f )
+ {
++#ifdef __PROSPERO__
++    /* Each write() costs about 3.3 ms on the console whatever its size, and
++     * stdio would issue one per st_blksize (64 KiB on /data): a 3.2 MB
++     * system.reg took 154 ms, holding up every server request. Write it in
++     * 1 MiB pieces instead. */
++    setvbuf( f, NULL, _IOFBF, 1 << 20 );
++#endif
+     fprintf( f, "WINE REGISTRY Version 2\n" );
+     fprintf( f, ";; All keys relative to " );
+     dump_path( key, NULL, f );
+-- 
+2.43.0
+

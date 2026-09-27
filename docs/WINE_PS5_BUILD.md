@@ -61,6 +61,7 @@ of the port never collide:
 | 0120 | `server`: when the current user names no audio driver, default `HKCU\Software\Wine\Drivers\Audio` to `ps5`; see [Audio](#audio) |
 | 0130 | `ntdll`: a main program mapped away from its preferred base (the title's image may hold 0x400000) runs in-process, relocated by the PE loader; any other load failure prints the program and the status instead of running `start.exe`, which would need a new process. Both failure paths leave through `exit()`, so the title restarts into its launcher |
 | 0140 | `ntdll`: `NtQueryDirectoryFile` enters a directory by the name the server opened it with when `fchdir()` on the server's descriptor fails. The descriptor has no path in ntdll's working-directory emulation, so no directory could be listed |
+| 0150 | `server`: save the registry in 1 MiB writes: each `write()` costs about 3.3 ms on the console whatever its size, and stdio issued one per 64 KiB, so a 3.2 MB `system.reg` took 154 ms, during which the in-process server answers nothing |
 | 0400 | `win32u`: in-process PS5 user driver (`WINE_PS5_USER_DRIVER`, set on PS5); see [User driver](#user-driver) |
 | 0470 | `xinput`: controller 0 is the PS5 title's, read through a Unix library (`xinput1_3.so`) from the title's sink; elsewhere xinput uses HID as before; see [XInput controller](#xinput-controller) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
