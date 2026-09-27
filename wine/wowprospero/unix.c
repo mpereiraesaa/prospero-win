@@ -25,11 +25,11 @@
 #include "wowprospero.h"
 
 #include "pw_x86_engine.h"
-#include "pw_vm_posix.h"
 #include "pw_guest_fp.h"
 #include "pw_x86_hostexec.h"
 #include "code_pages.h"
 #include "thread_budget.h"
+#include "host_memory.h"
 
 /* The guest range every translated access is checked against (load_state). */
 enum { GUEST_LOW = 0x10000u, GUEST_HIGH = 0xfffff000u };
@@ -62,6 +62,7 @@ struct pw_thread
 C_ASSERT( sizeof(((I386_CONTEXT *)0)->ExtendedRegisters) == PW_GUEST_FXSAVE_BYTES );
 
 static __thread struct pw_thread *self;
+static PwWowHostMemory host_memory;
 /* Set once a thread has its DBT: the threads after it take the smaller
  * budget (thread_budget.h). */
 static int first_thread_ready;
@@ -126,13 +127,43 @@ static int source_view( void *opaque, uint32_t pc, const uint8_t **source, size_
     return PW_OK;
 }
 
+/* Zeroed memory above the guest's 4 GiB, from Wine's own virtual memory
+ * (host_memory.h); NULL when there is none. */
+static void *allocate_above_guest( size_t bytes, ULONG protect )
+{
+    MEM_ADDRESS_REQUIREMENTS requirements = { (void *)0x100000000, NULL, 0 };
+    MEM_EXTENDED_PARAMETER parameter = { 0 };
+    SIZE_T size = bytes;
+    void *base = NULL;
+
+    parameter.Type = MemExtendedParameterAddressRequirements;
+    parameter.Pointer = &requirements;
+    if (NtAllocateVirtualMemoryEx( NtCurrentProcess(), &base, &size, MEM_RESERVE | MEM_COMMIT,
+                                   protect, &parameter, 1 ))
+        return NULL;
+    return base;
+}
+
+static void *allocate_code( size_t bytes )
+{
+    return allocate_above_guest( bytes, PAGE_EXECUTE_READWRITE );
+}
+
+static void release( void *base, size_t bytes )
+{
+    SIZE_T size = 0;
+
+    NtFreeVirtualMemory( NtCurrentProcess(), &base, &size, MEM_RELEASE );
+}
+
 /* The thread's cache entries, engine and fallback within one budget; 0, or
  * -1 with nothing left allocated. */
 static int setup_thread( void *context, const PwWowThreadBudget *budget )
 {
     struct pw_thread *thread = context;
+    const size_t entry_bytes = budget->entries * sizeof(*thread->entries);
 
-    if (!(thread->entries = calloc( budget->entries, sizeof(*thread->entries) ))) return -1;
+    if (!(thread->entries = allocate_above_guest( entry_bytes, PAGE_READWRITE ))) return -1;
     if (pw_x86_engine_init( &thread->engine, &thread->vm, thread->entries, budget->entries,
                             budget->arena_bytes, (uint32_t)code_generation, source_view, NULL ) == PW_OK)
     {
@@ -140,7 +171,7 @@ static int setup_thread( void *context, const PwWowThreadBudget *budget )
             return 0;
         pw_x86_engine_destroy( &thread->engine );
     }
-    free( thread->entries );
+    release( thread->entries, entry_bytes );
     thread->entries = NULL;
     return -1;
 }
@@ -154,7 +185,7 @@ static struct pw_thread *get_thread(void)
     if (thread) return thread;
     if (!(thread = calloc( 1, sizeof(*thread) ))) return NULL;
     first = !__atomic_load_n( &first_thread_ready, __ATOMIC_ACQUIRE );
-    if (pw_vm_posix_backend( &thread->vm ) != PW_OK ||
+    if (pw_wow_host_backend( &thread->vm, &host_memory ) != PW_OK ||
         (attempt = pw_wow_thread_fit( first, setup_thread, thread, &budget )) < 0)
     {
         fprintf( stderr, "wowprospero: no memory for a %s thread's translator\n",
@@ -276,6 +307,12 @@ static void store_state( const PwX86State *state, I386_CONTEXT *ctx )
 
 static NTSTATUS process_init( void *args )
 {
+    long page = sysconf( _SC_PAGESIZE );
+
+    host_memory.allocate = allocate_code;
+    host_memory.release = release;
+    host_memory.page = page > 0 ? (size_t)page : 0x1000;
+    host_memory.alignment = 0x10000;  /* the allocation granularity */
     return STATUS_SUCCESS;
 }
 
@@ -406,7 +443,7 @@ static NTSTATUS thread_term( void *args )
     self = NULL;
     pw_x86_hostexec_destroy( &thread->hostexec );
     pw_x86_engine_destroy( &thread->engine );
-    free( thread->entries );
+    release( thread->entries, 0 );
     free( thread );
     return STATUS_SUCCESS;
 }

@@ -148,8 +148,14 @@ reach.
 
 The DBT stays single-owner per guest thread: `wowprospero` gives every host
 thread its own engine, `PwX86State` and cache. Translated code is immutable
-after W^X publication, and a memory change discards only the translations
-made from the pages it touches.
+after publication, and a memory change discards only the translations made
+from the pages it touches. Under `wowprospero` the arena, the fallback stubs
+and the cache entries are Wine's own memory above 4 GiB
+(`wine/wowprospero/host_memory.h`), committed read-write-execute, so
+publishing a block needs no protection change (two per block before, about
+26 µs each on the console); on the console that memory is direct memory
+(patch 0600). The first guest thread gets a 128 MiB arena and 65536 entries,
+later ones a quarter of that (`thread_budget.h`).
 
 Performance changes are driven by Wine and independent application traces,
 not by title-specific shortcuts. The runtime keeps translated code immutable

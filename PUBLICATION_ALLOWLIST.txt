@@ -142,6 +142,7 @@ assets/prospero-win-banner.svg
 tests/test_wowprospero_contract.py
 wine/wowprospero/code_pages.h
 wine/wowprospero/thread_budget.h
+wine/wowprospero/host_memory.h
 wine/wowprospero/cpu.c
 wine/wowprospero/unix.c
 wine/wineps5/unix.c

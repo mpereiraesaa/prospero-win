@@ -2,6 +2,7 @@
 /* wowprospero's per-thread translator budget (wine/wowprospero/thread_budget.h),
  * and a second guest thread brought up within it the way unix.c does. */
 #include "../wine/wowprospero/thread_budget.h"
+#include "../wine/wowprospero/host_memory.h"
 #include "../src/pw_x86_engine.h"
 #include "../src/pw_x86_hostexec.h"
 #include "../src/pw_vm_posix.h"
@@ -17,18 +18,19 @@ static void test_budgets(void)
     PwWowThreadBudget b;
 
     assert(!pw_wow_thread_budget(1, 0, &b));
-    assert(b.entries == 32768 && b.arena_bytes == 32u << 20 && b.hostexec_bytes == 4u << 20);
+    assert(b.entries == 65536 && b.arena_bytes == 128u << 20 && b.hostexec_bytes == 4u << 20);
     assert(!pw_wow_thread_budget(0, 0, &b));
-    assert(b.entries == 8192 && b.arena_bytes == 8u << 20 && b.hostexec_bytes == 1u << 20);
+    assert(b.entries == 16384 && b.arena_bytes == 32u << 20 && b.hostexec_bytes == 1u << 20);
     /* Each retry halves everything. */
     assert(!pw_wow_thread_budget(1, 1, &b));
-    assert(b.entries == 16384 && b.arena_bytes == 16u << 20 && b.hostexec_bytes == 2u << 20);
+    assert(b.entries == 32768 && b.arena_bytes == 64u << 20 && b.hostexec_bytes == 2u << 20);
     assert(!pw_wow_thread_budget(0, 2, &b));
-    assert(b.entries == 2048 && b.arena_bytes == 2u << 20 && b.hostexec_bytes == 256u << 10);
-    /* The first thread goes 32, 16, 8, 4, 2 MiB; a later one 8, 4, 2. */
-    assert(!pw_wow_thread_budget(1, 4, &b) && b.arena_bytes == 2u << 20 && b.entries == 2048);
-    assert(pw_wow_thread_budget(1, 5, &b) == -1);
-    assert(pw_wow_thread_budget(0, 3, &b) == -1);
+    assert(b.entries == 4096 && b.arena_bytes == 8u << 20 && b.hostexec_bytes == 256u << 10);
+    /* The first thread goes 128, 64, ... 2 MiB; a later one 32, 16, ... 2. */
+    assert(!pw_wow_thread_budget(1, 6, &b) && b.arena_bytes == 2u << 20 && b.entries == 1024);
+    assert(pw_wow_thread_budget(1, 7, &b) == -1);
+    assert(!pw_wow_thread_budget(0, 4, &b) && b.arena_bytes == 2u << 20 && b.entries == 1024);
+    assert(pw_wow_thread_budget(0, 5, &b) == -1);
 }
 
 typedef struct Limit { size_t arena_limit; unsigned calls; size_t seen[8]; } Limit;
@@ -46,22 +48,22 @@ static void test_fit(void)
     Limit limit = { .arena_limit = 5u << 20 };
     PwWowThreadBudget used;
 
-    /* A later thread in a nearly full address space settles for 4 MiB. */
-    assert(pw_wow_thread_fit(0, arena_within, &limit, &used) == 1);
-    assert(limit.calls == 2 && limit.seen[0] == 8u << 20 && limit.seen[1] == 4u << 20);
-    assert(used.arena_bytes == 4u << 20 && used.entries == 4096);
+    /* A later thread with little memory left settles for 4 MiB. */
+    assert(pw_wow_thread_fit(0, arena_within, &limit, &used) == 3);
+    assert(limit.calls == 4 && limit.seen[0] == 32u << 20 && limit.seen[3] == 4u << 20);
+    assert(used.arena_bytes == 4u << 20 && used.entries == 2048);
     /* Everything refused: -1 after the floor, nothing reported as used. */
     limit = (Limit){ .arena_limit = 1u << 20 };
     memset(&used, 0xa5, sizeof(used));
     assert(pw_wow_thread_fit(1, arena_within, &limit, &used) == -1);
-    assert(limit.calls == 5 && limit.seen[4] == 2u << 20 && used.entries == 0xa5a5a5a5u);
+    assert(limit.calls == 7 && limit.seen[6] == 2u << 20 && used.entries == 0xa5a5a5a5u);
     /* The first budget that fits is taken as is. */
-    limit = (Limit){ .arena_limit = 64u << 20 };
+    limit = (Limit){ .arena_limit = 128u << 20 };
     assert(pw_wow_thread_fit(1, arena_within, &limit, &used) == 0 && limit.calls == 1);
 }
 
-/* A VM backend that refuses reservations above a size, like an address
- * space that has run out of room. */
+/* A VM backend that refuses reservations above a size, like memory that
+ * has run out. */
 static PwVmBackend host;
 static size_t reserve_limit;
 static unsigned refused;
@@ -70,6 +72,52 @@ static int limited_reserve(void *context, size_t bytes, size_t alignment, PwVmRe
 {
     if (bytes > reserve_limit) { refused++; return PW_ERR_VM; }
     return host.reserve(context, bytes, alignment, out);
+}
+
+/* Wine's side of host_memory.h: read-write-execute anonymous memory. */
+static unsigned allocations, releases;
+static void *allocate_rwx(size_t bytes)
+{
+    void *base = mmap(NULL, bytes, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED) return NULL;
+    allocations++;
+    return base;
+}
+static void release_rwx(void *base, size_t bytes)
+{
+    assert(!munmap(base, bytes));
+    releases++;
+}
+static PwWowHostMemory host_memory = { allocate_rwx, release_rwx, 4096, 4096 };
+
+static void test_host_memory(void)
+{
+    PwVmBackend backend;
+    PwVmRegion region;
+    PwWowHostMemory broken = host_memory;
+
+    broken.page = 3000;
+    assert(pw_wow_host_backend(&backend, &broken) == PW_ERR_PRECONDITION);
+    broken = host_memory;
+    broken.alignment = 1024;
+    assert(pw_wow_host_backend(NULL, &host_memory) == PW_ERR_PRECONDITION);
+    assert(pw_wow_host_backend(&backend, &broken) == PW_ERR_PRECONDITION);
+    assert(pw_wow_host_backend(&backend, &host_memory) == PW_OK && pw_vm_backend_valid(&backend));
+    assert(backend.capabilities == PW_VM_CAP_PROTECT && !backend.reserve_at);
+    /* Rounded to whole pages, one mapping for writing and running. */
+    assert(backend.reserve(backend.context, 5000, 4096, &region) == PW_OK);
+    assert(region.bytes == 8192 && region.write_base == region.exec_base && allocations == 1);
+    /* Committed and executable already: protect only checks the range. */
+    assert(backend.protect(backend.context, &region, 4096, 4096, PW_PROT_READ | PW_PROT_EXEC) == PW_OK);
+    assert(backend.commit(backend.context, &region, 4096, 8192, PW_PROT_READ) == PW_ERR_PRECONDITION);
+    ((uint8_t *)region.write_base)[8191] = 0xc3;
+    assert(backend.release(backend.context, &region) == PW_OK && releases == 1);
+    assert(backend.release(backend.context, &region) == PW_ERR_PRECONDITION && releases == 1);
+    /* More alignment than the allocator gives, no size, or no room. */
+    assert(backend.reserve(backend.context, 4096, 65536, &region) == PW_ERR_PRECONDITION);
+    assert(backend.reserve(backend.context, 0, 4096, &region) == PW_ERR_PRECONDITION);
+    assert(backend.reserve(backend.context, SIZE_MAX, 4096, &region) == PW_ERR_OVERFLOW);
+    assert(backend.reserve(backend.context, (size_t)1 << 62, 4096, &region) == PW_ERR_VM);
 }
 
 /* One guest thread's translator, as unix.c sets it up. */
@@ -179,12 +227,13 @@ static void test_second_thread(void)
     memcpy(guest + TEB + 0x18, &self_pointer, 4);
     memcpy(guest + STACK_TOP, &(uint32_t){ 0xdead0000u }, 4);
 
-    /* Room for 5 MiB: the 8 MiB arena is refused, 4 MiB is taken. */
+    /* Room for 5 MiB: the 32, 16 and 8 MiB arenas are refused, 4 MiB is
+     * taken. */
     reserve_limit = 5u << 20;
     refused = 0;
     memset(&r, 0, sizeof(r));
     assert(!pthread_create(&thread, NULL, guest_thread, &r) && !pthread_join(thread, NULL));
-    assert(r.attempt == 1 && refused == 1 && r.used.arena_bytes == 4u << 20);
+    assert(r.attempt == 3 && refused == 3 && r.used.arena_bytes == 4u << 20);
     assert(r.status == PW_OK && r.eip == 0xdead0000u && r.eax == low + TEB);
     assert(r.fault_status == PW_ERR_VM && r.fault_address == 8);
 
@@ -199,11 +248,18 @@ static void test_second_thread(void)
 
 int main(void)
 {
-    assert(pw_vm_posix_backend(&host) == PW_OK);
     test_budgets();
     test_fit();
+    test_host_memory();
+    /* The translator in Wine's memory, as unix.c sets it up, then over
+     * plain mappings with protection changes, as before. */
+    assert(pw_wow_host_backend(&host, &host_memory) == PW_OK);
     test_second_thread();
-    printf("wow thread budget passed: first and later budgets, halving to the floor, fitting into a "
-           "limited address space, a second thread's first block and fs access, a guard miss as a fault\n");
+    assert(allocations == releases && allocations > 1);
+    assert(pw_vm_posix_backend(&host) == PW_OK);
+    test_second_thread();
+    printf("wow thread budget passed: first and later budgets, halving to the floor, fitting into "
+           "limited memory, Wine's read-write-execute memory, a second thread's first block and fs "
+           "access, a guard miss as a fault\n");
     return 0;
 }

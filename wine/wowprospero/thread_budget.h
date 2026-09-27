@@ -9,15 +9,14 @@
  * arena translated code is written to, and the single-instruction fallback's
  * code buffer.
  *
- * Every i386 thread has its own DBT. On the console a title's mmap(NULL)
- * placements share one region of about 384 MiB (measured), which Wine's own
- * mappings also use. A game's second thread (the audio mixer, once the game
- * has a sound device) could not reserve a second 128 MiB arena, so it could
- * not run at all. The first thread keeps a cache large enough for a game's
- * startup (Pinball fills 12 MiB of arena on the host); later threads, which
- * run far less code, start smaller. A thread whose reservation is refused
- * tries again with everything halved, down to a floor. A full arena is not
- * fatal: the engine is reset and translation continues. */
+ * Every i386 thread has its own DBT, in memory Wine allocates for it
+ * (host_memory.h), which on the console is direct memory: committed as soon
+ * as it is allocated, out of up to 12 GiB. The first thread, which runs a
+ * game's startup and main loop, gets a 128 MiB arena and 65536 entries;
+ * later threads, which run far less code (an audio mixer, a loader), get a
+ * quarter of that, so tens of threads fit. A thread whose allocation is
+ * refused tries again with everything halved, down to a floor. A full arena
+ * is not fatal: the engine is reset and translation continues. */
 typedef struct PwWowThreadBudget {
     uint32_t entries;
     size_t arena_bytes;
@@ -25,12 +24,12 @@ typedef struct PwWowThreadBudget {
 } PwWowThreadBudget;
 
 enum {
-    PW_WOW_FIRST_ENTRIES = 32768,
-    PW_WOW_OTHER_ENTRIES = 8192,
+    PW_WOW_FIRST_ENTRIES = 65536,
+    PW_WOW_OTHER_ENTRIES = 16384,
     PW_WOW_MIN_ENTRIES = 1024,
 };
-#define PW_WOW_FIRST_ARENA ((size_t)32 << 20)
-#define PW_WOW_OTHER_ARENA ((size_t)8 << 20)
+#define PW_WOW_FIRST_ARENA ((size_t)128 << 20)
+#define PW_WOW_OTHER_ARENA ((size_t)32 << 20)
 #define PW_WOW_MIN_ARENA ((size_t)2 << 20)
 #define PW_WOW_FIRST_HOSTEXEC ((size_t)4 << 20)
 #define PW_WOW_OTHER_HOSTEXEC ((size_t)1 << 20)
