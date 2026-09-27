@@ -6,6 +6,7 @@
  * scalar presenter, not a copy of the SDL video driver.
  */
 #include "pw_videoout_ps5.h"
+#include "pw_videoout_tile.h"
 #include "pw_videoout_layout.h"
 #include <string.h>
 
@@ -27,23 +28,14 @@ extern int sceVideoOutRegisterBuffers2(int32_t,int32_t,int32_t,void *,int32_t,vo
 extern int sceVideoOutWaitVblank(int32_t);
 extern int sceSystemServiceHideSplashScreen(void);
 
-static uint32_t tile_offset(uint32_t x,uint32_t y)
-{
-    return ((x&1u)<<0)|(((x>>1)&1u)<<1)|(((y>>0)&1u)<<2)|(((y>>1)&1u)<<3)|
-        (((y>>2)&1u)<<4)|(((x>>2)&1u)<<5)|((((x>>3)^(y>>3))&1u)<<6)|
-        ((((x>>4)^(y>>4))&1u)<<7)|((((x>>6)^(y>>5))&1u)<<8)|
-        ((((x>>5)^(y>>6))&1u)<<9)|(((y>>3)&1u)<<10)|(((x>>4)&1u)<<11)|
-        (((y>>6)&1u)<<12)|(((x>>6)&1u)<<13)|(((x>>7)&1u)<<14)|(((x>>8)&1u)<<15);
-}
-static size_t tile_pixel(uint32_t x,uint32_t y)
-{
-    return (size_t)(x/512u)*(512u*128u)+(size_t)(y/128u)*(128u*WIDTH)+
-        (tile_offset(x%512u,0)^tile_offset(0,y%128u));
-}
+/* Column and row parts of the tiled index, filled once at open. */
+static PwVideoOutTiles tiles;
+
 int pw_videoout_ps5_open(PwVideoOutPs5 *video)
 {
     if(!video)return PW_ERR_PRECONDITION;memset(video,0,sizeof(*video));
     video->handle=-1;video->physical=-1;
+    pw_videoout_tiles_init(&tiles);
     int status=pw_agc_ps5_open(&video->agc);if(status!=PW_OK)return status;
     video->handle=sceVideoOutOpen(0xff,0,0,NULL);if(video->handle<0)goto state_failed;
     size_t pool=sceKernelGetDirectMemorySize();if(pool<MEMORY_BYTES)goto limit_failed;
@@ -110,20 +102,27 @@ int pw_videoout_ps5_present(PwVideoOutPs5 *video,const PwGdiTargetView *view)
     uint32_t *output=(uint32_t *)((uint8_t *)video->memory+2u*video->frame_bytes);
     void *scanout=(uint8_t *)video->memory+(size_t)index*video->frame_bytes;
     uint32_t background=0xff101018u;
-    for(uint32_t y=0;y<HEIGHT;y++)for(uint32_t x=0;x<WIDTH;x++)
-        output[tile_pixel(x,y)]=background;
     /* A target larger than the scanout is cropped, never placed at an
      * underflowed offset: the old centring wrote outside the scratch frame. */
     PwVideoOutLayout layout;
     int status=pw_videoout_layout(view->width,view->height,WIDTH,HEIGHT,80u,3u,&layout);
     if(status!=PW_OK)return status;
     const uint32_t scale=layout.scale;
+    /* The background shows only where the frame does not cover the screen. */
+    if(layout.source_width*scale<WIDTH || layout.source_height*scale<HEIGHT)
+        for(uint32_t y=0;y<HEIGHT;y++)for(uint32_t x=0;x<WIDTH;x++)
+            output[pw_videoout_tiles_index(&tiles,x,y)]=background;
     for(uint32_t sy=0;sy<layout.source_height;sy++) {
         const uint32_t *source=(const uint32_t *)(view->pixels+(size_t)sy*view->stride);
-        for(uint32_t sx=0;sx<layout.source_width;sx++)for(uint32_t yy=0;yy<scale;yy++)
-            for(uint32_t xx=0;xx<scale;xx++)
-                output[tile_pixel(layout.left+sx*scale+xx,layout.top+sy*scale+yy)]=
+        for(uint32_t yy=0;yy<scale;yy++) {
+            const uint32_t y=layout.top+sy*scale+yy,row_base=tiles.row_base[y],
+                           row_swizzle=tiles.row_swizzle[y];
+            for(uint32_t sx=0;sx<layout.source_width;sx++)for(uint32_t xx=0;xx<scale;xx++) {
+                const uint32_t x=layout.left+sx*scale+xx;
+                output[tiles.column_base[x]+row_base+(tiles.column_swizzle[x]^row_swizzle)]=
                     source[sx]|0xff000000u;
+            }
+        }
     }
     status=pw_agc_ps5_copy_flip(&video->agc,video->handle,(int)index,output,
                                     scanout,(uint32_t)video->frame_bytes,video->flips+1);

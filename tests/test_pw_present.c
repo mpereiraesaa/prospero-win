@@ -101,6 +101,22 @@ static void test_scale(void)
     assert(pw_present_scale(&line,PW_PRESENT_SCALE_FIT,0,&square,&shown)==PW_OK &&
            shown.shown_height==1 && shown.shown_width==2);
 
+    /* The stepped columns equal floor(i*width/shown) for awkward sizes. */
+    {
+        static uint8_t odd[7*5*4];
+        for(uint32_t i=0;i<sizeof(odd);i++)odd[i]=(uint8_t)(i*37u+11u);
+        const PwPresentFrame seven={odd,7,5,28,PW_PRESENT_BGRX8};
+        PwPresentTarget t={scaled,23,13,23*4,sizeof(scaled)};
+        for(int mode=PW_PRESENT_SCALE_FIT;mode<=PW_PRESENT_SCALE_STRETCH;mode+=2) {
+            assert(pw_present_scale(&seven,mode,0,&t,&shown)==PW_OK);
+            for(uint32_t y=shown.top;y<shown.top+shown.shown_height;y++)
+                for(uint32_t x=shown.left;x<shown.left+shown.shown_width;x++) {
+                    uint32_t sx=(x-shown.left)*7u/shown.shown_width,sy=(y-shown.top)*5u/shown.shown_height;
+                    const uint8_t *want=odd+(sy*7u+sx)*4u,*got=at_scaled(&t,x,y);
+                    assert(got[0]==want[0] && got[1]==want[1] && got[2]==want[2] && got[3]==0xff);
+                }
+        }
+    }
     assert(pw_present_scale(&frame,7,0,&wide,&shown)==PW_ERR_UNSUPPORTED);
     assert(pw_present_scale(&frame,PW_PRESENT_SCALE_FIT,0,NULL,&shown)==PW_ERR_PRECONDITION);
     PwPresentTarget bad=wide;bad.stride=10;

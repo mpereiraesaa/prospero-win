@@ -35,6 +35,7 @@ native/pw_audio_ps5.h
 native/pw_pad_ps5.c
 native/pw_pad_ps5.h
 native/pw_videoout_layout.h
+native/pw_videoout_tile.h
 native/pw_present_vk_ps5.c
 native/pw_present_vk_ps5.h
 native/pw_psbc_absent_ps5.c
@@ -242,6 +243,7 @@ tests/test_pw_registry_store.c
 tests/test_pw_state_ps5.c
 tests/test_pw_agc_submit_lifecycle.c
 tests/test_pw_videoout_layout.c
+tests/test_pw_videoout_tile.c
 tools/bench_dynarec.c
 tests/test_dynarec_bench.py
 tests/test_docs_links.py

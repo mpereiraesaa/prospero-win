@@ -113,17 +113,24 @@ int pw_present_scale(const PwPresentFrame *frame,int mode,uint32_t background,
         shown.scale=shown.shown_width/frame->width;
     for(uint32_t y=0;y<target->height;y++) {
         uint8_t *row=target->pixels+(uint64_t)y*target->stride;
-        int inside=y>=shown.top && y<shown.top+shown.shown_height;
-        const uint8_t *source=inside?frame->pixels+
-            (uint64_t)(y-shown.top)*frame->height/shown.shown_height*frame->stride:NULL;
-        for(uint32_t x=0;x<target->width;x++) {
-            if(!inside || x<shown.left || x>=shown.left+shown.shown_width) {
-                store_opaque(row+(uint64_t)x*4u,background);
-                continue;
-            }
-            const uint8_t *pixel=source+(uint64_t)(x-shown.left)*frame->width/shown.shown_width*4u;
-            row[x*4u]=pixel[0];row[x*4u+1]=pixel[1];row[x*4u+2]=pixel[2];row[x*4u+3]=0xff;
+        if(y<shown.top || y>=shown.top+shown.shown_height) {
+            for(uint32_t x=0;x<target->width;x++)store_opaque(row+(uint64_t)x*4u,background);
+            continue;
         }
+        const uint8_t *source=frame->pixels+
+            (uint64_t)(y-shown.top)*frame->height/shown.shown_height*frame->stride;
+        for(uint32_t x=0;x<shown.left;x++)store_opaque(row+(uint64_t)x*4u,background);
+        /* Source column floor(i*width/shown_width), stepped without dividing. */
+        uint32_t sx=0,remainder=0;
+        uint8_t *out=row+(uint64_t)shown.left*4u;
+        for(uint32_t i=0;i<shown.shown_width;i++,out+=4) {
+            const uint8_t *pixel=source+(uint64_t)sx*4u;
+            out[0]=pixel[0];out[1]=pixel[1];out[2]=pixel[2];out[3]=0xff;
+            remainder+=frame->width;
+            while(remainder>=shown.shown_width){remainder-=shown.shown_width;sx++;}
+        }
+        for(uint32_t x=shown.left+shown.shown_width;x<target->width;x++)
+            store_opaque(row+(uint64_t)x*4u,background);
     }
     if(placement)*placement=shown;
     return PW_OK;
