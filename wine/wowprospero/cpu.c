@@ -200,8 +200,11 @@ void WINAPI BTCpuSimulate(void)
     WOW64_CPURESERVED *cpu = get_cpu();
     I386_CONTEXT *ctx = get_context( cpu );
     struct pw_wow_run_params params;
+    DECLSPEC_ALIGN(16) XSAVE_FORMAT fp;
     NTSTATUS status;
     UINT *stack;
+
+    C_ASSERT( sizeof(ctx->ExtendedRegisters) == sizeof(fp) );
 
     for (;;)
     {
@@ -215,7 +218,15 @@ void WINAPI BTCpuSimulate(void)
         params.bop = PtrToUlong( bop_page );
         params.unix_bop = PtrToUlong( bop_page + 16 );
         params.reason = 0;
+        /* The guest's x87 and SSE state is this thread's hardware state
+         * while the guest is out, as with wow64cpu, so what NtContinue and
+         * SetThreadContext restore reaches it and GetThreadContext reads
+         * it; the Unix side runs on the FXSAVE image in between. */
+        __asm__ volatile( "fxsave %0" : "=m" (fp) );
+        memcpy( ctx->ExtendedRegisters, &fp, sizeof(fp) );
         status = WINE_UNIX_CALL( pw_wow_run, &params );
+        memcpy( &fp, ctx->ExtendedRegisters, sizeof(fp) );
+        __asm__ volatile( "fxrstor %0" : : "m" (fp) );
         if (status)
         {
             /* A host fault inside translated code: Wine unwound the Unix

@@ -97,3 +97,35 @@ int pw_guest_x87_pop(PwGuestFp *fp,uint8_t value[10])
     memcpy(value,fp->x87_st[slot],10);memset(fp->x87_st[slot],0,10);set_tag(fp,slot,3);
     fp->x87_status=(uint16_t)((fp->x87_status&~0x3800u)|(((slot+1)&7)<<11));return PW_OK;
 }
+
+static void put16(uint8_t *p,uint32_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);}
+static void put32(uint8_t *p,uint32_t v){put16(p,v);put16(p+2,v>>16);}
+static uint32_t get16(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8;}
+static uint32_t get32(const uint8_t *p){return get16(p)|get16(p+2)<<16;}
+/* The full tag word, every register given a valid tag reclassified. */
+static uint16_t full_tags(const PwGuestFp *fp,unsigned valid_mask)
+{
+    uint16_t tags=0;
+    for(unsigned slot=0;slot<8;slot++)
+        tags|=(uint16_t)((valid_mask>>slot&1?classify80(fp->x87_st[slot]):3u)<<(slot*2));
+    return tags;
+}
+void pw_guest_fp_to_fxsave(const PwGuestFp *fp,uint8_t out[PW_GUEST_FXSAVE_BYTES])
+{
+    memset(out,0,PW_GUEST_FXSAVE_BYTES);
+    put16(out,fp->x87_control);put16(out+2,fp->x87_status);
+    for(unsigned slot=0;slot<8;slot++)if(tag(fp,slot)!=3)out[4]|=(uint8_t)(1u<<slot);
+    put16(out+6,fp->x87_opcode&0x7ffu);put32(out+8,fp->x87_ip);put32(out+16,fp->x87_dp);
+    put32(out+24,fp->mxcsr);put32(out+28,0xffff);
+    for(unsigned i=0;i<8;i++)memcpy(out+32+i*16,fp->x87_st[(top(fp)+i)&7],10);
+    memcpy(out+160,fp->xmm,sizeof(fp->xmm));
+}
+void pw_guest_fp_from_fxsave(PwGuestFp *fp,const uint8_t in[PW_GUEST_FXSAVE_BYTES])
+{
+    fp->x87_control=(uint16_t)get16(in);fp->x87_status=(uint16_t)get16(in+2);
+    fp->x87_opcode=(uint16_t)(get16(in+6)&0x7ffu);fp->x87_ip=get32(in+8);fp->x87_dp=get32(in+16);
+    fp->mxcsr=get32(in+24);
+    for(unsigned i=0;i<8;i++)memcpy(fp->x87_st[(top(fp)+i)&7],in+32+i*16,10);
+    memcpy(fp->xmm,in+160,sizeof(fp->xmm));
+    fp->x87_tag=full_tags(fp,in[4]);fp->initialized=1;
+}

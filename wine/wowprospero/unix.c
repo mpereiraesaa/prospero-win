@@ -59,6 +59,8 @@ struct pw_thread
     PwX86CacheEntry *entries;  /* the budget's count (thread_budget.h) */
 };
 
+C_ASSERT( sizeof(((I386_CONTEXT *)0)->ExtendedRegisters) == PW_GUEST_FXSAVE_BYTES );
+
 static __thread struct pw_thread *self;
 /* Set once a thread has its DBT: the threads after it take the smaller
  * budget (thread_budget.h). */
@@ -242,6 +244,22 @@ static void load_state( PwX86State *state, const I386_CONTEXT *ctx, UINT teb32 )
     state->memory[0].permissions = PW_X86_READ | PW_X86_WRITE | PW_X86_EXEC;
 }
 
+/* The guest's x87 and SSE state is the thread's own hardware state whenever
+ * the guest is not running, as with wow64cpu: cpu.c saves it into the
+ * context's FXSAVE image just before this call and restores it from there
+ * after. So what Wine's NtContinue, SetThreadContext and exception dispatch
+ * write into the thread's FP state reaches the guest, and GetThreadContext
+ * reads the guest's. In between, the image is the guest's. */
+static void sync_fp_in( struct pw_thread *thread, const I386_CONTEXT *ctx )
+{
+    pw_guest_fp_from_fxsave( &thread->state.fp, ctx->ExtendedRegisters );
+}
+
+static void sync_fp_out( struct pw_thread *thread, I386_CONTEXT *ctx )
+{
+    pw_guest_fp_to_fxsave( &thread->state.fp, ctx->ExtendedRegisters );
+}
+
 static void store_state( const PwX86State *state, I386_CONTEXT *ctx )
 {
     ctx->Eax = state->gpr[0];
@@ -286,6 +304,7 @@ static NTSTATUS run( void *args )
         pw_x86_hostexec_reset( &thread->hostexec );
     }
     load_state( state, ctx, params->teb32 );
+    sync_fp_in( thread, ctx );
     for (;;)
     {
         if (state->eip == params->bop) { params->reason = PW_WOW_SYSCALL; break; }
@@ -334,6 +353,7 @@ static NTSTATUS run( void *args )
     }
     pw_x86_commit_canonical_flags( state );
     store_state( state, ctx );
+    sync_fp_out( thread, ctx );
     return STATUS_SUCCESS;
 }
 

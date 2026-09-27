@@ -54,6 +54,11 @@ PE32 application + Wine i386 PE modules          (guest, IA-32)
 The PE side keeps the canonical `I386_CONTEXT` where Wine expects it
 (`TlsSlots[WOW64_TLS_CPURESERVED]`) and services the two BOP addresses exactly
 as `wow64cpu`'s thunks do. The Unix side owns one engine per host thread.
+Between runs of guest code the guest's x87 and SSE state is the thread's
+hardware state, as with `wow64cpu`: `cpu.c` saves it into the context's
+FXSAVE image before each run and restores it after, so what `NtContinue`,
+`SetThreadContext` and exception dispatch write reaches the guest and
+`GetThreadContext` reads the guest's.
 Every Windows service - NT calls, USER/GDI (`win32u` with its DIB engine),
 the object server - is Wine's own, so a compatibility gap is an
 instruction-coverage gap, not a missing `NtUser*`/`NtGdi*` reimplementation.

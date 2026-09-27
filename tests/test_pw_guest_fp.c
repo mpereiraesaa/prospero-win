@@ -3,6 +3,69 @@
 #include "../include/prospero_win.h"
 #include <assert.h>
 #include <string.h>
+#if defined(__x86_64__)
+/* A state built on the host FPU: six registers live (one, pi, a denormal
+ * double that loads normalised, an infinity, 1/0 and a zero), a non-default
+ * control word, sticky flags, an MXCSR and eight XMM registers. Its FXSAVE
+ * image is what the conversions must reproduce. */
+static void native_image(uint8_t fxsave[PW_GUEST_FXSAVE_BYTES])
+{
+    static const uint16_t control=0x0e7f;
+    static const uint32_t mxcsr=0x5fa1;
+    static const uint64_t denormal=0x0000000000000001ull,infinity=0x7ff0000000000000ull;
+    uint8_t xmm[8][16];
+    _Alignas(16) uint8_t image[512]={0};
+
+    for(unsigned i=0;i<sizeof(xmm);i++)xmm[i/16][i%16]=(uint8_t)(i*7+3);
+    __asm__ volatile("fninit\n\tfldcw %0\n\tfld1\n\tfldpi\n\tfldl %1\n\tfldl %2\n\tfldz\n\t"
+                     "fld1\n\tfdivp\n\t"   /* AT&T fdivp is st(1)=st(0)/st(1): 1/0, ZE */
+                     "fldz\n\t"
+                     : : "m"(control),"m"(denormal),"m"(infinity));
+    __asm__ volatile("ldmxcsr %0" : : "m"(mxcsr));
+    __asm__ volatile("movdqu 0(%1),%%xmm0\n\tmovdqu 16(%1),%%xmm1\n\tmovdqu 32(%1),%%xmm2\n\t"
+                     "movdqu 48(%1),%%xmm3\n\tmovdqu 64(%1),%%xmm4\n\tmovdqu 80(%1),%%xmm5\n\t"
+                     "movdqu 96(%1),%%xmm6\n\tmovdqu 112(%1),%%xmm7\n\t"
+                     "fxsave %0\n\tfninit"
+                     : "=m"(image) : "r"(xmm),"m"(xmm)
+                     : "xmm0","xmm1","xmm2","xmm3","xmm4","xmm5","xmm6","xmm7");
+    memcpy(fxsave,image,sizeof(image));
+}
+/* The image agrees with the hardware's in everything but the instruction
+ * and operand pointers, which only the hardware has, and MXCSR_MASK; a
+ * state loaded from it has the full tag word FNSTENV would report. */
+static void test_image_against_hardware(void)
+{
+    _Alignas(16) uint8_t fxsave[PW_GUEST_FXSAVE_BYTES];
+    uint8_t mine[PW_GUEST_FXSAVE_BYTES];
+    uint16_t host_cw,environment[14];
+    uint32_t host_sse;
+    PwGuestFp fp,other;
+
+    __asm__ volatile("fnstcw %0":"=m"(host_cw));
+    __asm__ volatile("stmxcsr %0":"=m"(host_sse));
+    native_image(fxsave);
+    /* The full tag word of the same state, from the hardware. */
+    __asm__ volatile("fxrstor %1\n\tfnstenv %0\n\tfninit":"=m"(environment):"m"(*(uint8_t(*)[512])fxsave));
+    __asm__ volatile("fldcw %0"::"m"(host_cw));
+    __asm__ volatile("ldmxcsr %0"::"m"(host_sse));
+    assert(((fxsave[2]|fxsave[3]<<8)>>11&7)==2 && fxsave[4]==0xfc && (fxsave[2]&4)); /* six live, ZE */
+
+    pw_guest_fp_init(&fp);fp.x87_pending=0x4;
+    pw_guest_fp_from_fxsave(&fp,fxsave);
+    assert(fp.x87_control==0x0e7f && fp.mxcsr==0x5fa1 && fp.x87_pending==0x4);
+    assert(fp.x87_tag==environment[4]);
+    assert(fp.x87_status==(fxsave[2]|fxsave[3]<<8));
+    pw_guest_fp_to_fxsave(&fp,mine);
+    assert(!memcmp(mine,fxsave,6) && !memcmp(mine+24,fxsave+24,4));
+    assert(!memcmp(mine+32,fxsave+32,256));                /* registers and XMM */
+    /* The pointers round-trip. */
+    fp.x87_ip=0x401234;fp.x87_dp=0x7ffe0010;fp.x87_opcode=0x5d9;
+    pw_guest_fp_to_fxsave(&fp,mine);pw_guest_fp_init(&other);pw_guest_fp_from_fxsave(&other,mine);
+    assert(other.x87_ip==0x401234 && other.x87_dp==0x7ffe0010 && other.x87_opcode==0x5d9);
+    assert(!memcmp(other.x87_st,fp.x87_st,sizeof(fp.x87_st)) && other.x87_tag==fp.x87_tag);
+    assert(!memcmp(other.xmm,fp.xmm,sizeof(fp.xmm)) && other.mxcsr==fp.mxcsr);
+}
+#endif
 int main(void)
 {
     uint16_t host_cw,after_cw;uint32_t host_sse,after_sse;
@@ -59,5 +122,8 @@ int main(void)
     before=fp;assert(pw_guest_x87_push(&fp,one)==PW_ERR_LIMIT && !memcmp(&fp,&before,sizeof(fp)));
     for(unsigned i=0;i<8;i++)assert(pw_guest_x87_pop(&fp,out)==PW_OK);
     before=fp;assert(pw_guest_x87_pop(&fp,out)==PW_ERR_NOT_FOUND && !memcmp(&fp,&before,sizeof(fp)));
+#if defined(__x86_64__)
+    test_image_against_hardware();
+#endif
     return 0;
 }

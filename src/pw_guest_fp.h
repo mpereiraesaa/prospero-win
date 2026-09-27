@@ -20,4 +20,12 @@ int pw_guest_fp_control(PwGuestFp *,uint32_t value,uint32_t mask,uint32_t *resul
 int pw_guest_x87_push(PwGuestFp *,const uint8_t value[10]);
 int pw_guest_x87_peek(const PwGuestFp *,unsigned logical_index,uint8_t value[10]);
 int pw_guest_x87_pop(PwGuestFp *,uint8_t value[10]);
+
+/* The FXSAVE image, as a Windows i386 CONTEXT's ExtendedRegisters holds it:
+ * ST registers in stack order, the tag word abridged (a restore reclassifies
+ * every register it marks valid), MXCSR and XMM0-7. Loading one keeps the
+ * pending-exception bits, which the hardware has no place for. */
+enum { PW_GUEST_FXSAVE_BYTES=512 };
+void pw_guest_fp_to_fxsave(const PwGuestFp *,uint8_t out[PW_GUEST_FXSAVE_BYTES]);
+void pw_guest_fp_from_fxsave(PwGuestFp *,const uint8_t in[PW_GUEST_FXSAVE_BYTES]);
 #endif
