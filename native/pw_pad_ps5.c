@@ -47,6 +47,11 @@ static int valid_ops(const PwPadPs5Ops *ops)
         ops->pad_init && ops->pad_open && ops->pad_read && ops->pad_close;
 }
 
+static void centre_analog(PwPadPs5 *pad)
+{
+    pad->left_stick=pad->right_stick=(PwPadPs5Stick){0x80,0x80};pad->l2=pad->r2=0;
+}
+
 int pw_pad_ps5_open(PwPadPs5 *pad,const PwPadPs5Ops *ops,
                     const PwPadKeyMap *map,size_t map_count)
 {
@@ -61,7 +66,7 @@ int pw_pad_ps5_open(PwPadPs5 *pad,const PwPadPs5Ops *ops,
     pad->pad_init_rc=pad->ops.pad_init();if(pad->pad_init_rc<0)goto failed;
     pad->pad_handle=pad->ops.pad_open(pad->user_id,0,0,NULL);
     if(pad->pad_handle<0)goto failed;
-    pad->opened=1;return PW_OK;
+    pad->opened=1;centre_analog(pad);return PW_OK;
 failed:
     if(pad->owns_user_service){pad->terminate_rc=pad->ops.user_terminate();pad->owns_user_service=0;}
     return PW_ERR_STATE;
@@ -76,7 +81,7 @@ static int read_batch(PwPadPs5 *pad,PwPadSample samples[PW_PAD_PS5_BATCH])
      * consumed repeatedly by the title lifecycle adapter. */
     pad->core.pressed_edges=0;pad->core.released_edges=0;
     int count=pad->ops.pad_read(pad->pad_handle,raw,PW_PAD_PS5_BATCH);pad->last_read_rc=count;
-    if(count<0){pad->read_errors++;return count;}
+    if(count<0){pad->read_errors++;centre_analog(pad);return count;}
     if(!count){pad->empty_reads++;return 0;}
     if(count>PW_PAD_PS5_BATCH)count=PW_PAD_PS5_BATCH;
     for(int i=0;i<count;i++) {
@@ -88,9 +93,13 @@ static int read_batch(PwPadPs5 *pad,PwPadSample samples[PW_PAD_PS5_BATCH])
             pad->last_generation=raw[i].connected_count;pad->generation_valid=1;
             pad->generation_changes++;
         }
-        if(intercepted)pad->intercepted_samples++;
-        else if(raw[i].connected)pad->connected_samples++;
-        else pad->disconnected_samples++;
+        if(intercepted){pad->intercepted_samples++;centre_analog(pad);}
+        else if(raw[i].connected) {
+            pad->connected_samples++;
+            pad->left_stick=raw[i].left_stick;pad->right_stick=raw[i].right_stick;
+            pad->l2=raw[i].l2;pad->r2=raw[i].r2;
+        }
+        else{pad->disconnected_samples++;centre_analog(pad);}
     }
     return count;
 }

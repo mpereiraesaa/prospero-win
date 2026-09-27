@@ -34,6 +34,9 @@ typedef struct PwPadPs5 {
              intercepted_samples,generation_changes;
     uint8_t last_generation;
     unsigned owns_user_service,opened,generation_valid;
+    /* The newest connected sample's sticks (0..255, 0x80 centred) and
+     * triggers; centred and released while disconnected or intercepted. */
+    PwPadPs5Stick left_stick,right_stick;uint8_t l2,r2;
 } PwPadPs5;
 
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *);

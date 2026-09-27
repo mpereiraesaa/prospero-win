@@ -25,6 +25,7 @@ int main(void)
     assert(pw_user32_init(&user,messages,1,windows,1)==PW_OK);
     windows[0]=(PwUser32Window){.handle=0x10000,.wndproc=1,.module=1,.used=1};
     assert(pw_pad_ps5_open(&pad,&ops,map,1)==PW_OK && pad.opened && pad.pad_handle==7);
+    assert(pad.left_stick.x==0x80 && pad.right_stick.y==0x80 && !pad.l2 && !pad.r2);
     assert(init_calls==1&&foreground_calls==1&&pad_init_calls==1&&open_calls==1);
     fixture[0]=(PwPadPs5Data){.buttons=L1|CREATE,.connected=1,.timestamp=1000,.connected_count=1};
     fixture_count=1;assert(pw_pad_ps5_poll(&pad,&user,0x10000)==PW_OK);
@@ -42,9 +43,26 @@ int main(void)
     fixture_count=1;assert(pw_pad_ps5_read(&pad)==PW_OK);
     assert(pad.core.pressed_edges==CREATE && pad.core.previous_buttons==CREATE &&
            user.queue_count==queued);
+    /* Sticks and triggers follow the newest connected sample... */
+    fixture[0]=(PwPadPs5Data){.buttons=CREATE,.left_stick={10,250},.right_stick={200,40},
+                              .l2=30,.r2=255,.connected=1,.timestamp=3100,.connected_count=1};
+    fixture_count=1;assert(pw_pad_ps5_read(&pad)==PW_OK);
+    assert(pad.left_stick.x==10 && pad.left_stick.y==250 && pad.right_stick.x==200 &&
+           pad.right_stick.y==40 && pad.l2==30 && pad.r2==255);
+    /* ... an empty read keeps them, an intercepted or disconnected one centres them. */
+    fixture_count=0;assert(pw_pad_ps5_read(&pad)==PW_OK && pad.left_stick.x==10);
+    fixture[0].buttons=0x80000000u|CREATE;fixture_count=1;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && pad.left_stick.x==0x80 && !pad.r2);
+    fixture[0]=(PwPadPs5Data){.left_stick={1,1},.connected=1,.timestamp=3200,.connected_count=1};
+    assert(pw_pad_ps5_read(&pad)==PW_OK && pad.left_stick.x==1);
+    fixture[0].connected=0;assert(pw_pad_ps5_read(&pad)==PW_OK && pad.left_stick.x==0x80);
+    fixture[0]=(PwPadPs5Data){.buttons=CREATE,.right_stick={9,9},.connected=1,.timestamp=3300,
+                              .connected_count=1};
+    assert(pw_pad_ps5_read(&pad)==PW_OK && pad.right_stick.x==9);
     fixture_count=0;assert(pw_pad_ps5_read(&pad)==PW_OK && !pad.core.pressed_edges);
     read_rc=-9;assert(pw_pad_ps5_read(&pad)==PW_OK && pad.read_errors==2 &&
-                      pad.core.released_edges==CREATE && !pad.core.previous_buttons);
+                      pad.core.released_edges==CREATE && !pad.core.previous_buttons &&
+                      pad.right_stick.x==0x80);
     read_rc=0;
     assert(pw_pad_ps5_close(&pad,&user,0x10000)==PW_OK);
     assert(close_calls==1&&terminate_calls==1&&!pad.opened&&!pad.owns_user_service);
