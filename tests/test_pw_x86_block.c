@@ -566,8 +566,8 @@ static void shift_tests(void)
     const uint32_t values[]={0,1,0x80000000,0x7fffffff,0xffffffff,0x89abcdef};
     const unsigned kinds[]={4,5,7};
     for(unsigned k=0;k<3;k++)for(unsigned form=0;form<3;form++)
-    for(unsigned memory=0;memory<2;memory++)for(unsigned count=0;count<256;count++)
-    for(unsigned v=0;v<6;v++) {
+    for(unsigned memory=0;memory<2;memory++)for(unsigned mode=0;mode<4;mode++)
+    for(unsigned count=0;count<256;count+=(mode?5:1))for(unsigned v=0;v<6;v++) {
         unsigned actual=form==1?1:count,masked=actual&31;
         uint32_t expected=values[v];unsigned long flags;
         if(k==0)__asm__ volatile("shll %%cl,%0; pushfq; popq %1":"+a"(expected),"=r"(flags):"c"(actual):"cc");
@@ -576,7 +576,7 @@ static void shift_tests(void)
         state.gpr[0]=values[v];state.gpr[1]=count;state.gpr[2]=state.stack_high-4;state.eflags=0xad7;
         memcpy((void *)(uintptr_t)state.gpr[2],&values[v],4);
         const uint8_t op[]={(uint8_t)(form==0?0xc1:form==1?0xd1:0xd3),(uint8_t)((memory?2:0xc0)|(kinds[k]<<3)),(uint8_t)count};
-        assert(run(op,form==0?3:2,0xd100)==0);
+        assert(run_mode(op,form==0?3:2,0xd100,mode&1,mode>>1)==0);
         uint32_t result=state.gpr[0];if(memory)memcpy(&result,(void *)(uintptr_t)state.gpr[2],4);
         unsigned mask=masked?(masked==1?0x8c5:0xc5):0;
         assert(result==expected && state.eflags==((0xad7&~mask)|((unsigned)flags&mask)));

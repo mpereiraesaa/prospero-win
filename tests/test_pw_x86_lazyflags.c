@@ -1030,6 +1030,13 @@ __attribute__((no_sanitize("function")))
 #endif
 static int call_block(BlockFn fn, PwX86State *state) { return fn(state); }
 
+/* The flags a condition reads. */
+static uint32_t branch_flags(unsigned condition)
+{
+    static const uint32_t flags[8] = { 0x800, 0x001, 0x040, 0x041, 0x080, 0x004, 0x880, 0x8c0 };
+    return flags[condition >> 1];
+}
+
 static int condition_holds(unsigned condition, uint64_t f)
 {
     const int cf = (f & 1) != 0, pf = (f & 4) != 0, zf = (f & 0x40) != 0, sf = (f & 0x80) != 0,
@@ -1051,22 +1058,32 @@ static int condition_holds(unsigned condition, uint64_t f)
 
 static void test_jcc_against_native(void)
 {
-    static const struct { uint8_t bytes[3]; uint8_t length; } producers[] = {
-        { { 0x39, 0xc8 }, 2 }, /* cmp eax, ecx */
-        { { 0x29, 0xc8 }, 2 }, /* sub eax, ecx */
-        { { 0x01, 0xc8 }, 2 }, /* add eax, ecx */
-        { { 0x85, 0xc8 }, 2 }, /* test eax, ecx */
-        { { 0x21, 0xc8 }, 2 }, /* and eax, ecx */
-        { { 0x09, 0xc8 }, 2 }, /* or eax, ecx */
-        { { 0x31, 0xc8 }, 2 }, /* xor eax, ecx */
-        { { 0x11, 0xc8 }, 2 }, /* adc eax, ecx */
-        { { 0x19, 0xc8 }, 2 }, /* sbb eax, ecx */
-        { { 0xff, 0xc0 }, 2 }, /* inc eax: CF is the incoming one */
-        { { 0xff, 0xc8 }, 2 }, /* dec eax */
-        { { 0xf7, 0xd8 }, 2 }, /* neg eax */
-        { { 0xd1, 0xe0 }, 2 }, /* shl eax, 1 */
-        { { 0xd1, 0xf8 }, 2 }, /* sar eax, 1 */
-        { { 0x83, 0xf8, 0x05 }, 3 }, /* cmp eax, 5 */
+    /* defined: the flags the producer defines; the others keep their guest
+     * value, which the host CPU does not model. */
+    static const struct { uint8_t bytes[3]; uint8_t length; uint32_t defined; } producers[] = {
+        { { 0x39, 0xc8 }, 2, 0x8c5 }, /* cmp eax, ecx */
+        { { 0x29, 0xc8 }, 2, 0x8c5 }, /* sub eax, ecx */
+        { { 0x01, 0xc8 }, 2, 0x8c5 }, /* add eax, ecx */
+        { { 0x85, 0xc8 }, 2, 0x8c5 }, /* test eax, ecx */
+        { { 0x21, 0xc8 }, 2, 0x8c5 }, /* and eax, ecx */
+        { { 0x09, 0xc8 }, 2, 0x8c5 }, /* or eax, ecx */
+        { { 0x31, 0xc8 }, 2, 0x8c5 }, /* xor eax, ecx */
+        { { 0x11, 0xc8 }, 2, 0x8c5 }, /* adc eax, ecx */
+        { { 0x19, 0xc8 }, 2, 0x8c5 }, /* sbb eax, ecx */
+        { { 0xff, 0xc0 }, 2, 0x8c5 }, /* inc eax: CF is the incoming one */
+        { { 0xff, 0xc8 }, 2, 0x8c5 }, /* dec eax */
+        { { 0xf7, 0xd8 }, 2, 0x8c5 }, /* neg eax */
+        { { 0xd1, 0xe0 }, 2, 0x8c5 }, /* shl eax, 1 */
+        { { 0xd1, 0xf8 }, 2, 0x8c5 }, /* sar eax, 1 */
+        { { 0x83, 0xf8, 0x05 }, 3, 0x8c5 }, /* cmp eax, 5 */
+        { { 0xd1, 0xe8 }, 2, 0x8c5 }, /* shr eax, 1 */
+        { { 0xc1, 0xe0, 0x03 }, 3, 0x0c5 }, /* shl eax, 3 */
+        { { 0xc1, 0xe8, 0x1f }, 3, 0x0c5 }, /* shr eax, 31 */
+        { { 0xc1, 0xf8, 0x03 }, 3, 0x0c5 }, /* sar eax, 3 */
+        { { 0xd1, 0xc0 }, 2, 0x801 }, /* rol eax, 1 */
+        { { 0xc1, 0xc0, 0x05 }, 3, 0x001 }, /* rol eax, 5 */
+        { { 0xd1, 0xc8 }, 2, 0x801 }, /* ror eax, 1 */
+        { { 0xc1, 0xc8, 0x07 }, 3, 0x001 }, /* ror eax, 7 */
     };
     static const uint32_t values[] = { 0, 1, 5, 0x7fffffffu, 0x80000000u, 0xfffffffeu,
                                        0xffffffffu };
@@ -1095,6 +1112,10 @@ static void test_jcc_against_native(void)
                PW_OK);
         for (unsigned condition = 0; condition < 16; condition++)
             for (unsigned between = 0; between < 2; between++) {
+                if (branch_flags(condition) & ~producers[p].defined) {
+                    checked += 4u * 49u * 2u;
+                    continue;
+                }
                 /* mov eax, A; mov ecx, B; [mov edx, 1;] producer; jcc +0x10 */
                 uint8_t guest[32];
                 size_t g = 0;
@@ -1135,9 +1156,8 @@ static void test_jcc_against_native(void)
                                 state.chain_budget = 8;
                                 assert(call_block((BlockFn)code.exec_base, &state) == 0);
                                 pw_x86_commit_canonical_flags(&state);
-                                /* AF is undefined for some producers. */
                                 if ((state.eip == taken) != condition_holds(condition, flags) ||
-                                    ((state.eflags ^ (uint32_t)flags) & 0x8c5u)) {
+                                    ((state.eflags ^ (uint32_t)flags) & producers[p].defined)) {
                                     fprintf(stderr, "producer %zu condition %u between %u mode %u"
                                             " a=%08x b=%08x cf=%u eip=%08x eflags=%08x"
                                             " native=%08llx\n", p, condition, between, mode,
@@ -1151,7 +1171,7 @@ static void test_jcc_against_native(void)
                 }
             }
     }
-    assert(checked == 15u * 16u * 2u * 4u * 49u * 2u);
+    assert(checked == 23u * 16u * 2u * 4u * 49u * 2u);
     assert(vm.release(vm.context, &code) == PW_OK);
     assert(vm.release(vm.context, &native) == PW_OK);
 }

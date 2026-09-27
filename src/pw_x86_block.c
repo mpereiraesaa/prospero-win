@@ -2517,6 +2517,22 @@ analyze_and_emit:
             block->exit_contract.dirty_mask = 0;
             x87_call(&e,x87-1,x87_register);
             emit_load_all_resident(&e, &block->exit_contract);
+        } else if((op==0xc1 && (source[cursor+length-1]&31)) || op==0xd1) {
+            /* A 32-bit shift or rotate by a nonzero constant: the host
+             * instruction itself, and its defined flags deferred like any
+             * producer's. SHL/SHR/SAR define CF, PF, ZF and SF (and OF for a
+             * count of one); ROL/ROR define CF (and OF for one). The bits
+             * they leave undefined keep their guest value, as below. */
+            const unsigned count=op==0xd1?1u:(source[cursor+length-1]&31u);
+            const unsigned rotate=operand.reg<=1;
+            const uint32_t mask=count==1?(rotate?0x801u:0x8c5u):(rotate?0x001u:0x0c5u);
+            const uint8_t modrm=(uint8_t)((operand.mod==3?0xc0u:0u)|(operand.reg<<3));
+            if(operand.mod==3)load_guest_reg(&e, &block->exit_contract, operand.rm);
+            else {effective_address(&e,&operand,&block->exit_contract);memory_address_width(&e,2,4);}
+            if(count==1){byte(&e,0xd1);byte(&e,modrm);}
+            else {byte(&e,0xc1);byte(&e,modrm);byte(&e,(uint8_t)count);}
+            if(operand.mod==3)store_guest_reg(&e, &block->exit_contract, operand.rm);
+            emit_save_flags(&e, mask, lazy_flags_enabled, d->flags_dead);
         } else if(op==0xc1 || op==0xd1 || op==0xd3 || shift_word) {
             /* A zero-count shift preserves all arithmetic flags and wider
              * counts retain implementation-policy bits. Canonicalize the

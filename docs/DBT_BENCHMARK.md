@@ -101,6 +101,7 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
 | No statistics counters in translated code (`PW_WOW_STATS` keeps them) | 657 | 726 | +10% | 14.6% |
 | Conditional branches on the producer's flags | 650 | 788 | +21% | 19.5% |
 | Guest addresses with one `lea` | 788 | 804 | +2% | 19.9% |
+| Shifts and rotates by a constant as the host instruction | 797 | 872 | +9% | 18.5% |
 
 - **Flat guard.** wowprospero's guest is one identity-mapped range, and the
   stack range and the one region are both that range, so every access
@@ -133,6 +134,12 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   for the base, and a load, `shl` and `add` for a scaled index. It is now
   the base (and index) loaded into `eax` (and `edx`) and one `lea`, whose
   32-bit destination wraps the sum modulo 2^32 exactly as the guest does.
+- **Constant shifts.** A shift or rotate by an immediate went through the
+  variable-count path: commit every pending flag, then about twenty
+  instructions that select at run time which flags the count defines. With
+  a nonzero constant count the defined flags are known when translating, so
+  the host instruction runs as is and its defined flags are deferred like
+  any producer's (native baseline 4712 MIPS in these rounds).
 
 ## Comparison with published numbers
 
