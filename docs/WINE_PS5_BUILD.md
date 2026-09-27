@@ -290,7 +290,27 @@ best-effort — if the helper is not running, the title keeps using
 
 ## Starting Wine in the title
 
-`PW_NATIVE_MODE=wine64` builds the title around `native/wine64_main.c`:
+`PW_NATIVE_MODE=wine64` builds the title around `native/wine64_main.c`.
+The title runs one game per process (`src/pw_wine_launch.h`):
+
+- **Launcher.** Started with no game (as the system starts it), the title
+  shows the launcher (`src/pw_launcher_render.c`) on VideoOut without
+  loading Wine. The d-pad moves the selection. Cross restarts the title with
+  `sceSystemServiceLoadExec` and the game's arguments
+  (`profile=pinball path=C:\Games\Pinball\PINBALL.EXE cycle=<n>`). A
+  restart is a new process that receives its arguments intact in about
+  430 ms (see `HARDWARE_VALIDATION.md`).
+- **Game.** Started with `profile=` or `path=`, the title runs that executable
+  in Wine as below.
+- **Closing.** Holding Options+Create for a second sends the game Alt+F4. When
+  Wine exits, the title restarts into the launcher. If the game has not
+  closed after 5 s, the title restarts into the launcher anyway.
+- **Unattended validation.** `-DPW_WINE64_SCRIPT=1` makes the launcher open
+  the first game by itself, `PW_WINE64_SCRIPT_CYCLES` times.
+  `-DPW_WINE64_SECONDS=<s>` closes each game after that long; the default, 0,
+  lets a game run until it is closed.
+
+In a game, the title works as follows:
 
 1. It requests the `/data` mount (`native/pw_data_mount.c`) and uses
    `/data/prospero-win/prefix`, or `/download0/prospero-win/prefix` when
@@ -300,7 +320,7 @@ best-effort — if the helper is not running, the title keeps using
    channels into `WINE ...` ps5log lines.
 4. It sets ntdll's present sink (`pw_wine_set_present_sink`), opens VideoOut
    and the DualSense, and maps two frame buffers.
-5. It enters `__wine_main` for `C:\Games\Pinball\PINBALL.EXE` on its own
+5. It enters `__wine_main` for the chosen executable on its own
    thread (`src/pw_wine_start.c`).
 
 The present sink runs on Wine's threads and only copies the frame into a
@@ -316,9 +336,9 @@ Until Wine installs its own handlers, a fault is reported with its RIP
 (read at ucontext +224) and the ntdll segment it falls in. Once a second
 the main thread logs a heartbeat with the frames put and shown and the
 inputs posted, and every five seconds ntdll's address-space counters, for
-up to 120 s (`PW_WINE64_SECONDS`). Pinball's first frame arrives about
-31 s in. `WINEDEBUG` defaults to `err+all,+loaddll,+process`; `+seh` is left
-out because WoW64 callback returns unwind with `80000026` many times a second.
+as long as the game runs. Pinball's first frame arrives about 31 s in.
+`WINEDEBUG` defaults to `err+all,+loaddll,+process`; `+seh` is left out
+because WoW64 callback returns unwind with `80000026` many times a second.
 
 The runtime is found at `/app0` or, failing that, at
 `/mnt/sandbox/PPSA99995_000/app0`, whichever holds

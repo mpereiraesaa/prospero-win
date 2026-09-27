@@ -32,6 +32,8 @@
 #                          win32u.prx (tools/build_wine_ps5.sh), packaged in
 #                          win/wine for the gate's Wine Unix-side probe
 #   PW_OUTPUT_SUFFIX       isolated build/dist suffix, e.g. -wine-smoke
+#   PW_WINE64_SCRIPT       wine64: 1 drives the launcher unattended (validation)
+#   PW_WINE64_SECONDS      wine64: close each game after this many seconds; 0 never
 #   PW_TEST_EXIT_AFTER_MS  validation-only orderly runtime exit; 0 disables it
 #   PW_DBT_CHAINING        1 enables direct block chaining (default 1)
 #   PW_DBT_RESIDENCY       1 enables cross-block guest GPR residency (default 1)
@@ -64,6 +66,8 @@ dbt_lazy_flags=${PW_DBT_LAZY_FLAGS:-1}
 output_suffix=${PW_OUTPUT_SUFFIX:-}
 present_backend=${PW_PRESENT_BACKEND:-agc}
 wine_ps5_prx_dir=${PW_WINE_PS5_PRX_DIR:-}
+wine64_script=${PW_WINE64_SCRIPT:-0}
+wine64_seconds=${PW_WINE64_SECONDS:-0}
 launcher=${PW_LAUNCHER:-0}
 launcher_script=${PW_LAUNCHER_SCRIPT:-0}
 launcher_extra=${PW_LAUNCHER_EXTRA_PROFILES:-}
@@ -84,6 +88,8 @@ fi
 [[ $native_mode == runtime || $native_mode == gate || $native_mode == wine ||
    $native_mode == wine64 || $native_mode == relaunch ]] || {
     echo "PW_NATIVE_MODE must be runtime, gate, wine, wine64 or relaunch" >&2; exit 2; }
+[[ $wine64_script == 0 || $wine64_script == 1 ]] && [[ $wine64_seconds =~ ^[0-9]+$ ]] || {
+    echo "PW_WINE64_SCRIPT must be 0 or 1 and PW_WINE64_SECONDS a number" >&2; exit 2; }
 if [[ -n $wine_ps5_prx_dir ]]; then
     [[ $native_mode == gate ]] || {
         echo "PW_WINE_PS5_PRX_DIR requires PW_NATIVE_MODE=gate" >&2; exit 2; }
@@ -316,7 +322,8 @@ common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -DPW_DBT_LAZY_FLAGS="$dbt_lazy_flags"
         -DPW_COMPAT32_TRANSFER="$compat32_transfer"
         -DPW_PRESENT_VK="$present_vk"
-        -DPW_LAUNCHER="$launcher" -DPW_LAUNCHER_SCRIPT="$launcher_script")
+        -DPW_LAUNCHER="$launcher" -DPW_LAUNCHER_SCRIPT="$launcher_script"
+        -DPW_WINE64_SCRIPT="$wine64_script" -DPW_WINE64_SECONDS="$wine64_seconds")
 (( present_vk )) && common+=(-I"$ps5vk_sdk/include")
 
 entry=native/runtime_main.c
