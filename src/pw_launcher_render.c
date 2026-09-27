@@ -142,16 +142,76 @@ static int32_t fit(const char *s,int32_t preferred,int32_t minimum,int32_t max_w
     while(scale>minimum && text_width(s,scale)>max_width)scale--;
     return scale;
 }
+static uint32_t get(const Canvas *c,int32_t x,int32_t y)
+{
+    const uint8_t *p=c->pixels+(size_t)y*c->stride+(size_t)x*4u;
+    return rgb(p[2],p[1],p[0]);
+}
+/* Three-stop ramp: a at 0, b at mid, c at end. */
+static uint32_t mix3(uint32_t a,uint32_t b,uint32_t c,uint32_t n,uint32_t mid,uint32_t end)
+{
+    return n<mid?mix(a,b,n,mid):mix(b,c,n-mid<end-mid?n-mid:end-mid,end-mid?end-mid:1u);
+}
+/* Crest of the near hill: low on the left, highest a little right of the
+ * centre, easing down to the right edge. */
+static int32_t near_crest(int32_t x)
+{
+    int32_t d=x-W*62/100;
+    return 610+(int32_t)((int64_t)d*d*300/((int64_t)W*W))+(x<W*62/100?(W*62/100-x)/14:0);
+}
+/* A distant hill behind the right half. */
+static int32_t far_crest(int32_t x)
+{
+    int32_t d=x-W*88/100;
+    return 585+(int32_t)((int64_t)d*d*520/((int64_t)W*W));
+}
+/* One soft cloud puff: an ellipse whose edge fades out. */
+static void puff(const Canvas *c,int32_t cx,int32_t cy,int32_t rx,int32_t ry)
+{
+    for(int32_t y=cy-ry;y<=cy+ry;y++)for(int32_t x=cx-rx;x<=cx+rx;x++) {
+        if(x<0 || y<0 || x>=W || y>=H)continue;
+        int64_t dx=x-cx,dy=y-cy;
+        int64_t d=(dx*dx*1024)/((int64_t)rx*rx)+(dy*dy*1024)/((int64_t)ry*ry);
+        if(d>=1024)continue;
+        uint32_t a=(uint32_t)((1024-d)*(1024-d)>>12);    /* 0..256, soft edge */
+        if(a>220)a=220;
+        uint32_t white=y>cy?mix(rgb(0xff,0xff,0xff),rgb(0xd6,0xe4,0xf6),(uint32_t)(y-cy),(uint32_t)ry):
+                            rgb(0xff,0xff,0xff);
+        put(c,x,y,mix(get(c,x,y),white,a,256));
+    }
+}
 static void background(const Canvas *c)
 {
-    /* Sky ramp with a rolling hill whose crest is a parabola. */
-    for(int32_t y=0;y<H;y++) {
-        uint32_t sky=mix(rgb(0x1f,0x5c,0xc4),rgb(0xa6,0xcc,0xf4),(uint32_t)y,H-1);
-        for(int32_t x=0;x<W;x++) {
-            int32_t d=x-W*3/5;
-            int32_t crest=700+(int32_t)((int64_t)d*d*220/((int64_t)W*W));
-            put(c,x,y,y<crest?sky:mix(rgb(0x62,0xba,0x46),rgb(0x2a,0x78,0x22),
-                (uint32_t)(y-crest),(uint32_t)(H-crest)));
+    /* Deep cobalt overhead, bright azure, then a pale horizon haze; a little
+     * warmer light on the upper left, where the sun would be. */
+    for(int32_t y=0;y<H;y++)for(int32_t x=0;x<W;x++) {
+        uint32_t sky=mix3(rgb(0x0f,0x4a,0xc6),rgb(0x3b,0x86,0xe8),rgb(0xb8,0xdc,0xf8),
+                          (uint32_t)(y<660?y:660),330,660);
+        uint32_t glow=(uint32_t)((x<W/2?W/2-x:0)*(y<500?500-y:0)/(W/2*10));
+        put(c,x,y,mix(sky,rgb(0xd8,0xec,0xff),glow>60?60:glow,256));
+    }
+    static const int16_t clouds[][4]={
+        {300,235,190,62},{420,196,170,74},{560,228,180,58},{470,262,250,44},{230,268,150,34},
+        {1050,158,140,46},{1160,138,160,58},{1280,162,150,42},{1170,184,210,30},
+        {1540,300,130,36},{1650,284,150,46},{1760,306,120,30},
+        {700,430,200,30},{840,414,170,40},{980,436,160,28},
+        {160,470,150,26},{290,462,140,32},{1400,470,170,24},{1520,462,120,26},
+    };
+    for(size_t i=0;i<sizeof(clouds)/sizeof(clouds[0]);i++)
+        puff(c,clouds[i][0],clouds[i][1],clouds[i][2],clouds[i][3]);
+    for(int32_t x=0;x<W;x++) {
+        int32_t far=far_crest(x),near=near_crest(x);
+        for(int32_t y=far;y<near && y<H;y++)
+            put(c,x,y,mix(rgb(0x5c,0xa8,0x5c),rgb(0x3a,0x86,0x40),(uint32_t)(y-far),
+                          (uint32_t)(H-far)));
+        for(int32_t y=near;y<H;y++) {
+            /* Sunlit yellow-green along the crest, saturated grass, then a
+             * deeper green toward the bottom and the left. */
+            uint32_t depth=(uint32_t)(y-near);
+            uint32_t grass=mix3(rgb(0x9c,0xd8,0x4c),rgb(0x4c,0xaa,0x2a),rgb(0x22,0x70,0x18),
+                                depth,90,(uint32_t)(H-near>91?H-near:91));
+            uint32_t shade=(uint32_t)(x<W*62/100?(W*62/100-x)*40/(W*62/100):0);
+            put(c,x,y,mix(grass,rgb(0x14,0x4c,0x10),shade,256));
         }
     }
 }
@@ -160,7 +220,7 @@ static void title_bar(const Canvas *c)
     ramp(c,0,0,W,BAR,rgb(0x3a,0x86,0xf2),rgb(0x0a,0x44,0xc0));
     fill(c,0,0,W,3,rgb(0x8c,0xbc,0xff));
     fill(c,0,BAR-3,W,3,rgb(0x06,0x2e,0x8a));
-    text(c,48,27,"prospero-win",6,rgb(0xff,0xff,0xff),W);
+    text(c,48,27,"Prospero Win",6,rgb(0xff,0xff,0xff),W);
     text(c,W-48-text_width("Library",5),31,"Library",5,rgb(0xdc,0xea,0xff),W);
 }
 static void tile(const Canvas *c,int32_t x,int32_t y,const PwLauncherItem *item,int selected)

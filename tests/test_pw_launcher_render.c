@@ -41,13 +41,21 @@ int main(void)
     uint32_t hashes[3]={render(&library),render(&unavailable),render(&empty)};
     /* Golden frames: a visual change must update these deliberately, after
      * looking at the new rendering. */
-    const uint32_t golden[3]={0xbd18e38fu,0x2ee60186u,0x59bd4231u};
+    const uint32_t golden[3]={0x5be4b81au,0xa5e60446u,0x1155820cu};
     if(memcmp(hashes,golden,sizeof(golden)))
         printf("launcher render hashes 0x%08x 0x%08x 0x%08x\n",hashes[0],hashes[1],hashes[2]);
     assert(!memcmp(hashes,golden,sizeof(golden)));
 
     /* Semantic probes on the library scene. */
     render(&library);
+    /* The sky deepens overhead and pales toward the horizon; the hill is
+     * lighter green at its crest than at the bottom. */
+    uint32_t sky_top=at(1900,110),sky_low=at(1900,560);
+    assert((sky_top&0xff)>0xc0 && (sky_top>>16&0xff)<0x40);
+    assert((sky_low>>16&0xff)>(sky_top>>16&0xff)+0x40);
+    uint32_t crest=at(1250,640),foot=at(1250,960);
+    assert((crest>>8&0xff)>(crest>>16&0xff) && (crest>>8&0xff)>(crest&0xff));
+    assert((foot>>8&0xff)>(foot>>16&0xff) && (crest>>8&0xff)>(foot>>8&0xff)+0x30);
     assert(at(10,1)==0x8cbcff);                     /* title bar highlight */
     assert((at(10,60)&0xff)>0xc0);                  /* blue title bar */
     assert(at(0,1079)==at(120,1079) && (at(120,1079)>>8&0xff)>0x80); /* green button */
