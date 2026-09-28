@@ -4,6 +4,23 @@
 FEX publish. It is mostly integer code, with little SSE and few library
 calls, so it measures the translator itself. Here it compares prospero-win's
 i386 DBT (`wine/wowprospero`) with the same 32-bit binary running natively.
+nbench and a Super PI-style pi program cover floating point.
+
+## Current state (2026-09-28)
+
+Host (i7-12700H, one P-core), the DBT against the same i386 binary run
+natively under Wine:
+
+| Benchmark | vs native | Details |
+|---|---|---|
+| 7-Zip, total rating | **91%** | [Direct links, copied operands and superblocks](#direct-links-copied-operands-and-superblocks) |
+| nbench x87, integer / FP index | **94% / 97%** | [Floating point](#floating-point-nbench-and-pi) |
+| nbench SSE2, integer / FP index | **92% / 93%** | [Floating point](#floating-point-nbench-and-pi) |
+| pi, 4.2M digits, x87 and SSE2 | **98%** | [Floating point](#floating-point-nbench-and-pi) |
+
+On the console (FW 12.02), 7-Zip rates 3361–3369 total MIPS against 1383
+before this work; the console figures are [below](#on-the-console). The
+sections after the first results record each change in order.
 
 ## Method
 
@@ -36,7 +53,9 @@ tools/bench_7zip.sh --config wowprospero --wine <wine> --prefix <prefix> --modes
 The `wowprospero` prefix needs `wowprospero.dll` installed
 (`docs/WINE_INTEGRATION.md`).
 
-## Results (2026-09-27)
+## First results (2026-09-27)
+
+The starting point, before the re-encoder and the changes below.
 
 Host: i7-12700H, one P-core, the pinned Wine (11.17-54) built for the host
 in WoW64 mode with `wowprospero`. The machine was
@@ -396,6 +415,11 @@ same 97% in translated code; the follow-ups below were written then.
 
 ## Follow-ups
 
+Written when the emitter translated everything, before the re-encoder. The
+re-encoder copies the guest's instructions with its registers in host
+registers (4), and emitted blocks now take 0.3% of 7-Zip's samples, so 2
+and 3 matter only for code the re-encoder does not take.
+
 1. **The memory guard on every access** (done: the flat guard above). `memory_address_width` runs about 9
    instructions and 4 branches before each guest load or store, even when
    the whole address space is one region, as in wowprospero. Under WoW64 the
@@ -425,11 +449,10 @@ same 97% in translated code; the follow-ups below were written then.
   of it never run. Sharing one leave routine per engine would put the hot
   code of consecutive blocks closer together.
 - **What the re-encoder does not take yet** ends its block and goes to the
-  emitter, which stores and reloads the pinned state: SSE and x87 (the
-  largest remaining share in Wine and in 7-Zip's CRC and match finders),
-  string instructions, div/idiv (they fault natively), push/pop of 16-bit
-  operands, pusha/popa, and forms that need REX with ah-bh. Taking SSE and
-  x87 register forms verbatim is the next step.
+  emitter, which stores and reloads the pinned state: div/idiv (they fault
+  natively), push/pop of 16-bit operands, pusha/popa, std and cld, and
+  forms that need REX with ah-bh. Under native FP such a crossing also
+  moves the FP state through C, as in nbench's STRING SORT.
 - **The guard's flag save.** When flags are live across a memory access,
   the guard wraps its compare in `lahf`/`seto` and `sahf`; a flag-free
   bounds check (for example with `bextr`/`lea` and `jrcxz`) would remove
@@ -455,8 +478,27 @@ under the title:
 
 The native baseline for the PS5 has to come from another x86-64 machine
 with the same CPU family: the console cannot run the binary without the DBT.
+nbench and pi run the same way, each from a local profile like this one
+whose `path` names the benchmark's executable.
 
-Measured on the console on 2026-09-27 (FW 12.02, one run, main at `cd92d61`
+Measured on 2026-09-28 (FW 12.02) with the changes above through native
+FP; the last 7-Zip round and the FP benchmarks also had the
+working-directory fix (#201). Three rounds of 7-Zip, one of each FP
+benchmark, ps5log `20260928T114656843Z`, `20260928T120539847Z`,
+`20260928T123134239Z`, `20260928T123150939Z` and `20260928T123626260Z`:
+
+| Benchmark | PS5, DBT | Host, DBT | PS5 / host |
+|---|---|---|---|
+| 7-Zip, total MIPS | 3361–3369 | 4685 | 0.72 |
+| nbench x87, integer index | 166.7 | 235.2 | 0.71 |
+| nbench x87, FP index | 81.6 | 120.5 | 0.68 |
+| pi x87, 4.2M digits | 13 s | 7.63 s | 0.59 |
+
+pi's timer counts whole seconds. The console runs the same DBT at 0.6–0.7
+of the host's speed, about what its slower core accounts for; there is
+still no console native figure, so its share of native is not measured.
+
+The earlier run was on 2026-09-27 (FW 12.02, one run, main at `cd92d61`
 with the re-encoder and quantum 1024). 7-Zip reported the CPU as "AMD Eng
 Sample 100-000000189-11" at about 3460 MHz.
 
@@ -464,7 +506,7 @@ Sample 100-000000189-11" at about 3460 MHz.
 |---|---|---|---|
 | PS5, DBT (`wowprospero`) | 1252 | 1514 | 1383 |
 
-There is no console native figure to divide by. For scale, the host's DBT
+For scale, the host's DBT
 run of the same build rated 1416 total at 29% of its native 4850, on a
 faster core. Getting 1383 on a 3.46 GHz Zen 2 core puts the console within
 the same ratio range.

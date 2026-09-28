@@ -30,9 +30,13 @@ stick-driven cursor drawn by Wine's PS5 user driver. A profile chooses the
 prefix, the desktop size and scaling, the button bindings or an XInput
 controller, and the pointer.
 
-Fonts, audio through Wine's PS5 driver, the XInput controller and the latest
-DBT and startup work are built and host-tested; their console validation is
-recorded in [hardware validation](docs/HARDWARE_VALIDATION.md) as it lands.
+The DBT runs 7-Zip's benchmark at 91% of native speed on an x86-64 host,
+nbench at 92–97% and a Super PI-style pi program at 98%; on the console it
+rates 7-Zip at about 3360 MIPS
+([DBT benchmark](docs/DBT_BENCHMARK.md)). Fonts, audio through Wine's PS5
+driver and the XInput controller are built and host-tested; their console
+validation is recorded in [hardware validation](docs/HARDWARE_VALIDATION.md)
+as it lands.
 Direct3D through DXVK over `ps5-vulkan` is not yet available.
 
 ## Build and test
@@ -54,7 +58,7 @@ game data, captures, telemetry transcripts, SDK files or private paths.
 - [Architecture](docs/ARCHITECTURE.md) · [Wine integration](docs/WINE_INTEGRATION.md)
 - [Wine on the PS5](docs/WINE_PS5_BUILD.md): build, patches, drivers, profiles
 - [Hardware validation](docs/HARDWARE_VALIDATION.md) · [Roadmap](docs/ROADMAP.md)
-- [Development](docs/DEVELOPMENT.md) · [Contributing](CONTRIBUTING.md)
+- [DBT benchmark](docs/DBT_BENCHMARK.md) · [Development](docs/DEVELOPMENT.md) · [Contributing](CONTRIBUTING.md)
 
 Pinball is a compatibility test, not the scope of the project. DRM,
 anti-cheat, kernel drivers and distribution of proprietary game files are out

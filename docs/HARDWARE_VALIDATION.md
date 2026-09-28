@@ -72,6 +72,24 @@ Two gaps remain:
   first two frames nothing redraws, so the screen shows a still picture of
   the table.
 
+## DBT performance
+
+On 2026-09-28 (FW 12.02) the title ran 7-Zip's benchmark, nbench's x87 build
+and a Super PI-style pi program through the DBT, each as a launcher profile
+in its own title process, with the stable baseline restored afterwards:
+
+- 7-Zip rated 3361–3369 total MIPS in three rounds, against 1383 on
+  2026-09-27 before the DBT's direct links, copied operands, call stack,
+  superblocks and native FP;
+- nbench completed all ten tests: integer index 166.7, FP index 81.6;
+- pi computed 4.2M digits in 13 s and wrote its output file;
+- with the working-directory fix (#201), each program started in its
+  profile's working directory (`PW_WINE64 cwd=` with `status=0`);
+- the null test passed before each series.
+
+The ps5log runs, the host comparison and the method are in
+[DBT benchmark](DBT_BENCHMARK.md#on-the-console).
+
 ## Evidence rules
 
 A screenshot or video proves appearance only. Runtime acceptance requires:
