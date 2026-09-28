@@ -154,7 +154,7 @@ static void ea_lea(Out *o, unsigned dst, const Ea *e)
 typedef enum Kind {
     K_RM = 1, K_PLAIN, K_INCDEC, K_MOVIMM, K_XCHGA, K_BSWAP, K_NOP, K_LEA,
     K_PUSH, K_PUSHIMM, K_PUSHRM, K_POP, K_LEAVE, K_CALL, K_CALLRM, K_RET,
-    K_JMP, K_JMPRM, K_JCC,
+    K_JMP, K_JMPRM, K_JCC, K_STR,
 } Kind;
 enum { REG8 = 1, REG32, EXT };      /* what the ModRM reg field names */
 enum { RM8 = 1, RMW, RMRAW };       /* what a register-form rm names (RMRAW: xmm, mm, st, as is) */
@@ -341,6 +341,24 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
         in->kind = K_XCHGA; in->reg = op & 7;
     } else if (op == 0x98 || op == 0x99) {
         in->kind = K_PLAIN;
+    } else if ((op >= 0xa4 && op <= 0xa7) || (op >= 0xaa && op <= 0xaf)) {
+        /* movs cmps stos lods scas, with rep/repe/repne: the host's own on
+         * the guest's esi, edi and ecx (emit_string). */
+        const unsigned compares = op == 0xa6 || op == 0xa7 || op == 0xae || op == 0xaf;
+        if (in->fs || in->lock) return 0;
+        in->kind = K_STR;
+        in->op[0] = op; in->op_len = 1;
+        in->width = (uint8_t)(!(op & 1) ? 1 : in->opsize16 ? 2 : 4);
+        if (compares) {
+            in->def = ALL_FLAGS;
+            if (in->rep) in->use = ALL_FLAGS;     /* a zero count leaves them */
+        }
+        rep_ok = 1;
+    } else if (op == 0x9e || op == 0x9f) {
+        in->kind = K_PLAIN;                       /* sahf, lahf: ah is the guest's */
+        if (op == 0x9e) in->def = 0x0d5; else in->use = 0x0d5;
+    } else if (op == 0x9b && native_fp) {
+        in->kind = K_PLAIN;                       /* fwait, as in fstsw = fwait; fnstsw */
     } else if (op >= 0xa0 && op <= 0xa3) {
         static const uint8_t as[4] = { 0x8a, 0x8b, 0x88, 0x89 };
         NEED(4);
@@ -997,6 +1015,46 @@ static void emit_call(Ctx *c, PwX86Block *block, uint32_t next, uint32_t target,
     block->exit.fallthrough_direct_offset = rest.direct;
 }
 
+/* 1 for each value of eflags' second byte whose DF bit (bit 10) is set. */
+static const uint8_t df_set[256] = {
+#define DF4(n) (((n) >> 2) & 1), ((((n) + 1) >> 2) & 1), ((((n) + 2) >> 2) & 1), ((((n) + 3) >> 2) & 1)
+#define DF16(n) DF4(n), DF4((n) + 4), DF4((n) + 8), DF4((n) + 12)
+#define DF64(n) DF16(n), DF16((n) + 16), DF16((n) + 32), DF16((n) + 48)
+    DF64(0), DF64(64), DF64(128), DF64(192)
+#undef DF64
+#undef DF16
+#undef DF4
+};
+
+/* A string instruction as the host's: rdi holds the state and edi is r13,
+ * so the two swap around it, and a 0x67 prefix makes it use esi, edi and
+ * ecx, the guest's own. Re-encoded code never changes DF, so the guest's is
+ * PwX86State.eflags': std before it when set (found without flags through
+ * df_set and jrcxz, the count kept in r9), cld after it, since the host
+ * runs with DF clear. A fault outside the guest range inside it is not
+ * redirected (rdi is swapped); one Wine resolves restarts it as usual. */
+static void emit_string(Ctx *c, const Inst *in)
+{
+    Out *o = &c->o;
+    size_t to_forward;
+
+    mov_r9_rcx(o);
+    b(o, 0x49); b(o, 0xbb); w64(o, (uint64_t)(uintptr_t)df_set);   /* movabs r11, df_set */
+    b(o, 0x0f); b(o, 0xb6); b(o, 0x8f); w32(o, (uint32_t)offsetof(PwX86State, eflags) + 1);  /* movzx ecx, byte [rdi+eflags+1] */
+    b(o, 0x41); b(o, 0x0f); b(o, 0xb6); b(o, 0x0c); b(o, 0x0b);    /* movzx ecx, byte [r11+rcx] */
+    to_forward = jump8(o, 0xe3);                                    /* jrcxz forward */
+    b(o, 0xfd);                                                     /* std */
+    land8(o, to_forward);
+    mov_rcx_r9(o);
+    b(o, 0x4c); b(o, 0x87); b(o, 0xef);                             /* xchg rdi, r13 */
+    if (in->rep) b(o, in->rep);
+    if (in->opsize16) b(o, 0x66);
+    b(o, 0x67);
+    b(o, in->op[0]);
+    b(o, 0x4c); b(o, 0x87); b(o, 0xef);                             /* xchg rdi, r13 */
+    b(o, 0xfc);                                                     /* cld */
+}
+
 /* The side exits: each loads its target into r10d and the address of its
  * jcc's rel32 into r8, then all share one lookup of r10d in the chain
  * table. A hit rewrites that rel32 to the target's chain entry (r11 - (r8 +
@@ -1199,6 +1257,9 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
             break;
         }
         case K_NOP:
+            break;
+        case K_STR:
+            emit_string(&c, in);
             break;
         case K_LEA:
             ea_lea(o, host_of[in->reg], &in->ea);

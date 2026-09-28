@@ -209,7 +209,7 @@ static void test_options(void)
 {
     static const uint8_t mov[] = { 0x89, 0xc8, 0xc3 };           /* mov eax, ecx; ret */
     static const uint8_t lock[] = { 0xf0, 0x01, 0xc0, 0xc3 };    /* lock add eax, eax: #UD */
-    static const uint8_t tail[] = { 0x40, 0xf3, 0xa4 };          /* inc eax; rep movsb */
+    static const uint8_t tail[] = { 0x40, 0xf7, 0xf1 };          /* inc eax; div ecx */
     PwX86TranslateOptions o = { .flat_low = 0x10000, .flat_high = 0xfffff000u, .no_counters = 1 };
     uint8_t out[16384];
     PwX86Block block;
@@ -561,6 +561,41 @@ static void test_superblocks(void)
  * a time on the host): registers, flags, memory, xmm0-7 and the x87 and
  * MXCSR state; the re-encoder took the FP blocks. Only TOP is compared from
  * fnstsw: the software x87 leaves C1 where the CPU clears it. */
+/* String instructions as the host's (movs, stos, scas and cmps, with rep,
+ * repe and repne, bytes, words and dwords, a zero count) forwards, and
+ * backwards after std: the same as the emitter and the host fallback in
+ * every mode. The
+ * emitter's lods leaves eax as it was, so lods is checked against its
+ * expected values instead: dwords, words and bytes, forwards and back. */
+static void test_strings(void)
+{
+    static const uint8_t code[] = {
+        0xb9, 0x10, 0x00, 0x00, 0x00, 0xf3, 0xa4, 0xb9, 0x04, 0x00, 0x00, 0x00,
+        0xf3, 0xa5, 0x66, 0xa5, 0xa4, 0xb0, 0x41, 0xb9, 0x08, 0x00, 0x00, 0x00,
+        0xf3, 0xaa, 0xab, 0x8d, 0x7f, 0xc0, 0xb9, 0x20, 0x00, 0x00, 0x00, 0xf2,
+        0xae, 0x89, 0xcb, 0x83, 0xee, 0x40, 0xb9, 0x0a, 0x00, 0x00, 0x00, 0xf3,
+        0xa6, 0x0f, 0x95, 0xc2, 0x89, 0xcd, 0xfd, 0x8d, 0x76, 0x20, 0x8d, 0xbf,
+        0x80, 0x00, 0x00, 0x00, 0xb9, 0x04, 0x00, 0x00, 0x00, 0xf3, 0xa5, 0xa4,
+        0xfc, 0x31, 0xc9, 0xf3, 0xa4, 0xc3,
+    };
+    static const uint8_t lods[] = {
+        0x8d, 0x76, 0x23, 0xad, 0x89, 0xc3, 0x66, 0xad, 0xfd, 0xac, 0xfc, 0xc3,
+    };
+    Run r;
+
+    /* As in wowprospero, what neither translator takes (std, cld, scas on
+     * the emitter's side) runs on the host. */
+    hostexec_fallback = 1;
+    compare(code, sizeof(code));
+    r = run_superblocks(lods, sizeof(lods));
+    hostexec_fallback = 0;
+    assert(r.status == PW_OK && r.state.eip == 0xdead0000u);
+    assert(r.state.gpr[3] == pattern(35));                              /* lodsl */
+    assert((r.state.gpr[0] & 0xffffff00u) == ((pattern(35) & 0xffff0000u) | (pattern(39) & 0xff00u)));
+    assert((r.state.gpr[0] & 0xff) == (pattern(41) & 0xff));             /* lodsb after std */
+    assert(r.state.gpr[6] == low + DATA + 40);                          /* esi went back one */
+}
+
 static void test_native_fp(void)
 {
     static const uint8_t code[] = {
@@ -839,12 +874,13 @@ int main(void)
     test_unbounded_chains();
     test_call_stack();
     test_superblocks();
+    test_strings();
     test_native_fp();
     test_native_fp_forms();
     test_native_fp_gpr();
     test_native_fp_emitter();
     test_fault();
     printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
-           "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, native FP, fault state\n");
+           "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, strings, native FP, fault state\n");
     return 0;
 }
