@@ -479,12 +479,24 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   it below 4 GiB (`VK_EXT_map_memory_placed` or
   `VK_EXT_external_memory_host`).
 
-Console results (FW 12.02, 2026-09-28):
+Console results (FW 12.02, 2026-09-28). The test programs are ps5vk's DXVK
+2.6.2 PE frontends (one per API): each creates a 1920x1080 window, clears
+two frames to known colours and presents each.
 
-| Program | Stopped at |
+| Program | Result |
 | --- | --- |
-| Vulkan probe, x64 and x86 | Nowhere: instance, physical device, win32 surface, device and swapchain all succeed, and teardown is clean |
-| DXVK 2.6.2 D3D11, D3D10, D3D9, D3D8 (x64) | Device created (D3D11 feature level 11_0). The swapchain's back buffer is refused because ps5vk does not yet support `B8G8R8A8_UNORM` with color-attachment, sampled and transfer usage and `MUTABLE_FORMAT` (`vkGetPhysicalDeviceImageFormatProperties2` returns `VK_ERROR_FORMAT_NOT_SUPPORTED`) |
+| Vulkan probe, x64 and x86 | Instance, physical device, win32 surface, device and swapchain all succeed, and teardown is clean |
+| DXVK 2.6.2 D3D11, D3D10, D3D9, D3D8, x64 and x86 | Both frames presented: every call returns `S_OK`, and ps5vk logs each frame's clear colour (`ff1c4c84`, then `ff844c1c`) and a completed flip (`PS5VK_VIDEO_PRESENTED`, tokens 1 and 2) |
+
+These passes used a diagnostic ps5vk SDK (`libps5vk.a` SHA-256
+`fc0db342…`) built from uncommitted ps5vk sources. On the way to it, ps5vk
+gained support for DXVK's mutable BGRA8 back buffer, its barriers,
+clear-only render passes, transfer-only submissions and the D3D9
+presenter's `R,G,B,ONE` view. Until those changes land in ps5vk, a
+released ps5vk SDK stops at the first of them. The pixels were not read back from the scanout: the
+evidence is the clear values and the completed flips. The x86 programs
+never map device memory, so mapping it below 4 GiB for a 32-bit process is
+still untested.
 
 ## Imports a title does not get
 
