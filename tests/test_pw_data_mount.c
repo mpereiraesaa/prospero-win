@@ -11,7 +11,14 @@
 
 static char written_path[128];
 static char written_bytes[64];
-static int write_calls, write_fail, visible_in, poll_calls, sleep_total;
+static int write_calls, write_fail, visible_in, poll_calls, sleep_total, prepare_calls, prepare_fail;
+
+static int fake_prepare(void)
+{
+    prepare_calls++;
+    if (prepare_fail) { errno = EPERM; return -1; }
+    return 0;
+}
 
 static int fake_write(const char *path, const char *bytes, size_t len)
 {
@@ -34,30 +41,39 @@ static void fake_sleep(int ms) { sleep_total += ms; }
 
 int main(void)
 {
-    static const PwDataMountOps ops = { fake_write, fake_visible, fake_sleep };
+    static const PwDataMountOps ops = { fake_prepare, fake_write, fake_visible, fake_sleep };
     PwDataMountResult r;
     char buf[PW_DATA_MOUNT_REQUEST_MAX], small[3];
 
-    /* The request line carries the process id. */
-    assert(pw_data_mount_format_request(buf, sizeof(buf), 2595) == 14 && !strcmp(buf, "{\"PID\":\"2595\"}"));
-    assert(pw_data_mount_format_request(buf, sizeof(buf), 1) == 11 && !strcmp(buf, "{\"PID\":\"1\"}"));
+    /* The request carries the process id as a JSON number. */
+    assert(pw_data_mount_format_request(buf, sizeof(buf), 2595) == 13 && !strcmp(buf, "{\"PID\":2595}\n"));
+    assert(pw_data_mount_format_request(buf, sizeof(buf), 1) == 10 && !strcmp(buf, "{\"PID\":1}\n"));
     assert(pw_data_mount_format_request(small, sizeof(small), 2595) == -1); /* too small */
 
     /* Request: write the file, then /data appears after a couple of checks. */
-    write_calls = poll_calls = sleep_total = 0; write_fail = 0; visible_in = 3;
+    write_calls = poll_calls = sleep_total = prepare_calls = 0; write_fail = 0; visible_in = 3;
     assert(pw_data_mount_request_with(&ops, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
+    assert(prepare_calls == 1 && r.prepare_errno == 0);
     assert(r.data_before == 0 && r.wrote_request == 1 && r.write_errno == 0);
     /* one check before the write, two sleeps, visible on the third loop check */
     assert(r.data_after == 1 && r.waited_ms == 2 * PW_DATA_MOUNT_POLL_MS);
     /* a new grant waits to settle before the title goes on */
     assert(r.settled_ms == PW_DATA_MOUNT_SETTLE_MS && sleep_total == r.waited_ms + r.settled_ms);
-    assert(!strcmp(written_path, PW_DATA_MOUNT_REQUEST_PATH) && !strcmp(written_bytes, "{\"PID\":\"2595\"}"));
+    assert(!strcmp(written_path, PW_DATA_MOUNT_REQUEST_PATH) && !strcmp(written_bytes, "{\"PID\":2595}\n"));
     assert(write_calls == 1);
 
-    /* Already reachable: no request written, no waiting. */
-    write_calls = poll_calls = sleep_total = 0; visible_in = 0;
+    /* Already reachable: no request written, no waiting, nothing prepared. */
+    write_calls = poll_calls = sleep_total = prepare_calls = 0; visible_in = 0;
     assert(pw_data_mount_request_with(&ops, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
     assert(r.data_before == 1 && r.data_after == 1 && r.wrote_request == 0 && write_calls == 0);
+    assert(prepare_calls == 0);
+
+    /* seteuid refused: nothing is requested, and it says why. */
+    write_calls = poll_calls = sleep_total = prepare_calls = 0; visible_in = 5; prepare_fail = 1;
+    assert(pw_data_mount_request_with(&ops, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == -1);
+    assert(prepare_calls == 1 && r.prepare_errno == EPERM && write_calls == 0 && r.wrote_request == 0);
+    assert(r.data_after == 0 && sleep_total == 0);
+    prepare_fail = 0;
     assert(r.settled_ms == 0 && sleep_total == 0);
 
     /* Never granted: fail after the deadline, request still recorded. */
@@ -73,6 +89,6 @@ int main(void)
     /* Missing ops are rejected. */
     assert(pw_data_mount_request_with(NULL, 7, 100, &r) == -1);
 
-    printf("data mount passed: request line, wait, already-present, timeout, write failure, settle after a grant\n");
+    printf("data mount passed: request line, wait, already-present, seteuid refused, timeout, write failure, settle after a grant\n");
     return 0;
 }

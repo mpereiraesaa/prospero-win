@@ -463,17 +463,20 @@ the warning becomes a failure.
 
 A title can write only its own `/download0` sandbox, where `/data` is absent,
 so the Wine prefix would be limited to that sandbox. Before starting Wine,
-prospero-win (`native/pw_data_mount.c`) writes a request file,
-`/download0/etahen_jailbreak`, carrying its process id, then waits until
-`/data` becomes reachable. This expects the helper daemon from
-<https://github.com/ArkSama/PS5-Lapy-JB-Daemon> to be running on the console:
-it detects the request file and makes `/data` available to the process, after
-which the prefix lives at `/data/prospero-win/prefix`. Once `/data`
+prospero-win (`native/pw_data_mount.c`) asks the Lapy JB daemon
+(<https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon>, running on the
+console) for `/data`, following its protocol: in the title's own process,
+before it creates any other thread, `seteuid(geteuid())`, which must succeed
+(otherwise nothing is requested and the log says why, `prepare_errno`); then
+a complete `{"PID":<pid>}` request, written to a temporary file and renamed
+to `/download0/elevate_proc` (the title's `param.json` enables
+`downloadDataSize` for `/download0`). The daemon consuming the request proves
+nothing, so the title waits until `/data` is actually reachable, after which
+the prefix lives at `/data/prospero-win/prefix`. The earlier daemon's
+`/download0/etahen_jailbreak` marker is no longer written. Once `/data`
 appears after a request, the title waits another second
-(`PW_DATA_MOUNT_SETTLE_MS`) before it goes on. All three console
-power-offs seen on 2026-09-27 came within milliseconds of an escape: a game
-starting to load Wine, and twice `rfork_thread`. The request is
-best-effort — if the helper is not running, the title keeps using
+(`PW_DATA_MOUNT_SETTLE_MS`) before it goes on. The request is best-effort:
+if the daemon is not running, the title keeps using
 `/download0/prospero-win/prefix`.
 
 ## Starting Wine in the title

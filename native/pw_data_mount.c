@@ -11,8 +11,8 @@
 
 int pw_data_mount_format_request(char *buf, size_t size, int32_t pid)
 {
-    /* The console helper reads the process id from {"PID":"<int>"}. */
-    int len = snprintf(buf, size, "{\"PID\":\"%d\"}", (int)pid);
+    /* The Lapy JB daemon reads the process id from {"PID":<int>}. */
+    int len = snprintf(buf, size, "{\"PID\":%d}\n", (int)pid);
     if (len < 0 || (size_t)len >= size) return -1;
     return len;
 }
@@ -26,11 +26,18 @@ int pw_data_mount_request_with(const PwDataMountOps *ops, int32_t pid, int max_w
 
     if (!detail) detail = &local;
     detail->data_before = detail->wrote_request = detail->write_errno = 0;
-    detail->data_after = detail->waited_ms = detail->settled_ms = 0;
-    if (!ops || !ops->write_request || !ops->data_visible || !ops->sleep_ms) return -1;
+    detail->prepare_errno = detail->data_after = detail->waited_ms = detail->settled_ms = 0;
+    if (!ops || !ops->prepare || !ops->write_request || !ops->data_visible || !ops->sleep_ms) return -1;
 
     /* Already reachable (e.g. a re-launch): nothing to request. */
     if (ops->data_visible()) { detail->data_before = detail->data_after = 1; return 0; }
+
+    /* The daemon only acts on a process that did this first. */
+    errno = 0;
+    if (ops->prepare() != 0) {
+        detail->prepare_errno = errno ? errno : EPERM;
+        return -1;
+    }
 
     if ((len = pw_data_mount_format_request(request, sizeof(request), pid)) < 0) return -1;
     errno = 0;
@@ -54,15 +61,32 @@ int pw_data_mount_request_with(const PwDataMountOps *ops, int32_t pid, int max_w
 
 /* ---- native console operations ----------------------------------------- */
 
+static int native_prepare(void)
+{
+    /* The same-UID call gives this process a private credential, which the
+     * daemon requires; it must come before any other thread exists. */
+    return seteuid(geteuid());
+}
+
 static int native_write_request(const char *path, const char *bytes, size_t len)
 {
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    char temporary[64];
     ssize_t put;
+    int fd, saved;
 
-    if (fd < 0) return -1;
+    if (snprintf(temporary, sizeof(temporary), "%s%ld", PW_DATA_MOUNT_REQUEST_TEMP, (long)getpid()) >=
+        (int)sizeof(temporary)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    (void)unlink(temporary);
+    if ((fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL, 0644)) < 0) return -1;
     put = write(fd, bytes, len);
-    close(fd);
-    if (put != (ssize_t)len) { if (put >= 0) errno = EIO; return -1; }
+    saved = put == (ssize_t)len ? 0 : put >= 0 ? EIO : errno;
+    if (close(fd) != 0 && !saved) saved = errno;
+    /* The daemon sees only a complete request. */
+    if (!saved && rename(temporary, path) != 0) saved = errno;
+    if (saved) { (void)unlink(temporary); errno = saved; return -1; }
     return 0;
 }
 
@@ -81,6 +105,6 @@ static void native_sleep_ms(int ms)
 int pw_data_mount_request(PwDataMountResult *detail)
 {
     static const PwDataMountOps ops = {
-        native_write_request, native_data_visible, native_sleep_ms };
+        native_prepare, native_write_request, native_data_visible, native_sleep_ms };
     return pw_data_mount_request_with(&ops, (int32_t)getpid(), PW_DATA_MOUNT_WAIT_MS, detail);
 }

@@ -26,9 +26,17 @@ int main(void)
 
     cleanup();
 
-    /* /data absent: the request file is written and the wait times out. */
+    /* /data absent: seteuid(geteuid()) succeeds, the request is written and
+     * the wait times out. */
     assert(pw_data_mount_request(&r) == -1);
+    assert(r.prepare_errno == 0);
     assert(r.data_before == 0 && r.wrote_request == 1 && r.write_errno == 0);
+    {
+        /* Renamed into place: no temporary file is left. */
+        char temporary[64];
+        snprintf(temporary, sizeof(temporary), "%s%ld", PW_DATA_MOUNT_REQUEST_TEMP, (long)getpid());
+        assert(access(temporary, F_OK) != 0);
+    }
     assert(r.data_after == 0 && r.waited_ms == PW_DATA_MOUNT_WAIT_MS);
 
     /* It holds this process's id in the line the helper reads. */
@@ -48,6 +56,6 @@ int main(void)
     assert(access(PW_DATA_MOUNT_REQUEST_PATH, F_OK) != 0); /* nothing written */
 
     cleanup();
-    printf("data mount native passed: request file written, pid line, /data present short-circuit\n");
+    printf("data mount native passed: seteuid, request renamed into place, pid line, /data present short-circuit\n");
     return 0;
 }

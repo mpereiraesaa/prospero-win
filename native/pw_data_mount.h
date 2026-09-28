@@ -5,10 +5,12 @@
  * Make /data available to this process.
  *
  * A title starts able to write only its own /download0 sandbox, where /data is
- * absent. prospero-win writes a small request file into that sandbox carrying
- * its process id; an external console helper watches for the file and makes
- * /data available to the process (see docs/WINE_PS5_BUILD.md for the helper it
- * expects). prospero-win then waits until /data is reachable.
+ * absent. prospero-win asks the Lapy JB daemon for it (see
+ * docs/WINE_PS5_BUILD.md): in this process, before it creates any other
+ * thread, seteuid(geteuid()) (which must succeed, or nothing is requested),
+ * then a complete {"PID":<pid>} request renamed into /download0. The daemon
+ * consuming it proves nothing, so prospero-win then waits until /data is
+ * actually reachable.
  *
  * The file system and clock are injected so the request-and-wait logic is
  * host-testable; native/pw_data_mount.c provides the console operations. The
@@ -18,7 +20,12 @@
 #include <stdint.h>
 
 #ifndef PW_DATA_MOUNT_REQUEST_PATH
-#define PW_DATA_MOUNT_REQUEST_PATH "/download0/etahen_jailbreak"
+#define PW_DATA_MOUNT_REQUEST_PATH "/download0/elevate_proc"
+#endif
+#ifndef PW_DATA_MOUNT_REQUEST_TEMP
+/* Written first, then renamed to PW_DATA_MOUNT_REQUEST_PATH, so the daemon
+ * only ever sees a complete request; the process id follows. */
+#define PW_DATA_MOUNT_REQUEST_TEMP "/download0/.elevate_proc."
 #endif
 #ifndef PW_DATA_MOUNT_PATH
 #define PW_DATA_MOUNT_PATH "/data"          /* reachable once granted */
@@ -39,7 +46,11 @@
 enum { PW_DATA_MOUNT_REQUEST_MAX = 32 };    /* room for the request line */
 
 typedef struct PwDataMountOps {
-    /* Write len bytes to path (truncating). 0 on success, -1 with errno set. */
+    /* Make this process eligible before requesting: seteuid(geteuid()) on
+     * the console. 0 on success, -1 with errno set (nothing is requested). */
+    int (*prepare)(void);
+    /* Write len bytes as the request at path, complete or not at all. 0 on
+     * success, -1 with errno set. */
     int (*write_request)(const char *path, const char *bytes, size_t len);
     /* Non-zero when PW_DATA_MOUNT_PATH is reachable. */
     int (*data_visible)(void);
@@ -48,6 +59,7 @@ typedef struct PwDataMountOps {
 
 typedef struct PwDataMountResult {
     int data_before;   /* /data was already reachable */
+    int prepare_errno; /* errno if prepare failed (then nothing was requested), else 0 */
     int wrote_request; /* the request file was written */
     int write_errno;   /* errno if the write failed, else 0 */
     int data_after;    /* /data became reachable */

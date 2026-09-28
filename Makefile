@@ -90,7 +90,7 @@ $(eval $(call test_rule,test_pw_videoout_layout,tests/test_pw_videoout_layout.c,
 $(eval $(call test_rule,test_pw_videoout_tile,tests/test_pw_videoout_tile.c src/pw_present.c,))
 $(eval $(call test_rule,test_pw_pad_ps5,tests/test_pw_pad_ps5.c native/pw_pad_ps5.c src/pw_pad.c,-DPW_PAD_PS5_HOST_TEST))
 $(eval $(call test_rule,test_pw_data_mount,tests/test_pw_data_mount.c native/pw_data_mount.c,))
-PW_DATA_MOUNT_TEST_FLAGS := -DPW_DATA_MOUNT_REQUEST_PATH='"/tmp/pw_dm_req"' -DPW_DATA_MOUNT_PATH='"/tmp/pw_dm_data"' -DPW_DATA_MOUNT_WAIT_MS=200 -DPW_DATA_MOUNT_POLL_MS=50
+PW_DATA_MOUNT_TEST_FLAGS := -DPW_DATA_MOUNT_REQUEST_PATH='"/tmp/pw_dm_req"' -DPW_DATA_MOUNT_REQUEST_TEMP='"/tmp/pw_dm_req_tmp."' -DPW_DATA_MOUNT_PATH='"/tmp/pw_dm_data"' -DPW_DATA_MOUNT_WAIT_MS=200 -DPW_DATA_MOUNT_POLL_MS=50
 $(eval $(call test_rule,test_pw_data_mount_native,tests/test_pw_data_mount_native.c native/pw_data_mount.c,$(PW_DATA_MOUNT_TEST_FLAGS)))
 $(eval $(call test_rule,classify_x86,tools/classify_x86.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c,))
 $(eval $(call test_rule,dbt_differential,tools/dbt_differential.c src/pw_x86_hostexec.c src/pw_x86_engine.c src/pw_x86_cache.c src/pw_x86_block.c src/pw_x86_reencode.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,))
