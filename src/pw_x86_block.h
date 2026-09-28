@@ -75,6 +75,10 @@ typedef struct PwX86State {
     /* Why the memory guard refused the last access, so a classified stop can
      * name the address instead of only its kind. */
     uint32_t fault_address, fault_width, fault_write;
+    /* Re-encoded blocks with a call stack (PwX86TranslateOptions.call_stack)
+     * run on it: the host rsp to return to C with, and the top of the call
+     * stack each entry from C starts at. */
+    uintptr_t host_rsp, call_stack_top;
 } PwX86State;
 
 uint32_t pw_x86_compute_canonical_flags(const PwX86DeferredFlags *df, uint32_t prev_eflags);
@@ -203,6 +207,14 @@ typedef struct PwX86TranslateOptions {
      * dispatcher only at an unlinked exit or a missed lookup. For callers
      * that need nothing from the dispatcher between blocks. */
     unsigned unbounded_chains;
+    /* With unbounded_chains: a guest call is a host call to the callee on a
+     * call stack of host return addresses (PwX86State.call_stack_top), and
+     * a guest ret a host ret, so the host predicts returns. Each return
+     * lands after its call, which checks the guest's return address and
+     * continues at the call's next instruction or looks it up. A return
+     * from an empty call stack reaches the engine's return stub at the
+     * start of the code arena. */
+    unsigned call_stack;
 } PwX86TranslateOptions;
 
 /* The fault table of a re-encoded block with fault markers, at

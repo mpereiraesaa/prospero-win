@@ -50,4 +50,10 @@ static inline int pw_x86_reencoded(const PwX86RegContract *contract)
 int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t guest_pc,
                     uint8_t *output, size_t capacity, PwX86Block *block,
                     const PwX86TranslateOptions *options);
+
+/* The return stub PwX86TranslateOptions.call_stack needs at the start of the
+ * code arena: a host ret that finds no call on the call stack comes here
+ * with the guest's return address in r10d. Its bytes, or 0 when the options
+ * have no call stack or it does not fit. */
+size_t pw_x86_reencode_return_stub(uint8_t *output, size_t capacity, const PwX86TranslateOptions *options);
 #endif

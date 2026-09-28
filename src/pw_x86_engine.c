@@ -165,6 +165,66 @@ int pw_x86_engine_set_fault_markers(PwX86Engine *engine, unsigned enabled)
     return PW_OK;
 }
 
+/* The return stub at the start of the arena (pw_x86_reencode_return_stub);
+ * blocks follow it. */
+static int emit_return_stub(PwX86Engine *engine)
+{
+    uint8_t stub[512];
+    PwX86TranslateOptions options;
+    size_t bytes;
+
+    if(!engine->call_stack_base) return PW_OK;
+    memset(&options, 0, sizeof(options));
+    options.indirect_targets = engine->indirect_targets;
+    options.indirect_mask = PW_X86_ENGINE_INDIRECT_SLOTS - 1;
+    options.chain_targets = engine->chain_targets;
+    options.unbounded_chains = 1;
+    options.call_stack = 1;
+    if(!(bytes = pw_x86_reencode_return_stub(stub, sizeof(stub), &options))) return PW_ERR_UNSUPPORTED;
+    const size_t page = engine->backend->page_bytes, end = ((bytes + page - 1) / page) * page;
+    if(protection(engine, 0, end, PW_PROT_READ|PW_PROT_WRITE) != PW_OK) return PW_ERR_VM;
+    memcpy(engine->code.write_base, stub, bytes);
+    if(protection(engine, 0, end, PW_PROT_READ|PW_PROT_EXEC) != PW_OK) return PW_ERR_VM;
+    engine->return_stub_bytes = (bytes + 63) & ~(size_t)63;
+    engine->cache.cursor = engine->return_stub_bytes;
+    return PW_OK;
+}
+
+int pw_x86_engine_set_call_stack(PwX86Engine *engine, void *base, size_t bytes)
+{
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    if(!base) {
+        engine->call_stack_base = NULL;
+        engine->call_stack_bytes = 0;
+        engine->call_stack_top = 0;
+        return PW_OK;
+    }
+    if(bytes < 4096 || !engine->reencode_enabled || !engine->indirect_targets || !engine->chain_targets ||
+       !engine->unbounded_chains || engine->cache.cursor)
+        return PW_ERR_PRECONDITION;
+    engine->call_stack_base = base;
+    engine->call_stack_bytes = bytes;
+    /* A few return addresses above the top all lead to the return stub. */
+    uintptr_t top = ((uintptr_t)base + bytes - 16 * sizeof(uintptr_t)) & ~(uintptr_t)15;
+    for(uintptr_t *slot = (uintptr_t *)top; (uintptr_t)(slot + 1) <= (uintptr_t)base + bytes; slot++)
+        *slot = (uintptr_t)engine->code.exec_base;
+    engine->call_stack_top = top;
+    int status = emit_return_stub(engine);
+    if(status != PW_OK) {
+        engine->call_stack_base = NULL;
+        engine->call_stack_top = 0;
+    }
+    return status;
+}
+
+int pw_x86_engine_call_stack_fault(const PwX86Engine *engine, uintptr_t address, uintptr_t *rsp)
+{
+    const uintptr_t base = (uintptr_t)engine->call_stack_base;
+    if(!base || address >= base || address < base - PW_X86_ENGINE_CALL_STACK_GUARD) return 0;
+    *rsp = engine->call_stack_top;
+    return 1;
+}
+
 int pw_x86_engine_set_unbounded_chains(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
@@ -259,7 +319,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         engine->no_counters,
         engine->reencode_enabled ? engine->chain_targets : NULL,
         engine->residency_enabled ? engine->global_resident : (uint8_t)0,
-        engine->fault_markers, engine->unbounded_chains };
+        engine->fault_markers, engine->unbounded_chains, engine->call_stack_base != NULL };
     int last = PW_ERR_UNSUPPORTED;
     if (engine->reencode_enabled) {
         last = pw_x86_reencode(source, available, pc, scratch, sizeof(scratch), &best, &options);
@@ -495,6 +555,7 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
     state->reg_reconciliations = 0;
     state->reg_spills = 0;
 
+    state->call_stack_top = engine->call_stack_top;
     int invoked=invoke((uint8_t *)engine->code.exec_base+entry->code_offset+entry->canonical_entry_offset,state);
 
     /* The block a failed step entered, for the fault report. Taken only on
@@ -572,7 +633,8 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
     if(engine->block_map)
         memset(engine->block_map,0,(engine->code.bytes/PW_X86_ENGINE_FAULT_GRANULE+1)*sizeof(uint32_t));
     engine->last_published=0;
-    engine->dispatches=0;engine->retired_instructions=0;engine->failed=0;return PW_OK;
+    engine->dispatches=0;engine->retired_instructions=0;engine->failed=0;
+    return emit_return_stub(engine);
 }
 
 int pw_x86_engine_destroy(PwX86Engine *engine)

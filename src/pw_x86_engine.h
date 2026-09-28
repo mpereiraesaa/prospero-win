@@ -5,7 +5,8 @@
 #include "../include/prospero_win_vm.h"
 
 enum { PW_X86_ENGINE_MAX_SOURCE=15*32, PW_X86_ENGINE_MAX_CODE=16384,
-       PW_X86_ENGINE_INDIRECT_SLOTS=8192, PW_X86_ENGINE_FAULT_GRANULE=256 };
+       PW_X86_ENGINE_INDIRECT_SLOTS=8192, PW_X86_ENGINE_FAULT_GRANULE=256,
+       PW_X86_ENGINE_CALL_STACK_GUARD=0x10000 };
 
 /* Return one immutable executable source span beginning at guest_pc. The span
  * remains alive and unchanged for the engine generation. */
@@ -67,6 +68,12 @@ typedef struct PwX86Engine {
      * 1; blocks follow each other through arena_next). */
     unsigned fault_markers;
     unsigned unbounded_chains;  /* PwX86TranslateOptions.unbounded_chains */
+    /* PwX86TranslateOptions.call_stack: the memory the caller gave, its top
+     * (PwX86State.call_stack_top), and where the return stub ends. */
+    uint8_t *call_stack_base;
+    size_t call_stack_bytes;
+    uintptr_t call_stack_top;
+    size_t return_stub_bytes;
     PwVmRegion block_map_region;
     uint32_t *block_map;
     uint32_t last_published;
@@ -109,6 +116,17 @@ int pw_x86_engine_set_flat_memory(PwX86Engine *, uint32_t low, uint32_t high);
  * pw_x86_engine_fault_redirect. */
 int pw_x86_engine_set_fault_markers(PwX86Engine *, unsigned enabled);
 int pw_x86_engine_set_unbounded_chains(PwX86Engine *, unsigned enabled);
+/* Run re-encoded calls and returns on a call stack in [base, base+bytes)
+ * (PwX86TranslateOptions.call_stack), or stop with base NULL. Needs the
+ * re-encoder, the indirect targets and unbounded chains, and no block
+ * translated yet. The caller keeps the PW_X86_ENGINE_CALL_STACK_GUARD bytes
+ * below base inaccessible and sends host faults there to
+ * pw_x86_engine_call_stack_fault. */
+int pw_x86_engine_set_call_stack(PwX86Engine *, void *base, size_t bytes);
+/* A host fault at address, in translated code: 1 when it is a call that ran
+ * out of call stack, with *rsp set to resume it on an empty one (the calls
+ * below lose their predicted returns, nothing else), else 0. */
+int pw_x86_engine_call_stack_fault(const PwX86Engine *, uintptr_t address, uintptr_t *rsp);
 /* Where to resume a host fault at rip: the refused-access path of the
  * marked access that faulted, or 0 when rip is not one (not ours). Safe in
  * a signal handler: it reads only the engine and its code. */

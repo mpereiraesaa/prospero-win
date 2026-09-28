@@ -70,7 +70,13 @@ static void store_state_imm(Out *o, size_t offset, uint32_t value)
 
 /* Pinned guest state -> PwX86State: registers, then the arithmetic flags
  * from RFLAGS merged into eflags. Clobbers rax and rcx (already stored). */
-static void emit_leave(Out *o)
+/* mov [rdi+offset], rsp or mov rsp, [rdi+offset] */
+static void rsp_state(Out *o, uint8_t opcode, size_t offset)
+{
+    b(o, 0x48); b(o, opcode); b(o, 0xa7); w32(o, (uint32_t)offset);
+}
+
+static void emit_leave(Out *o, unsigned call_stack)
 {
     for (unsigned g = 0; g < 8; g++) store_state(o, host_of[g], g * 4u);
     b(o, 0x9f);                                         /* lahf */
@@ -84,11 +90,13 @@ static void emit_leave(Out *o)
     b(o, 0x25); w32(o, ~(uint32_t)ALL_FLAGS);           /* and eax, ~flags */
     b(o, 0x09); b(o, 0xc8);                             /* or eax, ecx */
     store_state(o, 0, offsetof(PwX86State, eflags));
+    if (call_stack) rsp_state(o, 0x8b, offsetof(PwX86State, host_rsp));
 }
 
 /* PwX86State -> pinned guest state: pending lazy flags committed, the
- * arithmetic flags loaded into RFLAGS without popf, then the registers. */
-static void emit_enter(Out *o)
+ * arithmetic flags loaded into RFLAGS without popf, then the registers.
+ * With a call stack, rsp moves onto it. */
+static void emit_enter(Out *o, unsigned call_stack)
 {
     load_state(o, 0, offsetof(PwX86State, eflags));
     load_state(o, 1, offsetof(PwX86State, deferred_flags.known_mask));
@@ -106,6 +114,10 @@ static void emit_enter(Out *o)
     b(o, 0x04); b(o, 0x7f);                             /* add al, 0x7f: OF = al */
     b(o, 0x9e);                                         /* sahf */
     for (unsigned g = 0; g < 8; g++) load_state(o, host_of[g], g * 4u);
+    if (call_stack) {
+        rsp_state(o, 0x89, offsetof(PwX86State, host_rsp));
+        rsp_state(o, 0x8b, offsetof(PwX86State, call_stack_top));
+    }
 }
 
 /* mov r64, r64 and friends between host registers 0..15. */
@@ -473,6 +485,7 @@ typedef struct Ctx {
     uint32_t here;  /* the guest EIP of the instruction being translated */
     uint32_t block_pc;
     unsigned bounded;  /* chains spend the budget (!unbounded_chains) */
+    unsigned call_stack;
 } Ctx;
 
 static void save_flags(Out *o)
@@ -729,13 +742,13 @@ static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots, size_t jc
     b(o, 0x49); b(o, 0xbb); slots->patch = o->n; w64(o, 0);         /* movabs r11, slot */
     stub_store = o->n;
     b(o, 0x4c); b(o, 0x89); b(o, 0x5f); b(o, (uint8_t)offsetof(PwX86State, last_exit_slot));
-    emit_leave(o);
+    emit_leave(o, c->call_stack);
     store_state_imm(o, offsetof(PwX86State, eip), target);
     b(o, 0x31); b(o, 0xc0); b(o, 0xc3);                             /* xor eax, eax; ret */
     if (backward) put32(o, spent_rel, (uint32_t)(stub_store - (spent_rel + 4)));
     /* A linked block with another contract: its canonical entry. */
     slots->reconcile = o->n;
-    emit_leave(o);
+    emit_leave(o, c->call_stack);
     b(o, 0x49); b(o, 0xbb); slots->reconcile_patch = o->n; w64(o, 0);
     b(o, 0x41); b(o, 0xff); b(o, 0x23);
 }
@@ -782,7 +795,7 @@ static void emit_dynamic_exit(Ctx *c)
         land8(o, to_miss);
     }
     store_state(o, R10, offsetof(PwX86State, eip));
-    emit_leave(o);
+    emit_leave(o, c->call_stack);
     if (c->table) {
         size_t budget_patch, miss_patch, empty_patch;
         uint64_t base = (uint64_t)(uintptr_t)c->table;
@@ -807,6 +820,64 @@ static void emit_dynamic_exit(Ctx *c)
     b(o, 0x31); b(o, 0xc0); b(o, 0xc3);
 }
 
+/* A guest call on the call stack: the guest's return address pushed, then a
+ * host call, to the callee's link (direct) or to the lookup of r10d
+ * (dynamic). The callee's ret comes back right after it, with the guest's
+ * return address in r10d: when it is next, go on to next through a link,
+ * otherwise look it up. */
+static void emit_call(Ctx *c, PwX86Block *block, uint32_t next, uint32_t target, int dynamic, unsigned keep)
+{
+    Out *o = &c->o;
+    ExitSlots callee, rest;
+    size_t call_rel, to_ok, to_lookup, rest_rel;
+
+    emit_push(c, -1, next, keep);
+    b(o, 0xe8); call_rel = o->n; w32(o, 0);                         /* call callee */
+    mov_r9_rcx(o);
+    b(o, 0x41); b(o, 0x8d); b(o, 0x8a); w32(o, 0u - next);          /* lea ecx, [r10-next] */
+    to_ok = jump8(o, 0xe3);                                         /* jrcxz ok */
+    mov_rcx_r9(o);
+    to_lookup = jump32(o);
+    land8(o, to_ok);
+    mov_rcx_r9(o);
+    rest_rel = jump32(o);                                           /* jmp next */
+    emit_chain_exit(c, next, &rest, rest_rel);
+    memset(&callee, 0, sizeof(callee));
+    if (!dynamic) emit_chain_exit(c, target, &callee, call_rel);
+    else land32(o, call_rel);
+    land32(o, to_lookup);
+    emit_dynamic_exit(c);
+
+    if (dynamic) {
+        /* The only link is the return's continuation. */
+        block->exit.kind = PW_X86_EXIT_DIRECT_JUMP;
+        block->exit.chainable = 1;
+        block->exit.target_pc = next;
+        block->exit.target_patch_offset = rest.patch;
+        block->exit.target_stub_offset = rest.stub;
+        block->exit.target_reconcile_offset = rest.reconcile;
+        block->exit.target_reconcile_patch_offset = rest.reconcile_patch;
+        block->exit.target_direct_offset = rest.direct;
+        return;
+    }
+    /* Two links, as a conditional branch has: the callee and the return's
+     * continuation. */
+    block->exit.kind = PW_X86_EXIT_CONDITIONAL;
+    block->exit.chainable = 1;
+    block->exit.target_pc = target;
+    block->exit.fallthrough_pc = next;
+    block->exit.target_patch_offset = callee.patch;
+    block->exit.target_stub_offset = callee.stub;
+    block->exit.target_reconcile_offset = callee.reconcile;
+    block->exit.target_reconcile_patch_offset = callee.reconcile_patch;
+    block->exit.target_direct_offset = callee.direct;
+    block->exit.fallthrough_patch_offset = rest.patch;
+    block->exit.fallthrough_stub_offset = rest.stub;
+    block->exit.fallthrough_reconcile_offset = rest.reconcile;
+    block->exit.fallthrough_reconcile_patch_offset = rest.reconcile_patch;
+    block->exit.fallthrough_direct_offset = rest.direct;
+}
+
 static void emit_cold_paths(Ctx *c, PwX86Block *block)
 {
     Out *o = &c->o;
@@ -823,7 +894,7 @@ static void emit_cold_paths(Ctx *c, PwX86Block *block)
         store_state(o, R11, offsetof(PwX86State, fault_address));
         store_state_imm(o, offsetof(PwX86State, fault_width), cold->width);
         store_state_imm(o, offsetof(PwX86State, fault_write), cold->write);
-        emit_leave(o);
+        emit_leave(o, c->call_stack);
         b(o, 0xb8); w32(o, 0xffffffffu); b(o, 0xc3);                /* mov eax, -1; ret */
     }
     if (!c->fault_markers) return;
@@ -892,6 +963,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     c.mask = options->indirect_mask;
     c.block_pc = pc;
     c.bounded = !options->unbounded_chains;
+    c.call_stack = options->unbounded_chains && options->call_stack && c.chain_table;
 
     block->entry_contract.resident_mask = 0xff;
     for (unsigned g = 0; g < 8; g++)
@@ -900,7 +972,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     block->exit_contract = block->entry_contract;
 
     block->canonical_entry_offset = 0;
-    emit_enter(&c.o);
+    emit_enter(&c.o, c.call_stack);
     block->chain_entry_offset = c.o.n;
 
     cursor = 0;
@@ -999,6 +1071,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         }
         case K_CALL: {
             ExitSlots slots;
+            if (c.call_stack) { emit_call(&c, block, next, in->target, 0, keep); break; }
             emit_push(&c, -1, next, keep);
             emit_chain_exit(&c, in->target, &slots, 0);
             block->exit.kind = PW_X86_EXIT_DIRECT_JUMP;
@@ -1013,6 +1086,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         }
         case K_CALLRM:
             operand_r10(&c, in, keep);
+            if (c.call_stack) { emit_call(&c, block, next, 0, 1, keep); break; }
             emit_push(&c, -1, next, keep);
             emit_dynamic_exit(&c);
             block->exit.kind = PW_X86_EXIT_DYNAMIC;
@@ -1022,7 +1096,8 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
             if (c.fault_markers) emit_frame_access(&c, 0x8b, R10, 4, 0, 0, 0);
             else { guard(&c, &top, 4, 0, keep); load_r10(o); }
             b(o, 0x45); b(o, 0x8d); b(o, 0xa4); b(o, 0x24); w32(o, 4 + in->imm_value); /* lea r12d, [r12+n] */
-            emit_dynamic_exit(&c);
+            if (c.call_stack) b(o, 0xc3);                               /* ret: to the call's landing */
+            else emit_dynamic_exit(&c);
             block->exit.kind = PW_X86_EXIT_DYNAMIC;
             break;
         }
@@ -1092,4 +1167,24 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     block->source_bytes = cursor;
     block->code_bytes = c.o.n;
     return PW_OK;
+}
+
+size_t pw_x86_reencode_return_stub(uint8_t *output, size_t capacity, const PwX86TranslateOptions *options)
+{
+    Ctx c;
+
+    if (!output || !options || !options->unbounded_chains || !options->call_stack ||
+        !options->indirect_targets || !options->chain_targets)
+        return 0;
+    memset(&c, 0, sizeof(c));
+    c.o.p = output; c.o.cap = capacity;
+    c.table = options->indirect_targets;
+    c.chain_table = options->chain_targets;
+    c.mask = options->indirect_mask;
+    c.call_stack = 1;
+    /* A ret past everything pushed: start the call stack again, then look
+     * the guest's return address (r10d) up. */
+    rsp_state(&c.o, 0x8b, offsetof(PwX86State, call_stack_top));
+    emit_dynamic_exit(&c);
+    return c.o.failed ? 0 : c.o.n;
 }

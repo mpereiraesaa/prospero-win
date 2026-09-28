@@ -44,6 +44,9 @@ enum { GUEST_LOW = 0x10000u, GUEST_HIGH = 0xfffff000u };
 enum { GLOBAL_RESIDENT = 0xfb };
 /* Linked blocks per dispatcher return (docs/DBT_BENCHMARK.md). */
 enum { QUANTUM = 1024 };
+/* Host return addresses of the guest calls in a chain (the engine's call
+ * stack): 32768 nested calls, beyond which the stack starts again. */
+enum { CALL_STACK = 0x40000 };
 
 struct pw_thread
 {
@@ -62,6 +65,7 @@ struct pw_thread
     uint64_t readable_generation;
     uint64_t readable_queries, readable_hits;
     PwX86CacheEntry *entries;  /* the budget's count (thread_budget.h) */
+    void *call_stack;          /* guard, then CALL_STACK bytes, or NULL */
 };
 
 C_ASSERT( sizeof(((I386_CONTEXT *)0)->ExtendedRegisters) == PW_GUEST_FXSAVE_BYTES );
@@ -277,6 +281,26 @@ static struct pw_thread *get_thread(void)
      * steps block by block or PW_WOW_QUANTUM asks for one. */
     pw_x86_engine_set_unbounded_chains( &thread->engine, !thread->trace && !thread->prefer_host &&
                                         !getenv( "PW_WOW_QUANTUM" ) );
+    /* Calls and returns on a call stack, so the host predicts the returns
+     * (PW_WOW_CALL_STACK=0 keeps the lookup); its guard sends a call that
+     * runs out of it to redirect_fault. */
+    if (thread->engine.unbounded_chains && thread->engine.reencode_enabled && fault_markers &&
+        (!getenv( "PW_WOW_CALL_STACK" ) || strcmp( getenv( "PW_WOW_CALL_STACK" ), "0" )) &&
+        (thread->call_stack = allocate_above_guest( PW_X86_ENGINE_CALL_STACK_GUARD + CALL_STACK,
+                                                    PAGE_READWRITE )))
+    {
+        void *guard = thread->call_stack;
+        SIZE_T size = PW_X86_ENGINE_CALL_STACK_GUARD;
+        ULONG old;
+
+        if (NtProtectVirtualMemory( NtCurrentProcess(), &guard, &size, PAGE_NOACCESS, &old ) ||
+            pw_x86_engine_set_call_stack( &thread->engine, (char *)thread->call_stack +
+                                          PW_X86_ENGINE_CALL_STACK_GUARD, CALL_STACK ) != PW_OK)
+        {
+            release( thread->call_stack, 0 );
+            thread->call_stack = NULL;
+        }
+    }
     thread->cache_epoch = (uint32_t)code_generation;
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
@@ -340,6 +364,21 @@ static void store_state( const PwX86State *state, I386_CONTEXT *ctx )
 }
 
 /* The saved RIP in a signal context, or NULL where it is not known. */
+/* The saved RSP, in the same layout. */
+static uintptr_t *context_rsp( void *context )
+{
+#if defined(__PROSPERO__)
+    return (uintptr_t *)((char *)context + 248);  /* mcontext at 64, mc_rsp at 184 */
+#elif defined(__linux__)
+    return (uintptr_t *)&((ucontext_t *)context)->uc_mcontext.gregs[REG_RSP];
+#elif defined(__FreeBSD__)
+    return (uintptr_t *)&((ucontext_t *)context)->uc_mcontext.mc_rsp;
+#else
+    (void)context;
+    return NULL;
+#endif
+}
+
 static uintptr_t *context_rip( void *context )
 {
 #if defined(__PROSPERO__)
@@ -369,6 +408,14 @@ static int redirect_fault( siginfo_t *info, void *context )
         uintptr_t low = __atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE );
         if (low && high && *rip >= low && *rip < high)
         {
+            uintptr_t rsp;
+            /* A call that ran out of call stack: start it again. */
+            if (context_rsp( context ) &&
+                pw_x86_engine_call_stack_fault( arenas[i].engine, address, &rsp ))
+            {
+                *context_rsp( context ) = rsp;
+                return 1;
+            }
             target = pw_x86_engine_fault_redirect( arenas[i].engine, *rip );
             state = arenas[i].state;
         }
@@ -431,7 +478,8 @@ static void profile_start(void)
     if (!(profile_rips = calloc( PROFILE_SAMPLES, sizeof(*profile_rips) ))) { profile_path = NULL; return; }
     memset( &action, 0, sizeof(action) );
     action.sa_sigaction = profile_handler;
-    action.sa_flags = SA_SIGINFO | SA_RESTART;
+    /* On the signal stack: translated code may run on the call stack. */
+    action.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
     sigemptyset( &action.sa_mask );
     sigaction( SIGPROF, &action, NULL );
     setitimer( ITIMER_PROF, &timer, NULL );
@@ -811,6 +859,7 @@ static NTSTATUS thread_term( void *args )
     pw_x86_hostexec_destroy( &thread->hostexec );
     pw_x86_engine_destroy( &thread->engine );
     release( thread->entries, 0 );
+    if (thread->call_stack) release( thread->call_stack, 0 );
     free( thread );
     return STATUS_SUCCESS;
 }
