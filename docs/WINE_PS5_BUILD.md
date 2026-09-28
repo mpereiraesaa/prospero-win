@@ -562,6 +562,15 @@ Pinball's keys with `pw_wine_post_input`: L1 and R1 flip, Cross plunges, the
 d-pad nudges, Options pauses and Square starts a new game. Frames up to 1280x1024 are shown; larger ones are
 counted as rejected.
 
+A game that presents with Vulkan scans out through the GPU driver's own
+video output, so the title hands its own over first. The driver calls
+`pw_wine_release_display` when the game creates its first Vulkan surface
+(patch 0460). That calls the title's callback, which waits until the main
+thread has closed the title's VideoOut (logged as `PW_WINE64 display released
+to vulkan`). From then on the sink passes no more GDI frames to the title,
+and the sink statistics show `display_released`. A game runs in its own
+process, so the release lasts until the game exits.
+
 Until Wine installs its own handlers, a fault is reported with its RIP
 (read at ucontext +224) and the ntdll segment it falls in. Once a second
 the main thread logs a heartbeat with the frames put and shown and the

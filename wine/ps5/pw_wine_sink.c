@@ -9,6 +9,8 @@
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static PwWinePresentSink sink;
 static void *sink_context;
+static PwWineDisplayRelease display_release;
+static void *display_context;
 static PwWineInput queue[PW_WINE_INPUT_QUEUE];
 static uint32_t head,count;
 static PwWineSinkStats stats;
@@ -45,12 +47,28 @@ void pw_wine_set_present_sink(PwWinePresentSink new_sink,void *context)
     sink=new_sink;sink_context=context;
     pthread_mutex_unlock(&lock);
 }
+void pw_wine_set_display_release(PwWineDisplayRelease release,void *context)
+{
+    pthread_mutex_lock(&lock);
+    display_release=release;display_context=context;
+    pthread_mutex_unlock(&lock);
+}
+int pw_wine_release_display(void)
+{
+    int status=0;
+    /* Under the frame lock: no frame is being shown while the title lets go. */
+    pthread_mutex_lock(&lock);
+    if(!stats.display_released && display_release)status=display_release(display_context);
+    if(!status)stats.display_released=1;
+    pthread_mutex_unlock(&lock);
+    return status;
+}
 int pw_wine_present(const void *bgra,uint32_t width,uint32_t height,uint32_t stride)
 {
     int status=-1;
     /* The lock also serialises frames: the sink sees one at a time. */
     pthread_mutex_lock(&lock);
-    if(sink && bgra && width && height && stride>=width*4u)
+    if(sink && !stats.display_released && bgra && width && height && stride>=width*4u)
         status=sink(sink_context,bgra,width,height,stride);
     if(status)stats.frames_dropped++;
     else stats.frames++;

@@ -18,6 +18,40 @@ static int sink(void *context,const void *bgra,uint32_t w,uint32_t h,uint32_t st
     return 0;
 }
 
+static int release_calls,release_status;
+static void *release_seen;
+static int release(void *context)
+{
+    release_calls++;release_seen=context;
+    return release_status;
+}
+
+/* Vulkan takes the video output once; frames stop reaching the title. Last
+ * in main: the release lasts for the process. */
+static void test_display_release(void)
+{
+    uint32_t frame[4*3]={0};
+    PwWineSinkStats s;
+    int context_tag;
+
+    pw_wine_sink_stats(&s);assert(!s.display_released);
+    const int before=calls;
+    assert(pw_wine_present(frame,4,3,16)==0 && calls==before+1);
+    /* A refusal is returned and changes nothing; the driver may ask again. */
+    pw_wine_set_display_release(release,&context_tag);
+    release_status=-5;assert(pw_wine_release_display()==-5 && release_calls==1);
+    assert(release_seen==&context_tag);
+    pw_wine_sink_stats(&s);assert(!s.display_released);
+    assert(pw_wine_present(frame,4,3,16)==0 && calls==before+2);
+    release_status=0;assert(pw_wine_release_display()==0 && release_calls==2);
+    pw_wine_sink_stats(&s);assert(s.display_released);
+    const uint64_t dropped=s.frames_dropped;
+    assert(pw_wine_present(frame,4,3,16)==-1 && calls==before+2);
+    pw_wine_sink_stats(&s);assert(s.frames_dropped==dropped+1);
+    /* Once released, the title is not asked again. */
+    assert(pw_wine_release_display()==0 && release_calls==2);
+}
+
 static int audio_calls,audio_fail;
 static int16_t audio_first,audio_last;
 static void *audio_seen;
@@ -155,5 +189,6 @@ int main(void)
     pw_wine_set_rumble(1000,0xffff);assert(!pw_wine_rumble(NULL,NULL));  /* unchanged */
     pw_wine_set_rumble(0x10000,0);assert(pw_wine_rumble(NULL,&right)==1 && right==0);
     assert(!pw_wine_rumble(&left,NULL) && left==0xffff);
+    test_display_release();
     return 0;
 }

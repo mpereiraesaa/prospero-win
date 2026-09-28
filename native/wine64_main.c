@@ -148,6 +148,22 @@ static int wine_present(void *context, const void *bgra, uint32_t width, uint32_
     return pw_wine_frame_box_put(&frames, bgra, width, height, stride);
 }
 
+/* A game presenting with Vulkan scans out through the GPU driver's own video
+ * output (patch 0460), which the title must close first. The main thread
+ * owns the title's, so the driver's request waits for it to be closed. */
+static int display_request, display_closed;
+
+static int wine_release_display(void *context)
+{
+    (void)context;
+    __atomic_store_n(&display_request, 1, __ATOMIC_RELEASE);
+    for (int waited = 0; waited < 5000; waited++) {
+        if (__atomic_load_n(&display_closed, __ATOMIC_ACQUIRE)) return 0;
+        usleep(1000);
+    }
+    return -1;
+}
+
 /* ---- sound -------------------------------------------------------------- */
 
 /* Wine's audio driver (wine/wineps5) mixes every stream a game plays into
@@ -596,6 +612,11 @@ int main(int argc, char **argv)
                 if (set_present) set_present(wine_present, NULL);
             }
         }
+        {
+            void (*set_release)(PwWineDisplayRelease, void *) = (void (*)(PwWineDisplayRelease, void *))
+                (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_display_release");
+            if (set_release) set_release(wine_release_display, NULL);
+        }
         PS5LOG_LOG("PW_WINE64 display present_sink=%d frames=%d post_input=%d xinput=%d video=%s "
                    "pad=%s", set_present != NULL, frame_shown != NULL, post_input != NULL,
                    set_pad != NULL,
@@ -671,6 +692,14 @@ int main(int argc, char **argv)
                     PS5LOG_LOG("PW_WINE64 rumble left=%u right=%u status=%s rc=%d", (unsigned)left,
                                (unsigned)right, pw_result_name(vibrate), pad.vibration_rc);
             }
+        }
+        if (__atomic_load_n(&display_request, __ATOMIC_ACQUIRE) &&
+            !__atomic_load_n(&display_closed, __ATOMIC_RELAXED)) {
+            int closed = video_status == PW_OK ? pw_videoout_ps5_close(&video) : PW_OK;
+            video_status = PW_ERR_STATE;
+            __atomic_store_n(&display_closed, 1, __ATOMIC_RELEASE);
+            PS5LOG_LOG("PW_WINE64 display released to vulkan close=%s shown=%llu",
+                       pw_result_name(closed), (unsigned long long)shown);
         }
         if (video_status == PW_OK && frame_shown &&
             pw_wine_frame_box_take(&frames, &shown_sequence, frame_shown, PW_WINE64_MAX_FRAME,
