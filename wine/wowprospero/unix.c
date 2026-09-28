@@ -284,6 +284,11 @@ static struct pw_thread *get_thread(void)
     /* Blocks go on past conditional branches, whose side exits link
      * themselves in the code memory, which stays writable here
      * (PW_WOW_SUPERBLOCKS=0 ends blocks at every branch). */
+    /* The guest's x87, MMX and SSE state runs in the host FPU in re-encoded
+     * code, which copies FP and SIMD instructions (PW_WOW_NATIVE_FP=0 leaves
+     * them to the emitter's software FPU). */
+    pw_x86_engine_set_native_fp( &thread->engine, thread->engine.reencode_enabled &&
+                                 (!getenv( "PW_WOW_NATIVE_FP" ) || strcmp( getenv( "PW_WOW_NATIVE_FP" ), "0" )) );
     pw_x86_engine_set_superblocks( &thread->engine, thread->engine.unbounded_chains &&
                                    (!getenv( "PW_WOW_SUPERBLOCKS" ) || strcmp( getenv( "PW_WOW_SUPERBLOCKS" ), "0" )) );
     /* Calls and returns on a call stack, so the host predicts the returns

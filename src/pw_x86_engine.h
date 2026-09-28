@@ -69,6 +69,8 @@ typedef struct PwX86Engine {
     unsigned fault_markers;
     unsigned unbounded_chains;  /* PwX86TranslateOptions.unbounded_chains */
     unsigned superblocks;       /* PwX86TranslateOptions.superblocks */
+    unsigned native_fp;         /* PwX86TranslateOptions.native_fp */
+    uint8_t fxsave_image[512 + 15];  /* the guest's FP state while a block runs */
     /* PwX86TranslateOptions.call_stack: the memory the caller gave, its top
      * (PwX86State.call_stack_top), and where the return stub ends. */
     uint8_t *call_stack_base;
@@ -120,6 +122,8 @@ int pw_x86_engine_set_unbounded_chains(PwX86Engine *, unsigned enabled);
 /* PwX86TranslateOptions.superblocks for blocks translated from now on: the
  * caller's code memory must stay writable while it runs. */
 int pw_x86_engine_set_superblocks(PwX86Engine *, unsigned enabled);
+/* PwX86TranslateOptions.native_fp, before any block is translated. */
+int pw_x86_engine_set_native_fp(PwX86Engine *, unsigned enabled);
 /* Run re-encoded calls and returns on a call stack in [base, base+bytes)
  * (PwX86TranslateOptions.call_stack), or stop with base NULL. Needs the
  * re-encoder, the indirect targets and unbounded chains, and no block

@@ -361,7 +361,39 @@ __asm__(
     "    pop %rbp\n"
     "    pop %rbx\n"
     "    ret\n"
-    ".size pw_x86_run_block,.-pw_x86_run_block\n");
+    ".size pw_x86_run_block,.-pw_x86_run_block\n"
+    /* The same with the guest's FP state (an FXSAVE image, 16-byte aligned)
+     * in the host FPU while the block runs; the host's MXCSR and x87
+     * control word come back after, with an empty x87 stack. */
+    ".globl pw_x86_run_block_fp\n"
+    ".type pw_x86_run_block_fp,@function\n"
+    "pw_x86_run_block_fp:\n"
+    "    push %rbx\n"
+    "    push %rbp\n"
+    "    push %r12\n"
+    "    push %r13\n"
+    "    push %r14\n"
+    "    push %r15\n"
+    "    sub $24, %rsp\n"
+    "    mov %rdx, (%rsp)\n"
+    "    stmxcsr 8(%rsp)\n"
+    "    fnstcw 12(%rsp)\n"
+    "    fxrstor (%rdx)\n"
+    "    call *%rsi\n"
+    "    mov (%rsp), %rdx\n"
+    "    fxsave (%rdx)\n"
+    "    fninit\n"
+    "    fldcw 12(%rsp)\n"
+    "    ldmxcsr 8(%rsp)\n"
+    "    add $24, %rsp\n"
+    "    pop %r15\n"
+    "    pop %r14\n"
+    "    pop %r13\n"
+    "    pop %r12\n"
+    "    pop %rbp\n"
+    "    pop %rbx\n"
+    "    ret\n"
+    ".size pw_x86_run_block_fp,.-pw_x86_run_block_fp\n");
 
 static inline int get_resident_host_reg(const PwX86RegContract *c, unsigned gpr)
 {
@@ -1552,7 +1584,7 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
                          uint8_t *output, size_t capacity, PwX86Block *block,
                          unsigned residency_enabled, unsigned lazy_flags_enabled)
 {
-    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0, 0, NULL, 0, 0, 0, 0, 0 };
+    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0, 0, NULL, 0, 0, 0, 0, 0, 0 };
 
     return pw_x86_translate_opts(source, bytes, pc, output, capacity, block, &options);
 }

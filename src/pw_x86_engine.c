@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_x86_engine.h"
 #include "pw_x86_reencode.h"
+#include "pw_guest_fp.h"
 #include <string.h>
 
 #if defined(__clang__)
@@ -180,6 +181,7 @@ static int emit_return_stub(PwX86Engine *engine)
     options.chain_targets = engine->chain_targets;
     options.unbounded_chains = 1;
     options.call_stack = 1;
+    options.native_fp = engine->native_fp;
     if(!(bytes = pw_x86_reencode_return_stub(stub, sizeof(stub), &options))) return PW_ERR_UNSUPPORTED;
     const size_t page = engine->backend->page_bytes, end = ((bytes + page - 1) / page) * page;
     if(protection(engine, 0, end, PW_PROT_READ|PW_PROT_WRITE) != PW_OK) return PW_ERR_VM;
@@ -223,6 +225,20 @@ int pw_x86_engine_call_stack_fault(const PwX86Engine *engine, uintptr_t address,
     if(!base || address >= base || address < base - PW_X86_ENGINE_CALL_STACK_GUARD) return 0;
     *rsp = engine->call_stack_top;
     return 1;
+}
+
+int pw_x86_engine_set_native_fp(PwX86Engine *engine, unsigned enabled)
+{
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    engine->native_fp = enabled ? 1 : 0;
+    return PW_OK;
+}
+
+/* With native FP, re-encoded and emitted blocks meet only through C, which
+ * moves the guest's FP state between the host FPU and memory. */
+static int may_link(const PwX86Engine *engine, const PwX86RegContract *from, const PwX86RegContract *to)
+{
+    return !engine->native_fp || pw_x86_reencoded(from) == pw_x86_reencoded(to);
 }
 
 int pw_x86_engine_set_superblocks(PwX86Engine *engine, unsigned enabled)
@@ -327,7 +343,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         engine->reencode_enabled ? engine->chain_targets : NULL,
         engine->residency_enabled ? engine->global_resident : (uint8_t)0,
         engine->fault_markers, engine->unbounded_chains, engine->call_stack_base != NULL,
-        engine->superblocks };
+        engine->superblocks, engine->native_fp };
     int last = PW_ERR_UNSUPPORTED;
     if (engine->reencode_enabled) {
         last = pw_x86_reencode(source, available, pc, scratch, sizeof(scratch), &best, &options);
@@ -411,7 +427,8 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         /* Forward link: connect newly published exits to targets already in cache */
         if(engine->chaining_enabled) {
             PwX86CacheEntry *tgt = NULL;
-            if(pw_x86_cache_lookup_mut(&engine->cache, best.exit.target_pc, &tgt) == PW_OK) {
+            if(pw_x86_cache_lookup_mut(&engine->cache, best.exit.target_pc, &tgt) == PW_OK &&
+               may_link(engine, &e_mut->exit_contract, &tgt->entry_contract)) {
                 engine->attempted_links++;
                 if(pw_x86_contracts_match(&e_mut->exit_contract, &tgt->entry_contract)) {
                     e_mut->link_slots[0].target_code = exec_base + tgt->code_offset + tgt->chain_entry_offset;
@@ -427,7 +444,8 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
                 engine->successful_links++;
             }
             if(best.exit.kind == PW_X86_EXIT_CONDITIONAL) {
-                if(pw_x86_cache_lookup_mut(&engine->cache, best.exit.fallthrough_pc, &tgt) == PW_OK) {
+                if(pw_x86_cache_lookup_mut(&engine->cache, best.exit.fallthrough_pc, &tgt) == PW_OK &&
+                   may_link(engine, &e_mut->exit_contract, &tgt->entry_contract)) {
                     engine->attempted_links++;
                     if(pw_x86_contracts_match(&e_mut->exit_contract, &tgt->entry_contract)) {
                         e_mut->link_slots[1].target_code = exec_base + tgt->code_offset + tgt->chain_entry_offset;
@@ -462,7 +480,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
             uint32_t *next = &cand->pending_next[side];
 
             if(!slot->is_linked && slot->target_pc != pc) { link = next; continue; }
-            if(!slot->is_linked) {
+            if(!slot->is_linked && may_link(engine, &cand->exit_contract, &e_mut->entry_contract)) {
                 engine->attempted_links++;
                 if(pw_x86_contracts_match(&cand->exit_contract, &e_mut->entry_contract)) {
                     slot->target_code = exec_base + e_mut->code_offset + e_mut->chain_entry_offset;
@@ -499,6 +517,11 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
             PwX86CacheEntry *target_entry = NULL;
             if(pw_x86_cache_lookup_mut(&engine->cache, state->eip, &target_entry) == PW_OK) {
                 PwX86CacheEntry *source_entry = NULL;
+                if(engine->native_fp &&
+                   (pw_x86_cache_lookup_mut(&engine->cache, last_slot->source_pc, &source_entry) != PW_OK ||
+                    !may_link(engine, &source_entry->exit_contract, &target_entry->entry_contract)))
+                    goto dispatch;
+                source_entry = NULL;
                 size_t reconcile_offset = 0;
                 if(pw_x86_cache_lookup_mut(&engine->cache, last_slot->source_pc, &source_entry) == PW_OK) {
                     if(last_slot == &source_entry->link_slots[0]) {
@@ -530,6 +553,7 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
         }
     }
 
+dispatch:;
     const PwX86CacheEntry *entry=NULL;
     int status=pw_x86_cache_lookup(&engine->cache,state->eip,&entry);
     if(status==PW_OK)report->cache_hit=1;
@@ -541,11 +565,15 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
     report->instructions=entry->instructions;report->source_bytes=entry->source_bytes;
     report->code_bytes=entry->code_bytes;engine->dispatches++;
     if(engine->indirect_enabled) {
-        PwX86IndirectTarget *target=&engine->indirect_targets[
-            pw_x86_indirect_slot(entry->guest_pc,PW_X86_ENGINE_INDIRECT_SLOTS-1)];
-        target->guest_pc=entry->guest_pc;
-        target->host_code=(const uint8_t *)engine->code.exec_base+entry->code_offset+
-                          entry->canonical_entry_offset;
+        /* The indirect table enters any block at its canonical entry, from
+         * emitted code; with native FP, only emitted blocks go there. */
+        if(!(engine->native_fp && pw_x86_reencoded(&entry->entry_contract))) {
+            PwX86IndirectTarget *target=&engine->indirect_targets[
+                pw_x86_indirect_slot(entry->guest_pc,PW_X86_ENGINE_INDIRECT_SLOTS-1)];
+            target->guest_pc=entry->guest_pc;
+            target->host_code=(const uint8_t *)engine->code.exec_base+entry->code_offset+
+                              entry->canonical_entry_offset;
+        }
         if(engine->chain_targets && pw_x86_reencoded(&entry->entry_contract)) {
             PwX86IndirectTarget *chain=&engine->chain_targets[entry->guest_pc & 0xffffu];
             chain->guest_pc=entry->guest_pc;
@@ -564,7 +592,15 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
     state->reg_spills = 0;
 
     state->call_stack_top = engine->call_stack_top;
-    int invoked=invoke((uint8_t *)engine->code.exec_base+entry->code_offset+entry->canonical_entry_offset,state);
+    void *code_entry=(uint8_t *)engine->code.exec_base+entry->code_offset+entry->canonical_entry_offset;
+    int invoked;
+    if(engine->native_fp && pw_x86_reencoded(&entry->entry_contract)) {
+        /* The guest's x87, MMX and SSE state in the host FPU for the chain. */
+        uint8_t *image=(uint8_t *)(((uintptr_t)engine->fxsave_image+15)&~(uintptr_t)15);
+        pw_guest_fp_to_fxsave(&state->fp,image);
+        invoked=pw_x86_run_block_fp(state,code_entry,image);
+        pw_guest_fp_from_fxsave(&state->fp,image);
+    } else invoked=invoke(code_entry,state);
 
     /* The block a failed step entered, for the fault report. Taken only on
      * failure: copying it before every dispatch cost a kilobyte per step. */

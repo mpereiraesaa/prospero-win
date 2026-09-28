@@ -221,6 +221,12 @@ typedef struct PwX86TranslateOptions {
      * the exit rewrites its own jcc to jump there. So the caller's code must
      * stay writable while it runs. */
     unsigned superblocks;
+    /* The guest's x87, MMX and SSE state is the host's while re-encoded code
+     * runs (pw_x86_run_block_fp loads and saves it around each entry from C),
+     * so the re-encoder copies FP and SIMD instructions as they are. The
+     * engine then never links re-encoded and emitted blocks to each other:
+     * the emitter keeps that state in memory and uses xmm as scratch. */
+    unsigned native_fp;
 } PwX86TranslateOptions;
 
 /* The fault table of a re-encoded block with fault markers, at
@@ -274,6 +280,9 @@ static inline int pw_x86_global_host(uint8_t mask, unsigned gpr)
  * with rbx, rbp and r12-r15 saved for the caller, since resident guest
  * values may live in them. Returns what the block returns. */
 int pw_x86_run_block(PwX86State *state, const void *entry);
+/* pw_x86_run_block with fxsave_image (512 bytes, 16-byte aligned) loaded
+ * into the host FPU for the block and saved back after it. */
+int pw_x86_run_block_fp(PwX86State *state, const void *entry, void *fxsave_image);
 
 int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t guest_pc,
                           uint8_t *output, size_t capacity, PwX86Block *block,
