@@ -116,7 +116,6 @@ static void rr(Out *o, uint8_t opcode, unsigned w, unsigned dst, unsigned src)
     b(o, opcode);
     b(o, (uint8_t)(0xc0 | (src & 7) << 3 | (dst & 7)));
 }
-static void xchg_rcx_r11(Out *o) { b(o, 0x4c); b(o, 0x87); b(o, 0xd9); }
 
 typedef struct Ea { int base, index; unsigned scale; uint32_t disp; } Ea;
 
@@ -639,22 +638,26 @@ typedef struct ExitSlots {
 static size_t jump32(Out *o) { b(o, 0xe9); w32(o, 0); return o->n - 4; }
 static void land32(Out *o, size_t rel) { put32(o, rel, (uint32_t)(o->n - (rel + 4))); }
 
+static void mov_r9_rcx(Out *o) { b(o, 0x49); b(o, 0x89); b(o, 0xc9); }
+static void mov_rcx_r9(Out *o) { b(o, 0x4c); b(o, 0x89); b(o, 0xc9); }
+
 /* The budget a backward exit spends: the chain returns to the dispatcher
  * when it runs out. Every cycle of linked blocks has an exit whose target
  * is at or before its block's PC, so charging only those bounds a chain.
- * Flag-free: mov, lea, xchg, jrcxz. Returns the rel8 of the jrcxz taken
- * when the budget is spent. */
+ * Flag-free: the count goes through ecx for jrcxz, with the guest's rcx
+ * kept in r9 (a mov, where an xchg would cost three uops). Returns the
+ * rel8 of the jrcxz taken when the budget is spent, with rcx still in r9. */
 static size_t emit_budget(Out *o)
 {
     const size_t budget = offsetof(PwX86State, chain_budget);
     size_t to_spent;
 
-    load_state(o, R11, budget);
-    b(o, 0x45); b(o, 0x8d); b(o, 0x5b); b(o, 0xff);                 /* lea r11d, [r11-1] */
-    store_state(o, R11, budget);
-    xchg_rcx_r11(o);
+    mov_r9_rcx(o);
+    load_state(o, 1, budget);                                       /* mov ecx, budget */
+    b(o, 0x8d); b(o, 0x49); b(o, 0xff);                             /* lea ecx, [rcx-1] */
+    store_state(o, 1, budget);
     to_spent = jump8(o, 0xe3);                                      /* jrcxz spent */
-    xchg_rcx_r11(o);
+    mov_rcx_r9(o);
     return to_spent;
 }
 
@@ -675,7 +678,8 @@ static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots, size_t jc
     else slots->direct = jump32(o);
     if (backward) {
         land8(o, to_spent);
-        xchg_rcx_r11(o);                                            /* r11 = 0 */
+        mov_rcx_r9(o);
+        b(o, 0x41); b(o, 0xbb); w32(o, 0);                          /* mov r11d, 0 */
         spent_rel = jump32(o);
     }
     /* Unlinked: record the slot for the dispatcher to link. */
@@ -697,8 +701,6 @@ static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots, size_t jc
 
 /* The dynamic exit to the guest EIP in r10d: the indirect table when the
  * translation has one, otherwise back to the dispatcher. */
-static void xchg_rcx_r9(Out *o) { b(o, 0x4c); b(o, 0x87); b(o, 0xc9); }
-
 static void emit_dynamic_exit(Ctx *c)
 {
     Out *o = &c->o;
@@ -715,25 +717,23 @@ static void emit_dynamic_exit(Ctx *c)
         b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x1b);                 /* lea r11, [r11+r11] */
         b(o, 0x49); b(o, 0xb9); w64(o, base);                           /* movabs r9, table */
         b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x19);                 /* lea r11, [r9+r11] */
-        b(o, 0x45); b(o, 0x8b); b(o, 0x0b);                             /* mov r9d, [r11] */
-        b(o, 0x41); b(o, 0xf7); b(o, 0xd1);                             /* not r9d */
-        b(o, 0x47); b(o, 0x8d); b(o, 0x4c); b(o, 0x11); b(o, 1);        /* lea r9d, [r9+r10+1] */
-        xchg_rcx_r9(o);
+        mov_r9_rcx(o);
+        b(o, 0x41); b(o, 0x8b); b(o, 0x0b);                             /* mov ecx, [r11] */
+        b(o, 0xf7); b(o, 0xd1);                                         /* not ecx */
+        b(o, 0x42); b(o, 0x8d); b(o, 0x4c); b(o, 0x11); b(o, 1);        /* lea ecx, [rcx+r10+1] */
         to_hit = jump8(o, 0xe3);                                        /* jrcxz hit */
-        xchg_rcx_r9(o);
+        mov_rcx_r9(o);
         to_miss = jump8(o, 0xeb);
         land8(o, to_hit);
-        xchg_rcx_r9(o);
-        load_state(o, R9, budget);
-        b(o, 0x45); b(o, 0x8d); b(o, 0x49); b(o, 0xff);                 /* lea r9d, [r9-1] */
-        store_state(o, R9, budget);
-        xchg_rcx_r9(o);
+        load_state(o, 1, budget);                                       /* mov ecx, budget */
+        b(o, 0x8d); b(o, 0x49); b(o, 0xff);                             /* lea ecx, [rcx-1] */
+        store_state(o, 1, budget);
         to_spent = jump8(o, 0xe3);                                      /* jrcxz spent */
-        xchg_rcx_r9(o);
+        mov_rcx_r9(o);
         b(o, 0x4d); b(o, 0x8b); b(o, 0x5b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, host_code));
         b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
         land8(o, to_spent);
-        xchg_rcx_r9(o);
+        mov_rcx_r9(o);
         land8(o, to_miss);
     }
     store_state(o, R10, offsetof(PwX86State, eip));
