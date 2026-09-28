@@ -14,6 +14,7 @@ enum {
     FIELD_ARCH = 1u << 7,
     FIELD_GRAPHICS = 1u << 8,
     FIELD_STARTUP_COMMAND = 1u << 9,
+    FIELD_DLL_OVERRIDES = 1u << 10,
     REQUIRED_FIELDS = FIELD_ID | FIELD_NAME | FIELD_EXE | FIELD_CWD |
                       FIELD_PREFIX | FIELD_RUNTIME | FIELD_ARCH |
                       FIELD_GRAPHICS,
@@ -105,6 +106,20 @@ static int valid_windows_path(const char *path)
     return 1;
 }
 
+/* WINEDLLOVERRIDES syntax: DLL names, "," between names, "=" before a load
+ * order (n, b, n,b, empty) and ";" between entries. No spaces or paths. */
+static int valid_dll_overrides(const char *text)
+{
+    for (size_t index = 0; text[index]; ++index) {
+        unsigned char value = (unsigned char)text[index];
+        if (!((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+              (value >= '0' && value <= '9') || value == ',' || value == '=' ||
+              value == ';' || value == '.' || value == '_' || value == '-' || value == '*'))
+            return 0;
+    }
+    return 1;
+}
+
 static int parse_command_id(const uint8_t *value, size_t length,
                             uint32_t *command_id)
 {
@@ -151,6 +166,7 @@ static int parse_field(PwAppProfile *profile, uint32_t *fields,
     if (!field) field = MATCH_KEY("architecture", FIELD_ARCH);
     if (!field) field = MATCH_KEY("graphics", FIELD_GRAPHICS);
     if (!field) field = MATCH_KEY("startup_command_id", FIELD_STARTUP_COMMAND);
+    if (!field) field = MATCH_KEY("dll_overrides", FIELD_DLL_OVERRIDES);
 #undef MATCH_KEY
     if (!field)
         return PW_ERR_UNSUPPORTED;
@@ -178,6 +194,12 @@ static int parse_field(PwAppProfile *profile, uint32_t *fields,
     case FIELD_ARGUMENTS:
         status = copy_value(profile->arguments, sizeof(profile->arguments),
                             value, value_end, 1);
+        break;
+    case FIELD_DLL_OVERRIDES:
+        status = copy_value(profile->dll_overrides, sizeof(profile->dll_overrides), value,
+                            value_end, 0);
+        if (status == PW_OK && !valid_dll_overrides(profile->dll_overrides))
+            status = PW_ERR_MALFORMED;
         break;
     case FIELD_STARTUP_COMMAND:
         status = parse_command_id(value, (size_t)(value_end - value),

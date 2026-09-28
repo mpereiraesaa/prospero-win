@@ -508,6 +508,10 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   in Wine as below, with the profile's settings:
   - `prefix = default` uses `<root>/prefix`, any other name
     `<root>/prefixes/<name>`;
+  - `dll_overrides` (optional, in `[application]`) sets `WINEDLLOVERRIDES`
+    for that game only. `d3d11,dxgi=n` makes it use the DXVK DLLs beside
+    its executable instead of Wine's builtins, without touching the prefix's
+    registry, which every game shares;
   - `[display] desktop` sets `WINE_PS5_DESKTOP`, and `scaling` (`fit`,
     `integer` or `stretch`) scales each frame onto the whole 1920x1080
     screen. `fit` keeps the aspect ratio, so 800x600 is shown at 1440x1080;
@@ -536,8 +540,9 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   Wine exits, the title restarts into the launcher. If the game has not
   closed after 5 s, the title restarts into the launcher anyway.
 - **Unattended validation.** `-DPW_WINE64_SCRIPT=1` makes the launcher open
-  the first game by itself, `PW_WINE64_SCRIPT_CYCLES` times (2 unless the
-  build sets it; each cycle is two sandbox escapes, the game and the launcher).
+  games by itself, one per cycle in the library's order (file names sort
+  it), `PW_WINE64_SCRIPT_CYCLES` times (2 unless the build sets it; each
+  cycle is two sandbox escapes, the game and the launcher).
   `-DPW_WINE64_SECONDS=<s>` closes each game after that long; the default, 0,
   lets a game run until it is closed.
 

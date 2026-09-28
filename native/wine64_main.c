@@ -67,8 +67,9 @@ static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 #define PW_WINE64_SECONDS 0
 #endif
 #ifndef PW_WINE64_SCRIPT
-/* 1 drives the launcher unattended for validation: it opens the first game
- * PW_WINE64_SCRIPT_CYCLES times, each closed by the deadline above. */
+/* 1 drives the launcher unattended for validation: it opens
+ * PW_WINE64_SCRIPT_CYCLES games, one per cycle in the library's order
+ * (starting again after the last), each closed by the deadline above. */
 #define PW_WINE64_SCRIPT 0
 #endif
 #ifndef PW_WINE64_SCRIPT_CYCLES
@@ -371,7 +372,8 @@ static void run_launcher(void)
                 ps5log_close("wine64-script-done");
                 _exit(0);
             }
-            if (catalog_count) chosen = 0;
+            /* One game per cycle, in the library's order. */
+            if (catalog_count) chosen = (int)(launch.cycle % catalog_count);
         }
         if (dirty && video_status == PW_OK && frame != MAP_FAILED) {
             const PwPresentTarget target = { frame, PW_LAUNCHER_RENDER_WIDTH, PW_LAUNCHER_RENDER_HEIGHT,
@@ -483,7 +485,7 @@ int main(int argc, char **argv)
         { "USER", "prospero" },
         { "WINE_PS5_TRACE_STARTUP", "1" },  /* patch 0560: name startup steps */
         { "WINE_PS5_VIEW", view },          /* patch 0430: the game's windows, or the desktop */
-        { "WINE_PS5_DESKTOP", desktop },    /* last: only when the profile sets it */
+        { NULL, NULL }, { NULL, NULL },     /* WINE_PS5_DESKTOP, WINEDLLOVERRIDES: as the profile sets */
     };
     /* wine, the executable, the profile's argument words, NULL */
     static const char *wine_argv[2 + PW_WINE_LAUNCH_WORDS + 1] = { "wine" };
@@ -495,7 +497,7 @@ int main(int argc, char **argv)
         .ntdll_path = ntdll_path,
         .ntdll_dir = ntdll_dir,
         .prefix = prefix,
-        .extra_env = extra, .extra_env_count = sizeof(extra) / sizeof(extra[0]) - 1,
+        .extra_env = extra, .extra_env_count = sizeof(extra) / sizeof(extra[0]) - 2,
         .argc = 2, .argv = wine_argv, .stack_bytes = 16u << 20,
     };
     static PwWineStart start;
@@ -541,13 +543,18 @@ int main(int argc, char **argv)
         if (game->display.width) {
             snprintf(desktop, sizeof(desktop), "%ux%u", (unsigned)game->display.width,
                      (unsigned)game->display.height);
-            config.extra_env_count++;
+            extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_DESKTOP", desktop };
         }
+        /* The game's own DLLs over Wine's builtins, e.g. DXVK's d3d11 and dxgi. */
+        if (game->app.dll_overrides[0])
+            extra[config.extra_env_count++] = (PwWineStartEnv){ "WINEDLLOVERRIDES", game->app.dll_overrides };
         PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s input=%s "
-                   "preset=%s mode=%s mouse=%d", game->app.id, prefix, desktop[0] ? desktop : "default",
+                   "preset=%s mode=%s mouse=%d dll_overrides=%s", game->app.id, prefix,
+                   desktop[0] ? desktop : "default",
                    scaling, view, pw_result_name(input_status),
                    game->input.preset[0] ? game->input.preset : "-",
-                   game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse);
+                   game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse,
+                   game->app.dll_overrides[0] ? game->app.dll_overrides : "-");
         /* [application] arguments follow the executable in Wine's argv. */
         int words = pw_wine_launch_split(game->app.arguments, argument_words,
                                          sizeof(argument_words), wine_argv + 2,

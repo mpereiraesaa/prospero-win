@@ -2,6 +2,7 @@
 #include "../src/pw_app_profile.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 
 static const uint8_t valid_profile[] =
@@ -58,6 +59,28 @@ int main(void)
         "startup_command_id=65535\nprefix=pinball\nruntime=wine\n"
         "architecture=pe32\ngraphics=gdi\n", &profile) == PW_OK);
     assert(profile.startup_command_id==65535u);
+    assert(profile.dll_overrides[0] == '\0');
+
+    /* dll_overrides: optional, WINEDLLOVERRIDES syntax, no spaces or paths. */
+#define OVERRIDES(line) "[application]\nid=dx\nname=DX\nexecutable=C:\\dx.exe\n" \
+    "working_directory=C:\\\nprefix=default\nruntime=wine\narchitecture=pe64\ngraphics=dxvk\n" line
+    assert(parse_text(OVERRIDES("dll_overrides = d3d11,dxgi=n;d3d9=n,b\n"), &profile) == PW_OK);
+    assert(strcmp(profile.dll_overrides, "d3d11,dxgi=n;d3d9=n,b") == 0);
+    assert(parse_text(OVERRIDES("dll_overrides=*d3d8.dll=\n"), &profile) == PW_OK);
+    assert(parse_text(OVERRIDES("dll_overrides=d3d11 dxgi=n\n"), &profile) == PW_ERR_MALFORMED);
+    assert(parse_text(OVERRIDES("dll_overrides=C:\\x.dll=n\n"), &profile) == PW_ERR_MALFORMED);
+    assert(parse_text(OVERRIDES("dll_overrides=\n"), &profile) == PW_ERR_MALFORMED);
+    assert(parse_text(OVERRIDES("dll_overrides=a=n\ndll_overrides=b=n\n"), &profile) == PW_ERR_MALFORMED);
+    {
+        char line[400] = "dll_overrides=";
+        size_t used = strlen(line);
+        memset(line + used, 'a', PW_APP_DLL_OVERRIDES_CAPACITY);
+        strcpy(line + used + PW_APP_DLL_OVERRIDES_CAPACITY, "\n");
+        char text[800];
+        snprintf(text, sizeof(text), OVERRIDES("%s"), line);
+        assert(parse_text(text, &profile) == PW_ERR_LIMIT);
+    }
+#undef OVERRIDES
     assert(parse_text(
         "[application]\nid=pinball\nname=Pinball\n"
         "executable=C:\\pinball.exe\nworking_directory=C:\\Games\n"

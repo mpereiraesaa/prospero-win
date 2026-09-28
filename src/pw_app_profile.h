@@ -12,6 +12,7 @@ enum {
     PW_APP_NAME_CAPACITY = 97,
     PW_APP_PATH_CAPACITY = 260,
     PW_APP_ARGUMENTS_CAPACITY = 513,
+    PW_APP_DLL_OVERRIDES_CAPACITY = 257,
     PW_APP_RUNTIME_CAPACITY = 65,
 };
 
@@ -36,6 +37,9 @@ typedef struct PwAppProfile {
     char executable[PW_APP_PATH_CAPACITY];
     char working_directory[PW_APP_PATH_CAPACITY];
     char arguments[PW_APP_ARGUMENTS_CAPACITY];
+    /* Optional: Wine's DLL load order for this game, in WINEDLLOVERRIDES
+     * syntax (d3d11,dxgi=n uses the game's own DXVK DLLs); empty if unset. */
+    char dll_overrides[PW_APP_DLL_OVERRIDES_CAPACITY];
     /* Optional initial WM_COMMAND queued when the first window enters wait. */
     uint32_t startup_command_id;
     char prefix[PW_APP_ID_CAPACITY];
