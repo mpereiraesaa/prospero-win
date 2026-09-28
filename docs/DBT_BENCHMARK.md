@@ -320,6 +320,47 @@ every host CPU feature to the guest, as `wow64cpu` does, makes 7-Zip report
 the same features as native but does not change its rating: the gap is not
 in the code paths the guest picks.
 
+### Floating point: nbench and pi
+
+7-Zip is integer code. For the x87 and SSE that games of 2000-2020 run,
+two more benchmarks, each built for i386 with mingw in an x87 build (the
+default, as engines of the early 2000s were) and an SSE2 build
+(`-msse2 -mfpmath=sse`):
+
+- **nbench** (BYTEmark 2.2.3): ten tests, an integer and a floating-point
+  index. Built from source; not committed.
+- **pi**: Takuya Ooura's `pi_fftca` (Gauss-Legendre with FFT
+  multiplication in double precision, Super PI's method), at 4.2M digits.
+  Super PI and PiFast themselves are no longer downloadable, and Super PI
+  needs a window. The digits it writes are compared with native's.
+
+Before this, the emitter ran x87 through a software FPU, one C call per
+instruction, and most SSE went to the host one instruction at a time:
+pi took more than 900 s against 7.5 s natively, and nbench's FP index was
+at 17-19% of native. Now the guest's x87, MMX and SSE state is the host
+FPU's while re-encoded code runs (`native_fp`: `pw_x86_run_block_fp` loads
+and saves it around each entry from C), and the re-encoder copies x87,
+MMX and SSE up to SSE4.1, the string instructions (the host's own, with
+rdi and r13 swapped around them), fwait, sahf and lahf. Re-encoded and
+emitted blocks then meet only through C, which moves the FP state between
+the two. `PW_WOW_NATIVE_FP=0` leaves FP to the emitter.
+
+Host, the same session, native first:
+
+| Benchmark | Native | DBT | vs native |
+|---|---|---|---|
+| pi x87, 4.2M digits | 7.51 s | 7.63 s | 98% |
+| pi SSE2, 4.2M digits | 5.51 s | 5.60 s | 98% |
+| nbench x87, integer index | 249.5 | 235.2 | 94% |
+| nbench x87, FP index | 124.3 | 120.5 | 97% |
+| nbench SSE2, integer index | 254.3 | 232.9 | 92% |
+| nbench SSE2, FP index | 142.7 | 132.8 | 93% |
+
+The pi digits are identical to native's. The lowest nbench test is STRING
+SORT at 83% (its memmove crosses to the emitter for std and cld when it
+copies backwards). 7-Zip does not change (4685 against 4650 MIPS, two
+rounds).
+
 ## Comparison with published numbers
 
 Published ratios, total rating as a share of native:
