@@ -455,9 +455,12 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in)
 }
 
 typedef struct Cold {
-    size_t patch;
+    size_t patch;   /* the guard's jump to it (0 with fault markers) */
+    size_t site;    /* with fault markers: the access that faults to it */
     uint32_t pc;
     uint8_t width, write, saved;
+    uint8_t direct; /* the access addressed ea itself; r11 is not set */
+    Ea ea;
 } Cold;
 
 typedef struct Ctx {
@@ -505,13 +508,14 @@ static void guard_fs(Ctx *c, const Ea *e, unsigned fs, unsigned width, unsigned 
     }
     if (c->cold_count >= MAX_COLD) { o->failed = 1; return; }
     if (c->fault_markers) {
-        /* No check: the access right after the marker faults instead, and
-         * the fault is sent to the cold path with the flags still live. */
-        b(o, 0x0f); b(o, 0x1f); b(o, 0x84); b(o, 0x00);             /* nopl 0(rax,rax,1) */
+        /* No check: the access emitted next faults instead, and the block's
+         * fault table sends that fault to the cold path with the flags
+         * still live. */
         cold = &c->cold[c->cold_count++];
-        cold->patch = o->n; w32(o, 0);
+        memset(cold, 0, sizeof(*cold));
+        cold->site = o->n;
         cold->pc = c->here;
-        cold->width = (uint8_t)width; cold->write = (uint8_t)write; cold->saved = 0;
+        cold->width = (uint8_t)width; cold->write = (uint8_t)write;
         return;
     }
     if (keep) save_flags(o);
@@ -519,6 +523,7 @@ static void guard_fs(Ctx *c, const Ea *e, unsigned fs, unsigned width, unsigned 
     b(o, 0x41); b(o, 0x81); b(o, 0xf9); w32(o, c->flat_span - width); /* cmp r9d, span-width */
     b(o, 0x0f); b(o, 0x87);                                          /* ja cold */
     cold = &c->cold[c->cold_count++];
+    memset(cold, 0, sizeof(*cold));
     cold->patch = o->n; w32(o, 0);
     cold->pc = c->here;
     cold->width = (uint8_t)width; cold->write = (uint8_t)write; cold->saved = (uint8_t)keep;
@@ -550,6 +555,58 @@ static void emit_rm(Ctx *c, const Inst *in)
     if (rex) b(o, (uint8_t)(0x40 | rex));
     for (unsigned k = 0; k < in->op_len; k++) b(o, in->op[k]);
     b(o, (uint8_t)((in->mod == 3 ? 0xc0 : 0) | regf << 3 | rmf));
+    for (unsigned k = 0; k < in->imm_len; k++) b(o, in->imm[k]);
+}
+
+/* With fault markers: the instruction itself, its memory operand addressed
+ * with the guest's 32-bit arithmetic (0x67: the 32-bit effective address,
+ * zero-extended, is the guest address), recorded in the fault table. */
+static void emit_rm_direct(Ctx *c, const Inst *in)
+{
+    Out *o = &c->o;
+    const Ea *e = &in->ea;
+    const int hb = e->base >= 0 ? host_of[e->base] : -1, hi = e->index >= 0 ? host_of[e->index] : -1;
+    const unsigned index = hi >= 0 ? (unsigned)hi & 7 : 4;
+    const int32_t disp = (int32_t)e->disp;
+    unsigned regf = in->reg;
+    uint8_t rex = 0;
+    Cold *cold;
+
+    if (c->cold_count >= MAX_COLD) { o->failed = 1; return; }
+    cold = &c->cold[c->cold_count++];
+    memset(cold, 0, sizeof(*cold));
+    cold->site = o->n;
+    cold->pc = c->here;
+    cold->width = in->width; cold->write = in->write;
+    cold->direct = 1; cold->ea = *e;
+
+    if (in->lock) b(o, 0xf0);
+    if (in->opsize16) b(o, 0x66);
+    b(o, 0x67);
+    if (in->reg_kind == REG32) {
+        if (host_of[in->reg] >= 8) rex |= 4;
+        regf = host_of[in->reg] & 7;
+    }
+    if (hi >= 8) rex |= 2;
+    if (hb >= 8) rex |= 1;
+    if (rex) b(o, (uint8_t)(0x40 | rex));
+    for (unsigned k = 0; k < in->op_len; k++) b(o, in->op[k]);
+    if (hb < 0) {
+        b(o, (uint8_t)(regf << 3 | 4));
+        b(o, (uint8_t)(e->scale << 6 | index << 3 | 5));
+        w32(o, e->disp);
+    } else if (!disp && (hb & 7) != 5) {
+        b(o, (uint8_t)(regf << 3 | 4));
+        b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
+    } else if (disp >= -128 && disp <= 127) {
+        b(o, (uint8_t)(0x40 | regf << 3 | 4));
+        b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
+        b(o, (uint8_t)disp);
+    } else {
+        b(o, (uint8_t)(0x80 | regf << 3 | 4));
+        b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
+        w32(o, e->disp);
+    }
     for (unsigned k = 0; k < in->imm_len; k++) b(o, in->imm[k]);
 }
 
@@ -705,20 +762,33 @@ static void emit_dynamic_exit(Ctx *c)
     b(o, 0x31); b(o, 0xc0); b(o, 0xc3);
 }
 
-static void emit_cold_paths(Ctx *c)
+static void emit_cold_paths(Ctx *c, PwX86Block *block)
 {
     Out *o = &c->o;
+    size_t starts[MAX_COLD];
+
     for (unsigned k = 0; k < c->cold_count; k++) {
         const Cold *cold = &c->cold[k];
-        put32(o, cold->patch, (uint32_t)(o->n - (cold->patch + 4)));
+        starts[k] = o->n;
+        if (cold->patch) put32(o, cold->patch, (uint32_t)(o->n - (cold->patch + 4)));
         /* First, so a fault handler can read it (pw_x86_cold_path_eip). */
         store_state_imm(o, offsetof(PwX86State, eip), cold->pc);
         if (cold->saved) restore_flags(o);
+        if (cold->direct) ea_lea(o, R11, &cold->ea);
         store_state(o, R11, offsetof(PwX86State, fault_address));
         store_state_imm(o, offsetof(PwX86State, fault_width), cold->width);
         store_state_imm(o, offsetof(PwX86State, fault_write), cold->write);
         emit_leave(o);
         b(o, 0xb8); w32(o, 0xffffffffu); b(o, 0xc3);                /* mov eax, -1; ret */
+    }
+    if (!c->fault_markers) return;
+    /* The fault table (pw_x86_block.h): each access that may fault and the
+     * path that reports it. */
+    block->fault_table_offset = o->n;
+    w16(o, c->cold_count);
+    for (unsigned k = 0; k < c->cold_count; k++) {
+        w16(o, (uint32_t)c->cold[k].site);
+        w16(o, (uint32_t)starts[k]);
     }
 }
 
@@ -799,9 +869,11 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
          * fault handler can read it from there; only the guard stores it
          * before the access. */
         c.here = here;
+        if (k == count - 1) block->exit_offset = o->n;
         if (!c.fault_markers && can_fault(in)) store_state_imm(o, offsetof(PwX86State, eip), here);
         switch (in->kind) {
         case K_RM:
+            if (in->mod != 3 && c.fault_markers && !in->fs) { emit_rm_direct(&c, in); break; }
             if (in->mod != 3) guard_fs(&c, &in->ea, in->fs, in->width, in->write, keep);
             emit_rm(&c, in);
             break;
@@ -945,6 +1017,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         /* Ended before an instruction this backend does not take, or at the
          * length limit: continue at the next one, linked like a jump. */
         ExitSlots slots;
+        block->exit_offset = c.o.n;
         const uint32_t next = pc + (uint32_t)cursor;
         emit_chain_exit(&c, next, &slots, 0);
         block->exit.kind = PW_X86_EXIT_DIRECT_JUMP;
@@ -956,7 +1029,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         block->exit.target_reconcile_patch_offset = slots.reconcile_patch;
         block->exit.target_direct_offset = slots.direct;
     }
-    emit_cold_paths(&c);
+    emit_cold_paths(&c, block);
     if (c.o.failed) return PW_ERR_LIMIT;
     block->instructions = count;
     block->source_bytes = cursor;

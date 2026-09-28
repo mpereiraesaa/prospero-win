@@ -119,6 +119,8 @@ typedef struct PwX86Block {
     PwX86RegContract entry_contract;
     PwX86RegContract exit_contract;
     PwX86ExitDesc exit;
+    size_t fault_table_offset;  /* the fault table, or 0 (see below) */
+    size_t exit_offset;         /* where the exit code starts (0: not recorded) */
 } PwX86Block;
 
 /* Initial bounded DBT subset: push immediate/register/memory, pop register,
@@ -190,37 +192,32 @@ typedef struct PwX86TranslateOptions {
      * store or load; at most seven. 0 keeps the per-block allocator. */
     uint8_t global_resident;
     /* Re-encoded blocks (pw_x86_reencode.h) check no access against the flat
-     * range: each guest memory access is preceded by a fault marker instead,
-     * and a host fault on it becomes the refused access the check would have
-     * reported, through pw_x86_fault_redirect. The caller must reserve the
-     * rest of the guest's 4 GiB so an access outside the range faults, and
-     * send the host faults in its code region to pw_x86_fault_redirect. The
+     * range: each guest memory access is listed in the block's fault table
+     * instead, and a host fault on it becomes the refused access the check
+     * would have reported, through pw_x86_engine_fault_redirect. The caller
+     * must reserve the rest of the guest's 4 GiB so an access outside the
+     * range faults, and send the host faults in its code region there. The
      * older emitter keeps its checks. */
     unsigned fault_markers;
 } PwX86TranslateOptions;
 
-/* The fault marker: `nopl 0x0(%rax,%rax,1)` with a 32-bit displacement,
- * right before the host instruction that makes a guest access. The
- * displacement is the distance from the end of the marker to the access's
- * refused-access path. */
-enum { PW_X86_FAULT_MARKER_BYTES = 8 };
-
-/* A host fault at rip, in code between low and high: when a fault marker
- * ends at rip, the address of the path that reports the access as refused
- * (resume there with the faulting registers and flags), else 0. */
-static inline uintptr_t pw_x86_fault_redirect(uintptr_t rip, uintptr_t low, uintptr_t high)
+/* The fault table of a re-encoded block with fault markers, at
+ * PwX86Block.fault_table_offset in its code: a 16-bit count, then for each
+ * guest access that may fault the 16-bit offsets (from the block's start) of
+ * the host instruction that makes it and of the path that reports it as
+ * refused. A host fault at a listed access resumes at its path with the
+ * faulting registers and flags. The path's offset, or 0 when site is not
+ * listed. */
+static inline size_t pw_x86_fault_table_path(const uint8_t *block_code, size_t table_offset, size_t site)
 {
-    const uint8_t *marker = (const uint8_t *)(rip - PW_X86_FAULT_MARKER_BYTES);
-    int32_t displacement;
-    uintptr_t target;
+    const uint8_t *table = block_code + table_offset;
+    const unsigned count = (unsigned)table[0] | (unsigned)table[1] << 8;
 
-    if (rip < low + PW_X86_FAULT_MARKER_BYTES || rip >= high) return 0;
-    if (marker[0] != 0x0f || marker[1] != 0x1f || marker[2] != 0x84 || marker[3] != 0x00) return 0;
-    displacement = (int32_t)((uint32_t)marker[4] | (uint32_t)marker[5] << 8 |
-                             (uint32_t)marker[6] << 16 | (uint32_t)marker[7] << 24);
-    if (displacement <= 0) return 0;
-    target = rip + (uintptr_t)(intptr_t)displacement;
-    return target > rip && target < high ? target : 0;
+    for (unsigned k = 0; k < count; k++) {
+        const uint8_t *row = table + 2 + 4 * k;
+        if (((size_t)row[0] | (size_t)row[1] << 8) == site) return (size_t)row[2] | (size_t)row[3] << 8;
+    }
+    return 0;
 }
 
 /* The guest EIP a refused-access path reports: the path begins with

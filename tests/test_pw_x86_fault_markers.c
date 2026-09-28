@@ -127,22 +127,65 @@ static void compare(const char *name, const uint8_t *code, size_t bytes, uint32_
     assert(marked.state.fault_width == guarded.state.fault_width);
 }
 
-static void test_redirect_bounds(void)
+/* Every addressing form the re-encoder copies with fault markers (esp and
+ * edi as base or index, no base, an absolute address, disp8 and disp32,
+ * 8- and 16-bit operands, lock, immediates, flags read across accesses) runs
+ * exactly as with the guard: same registers, flags and memory. */
+static void test_memory_forms(void)
 {
-    static const uint8_t code[32] = {
-        [0] = 0x0f, 0x1f, 0x84, 0x00, 0x10, 0x00, 0x00, 0x00,   /* marker, +16 */
-        [8] = 0x90,
-        [16] = 0x0f, 0x1f, 0x84, 0x00, 0xf0, 0xff, 0xff, 0xff,  /* marker, backwards */
-        [24] = 0x90,
+    uint8_t code[] = {
+        0x8d, 0xb4, 0x24, 0x00, 0x80, 0xff, 0xff, 0x8d, 0xbc, 0x24, 0x00, 0x90,
+        0xff, 0xff, 0x8d, 0xac, 0x24, 0x00, 0xa0, 0xff, 0xff, 0xb8, 0x44, 0x33,
+        0x22, 0x11, 0xb9, 0x03, 0x00, 0x00, 0x00, 0x89, 0x06, 0x89, 0x0c, 0x8f,
+        0x89, 0x44, 0xcf, 0x40, 0x01, 0x45, 0x08, 0x29, 0x4d, 0xfc, 0x89, 0x85,
+        0x00, 0x10, 0x00, 0x00, 0x89, 0x44, 0x24, 0xf0, 0x8b, 0x54, 0x24, 0xf0,
+        0x89, 0x0c, 0x8d, 0x78, 0x56, 0x34, 0x12, 0x89, 0x0d, 0x78, 0x56, 0x34,
+        0x12, 0x0f, 0xb6, 0x1c, 0x8f, 0x8a, 0x5e, 0x01, 0x88, 0x4e, 0x02, 0x66,
+        0x89, 0x46, 0x04, 0xf0, 0x0f, 0xc1, 0x0e, 0xf0, 0x0f, 0xb1, 0x0f, 0xb9,
+        0x03, 0x00, 0x00, 0x00, 0x33, 0x06, 0x39, 0x14, 0x8f, 0x13, 0x06, 0x6b,
+        0x1e, 0x07, 0xf7, 0x06, 0x00, 0x00, 0x00, 0x80, 0x81, 0x17, 0x45, 0x23,
+        0x01, 0x00, 0xc7, 0x47, 0x20, 0x55, 0x00, 0x00, 0x00, 0xff, 0x36, 0x5a,
+        0x1b, 0x57, 0x04, 0x8b, 0x07, 0xbf, 0x10, 0x00, 0x00, 0x00, 0x8b, 0x0c,
+        0xbe, 0x03, 0x44, 0x7d, 0xf8, 0x88, 0x94, 0x3e, 0x00, 0x01, 0x00, 0x00,
+        0xc3,
     };
-    const uintptr_t low_code = (uintptr_t)code, high = low_code + sizeof(code);
+    const uint32_t absolute = low + 0x3c000;
+    uint8_t after[2][0x10000];
+    Run r[2];
 
-    assert(pw_x86_fault_redirect(low_code + 8, low_code, high) == low_code + 24);
-    assert(!pw_x86_fault_redirect(low_code + 8, low_code, low_code + 20));  /* target past the end */
-    assert(!pw_x86_fault_redirect(low_code + 24, low_code, high));           /* backwards */
-    assert(!pw_x86_fault_redirect(low_code + 9, low_code, high));            /* no marker */
-    assert(!pw_x86_fault_redirect(low_code + 4, low_code, high));            /* before the region */
-    assert(!pw_x86_fault_redirect(high, low_code, high));                    /* past the region */
+    memcpy(code + 0x3f, &absolute, 4);  /* mov %ecx, abs(,%ecx,4) */
+    memcpy(code + 0x45, &absolute, 4);  /* mov %ecx, abs */
+    for (unsigned m = 0; m < 2; m++) {
+        for (unsigned i = 0; i < 0x10000; i++) guest[0x30000 + i] = (uint8_t)(i * 7 + 1);
+        r[m] = run(code, sizeof(code), m);
+        memcpy(after[m], guest + 0x30000, sizeof(after[m]));
+    }
+    assert(r[0].status == PW_OK && r[1].status == PW_OK && r[0].reencoded && r[1].reencoded);
+    assert(!r[1].redirected && r[0].state.eip == 0xdead0000u && r[1].state.eip == 0xdead0000u);
+    for (unsigned g = 0; g < 8; g++) {
+        if (r[0].state.gpr[g] != r[1].state.gpr[g])
+            fprintf(stderr, "memory forms: gpr%u %08x != %08x\n", g, r[1].state.gpr[g], r[0].state.gpr[g]);
+        assert(r[0].state.gpr[g] == r[1].state.gpr[g]);
+    }
+    assert((r[0].state.eflags & 0x8d5) == (r[1].state.eflags & 0x8d5));
+    assert(!memcmp(after[0], after[1], sizeof(after[0])));
+}
+
+static void test_fault_table(void)
+{
+    /* Three rows: sites 0x10, 0x30 and 0x2345 with their paths. */
+    static const uint8_t code[64] = {
+        [40] = 3, 0,
+        0x10, 0x00, 0x80, 0x00,
+        0x30, 0x00, 0x90, 0x01,
+        0x45, 0x23, 0x00, 0x20,
+    };
+
+    assert(pw_x86_fault_table_path(code, 40, 0x10) == 0x80);
+    assert(pw_x86_fault_table_path(code, 40, 0x30) == 0x190);
+    assert(pw_x86_fault_table_path(code, 40, 0x2345) == 0x2000);
+    assert(!pw_x86_fault_table_path(code, 40, 0x11));      /* not an access */
+    assert(!pw_x86_fault_table_path(code, 40, 0));
 }
 
 int main(void)
@@ -182,8 +225,10 @@ int main(void)
         assert(guarded.status == PW_OK && marked.status == PW_OK && !marked.redirected);
         assert(marked.state.eip == 0xdead0000u && marked.state.gpr[0] == guarded.state.gpr[0]);
     }
-    test_redirect_bounds();
+    test_memory_forms();
+    test_fault_table();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
-           "on the null page report the guard's EIP, registers, flags and fault\n");
+           "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
+           "form matches the guard\n");
     return 0;
 }

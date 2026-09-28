@@ -29,6 +29,9 @@ typedef struct PwX86CacheEntry {
      * the block stored here, so publishing into the slot keeps it. */
     uint32_t pending_next[2];
     uint32_t pending_head;
+    size_t fault_table_offset;  /* PwX86Block.fault_table_offset */
+    size_t exit_offset;         /* PwX86Block.exit_offset */
+    uint32_t arena_next;        /* the next block in the arena, as index + 1 */
     unsigned used;
 } PwX86CacheEntry;
 

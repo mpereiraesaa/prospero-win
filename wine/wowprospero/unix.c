@@ -29,6 +29,7 @@
 #include "wowprospero.h"
 
 #include "pw_x86_engine.h"
+#include "pw_x86_reencode.h"
 #include "pw_guest_fp.h"
 #include "pw_x86_hostexec.h"
 #include "code_pages.h"
@@ -75,7 +76,7 @@ static __thread struct pw_thread *self;
  * not mapped) stays Wine's, as before. The handler reads the translators'
  * code ranges from this table rather than thread-local storage. */
 enum { MAX_ARENAS = 1024 };
-static struct { uintptr_t low, high; PwX86State *state; } arenas[MAX_ARENAS];
+static struct { uintptr_t low, high; PwX86Engine *engine; PwX86State *state; } arenas[MAX_ARENAS];
 #ifndef __PROSPERO__
 static struct sigaction wine_segv;
 #endif
@@ -362,7 +363,7 @@ static int redirect_fault( siginfo_t *info, void *context )
         uintptr_t low = __atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE );
         if (low && high && *rip >= low && *rip < high)
         {
-            target = pw_x86_fault_redirect( *rip, low, high );
+            target = pw_x86_engine_fault_redirect( arenas[i].engine, *rip );
             state = arenas[i].state;
         }
     }
@@ -477,6 +478,7 @@ static const PwX86CacheEntry *profile_find( uint64_t rip, const uint8_t **code )
 static void profile_dump(void)
 {
     uint32_t n = __atomic_load_n( &profile_count, __ATOMIC_RELAXED ), blocks = 0, arena = 0, stubs = 0;
+    uint32_t part[4] = { 0 };  /* re-encoded entry, body, exit; emitter blocks */
     struct profile_block *table;
     uint64_t *rips;
     char name[512];
@@ -501,7 +503,13 @@ static void profile_dump(void)
             uint32_t k;
             for (k = 0; k < blocks && table[k].entry != e; k++);
             if (k == blocks && blocks < 65536) { table[blocks].entry = e; table[blocks].code = code; blocks++; }
-            while (j < n && rips[j] < (uintptr_t)code + e->code_bytes) j++;
+            while (j < n && rips[j] < (uintptr_t)code + e->code_bytes)
+            {
+                const size_t at = rips[j] - (uintptr_t)code;
+                if (!pw_x86_reencoded( &e->entry_contract ) || !e->exit_offset) part[3]++;
+                else part[at < e->chain_entry_offset ? 0 : at < e->exit_offset ? 1 : 2]++;
+                j++;
+            }
             if (k < 65536) table[k].samples += j - i;
             arena += j - i;
         }
@@ -541,12 +549,15 @@ static void profile_dump(void)
     }
     fprintf( out, "\n== translated code %.1f%% (%u blocks), of it outside blocks (stubs) %.1f%%\n",
              100.0 * arena / n, blocks, 100.0 * stubs / n );
+    fprintf( out, "re-encoded: entry %.1f%%, body %.1f%%, exits %.1f%%; emitter blocks %.1f%%\n",
+             100.0 * part[0] / n, 100.0 * part[1] / n, 100.0 * part[2] / n, 100.0 * part[3] / n );
     qsort( table, blocks, sizeof(*table), compare_block_samples );
     for (uint32_t k = 0; k < blocks && k < PROFILE_TOP; k++)
     {
         const PwX86CacheEntry *e = table[k].entry;
-        fprintf( out, "%5.2f%% eip=%08x instr=%u guest_bytes=%zu host_bytes=%zu\n", 100.0 * table[k].samples / n,
-                 e->guest_pc, e->instructions, e->source_bytes, e->code_bytes );
+        fprintf( out, "%5.2f%% %c eip=%08x instr=%u guest_bytes=%zu host_bytes=%zu entry=%#zx exit=%#zx\n",
+                 100.0 * table[k].samples / n, pw_x86_reencoded( &e->entry_contract ) ? 'R' : 'E',
+                 e->guest_pc, e->instructions, e->source_bytes, e->code_bytes, e->chain_entry_offset, e->exit_offset );
         if (k < PROFILE_DUMP)
         {
             FILE *bin;
@@ -605,6 +616,7 @@ static void register_arena( struct pw_thread *thread, int add )
             uintptr_t none = 0;
             if (__atomic_compare_exchange_n( &arenas[i].low, &none, low, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ))
             {
+                arenas[i].engine = &thread->engine;
                 arenas[i].state = &thread->state;
                 __atomic_store_n( &arenas[i].high, low + thread->engine.code.bytes, __ATOMIC_RELEASE );
                 return;

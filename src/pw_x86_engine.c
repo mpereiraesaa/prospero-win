@@ -146,14 +146,57 @@ int pw_x86_engine_set_reencode(PwX86Engine *engine, unsigned enabled)
 int pw_x86_engine_set_fault_markers(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    if(enabled && !engine->block_map) {
+        const size_t bytes=(engine->code.bytes/PW_X86_ENGINE_FAULT_GRANULE+1)*sizeof(uint32_t);
+        int status=engine->backend->reserve(engine->backend->context,bytes,
+                                            engine->backend->page_bytes,&engine->block_map_region);
+        if(status!=PW_OK)return status;
+        status=engine->backend->commit(engine->backend->context,&engine->block_map_region,0,
+                                       engine->block_map_region.bytes,PW_PROT_READ|PW_PROT_WRITE);
+        if(status!=PW_OK) {
+            (void)engine->backend->release(engine->backend->context,&engine->block_map_region);
+            return status;
+        }
+        engine->block_map=engine->block_map_region.write_base;
+        memset(engine->block_map,0,bytes);
+        engine->last_published=0;
+    }
     engine->fault_markers = enabled ? 1 : 0;
     return PW_OK;
+}
+
+/* Record a published block for pw_x86_engine_fault_redirect. */
+static void map_block(PwX86Engine *engine, const PwX86CacheEntry *entry)
+{
+    const uint32_t index=(uint32_t)(entry-engine->cache.entries)+1;
+    if(!engine->block_map || !entry->code_bytes) return;
+    if(engine->last_published) engine->cache.entries[engine->last_published-1].arena_next=index;
+    engine->last_published=index;
+    for(size_t g=entry->code_offset/PW_X86_ENGINE_FAULT_GRANULE;
+        g<=(entry->code_offset+entry->code_bytes-1)/PW_X86_ENGINE_FAULT_GRANULE; g++)
+        if(!engine->block_map[g]) engine->block_map[g]=index;
 }
 
 uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *engine, uintptr_t rip)
 {
     const uintptr_t low = (uintptr_t)engine->code.exec_base;
-    return pw_x86_fault_redirect(rip, low, low + engine->code.bytes);
+    uint32_t index;
+
+    if(!engine->block_map || rip < low || rip >= low + engine->code.bytes) return 0;
+    index = engine->block_map[(rip - low) / PW_X86_ENGINE_FAULT_GRANULE];
+    while(index && index <= engine->cache.capacity) {
+        const PwX86CacheEntry *e = &engine->cache.entries[index - 1];
+        const uintptr_t start = low + e->code_offset;
+        if(rip < start) return 0;
+        if(rip < start + e->code_bytes) {
+            size_t path;
+            if(!e->fault_table_offset) return 0;
+            path = pw_x86_fault_table_path((const uint8_t *)start, e->fault_table_offset, rip - start);
+            return path ? start + path : 0;
+        }
+        index = e->arena_next;
+    }
+    return 0;
 }
 
 int pw_x86_engine_set_counters(PwX86Engine *engine, unsigned enabled)
@@ -272,6 +315,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
 
     /* Initialize link slot stubs */
     PwX86CacheEntry *e_mut = (PwX86CacheEntry *)*entry;
+    map_block(engine, e_mut);
     uint8_t *exec_base = (uint8_t *)engine->code.exec_base;
     if(best.exit.chainable) {
         e_mut->link_slots[0].target_code = exec_base + e_mut->code_offset + best.exit.target_stub_offset;
@@ -518,6 +562,9 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
         memset(engine->indirect_targets,0,PW_X86_ENGINE_INDIRECT_SLOTS*sizeof(PwX86IndirectTarget));
     if(engine->chain_targets)
         memset(engine->chain_targets,0,PW_X86_REENCODE_CHAIN_SLOTS*sizeof(PwX86IndirectTarget));
+    if(engine->block_map)
+        memset(engine->block_map,0,(engine->code.bytes/PW_X86_ENGINE_FAULT_GRANULE+1)*sizeof(uint32_t));
+    engine->last_published=0;
     engine->dispatches=0;engine->retired_instructions=0;engine->failed=0;return PW_OK;
 }
 
@@ -529,6 +576,8 @@ int pw_x86_engine_destroy(PwX86Engine *engine)
         status=engine->backend->release(engine->backend->context,&engine->indirect);
     if(status==PW_OK && engine->chain_targets)
         status=engine->backend->release(engine->backend->context,&engine->chain);
+    if(status==PW_OK && engine->block_map)
+        status=engine->backend->release(engine->backend->context,&engine->block_map_region);
     if(status==PW_OK)memset(engine,0,sizeof(*engine));
     return status;
 }

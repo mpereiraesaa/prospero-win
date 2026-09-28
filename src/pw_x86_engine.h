@@ -5,7 +5,7 @@
 #include "../include/prospero_win_vm.h"
 
 enum { PW_X86_ENGINE_MAX_SOURCE=15*32, PW_X86_ENGINE_MAX_CODE=16384,
-       PW_X86_ENGINE_INDIRECT_SLOTS=8192 };
+       PW_X86_ENGINE_INDIRECT_SLOTS=8192, PW_X86_ENGINE_FAULT_GRANULE=256 };
 
 /* Return one immutable executable source span beginning at guest_pc. The span
  * remains alive and unchanged for the engine generation. */
@@ -61,8 +61,14 @@ typedef struct PwX86Engine {
     PwVmRegion chain;
     PwX86IndirectTarget *chain_targets;
     uint64_t reencoded_blocks;
-    /* PwX86TranslateOptions.fault_markers for blocks translated from now on. */
+    /* PwX86TranslateOptions.fault_markers for blocks translated from now on,
+     * and, to find the block a host fault is in, the first block that
+     * overlaps each PW_X86_ENGINE_FAULT_GRANULE bytes of the arena (index +
+     * 1; blocks follow each other through arena_next). */
     unsigned fault_markers;
+    PwVmRegion block_map_region;
+    uint32_t *block_map;
+    uint32_t last_published;
     unsigned sealed,failed,initialized;
 } PwX86Engine;
 
