@@ -85,7 +85,11 @@ in its own title process, with the stable baseline restored afterwards:
 - pi computed 4.2M digits in 13 s and wrote its output file;
 - with the working-directory fix (#201), each program started in its
   profile's working directory (`PW_WINE64 cwd=` with `status=0`);
-- the null test passed before each series.
+- the null test passed before each series;
+- x64 builds of the same programs ran natively: 7-Zip 5148–5152 MIPS,
+  nbench 185.5 / 114.9, pi 8 s. Corrected for the x64 builds' own
+  advantage (measured on the host), the DBT runs at about 85–93% of the
+  console's native speed.
 
 The ps5log runs, the host comparison and the method are in
 [DBT benchmark](DBT_BENCHMARK.md#on-the-console).

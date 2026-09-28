@@ -31,9 +31,9 @@ prefix, the desktop size and scaling, the button bindings or an XInput
 controller, and the pointer.
 
 The DBT runs 7-Zip's benchmark at 91% of native speed on an x86-64 host,
-nbench at 92–97% and a Super PI-style pi program at 98%; on the console it
-rates 7-Zip at about 3360 MIPS
-([DBT benchmark](docs/DBT_BENCHMARK.md)). Fonts, audio through Wine's PS5
+nbench at 92–97% and a Super PI-style pi program at 98%. On the console it
+rates 7-Zip at about 3360 MIPS, an estimated 85–93% of the console's native
+speed across these benchmarks ([DBT benchmark](docs/DBT_BENCHMARK.md)). Fonts, audio through Wine's PS5
 driver and the XInput controller are built and host-tested; their console
 validation is recorded in [hardware validation](docs/HARDWARE_VALIDATION.md)
 as it lands.

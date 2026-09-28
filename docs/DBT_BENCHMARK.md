@@ -19,7 +19,8 @@ natively under Wine:
 | pi, 4.2M digits, x87 and SSE2 | **98%** | [Floating point](#floating-point-nbench-and-pi) |
 
 On the console (FW 12.02), 7-Zip rates 3361–3369 total MIPS against 1383
-before this work; the console figures are [below](#on-the-console). The
+before this work, and the DBT runs at an estimated 85–93% of the console's
+native speed; the console figures are [below](#on-the-console). The
 sections after the first results record each change in order.
 
 ## Method
@@ -476,11 +477,14 @@ The `sevenzip-bench` profile from
    `STDOUT` lines to `tools/bench_7zip.py`, which reads the `Avr:`/`Tot:`
    rows.
 
-The native baseline for the PS5 has to come from another x86-64 machine
-with the same CPU family: the console cannot run the binary without the DBT.
 nbench and pi run the same way, with the `nbench-x87` and `pi-x87`
 profiles; that repository's `benchmarks/build.sh` builds all three
 programs from their pinned sources.
+
+The console cannot run the i386 programs without the DBT, but it runs PE64
+programs natively (the title runs x64 code as is). The same repository's
+`sevenzip-bench-x64`, `nbench-x64` and `pi-x64` profiles run x64 builds of
+the same sources, which give the console's native speed.
 
 Measured on 2026-09-28 (FW 12.02) with the changes above through native
 FP; the last 7-Zip round and the FP benchmarks also had the
@@ -496,8 +500,34 @@ benchmark, ps5log `20260928T114656843Z`, `20260928T120539847Z`,
 | pi x87, 4.2M digits | 13 s | 7.63 s | 0.59 |
 
 pi's timer counts whole seconds. The console runs the same DBT at 0.6–0.7
-of the host's speed, about what its slower core accounts for; there is
-still no console native figure, so its share of native is not measured.
+of the host's speed.
+
+### Native baseline on the console
+
+The x64 builds ran natively on the console the same day (ps5log
+`20260928T134849016Z`, `20260928T143813974Z`, `20260928T144309104Z` and
+`20260928T144325507Z`; two more i386 7-Zip rounds in between rated 3365
+and 3363). An x64 build is not the i386 one: it has more registers and uses
+SSE2 for floating point. On the host, where both builds run natively, the
+x64 builds are faster by the factor in the fourth column, so the console's
+i386 native speed is estimated as its x64 speed divided by that factor:
+
+| Benchmark | PS5, i386, DBT | PS5, x64, native | Host: x64 / i386, both native | DBT vs native (est.) |
+|---|---|---|---|---|
+| 7-Zip, total MIPS | 3361–3369 | 5148–5152 | 1.30–1.36 | 85–89% |
+| nbench, integer index | 166.7 | 185.5 | 1.03 | 93% |
+| nbench, FP index | 81.6 | 114.9 | 1.21–1.28 | 86–91% |
+| pi, 4.2M digits | 13 s | 8 s | 1.4 (7 s / 5 s) | about 85% |
+
+On the console the DBT therefore runs at an estimated 85–93% of native,
+slightly below the 91–98% measured directly on the host. The pi estimate is
+the roughest, since its timer counts whole seconds.
+
+Natively the console runs at 0.72 of the host on 7-Zip (5150 against 7140),
+0.76 on nbench's integer index, 0.81 on its FP index and 0.63 on pi. pi is
+as slow natively as through the DBT, so its lower ratio comes from the
+console's CPU, not from the DBT (its Zen 2 cores are reported to have a
+reduced FPU).
 
 The earlier run was on 2026-09-27 (FW 12.02, one run, main at `cd92d61`
 with the re-encoder and quantum 1024). 7-Zip reported the CPU as "AMD Eng
