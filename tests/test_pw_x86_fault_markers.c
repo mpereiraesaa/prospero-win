@@ -127,15 +127,8 @@ static void compare(const char *name, const uint8_t *code, size_t bytes, uint32_
     assert(marked.state.fault_width == guarded.state.fault_width);
 }
 
-/* Every addressing form the re-encoder copies with fault markers (esp and
- * edi as base or index, no base, an absolute address, disp8 and disp32,
- * 8- and 16-bit operands, lock, immediates, flags read across accesses) and
- * every stack form (push of a register, esp, memory and an immediate, pop
- * of a register and of esp, leave, call, ret and ret imm16) runs exactly as
- * with the guard: same registers, flags and memory. */
-static void test_memory_forms(void)
-{
-    uint8_t code[] = {
+/* The program test_memory_forms runs: every addressing and stack form. */
+static uint8_t forms[] = {
         0x8d, 0xb4, 0x24, 0x00, 0x80, 0xff, 0xff, 0x8d, 0xbc, 0x24, 0x00, 0x90,
         0xff, 0xff, 0x8d, 0xac, 0x24, 0x00, 0xa0, 0xff, 0xff, 0xb8, 0x44, 0x33,
         0x22, 0x11, 0xb9, 0x03, 0x00, 0x00, 0x00, 0x89, 0x06, 0x89, 0x0c, 0x8f,
@@ -153,13 +146,30 @@ static void test_memory_forms(void)
         0x5a, 0x55, 0x89, 0xe5, 0x6a, 0x07, 0x6a, 0x08, 0xc9, 0x6a, 0x09, 0xe8,
         0x02, 0x00, 0x00, 0x00, 0xeb, 0x07, 0x03, 0x44, 0x24, 0x04, 0xc2, 0x04,
         0x00, 0x54, 0x5c, 0xc3,
-    };
+};
+
+/* forms with its absolute addresses pointed into the guest. */
+static void patch_forms(uint8_t *code)
+{
     const uint32_t absolute = low + 0x3c000;
+    memcpy(code + 0x3f, &absolute, 4);  /* mov %ecx, abs(,%ecx,4) */
+    memcpy(code + 0x45, &absolute, 4);  /* mov %ecx, abs */
+}
+
+/* Every addressing form the re-encoder copies with fault markers (esp and
+ * edi as base or index, no base, an absolute address, disp8 and disp32,
+ * 8- and 16-bit operands, lock, immediates, flags read across accesses) and
+ * every stack form (push of a register, esp, memory and an immediate, pop
+ * of a register and of esp, leave, call, ret and ret imm16) runs exactly as
+ * with the guard: same registers, flags and memory. */
+static void test_memory_forms(void)
+{
+    uint8_t code[sizeof(forms)];
     uint8_t after[2][0x10000];
     Run r[2];
 
-    memcpy(code + 0x3f, &absolute, 4);  /* mov %ecx, abs(,%ecx,4) */
-    memcpy(code + 0x45, &absolute, 4);  /* mov %ecx, abs */
+    memcpy(code, forms, sizeof(code));
+    patch_forms(code);
     for (unsigned m = 0; m < 2; m++) {
         for (unsigned i = 0; i < 0x10000; i++) guest[0x30000 + i] = (uint8_t)(i * 7 + 1);
         r[m] = run(code, sizeof(code), m);
@@ -174,6 +184,86 @@ static void test_memory_forms(void)
     }
     assert((r[0].state.eflags & 0x8d5) == (r[1].state.eflags & 0x8d5));
     assert(!memcmp(after[0], after[1], sizeof(after[0])));
+}
+
+/* The engine's lookup from a host address to a block's refused-access path:
+ * every listed access finds its path, any other address in a block (its
+ * canonical entry, found by walking the blocks of a granule) or past the
+ * last block finds none, and a reset forgets the blocks. Also the call
+ * stack's preconditions and the return stub's. */
+static void test_engine_lookup(void)
+{
+    static PwX86CacheEntry entries[512];
+    static PwVmBackend vm;
+    PwX86Engine engine;
+    PwX86StepReport step;
+    PwX86State state;
+    unsigned sites = 0, walked = 0;
+    uint8_t stub[512];
+    PwX86TranslateOptions options;
+
+    /* Several blocks: the memory forms program, translated with markers. */
+    memset(guest + CODE, 0xcc, DATA - CODE);
+    memcpy(guest + CODE, forms, sizeof(forms));
+    patch_forms(guest + CODE);
+    assert(pw_vm_posix_backend(&vm) == PW_OK);
+    assert(pw_x86_engine_init(&engine, &vm, entries, 512, 1u << 20, 1, view, NULL) == PW_OK);
+    assert(pw_x86_engine_set_chaining(&engine, 1) == PW_OK);
+    assert(pw_x86_engine_set_indirect(&engine, 1) == PW_OK);
+    assert(pw_x86_engine_set_counters(&engine, 0) == PW_OK);
+    assert(pw_x86_engine_set_flat_memory(&engine, low, low + SPAN) == PW_OK);
+    assert(pw_x86_engine_set_reencode(&engine, 1) == PW_OK);
+    /* The call stack needs unbounded chains; NULL turns it off. */
+    assert(pw_x86_engine_set_call_stack(&engine, guest, 0x4000) == PW_ERR_PRECONDITION);
+    assert(pw_x86_engine_set_call_stack(&engine, NULL, 0) == PW_OK);
+    assert(pw_x86_engine_set_fault_markers(&engine, 1) == PW_OK);
+    assert(!pw_x86_engine_fault_redirect(&engine, (uintptr_t)engine.code.exec_base));  /* nothing yet */
+    memset(&state, 0, sizeof(state));
+    state.eip = low + CODE;
+    state.stack_low = low;
+    state.stack_high = low + SPAN;
+    state.memory_count = 1;
+    state.memory[0].low = low;
+    state.memory[0].high = (uint64_t)low + SPAN;
+    state.memory[0].permissions = PW_X86_READ | PW_X86_WRITE;
+    state.gpr[4] = low + STACK_TOP;
+    state.eflags = 0x2;
+    memcpy(guest + STACK_TOP, &(uint32_t){ 0xdead0000u }, 4);
+    current = &engine;
+    for (unsigned i = 0; i < 1000 && state.eip != 0xdead0000u; i++)
+        assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK);
+    current = NULL;
+    assert(state.eip == 0xdead0000u);
+    for (uint32_t i = 0; i < engine.cache.capacity; i++) {
+        const PwX86CacheEntry *e = &engine.cache.entries[i];
+        const uint8_t *start = (const uint8_t *)engine.code.exec_base + e->code_offset;
+        if (!e->used || !e->fault_table_offset) continue;
+        {
+            const unsigned count = start[e->fault_table_offset] | start[e->fault_table_offset + 1] << 8;
+            for (unsigned k = 0; k < count; k++) {
+                const uint8_t *row = start + e->fault_table_offset + 2 + 4 * k;
+                const size_t site = row[0] | row[1] << 8, path = row[2] | row[3] << 8;
+                assert(pw_x86_engine_fault_redirect(&engine, (uintptr_t)start + site) == (uintptr_t)start + path);
+                sites++;
+            }
+        }
+        /* The canonical entry is never an access. */
+        assert(!pw_x86_engine_fault_redirect(&engine, (uintptr_t)start));
+        assert(!pw_x86_engine_fault_redirect(&engine, (uintptr_t)start + 1));
+        if (engine.block_map[e->code_offset / PW_X86_ENGINE_FAULT_GRANULE] != i + 1) walked++;
+    }
+    assert(sites && walked);
+    /* Past the last block, and outside the arena. */
+    assert(!pw_x86_engine_fault_redirect(&engine, (uintptr_t)engine.code.exec_base + engine.cache.cursor + 1));
+    assert(!pw_x86_engine_fault_redirect(&engine, (uintptr_t)engine.code.exec_base + engine.code.bytes));
+    assert(pw_x86_engine_reset(&engine, 2) == PW_OK);
+    assert(!engine.block_map[0] && !engine.last_published);
+    assert(pw_x86_engine_destroy(&engine) == PW_OK);
+
+    /* The return stub needs a call stack and its tables. */
+    memset(&options, 0, sizeof(options));
+    assert(!pw_x86_reencode_return_stub(stub, sizeof(stub), &options));
+    assert(!pw_x86_reencode_return_stub(NULL, sizeof(stub), &options));
 }
 
 static void test_fault_table(void)
@@ -231,9 +321,10 @@ int main(void)
         assert(marked.state.eip == 0xdead0000u && marked.state.gpr[0] == guarded.state.gpr[0]);
     }
     test_memory_forms();
+    test_engine_lookup();
     test_fault_table();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
            "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
-           "and stack form matches the guard\n");
+           "and stack form matches the guard; the engine finds each access's path and nothing else\n");
     return 0;
 }
