@@ -122,3 +122,28 @@ int pw_wine_launch_split(const char *text, char *storage, size_t size, const cha
         storage[used++] = 0;
     }
 }
+
+int pw_wine_launch_host_dir(const char *prefix, const char *windows_path, char *out, size_t size)
+{
+    const char *base;
+    size_t used;
+
+    if (!prefix || !windows_path || !out || !size || strlen(windows_path) < 3 ||
+        windows_path[1] != ':' || windows_path[2] != '\\')
+        return -1;
+    if (windows_path[0] == 'C' || windows_path[0] == 'c') base = "/drive_c";
+    else if (windows_path[0] == 'Z' || windows_path[0] == 'z') base = prefix = "";
+    else return -1;
+    if (strlen(prefix) + strlen(base) >= size) return -1;
+    memcpy(out, prefix, strlen(prefix));
+    memcpy(out + strlen(prefix), base, strlen(base));
+    used = strlen(prefix) + strlen(base);
+    for (const char *p = windows_path + 2; *p; p++) {
+        if (used + 1 >= size) return -1;
+        out[used++] = *p == '\\' ? '/' : *p;
+    }
+    /* No trailing separator, except for the root itself. */
+    while (used > 1 && out[used - 1] == '/') used--;
+    out[used] = 0;
+    return 0;
+}

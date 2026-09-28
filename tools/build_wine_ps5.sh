@@ -323,7 +323,7 @@ if [ "$prx_status" = 0 ]; then
         pw_wine_present pw_wine_next_input pw_wine_input_fd \
         pw_wine_set_pad pw_wine_rumble pw_wine_pad pw_wine_set_rumble \
         pw_wine_set_audio_sink pw_wine_audio_available pw_wine_audio_output \
-        __wine_virtual_stats __wine_ps5_set_output_sink __wine_ps5_memory_stats \
+        __wine_virtual_stats __wine_ps5_set_output_sink __wine_ps5_memory_stats pw_cwd_set \
         __wine_ps5_set_segv_hook
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/win32u_desc.c" __wine_unix_lib_init
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \

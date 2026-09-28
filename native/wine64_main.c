@@ -610,6 +610,19 @@ int main(int argc, char **argv)
             PS5LOG_LOG("PW_WINE64 audio sink=%d port=%d status=%s", set_audio != NULL, audio_port,
                        pw_result_name(audio_status));
         }
+        /* The game starts in its profile's working directory. A title
+         * cannot chdir, so ntdll keeps a logical one (wine/ps5/pw_wine_cwd.h),
+         * which Wine reads as the process's current directory. */
+        if (game && game->app.working_directory[0]) {
+            int (*set_cwd)(const char *) = (int (*)(const char *))
+                (uintptr_t)pw_prx_lookup(start.descriptor, "pw_cwd_set");
+            char host_dir[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY + PW_APP_PATH_CAPACITY];
+            int mapped = pw_wine_launch_host_dir(prefix, game->app.working_directory, host_dir,
+                                                 sizeof(host_dir));
+            int cwd_status = set_cwd && mapped == 0 ? set_cwd(host_dir) : -1;
+            PS5LOG_LOG("PW_WINE64 cwd=%s host=%s status=%d", game->app.working_directory,
+                       mapped == 0 ? host_dir : "-", cwd_status);
+        }
         status = pw_wine_start_environment(&start, &config, &ops);
         PS5LOG_LOG("PW_WINE64 environment status=%d", status);
     }

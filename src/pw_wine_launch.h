@@ -55,4 +55,10 @@ size_t pw_wine_launch_argv(const PwWineApp *app, uint32_t cycle, char *storage, 
  * do not fit storage or max. */
 int pw_wine_launch_split(const char *text, char *storage, size_t size, const char **words,
                          size_t max);
+
+/* A profile's working directory (a Windows path pw_app_profile validated:
+ * drive, backslashes, no "..") as the host directory it names in prefix:
+ * C: is the prefix's drive_c and Z: the host root, as in a default prefix.
+ * Returns 0, or -1 for another drive or when out is too small. */
+int pw_wine_launch_host_dir(const char *prefix, const char *windows_path, char *out, size_t size);
 #endif

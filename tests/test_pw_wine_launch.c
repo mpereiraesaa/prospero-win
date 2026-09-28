@@ -131,13 +131,35 @@ static void test_split(void)
     assert(pw_wine_launch_split("a", storage, sizeof(storage), NULL, 8) == -1);
 }
 
+/* A profile's working directory, mapped into its prefix. */
+static void test_host_dir(void)
+{
+    char out[64], small[16];
+
+    assert(pw_wine_launch_host_dir("/data/pw/prefix", "C:\\Tools", out, sizeof(out)) == 0 &&
+           !strcmp(out, "/data/pw/prefix/drive_c/Tools"));
+    assert(pw_wine_launch_host_dir("/data/pw/prefix", "c:\\Games\\Old One\\", out, sizeof(out)) == 0 &&
+           !strcmp(out, "/data/pw/prefix/drive_c/Games/Old One"));
+    assert(pw_wine_launch_host_dir("/p", "C:\\", out, sizeof(out)) == 0 && !strcmp(out, "/p/drive_c"));
+    assert(pw_wine_launch_host_dir("/p", "Z:\\", out, sizeof(out)) == 0 && !strcmp(out, "/"));
+    assert(pw_wine_launch_host_dir("/p", "z:\\tmp\\x", out, sizeof(out)) == 0 && !strcmp(out, "/tmp/x"));
+    assert(pw_wine_launch_host_dir("/p", "D:\\Games", out, sizeof(out)) == -1);        /* no such drive */
+    assert(pw_wine_launch_host_dir("/p", "C:", out, sizeof(out)) == -1);
+    assert(pw_wine_launch_host_dir("/data/pw/prefix", "C:\\x", small, sizeof(small)) == -1);
+    assert(pw_wine_launch_host_dir("/p", "C:\\a_long_directory", small, sizeof(small)) == -1);
+    assert(pw_wine_launch_host_dir(NULL, "C:\\x", out, sizeof(out)) == -1);
+    assert(pw_wine_launch_host_dir("/p", NULL, out, sizeof(out)) == -1);
+    assert(pw_wine_launch_host_dir("/p", "C:\\x", NULL, sizeof(out)) == -1);
+}
+
 int main(void)
 {
     test_parse();
     test_argv();
     test_split();
+    test_host_dir();
     printf("wine launch passed: launcher on no game, profile and path, overrides, refusals, "
            "cycle counts, LoadExec argv round trip, bounded storage, "
-           "argument words\n");
+           "argument words, working directory in the prefix\n");
     return 0;
 }
