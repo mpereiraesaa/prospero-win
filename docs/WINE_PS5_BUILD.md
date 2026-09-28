@@ -502,8 +502,8 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   A process granted `/data` cannot write the sandbox's `/download0`
   (`EACCES`, measured), so a game cannot leave the launcher a copy of the
   library there.
-  `examples/wine/` has the same layout, with Pinball's profile and its
-  shared input preset.
+  [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles) has the same layout, with the profiles
+  checked on the console and their shared input presets.
 - **Game.** Started with `profile=` or `path=`, the title runs that executable
   in Wine as below, with the profile's settings:
   - `prefix = default` uses `<root>/prefix`, any other name
@@ -528,8 +528,8 @@ The title runs one game per process (`src/pw_wine_launch.h`):
       motors stop when the game is asked to close. The first rumble, and
       any the pad refuses, are logged as `PW_WINE64 rumble`.
     - Bindings and the pointer stick still apply, so a preset can add a key.
-      `examples/wine/input/gamepad.input` binds nothing and moves no
-      pointer.
+      The `gamepad` preset in prospero-win-profiles binds nothing and moves
+      no pointer.
     - The game log's `PW_WINE64 display` line shows `xinput=1` when the
       runtime's ntdll has the gamepad slot.
 - **Closing.** Holding Options+Create for a second sends the game Alt+F4. When

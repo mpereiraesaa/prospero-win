@@ -68,12 +68,6 @@ src/pw_guest_call.h
 tests/test_pw_audio_ps5.c
 tests/test_pw_audio_mix.c
 tests/test_pw_app_profile.c
-examples/wine/input/gamepad.input
-examples/wine/input/mouse.input
-examples/wine/input/pinball.input
-examples/wine/profiles/minesweeper.profile
-examples/wine/profiles/pinball.profile
-examples/wine/profiles/sevenzip-bench.profile
 tests/test_pw_pad.c
 tests/test_pw_pad_ps5.c
 tests/test_status_vocabulary.py

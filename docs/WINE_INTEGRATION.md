@@ -86,7 +86,7 @@ staged application tree described by its profile:
 
 ```sh
 tools/build_wowprospero.sh
-tools/run_wine_dbt_host.sh --profile examples/wine/profiles/pinball.profile \
+tools/run_wine_dbt_host.sh --profile <prospero-win-profiles>/profiles/pinball.profile \
     --stage /path/to/staged/pinball --screenshot pinball.png
 tools/run_wine_dbt_host.sh ... --cpu native   # identical control run
 ```

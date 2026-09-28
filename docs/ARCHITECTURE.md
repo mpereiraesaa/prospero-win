@@ -43,8 +43,10 @@ wine/
   wowprospero/        Wine's i386 CPU backend around the DBT
   wineps5/            Wine's PS5 audio driver
 
-examples/wine/     profiles and input presets to copy to /data/prospero-win
 ```
+
+Game and benchmark profiles live in their own repository,
+[prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles).
 
 The title is built by `tools/build_native.sh`; Wine's PRXs by
 `tools/build_wine_ps5.sh`, and the host WoW64 build it needs by

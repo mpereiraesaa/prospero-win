@@ -462,8 +462,8 @@ and 3 matter only for code the re-encoder does not take.
 
 ## On the console
 
-`examples/wine/profiles/sevenzip-bench.profile` runs the same benchmark
-under the title:
+The `sevenzip-bench` profile from
+[prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles) runs the same benchmark under the title:
 
 1. Copy the i386 `7za.exe` from the pinned package to the prefix's
    `drive_c/Tools`.
@@ -478,8 +478,9 @@ under the title:
 
 The native baseline for the PS5 has to come from another x86-64 machine
 with the same CPU family: the console cannot run the binary without the DBT.
-nbench and pi run the same way, each from a local profile like this one
-whose `path` names the benchmark's executable.
+nbench and pi run the same way, with the `nbench-x87` and `pi-x87`
+profiles; that repository's `benchmarks/build.sh` builds all three
+programs from their pinned sources.
 
 Measured on 2026-09-28 (FW 12.02) with the changes above through native
 FP; the last 7-Zip round and the FP benchmarks also had the

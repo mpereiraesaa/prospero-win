@@ -49,8 +49,9 @@ tools/build_native.sh # the PS5 title (needs the pinned payload SDK)
 
 Wine's PRXs are built by `tools/build_wine_ps5.sh`; see
 [development](docs/DEVELOPMENT.md). Games are user-supplied: copy an
-installed game into a prefix under `/data/prospero-win` and add a profile
-next to the examples in `examples/wine/`. Do not commit Windows binaries,
+installed game into a prefix under `/data/prospero-win` and add a profile.
+Profiles checked on the console, their input presets and the benchmark
+programs' build are kept in [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles). Do not commit Windows binaries,
 game data, captures, telemetry transcripts, SDK files or private paths.
 
 ## Documentation

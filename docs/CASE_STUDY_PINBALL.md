@@ -24,8 +24,8 @@ general Windows compatibility, and it does not demonstrate Direct3D.
 
 ## Input profile
 
-`examples/wine/profiles/pinball.profile` uses the shared preset
-`examples/wine/input/pinball.input`:
+The `pinball` profile in [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles) uses the shared
+preset `input/pinball.input`:
 
 | DualSense | Key |
 | --- | --- |

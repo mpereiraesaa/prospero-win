@@ -163,66 +163,58 @@ static void test_presets(void)
     assert(pw_game_button_mask(PW_GAME_BUTTON_COUNT) == 0);
 }
 
-/* The shipped Wine examples parse, and the preset gives Pinball its keys. */
-static void test_examples(void)
+/* The forms the published profiles use (the prospero-win-profiles
+ * repository): a preset gives Pinball its keys, Minesweeper shares the
+ * mouse preset, the 7-Zip benchmark passes an arguments line, and the
+ * gamepad preset binds nothing. */
+static void test_published_forms(void)
 {
-    static uint8_t text[PW_APP_PROFILE_MAX_BYTES + 1];
     PwGameProfile p;
     PwGameInput input;
-    FILE *file;
-    size_t length;
 
-    assert((file = fopen("examples/wine/profiles/pinball.profile", "rb")));
-    length = fread(text, 1, sizeof(text), file);
-    assert(!fclose(file) && length < sizeof(text));
-    assert(pw_game_profile_parse(text, length, &p) == PW_OK);
+    assert(parse(APP "\n[display]\ndesktop = 800x600\nscaling = fit\n\n[input]\npreset = pinball\n",
+                 &p) == PW_OK);
     assert(!strcmp(p.app.id, "pinball") && !strcmp(p.input.preset, "pinball"));
     assert(p.display.width == 800 && p.display.height == 600 && p.display.scaling == PW_GAME_SCALING_FIT);
-    assert((file = fopen("examples/wine/input/pinball.input", "rb")));
-    length = fread(text, 1, sizeof(text), file);
-    assert(!fclose(file) && length < sizeof(text));
     pw_game_input_init(&input);
-    assert(pw_game_input_parse(text, length, &input) == PW_OK);
+    assert(preset("; comment\n[input]\nmode = keyboard\nl1 = z\nr1 = slash\ncross = space\n"
+                  "left = x\nright = period\nup = up\noptions = f3\nsquare = f2\n"
+                  "mouse = right_stick\nmouse_speed = 900\nr2 = mouse_left\nl2 = mouse_right\n",
+                  &input) == PW_OK);
     pw_game_input_overlay(&input, &p.input);
     assert(input.bindings[L1].code == 'Z' && input.bindings[R1].code == 0xbf);
     assert(input.bindings[CROSS].code == 0x20 && input.mouse == PW_GAME_STICK_RIGHT);
     assert(input.bindings[R2].kind == PW_GAME_BIND_MOUSE && input.bindings[R2].code == 0);
 
-    /* Minesweeper shares the generic mouse preset: left stick, Cross clicks. */
-    assert((file = fopen("examples/wine/profiles/minesweeper.profile", "rb")));
-    length = fread(text, 1, sizeof(text), file);
-    assert(!fclose(file) && length < sizeof(text));
-    assert(pw_game_profile_parse(text, length, &p) == PW_OK && !strcmp(p.input.preset, "mouse"));
-    assert(p.app.architecture == PW_APP_ARCH_PE64);
-    assert((file = fopen("examples/wine/input/mouse.input", "rb")));
-    length = fread(text, 1, sizeof(text), file);
-    assert(!fclose(file) && length < sizeof(text));
+    assert(parse("[application]\nid = minesweeper\nname = Minesweeper\n"
+                 "executable = C:\\windows\\system32\\winemine.exe\n"
+                 "working_directory = C:\\windows\\system32\nprefix = default\n"
+                 "runtime = wine-wow64\narchitecture = pe64\ngraphics = gdi\n\n[input]\npreset = mouse\n",
+                 &p) == PW_OK);
+    assert(!strcmp(p.input.preset, "mouse") && p.app.architecture == PW_APP_ARCH_PE64);
     pw_game_input_init(&input);
-    assert(pw_game_input_parse(text, length, &input) == PW_OK);
+    assert(preset("[input]\nmode = keyboard\nmouse = left_stick\nmouse_speed = 900\n"
+                  "cross = mouse_left\ncircle = mouse_right\nsquare = mouse_middle\n"
+                  "r2 = mouse_left\nl2 = mouse_right\n", &input) == PW_OK);
     assert(input.mouse == PW_GAME_STICK_LEFT && input.bindings[CROSS].kind == PW_GAME_BIND_MOUSE);
     assert(input.bindings[CIRCLE].code == 1 && input.bindings[SQUARE].code == 2);
 
-    /* The 7-Zip benchmark passes its arguments line to the program. */
-    assert((file = fopen("examples/wine/profiles/sevenzip-bench.profile", "rb")));
-    length = fread(text, 1, sizeof(text), file);
-    assert(!fclose(file) && length < sizeof(text));
-    assert(pw_game_profile_parse(text, length, &p) == PW_OK);
+    assert(parse("[application]\nid = sevenzip-bench\nname = 7-Zip benchmark\n"
+                 "executable = C:\\Tools\\7za.exe\nworking_directory = C:\\Tools\n"
+                 "arguments = b -mmt1 -md22\nprefix = default\nruntime = wine-wow64\n"
+                 "architecture = pe32\ngraphics = gdi\n", &p) == PW_OK);
     assert(!strcmp(p.app.id, "sevenzip-bench") && !strcmp(p.app.arguments, "b -mmt1 -md22"));
     assert(p.app.architecture == PW_APP_ARCH_PE32 && !p.input.preset[0]);
 
-    /* The gamepad preset: XInput, no pointer, nothing bound. */
-    assert((file = fopen("examples/wine/input/gamepad.input", "rb")));
-    length = fread(text, 1, sizeof(text), file);
-    assert(!fclose(file) && length < sizeof(text));
     pw_game_input_init(&input);
-    assert(pw_game_input_parse(text, length, &input) == PW_OK);
+    assert(preset("[input]\nmode = xinput\nmouse = none\n", &input) == PW_OK);
     assert(input.mode == PW_GAME_INPUT_XINPUT && input.mouse == PW_GAME_STICK_NONE);
     for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++) assert(input.bindings[i].kind == PW_GAME_BIND_UNSET);
 }
 
 int main(void)
 {
-    test_examples();
+    test_published_forms();
     test_profile();
     test_refusals();
     test_presets();
