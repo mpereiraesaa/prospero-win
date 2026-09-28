@@ -129,8 +129,10 @@ static void compare(const char *name, const uint8_t *code, size_t bytes, uint32_
 
 /* Every addressing form the re-encoder copies with fault markers (esp and
  * edi as base or index, no base, an absolute address, disp8 and disp32,
- * 8- and 16-bit operands, lock, immediates, flags read across accesses) runs
- * exactly as with the guard: same registers, flags and memory. */
+ * 8- and 16-bit operands, lock, immediates, flags read across accesses) and
+ * every stack form (push of a register, esp, memory and an immediate, pop
+ * of a register and of esp, leave, call, ret and ret imm16) runs exactly as
+ * with the guard: same registers, flags and memory. */
 static void test_memory_forms(void)
 {
     uint8_t code[] = {
@@ -147,7 +149,10 @@ static void test_memory_forms(void)
         0x01, 0x00, 0xc7, 0x47, 0x20, 0x55, 0x00, 0x00, 0x00, 0xff, 0x36, 0x5a,
         0x1b, 0x57, 0x04, 0x8b, 0x07, 0xbf, 0x10, 0x00, 0x00, 0x00, 0x8b, 0x0c,
         0xbe, 0x03, 0x44, 0x7d, 0xf8, 0x88, 0x94, 0x3e, 0x00, 0x01, 0x00, 0x00,
-        0xc3,
+        0x56, 0x68, 0x34, 0x12, 0x00, 0x00, 0x54, 0x58, 0xff, 0x36, 0x5b, 0x59,
+        0x5a, 0x55, 0x89, 0xe5, 0x6a, 0x07, 0x6a, 0x08, 0xc9, 0x6a, 0x09, 0xe8,
+        0x02, 0x00, 0x00, 0x00, 0xeb, 0x07, 0x03, 0x44, 0x24, 0x04, 0xc2, 0x04,
+        0x00, 0x54, 0x5c, 0xc3,
     };
     const uint32_t absolute = low + 0x3c000;
     uint8_t after[2][0x10000];
@@ -229,6 +234,6 @@ int main(void)
     test_fault_table();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
            "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
-           "form matches the guard\n");
+           "and stack form matches the guard\n");
     return 0;
 }

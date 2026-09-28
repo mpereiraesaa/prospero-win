@@ -611,11 +611,51 @@ static void emit_rm_direct(Ctx *c, const Inst *in)
 }
 
 /* push the 32-bit value in host register src (or imm32 when src < 0). */
+/* With fault markers: one stack or frame access, [base + disp] with the
+ * guest's 32-bit address, listed in the fault table. opcode is 0x89 (store
+ * host register reg), 0x8b (load it) or 0xc7 (store imm32). */
+static void emit_frame_access(Ctx *c, uint8_t opcode, unsigned reg, unsigned base, int8_t disp,
+                              unsigned write, uint32_t imm)
+{
+    Out *o = &c->o;
+    const unsigned hb = host_of[base];
+    const uint8_t rex = (uint8_t)((reg >= 8 ? 4 : 0) | (hb >= 8 ? 1 : 0));
+    Cold *cold;
+
+    if (c->cold_count >= MAX_COLD) { o->failed = 1; return; }
+    cold = &c->cold[c->cold_count++];
+    memset(cold, 0, sizeof(*cold));
+    cold->site = o->n;
+    cold->pc = c->here;
+    cold->width = 4; cold->write = (uint8_t)write;
+    cold->direct = 1;
+    cold->ea.base = (int)base; cold->ea.index = -1; cold->ea.disp = (uint32_t)(int32_t)disp;
+    b(o, 0x67);
+    if (rex) b(o, (uint8_t)(0x40 | rex));
+    b(o, opcode);
+    b(o, (uint8_t)(0x40 | (reg & 7) << 3 | ((hb & 7) == 4 ? 4 : hb & 7)));   /* mod 01: disp8 */
+    if ((hb & 7) == 4) b(o, 0x24);                                          /* SIB: base only */
+    b(o, (uint8_t)disp);
+    if (opcode == 0xc7) w32(o, imm);
+}
+
+static void lea_r12_r12(Out *o, int8_t n)
+{
+    b(o, 0x45); b(o, 0x8d); b(o, 0x64); b(o, 0x24); b(o, (uint8_t)n);   /* lea r12d, [r12+n] */
+}
+
 static void emit_push(Ctx *c, int src, uint32_t imm, unsigned keep)
 {
     Out *o = &c->o;
     const Ea top = { 4, -1, 0, (uint32_t)-4 };
 
+    if (c->fault_markers) {
+        /* Store below esp first: a fault leaves esp as it was. */
+        if (src < 0) emit_frame_access(c, 0xc7, 0, 4, -4, 1, imm);
+        else emit_frame_access(c, 0x89, (unsigned)src, 4, -4, 1, 0);
+        lea_r12_r12(o, -4);
+        return;
+    }
     guard(c, &top, 4, 1, keep);
     if (src < 0) { b(o, 0x41); b(o, 0xc7); b(o, 0x03); w32(o, imm); }   /* mov [r11], imm32 */
     else { b(o, (uint8_t)(0x41 | (src >= 8 ? 4 : 0))); b(o, 0x89); b(o, (uint8_t)((src & 7) << 3 | 3)); }
@@ -932,16 +972,27 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         case K_POP: {
             const Ea top = { 4, -1, 0, 0 };
             unsigned h = host_of[in->reg];
+            if (c.fault_markers) {
+                /* pop esp: esp is the value read. */
+                emit_frame_access(&c, 0x8b, h, 4, 0, 0, 0);
+                if (h != R12) lea_r12_r12(o, 4);
+                break;
+            }
             guard(&c, &top, 4, 0, keep);
             load_r10(o);
-            b(o, 0x45); b(o, 0x8d); b(o, 0x64); b(o, 0x24); b(o, 4);    /* lea r12d, [r12+4] */
+            lea_r12_r12(o, 4);
             rr(o, 0x89, 0, h, R10);                                     /* mov reg, r10d */
             break;
         }
         case K_LEAVE: {
             const Ea frame = { 5, -1, 0, 0 };
-            guard(&c, &frame, 4, 0, keep);
-            load_r10(o);
+            if (c.fault_markers) emit_frame_access(&c, 0x8b, R10, 5, 0, 0, 0);
+            else { guard(&c, &frame, 4, 0, keep); load_r10(o); }
+            if (c.fault_markers) {
+                b(o, 0x44); b(o, 0x8d); b(o, 0x65); b(o, 4);            /* lea r12d, [rbp+4] */
+                rr(o, 0x89, 0, 5, R10);                                 /* mov ebp, r10d */
+                break;
+            }
             b(o, 0x45); b(o, 0x8d); b(o, 0x63); b(o, 4);                /* lea r12d, [r11+4] */
             rr(o, 0x89, 0, 5, R10);                                     /* mov ebp, r10d */
             break;
@@ -968,8 +1019,8 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
             break;
         case K_RET: {
             const Ea top = { 4, -1, 0, 0 };
-            guard(&c, &top, 4, 0, keep);
-            load_r10(o);
+            if (c.fault_markers) emit_frame_access(&c, 0x8b, R10, 4, 0, 0, 0);
+            else { guard(&c, &top, 4, 0, keep); load_r10(o); }
             b(o, 0x45); b(o, 0x8d); b(o, 0xa4); b(o, 0x24); w32(o, 4 + in->imm_value); /* lea r12d, [r12+n] */
             emit_dynamic_exit(&c);
             block->exit.kind = PW_X86_EXIT_DYNAMIC;
