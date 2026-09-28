@@ -178,6 +178,9 @@ wine/patches/0410-win32u-ps5-fontless-metrics-and-server-desktop.patch
 wine/patches/0420-win32u-ps5-driver-cursor.patch
 wine/patches/0430-win32u-ps5-driver-window-view.patch
 wine/patches/0440-win32u-ps5-driver-cursor-edges.patch
+wine/patches/0450-winevulkan-host-display-extension.patch
+wine/patches/0455-win32u-vulkan-optional-host-external-capabilities.patch
+wine/patches/0460-win32u-ps5-driver-vulkan-display-plane.patch
 wine/patches/0470-xinput-ps5-title-controller.patch
 wine/patches/0560-ntdll-stderr-output-sink.patch
 wine/patches/0570-ntdll-ps5-reserve-virtual-range.patch
@@ -239,3 +242,4 @@ tests/test_pw_wine_cwd.c
 wine/ps5/pw_wine_cwd.c
 wine/ps5/pw_wine_cwd.h
 wine/ps5/pw_wine_cwd_libc.c
+wine/ps5/pw_vulkan_libc.c

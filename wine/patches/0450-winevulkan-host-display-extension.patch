@@ -1,0 +1,317 @@
+From 4037e4e365f0b0023ca92204a4e2c5e3a81d8927 Mon Sep 17 00:00:00 2001
+From: Manuel Pereira <manuelpereiralds@gmail.com>
+Date: Mon, 28 Sep 2026 18:56:59 +0200
+Subject: [PATCH] winevulkan: Let a host driver use VK_KHR_display.
+
+The PS5 user driver presents a win32 surface through the host's display
+plane, so the host instance needs VK_KHR_display and its instance
+functions. The extension stays unexposed: applications see only
+VK_KHR_win32_surface, its functions stay stubs in the client DLLs, and
+the extensions built on it stay unsupported. Only the Unix side's
+instance extension and function lists change; no thunk is added.
+---
+ dlls/winevulkan/make_vulkan |  16 +++++-
+ include/wine/vulkan.h       | 106 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 120 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/winevulkan/make_vulkan b/dlls/winevulkan/make_vulkan
+index 5a4f192c3e..3fdbbcea6b 100755
+--- a/dlls/winevulkan/make_vulkan
++++ b/dlls/winevulkan/make_vulkan
+@@ -85,7 +85,6 @@ EXT_BLOCK_SIZE = 1000
+ 
+ UNSUPPORTED_EXTENSIONS = {
+     # Instance extensions
+-    "VK_KHR_display", # Needs WSI work.
+     "VK_KHR_surface_protected_capabilities",
+     "VK_LUNARG_direct_driver_loading", # Implemented in the Vulkan loader
+ 
+@@ -101,6 +100,16 @@ UNSUPPORTED_EXTENSIONS = {
+     "VK_NV_external_memory_rdma", # Needs shared resources work.
+     "VK_NV_external_compute_queue", # Has a new dispatchable handle
+ 
++    # Built on VK_KHR_display, which only a host driver uses (below).
++    "VK_EXT_acquire_drm_display",
++    "VK_EXT_direct_mode_display",
++    "VK_EXT_display_control",
++    "VK_EXT_display_surface_counter",
++    "VK_KHR_display_swapchain",
++    "VK_KHR_get_display_properties2",
++    "VK_NV_acquire_winrt_display",
++    "VK_NV_display_stereo",
++
+     # Extensions for other platforms
+     "VK_EXT_metal_objects",
+     "VK_GOOGLE_surfaceless_query",
+@@ -124,6 +133,9 @@ UNSUPPORTED_EXTGROUPS = (
+ UNEXPOSED_EXTENSIONS = {
+     "VK_EXT_map_memory_placed",
+     "VK_EXT_headless_surface",
++    # A host driver may present win32 surfaces through the display plane
++    # (the PS5's); applications still see only VK_KHR_win32_surface.
++    "VK_KHR_display",
+     # Extensions for other platforms
+     "VK_EXT_external_memory_dma_buf",
+     "VK_EXT_image_drm_format_modifier",
+@@ -837,7 +849,7 @@ class Function(Type):
+         return body
+ 
+     def spec(self, prefix=None, symbol=None):
+-        if not self.is_required():
++        if not self.is_required() or not self.needs_exposing():
+             return f"@ stub {self.name}\n"
+ 
+         spec = ""
+diff --git a/include/wine/vulkan.h b/include/wine/vulkan.h
+index a53df3e823..5ce837c9e1 100644
+--- a/include/wine/vulkan.h
++++ b/include/wine/vulkan.h
+@@ -671,6 +671,8 @@ typedef void* VkRemoteAddressNV;
+ #define VK_KHR_DEVICE_GROUP_CREATION_SPEC_VERSION 1
+ #define VK_KHR_DEVICE_GROUP_EXTENSION_NAME "VK_KHR_device_group"
+ #define VK_KHR_DEVICE_GROUP_SPEC_VERSION 4
++#define VK_KHR_DISPLAY_EXTENSION_NAME "VK_KHR_display"
++#define VK_KHR_DISPLAY_SPEC_VERSION 23
+ #define VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME "VK_KHR_draw_indirect_count"
+ #define VK_KHR_DRAW_INDIRECT_COUNT_SPEC_VERSION 1
+ #define VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME "VK_KHR_driver_properties"
+@@ -1133,6 +1135,8 @@ VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDescriptorUpdateTemplate)
+ typedef VkDescriptorUpdateTemplate VkDescriptorUpdateTemplateKHR;
+ VK_DEFINE_HANDLE(VkDevice)
+ VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDeviceMemory)
++VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDisplayKHR)
++VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDisplayModeKHR)
+ VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkEvent)
+ VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkFence)
+ VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkFramebuffer)
+@@ -1210,6 +1214,7 @@ typedef VkFlags VkDebugReportFlagsEXT;
+ typedef VkFlags VkDebugUtilsMessageTypeFlagsEXT;
+ typedef VkFlags VkDependencyFlags;
+ typedef VkFlags VkDeviceQueueCreateFlags;
++typedef VkFlags VkDisplayPlaneAlphaFlagsKHR;
+ typedef VkFlags VkExternalMemoryFeatureFlags;
+ typedef VkExternalMemoryFeatureFlags VkExternalMemoryFeatureFlagsKHR;
+ typedef VkFlags VkExternalMemoryHandleTypeFlags;
+@@ -1276,6 +1281,8 @@ typedef VkFlags VkDeviceCreateFlags;
+ typedef VkFlags VkDeviceDiagnosticsConfigFlagsNV;
+ typedef VkFlags VkDeviceFaultFlagsKHR;
+ typedef VkFlags VkDeviceGroupPresentModeFlagsKHR;
++typedef VkFlags VkDisplayModeCreateFlagsKHR;
++typedef VkFlags VkDisplaySurfaceCreateFlagsKHR;
+ typedef VkFlags VkEventCreateFlags;
+ typedef VkFlags VkExternalFenceFeatureFlags;
+ typedef VkExternalFenceFeatureFlags VkExternalFenceFeatureFlagsKHR;
+@@ -3075,6 +3082,15 @@ typedef enum VkDiscardRectangleModeEXT
+     VK_DISCARD_RECTANGLE_MODE_EXT_MAX_ENUM = 0x7fffffff,
+ } VkDiscardRectangleModeEXT;
+ 
++typedef enum VkDisplayPlaneAlphaFlagBitsKHR
++{
++    VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR = 0x00000001,
++    VK_DISPLAY_PLANE_ALPHA_GLOBAL_BIT_KHR = 0x00000002,
++    VK_DISPLAY_PLANE_ALPHA_PER_PIXEL_BIT_KHR = 0x00000004,
++    VK_DISPLAY_PLANE_ALPHA_PER_PIXEL_PREMULTIPLIED_BIT_KHR = 0x00000008,
++    VK_DISPLAY_PLANE_ALPHA_FLAG_BITS_KHR_MAX_ENUM = 0x7fffffff,
++} VkDisplayPlaneAlphaFlagBitsKHR;
++
+ typedef enum VkDriverId
+ {
+     VK_DRIVER_ID_AMD_PROPRIETARY = 1,
+@@ -4597,6 +4613,8 @@ typedef enum VkObjectType
+     VK_OBJECT_TYPE_COMMAND_POOL = 25,
+     VK_OBJECT_TYPE_SURFACE_KHR = 1000000000,
+     VK_OBJECT_TYPE_SWAPCHAIN_KHR = 1000001000,
++    VK_OBJECT_TYPE_DISPLAY_KHR = 1000002000,
++    VK_OBJECT_TYPE_DISPLAY_MODE_KHR = 1000002001,
+     VK_OBJECT_TYPE_DEBUG_REPORT_CALLBACK_EXT = 1000011000,
+     VK_OBJECT_TYPE_VIDEO_SESSION_KHR = 1000023000,
+     VK_OBJECT_TYPE_VIDEO_SESSION_PARAMETERS_KHR = 1000023001,
+@@ -5938,6 +5956,8 @@ typedef enum VkStructureType
+     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES = 56,
+     VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR = 1000001000,
+     VK_STRUCTURE_TYPE_PRESENT_INFO_KHR = 1000001001,
++    VK_STRUCTURE_TYPE_DISPLAY_MODE_CREATE_INFO_KHR = 1000002000,
++    VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR = 1000002001,
+     VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR = 1000004000,
+     VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR = 1000006000,
+     VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR = 1000009000,
+@@ -9524,6 +9544,12 @@ typedef union VkDescriptorMappingSourceDataEXT
+     uint32_t shaderRecordAddressOffset;
+ } VkDescriptorMappingSourceDataEXT;
+ 
++typedef struct VkDisplayModeParametersKHR
++{
++    VkExtent2D visibleRegion;
++    uint32_t refreshRate;
++} VkDisplayModeParametersKHR;
++
+ typedef struct VkGeometryNV
+ {
+     VkStructureType sType;
+@@ -10385,6 +10411,42 @@ typedef struct VkDeviceQueueCreateInfo
+     const float *pQueuePriorities;
+ } VkDeviceQueueCreateInfo;
+ 
++typedef struct VkDisplayModePropertiesKHR
++{
++    VkDisplayModeKHR WINE_VK_ALIGN(8) displayMode;
++    VkDisplayModeParametersKHR parameters;
++} VkDisplayModePropertiesKHR;
++
++typedef struct VkDisplayPlaneCapabilitiesKHR
++{
++    VkDisplayPlaneAlphaFlagsKHR supportedAlpha;
++    VkOffset2D minSrcPosition;
++    VkOffset2D maxSrcPosition;
++    VkExtent2D minSrcExtent;
++    VkExtent2D maxSrcExtent;
++    VkOffset2D minDstPosition;
++    VkOffset2D maxDstPosition;
++    VkExtent2D minDstExtent;
++    VkExtent2D maxDstExtent;
++} VkDisplayPlaneCapabilitiesKHR;
++
++typedef struct VkDisplayPlanePropertiesKHR
++{
++    VkDisplayKHR WINE_VK_ALIGN(8) currentDisplay;
++    uint32_t currentStackIndex;
++} VkDisplayPlanePropertiesKHR;
++
++typedef struct VkDisplayPropertiesKHR
++{
++    VkDisplayKHR WINE_VK_ALIGN(8) display;
++    const char *displayName;
++    VkExtent2D physicalDimensions;
++    VkExtent2D physicalResolution;
++    VkSurfaceTransformFlagsKHR supportedTransforms;
++    VkBool32 planeReorderPossible;
++    VkBool32 persistentContent;
++} VkDisplayPropertiesKHR;
++
+ typedef struct VkDrmFormatModifierProperties2EXT
+ {
+     uint64_t WINE_VK_ALIGN(8) drmFormatModifier;
+@@ -13361,6 +13423,28 @@ typedef struct VkDispatchTileInfoQCOM
+     const void *pNext;
+ } VkDispatchTileInfoQCOM;
+ 
++typedef struct VkDisplayModeCreateInfoKHR
++{
++    VkStructureType sType;
++    const void *pNext;
++    VkDisplayModeCreateFlagsKHR flags;
++    VkDisplayModeParametersKHR parameters;
++} VkDisplayModeCreateInfoKHR;
++
++typedef struct VkDisplaySurfaceCreateInfoKHR
++{
++    VkStructureType sType;
++    const void *pNext;
++    VkDisplaySurfaceCreateFlagsKHR flags;
++    VkDisplayModeKHR WINE_VK_ALIGN(8) displayMode;
++    uint32_t planeIndex;
++    uint32_t planeStackIndex;
++    VkSurfaceTransformFlagBitsKHR transform;
++    float globalAlpha;
++    VkDisplayPlaneAlphaFlagBitsKHR alphaMode;
++    VkExtent2D imageExtent;
++} VkDisplaySurfaceCreateInfoKHR;
++
+ typedef struct VkDrawIndexedIndirectCommand
+ {
+     uint32_t indexCount;
+@@ -21538,6 +21622,8 @@ typedef VkResult (VKAPI_PTR *PFN_vkCreateDescriptorSetLayout)(VkDevice device, c
+ typedef VkResult (VKAPI_PTR *PFN_vkCreateDescriptorUpdateTemplate)(VkDevice device, const VkDescriptorUpdateTemplateCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDescriptorUpdateTemplate *pDescriptorUpdateTemplate);
+ typedef VkResult (VKAPI_PTR *PFN_vkCreateDescriptorUpdateTemplateKHR)(VkDevice device, const VkDescriptorUpdateTemplateCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDescriptorUpdateTemplate *pDescriptorUpdateTemplate);
+ typedef VkResult (VKAPI_PTR *PFN_vkCreateDevice)(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDevice *pDevice);
++typedef VkResult (VKAPI_PTR *PFN_vkCreateDisplayModeKHR)(VkPhysicalDevice physicalDevice, VkDisplayKHR display, const VkDisplayModeCreateInfoKHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDisplayModeKHR *pMode);
++typedef VkResult (VKAPI_PTR *PFN_vkCreateDisplayPlaneSurfaceKHR)(VkInstance instance, const VkDisplaySurfaceCreateInfoKHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface);
+ typedef VkResult (VKAPI_PTR *PFN_vkCreateEvent)(VkDevice device, const VkEventCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkEvent *pEvent);
+ typedef VkResult (VKAPI_PTR *PFN_vkCreateFence)(VkDevice device, const VkFenceCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkFence *pFence);
+ typedef VkResult (VKAPI_PTR *PFN_vkCreateFramebuffer)(VkDevice device, const VkFramebufferCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkFramebuffer *pFramebuffer);
+@@ -21708,6 +21794,9 @@ typedef void (VKAPI_PTR *PFN_vkGetDeviceQueue)(VkDevice device, uint32_t queueFa
+ typedef void (VKAPI_PTR *PFN_vkGetDeviceQueue2)(VkDevice device, const VkDeviceQueueInfo2 *pQueueInfo, VkQueue *pQueue);
+ typedef VkResult (VKAPI_PTR *PFN_vkGetDeviceSubpassShadingMaxWorkgroupSizeHUAWEI)(VkDevice device, VkRenderPass renderpass, VkExtent2D *pMaxWorkgroupSize);
+ typedef void (VKAPI_PTR *PFN_vkGetDeviceTensorMemoryRequirementsARM)(VkDevice device, const VkDeviceTensorMemoryRequirementsARM *pInfo, VkMemoryRequirements2 *pMemoryRequirements);
++typedef VkResult (VKAPI_PTR *PFN_vkGetDisplayModePropertiesKHR)(VkPhysicalDevice physicalDevice, VkDisplayKHR display, uint32_t *pPropertyCount, VkDisplayModePropertiesKHR *pProperties);
++typedef VkResult (VKAPI_PTR *PFN_vkGetDisplayPlaneCapabilitiesKHR)(VkPhysicalDevice physicalDevice, VkDisplayModeKHR mode, uint32_t planeIndex, VkDisplayPlaneCapabilitiesKHR *pCapabilities);
++typedef VkResult (VKAPI_PTR *PFN_vkGetDisplayPlaneSupportedDisplaysKHR)(VkPhysicalDevice physicalDevice, uint32_t planeIndex, uint32_t *pDisplayCount, VkDisplayKHR *pDisplays);
+ typedef VkResult (VKAPI_PTR *PFN_vkGetDynamicRenderingTilePropertiesQCOM)(VkDevice device, const VkRenderingInfo *pRenderingInfo, VkTilePropertiesQCOM *pProperties);
+ typedef VkResult (VKAPI_PTR *PFN_vkGetEncodedVideoSessionParametersKHR)(VkDevice device, const VkVideoEncodeSessionParametersGetInfoKHR *pVideoSessionParametersInfo, VkVideoEncodeSessionParametersFeedbackInfoKHR *pFeedbackInfo, size_t *pDataSize, void *pData);
+ typedef VkResult (VKAPI_PTR *PFN_vkGetEventStatus)(VkDevice device, VkEvent event);
+@@ -21758,6 +21847,8 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesK
+ typedef VkResult (VKAPI_PTR *PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesNV)(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount, VkCooperativeMatrixPropertiesNV *pProperties);
+ typedef VkResult (VKAPI_PTR *PFN_vkGetPhysicalDeviceCooperativeVectorPropertiesNV)(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount, VkCooperativeVectorPropertiesNV *pProperties);
+ typedef VkDeviceSize (VKAPI_PTR *PFN_vkGetPhysicalDeviceDescriptorSizeEXT)(VkPhysicalDevice physicalDevice, VkDescriptorType descriptorType);
++typedef VkResult (VKAPI_PTR *PFN_vkGetPhysicalDeviceDisplayPlanePropertiesKHR)(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount, VkDisplayPlanePropertiesKHR *pProperties);
++typedef VkResult (VKAPI_PTR *PFN_vkGetPhysicalDeviceDisplayPropertiesKHR)(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount, VkDisplayPropertiesKHR *pProperties);
+ typedef void (VKAPI_PTR *PFN_vkGetPhysicalDeviceExternalBufferProperties)(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalBufferInfo *pExternalBufferInfo, VkExternalBufferProperties *pExternalBufferProperties);
+ typedef void (VKAPI_PTR *PFN_vkGetPhysicalDeviceExternalBufferPropertiesKHR)(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalBufferInfo *pExternalBufferInfo, VkExternalBufferProperties *pExternalBufferProperties);
+ typedef void (VKAPI_PTR *PFN_vkGetPhysicalDeviceExternalFenceProperties)(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalFenceInfo *pExternalFenceInfo, VkExternalFenceProperties *pExternalFenceProperties);
+@@ -22301,6 +22392,8 @@ VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice device, const VkDescrip
+ VkResult VKAPI_CALL vkCreateDescriptorUpdateTemplate(VkDevice device, const VkDescriptorUpdateTemplateCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDescriptorUpdateTemplate *pDescriptorUpdateTemplate);
+ VkResult VKAPI_CALL vkCreateDescriptorUpdateTemplateKHR(VkDevice device, const VkDescriptorUpdateTemplateCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDescriptorUpdateTemplate *pDescriptorUpdateTemplate);
+ VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDevice *pDevice);
++VkResult VKAPI_CALL vkCreateDisplayModeKHR(VkPhysicalDevice physicalDevice, VkDisplayKHR display, const VkDisplayModeCreateInfoKHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDisplayModeKHR *pMode);
++VkResult VKAPI_CALL vkCreateDisplayPlaneSurfaceKHR(VkInstance instance, const VkDisplaySurfaceCreateInfoKHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface);
+ VkResult VKAPI_CALL vkCreateEvent(VkDevice device, const VkEventCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkEvent *pEvent);
+ VkResult VKAPI_CALL vkCreateFence(VkDevice device, const VkFenceCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkFence *pFence);
+ VkResult VKAPI_CALL vkCreateFramebuffer(VkDevice device, const VkFramebufferCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkFramebuffer *pFramebuffer);
+@@ -22471,6 +22564,9 @@ void VKAPI_CALL vkGetDeviceQueue(VkDevice device, uint32_t queueFamilyIndex, uin
+ void VKAPI_CALL vkGetDeviceQueue2(VkDevice device, const VkDeviceQueueInfo2 *pQueueInfo, VkQueue *pQueue);
+ VkResult VKAPI_CALL vkGetDeviceSubpassShadingMaxWorkgroupSizeHUAWEI(VkDevice device, VkRenderPass renderpass, VkExtent2D *pMaxWorkgroupSize);
+ void VKAPI_CALL vkGetDeviceTensorMemoryRequirementsARM(VkDevice device, const VkDeviceTensorMemoryRequirementsARM *pInfo, VkMemoryRequirements2 *pMemoryRequirements);
++VkResult VKAPI_CALL vkGetDisplayModePropertiesKHR(VkPhysicalDevice physicalDevice, VkDisplayKHR display, uint32_t *pPropertyCount, VkDisplayModePropertiesKHR *pProperties);
++VkResult VKAPI_CALL vkGetDisplayPlaneCapabilitiesKHR(VkPhysicalDevice physicalDevice, VkDisplayModeKHR mode, uint32_t planeIndex, VkDisplayPlaneCapabilitiesKHR *pCapabilities);
++VkResult VKAPI_CALL vkGetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDevice, uint32_t planeIndex, uint32_t *pDisplayCount, VkDisplayKHR *pDisplays);
+ VkResult VKAPI_CALL vkGetDynamicRenderingTilePropertiesQCOM(VkDevice device, const VkRenderingInfo *pRenderingInfo, VkTilePropertiesQCOM *pProperties);
+ VkResult VKAPI_CALL vkGetEncodedVideoSessionParametersKHR(VkDevice device, const VkVideoEncodeSessionParametersGetInfoKHR *pVideoSessionParametersInfo, VkVideoEncodeSessionParametersFeedbackInfoKHR *pFeedbackInfo, size_t *pDataSize, void *pData);
+ VkResult VKAPI_CALL vkGetEventStatus(VkDevice device, VkEvent event);
+@@ -22521,6 +22617,8 @@ VkResult VKAPI_CALL vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(VkPhysical
+ VkResult VKAPI_CALL vkGetPhysicalDeviceCooperativeMatrixPropertiesNV(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount, VkCooperativeMatrixPropertiesNV *pProperties);
+ VkResult VKAPI_CALL vkGetPhysicalDeviceCooperativeVectorPropertiesNV(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount, VkCooperativeVectorPropertiesNV *pProperties);
+ VkDeviceSize VKAPI_CALL vkGetPhysicalDeviceDescriptorSizeEXT(VkPhysicalDevice physicalDevice, VkDescriptorType descriptorType);
++VkResult VKAPI_CALL vkGetPhysicalDeviceDisplayPlanePropertiesKHR(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount, VkDisplayPlanePropertiesKHR *pProperties);
++VkResult VKAPI_CALL vkGetPhysicalDeviceDisplayPropertiesKHR(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount, VkDisplayPropertiesKHR *pProperties);
+ void VKAPI_CALL vkGetPhysicalDeviceExternalBufferProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalBufferInfo *pExternalBufferInfo, VkExternalBufferProperties *pExternalBufferProperties);
+ void VKAPI_CALL vkGetPhysicalDeviceExternalBufferPropertiesKHR(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalBufferInfo *pExternalBufferInfo, VkExternalBufferProperties *pExternalBufferProperties);
+ void VKAPI_CALL vkGetPhysicalDeviceExternalFenceProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalFenceInfo *pExternalFenceInfo, VkExternalFenceProperties *pExternalFenceProperties);
+@@ -23776,6 +23874,8 @@ VkResult VKAPI_CALL vkWriteSamplerDescriptorsEXT(VkDevice device, uint32_t sampl
+     USE_VK_FUNC(vkCreateDebugReportCallbackEXT) \
+     USE_VK_FUNC(vkCreateDebugUtilsMessengerEXT) \
+     USE_VK_FUNC(vkCreateDevice) \
++    USE_VK_FUNC(vkCreateDisplayModeKHR) \
++    USE_VK_FUNC(vkCreateDisplayPlaneSurfaceKHR) \
+     USE_VK_FUNC(vkCreateHeadlessSurfaceEXT) \
+     USE_VK_FUNC(vkCreateMacOSSurfaceMVK) \
+     USE_VK_FUNC(vkCreateMetalSurfaceEXT) \
+@@ -23795,6 +23895,9 @@ VkResult VKAPI_CALL vkWriteSamplerDescriptorsEXT(VkDevice device, uint32_t sampl
+     USE_VK_FUNC(vkEnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR) \
+     USE_VK_FUNC(vkEnumeratePhysicalDeviceShaderInstrumentationMetricsARM) \
+     USE_VK_FUNC(vkEnumeratePhysicalDevices) \
++    USE_VK_FUNC(vkGetDisplayModePropertiesKHR) \
++    USE_VK_FUNC(vkGetDisplayPlaneCapabilitiesKHR) \
++    USE_VK_FUNC(vkGetDisplayPlaneSupportedDisplaysKHR) \
+     USE_VK_FUNC(vkGetPhysicalDeviceCalibrateableTimeDomainsEXT) \
+     USE_VK_FUNC(vkGetPhysicalDeviceCalibrateableTimeDomainsKHR) \
+     USE_VK_FUNC(vkGetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV) \
+@@ -23802,6 +23905,8 @@ VkResult VKAPI_CALL vkWriteSamplerDescriptorsEXT(VkDevice device, uint32_t sampl
+     USE_VK_FUNC(vkGetPhysicalDeviceCooperativeMatrixPropertiesNV) \
+     USE_VK_FUNC(vkGetPhysicalDeviceCooperativeVectorPropertiesNV) \
+     USE_VK_FUNC(vkGetPhysicalDeviceDescriptorSizeEXT) \
++    USE_VK_FUNC(vkGetPhysicalDeviceDisplayPlanePropertiesKHR) \
++    USE_VK_FUNC(vkGetPhysicalDeviceDisplayPropertiesKHR) \
+     USE_VK_FUNC(vkGetPhysicalDeviceExternalBufferProperties) \
+     USE_VK_FUNC(vkGetPhysicalDeviceExternalBufferPropertiesKHR) \
+     USE_VK_FUNC(vkGetPhysicalDeviceExternalFenceProperties) \
+@@ -23878,6 +23983,7 @@ VkResult VKAPI_CALL vkWriteSamplerDescriptorsEXT(VkDevice device, uint32_t sampl
+ #define ALL_VK_INSTANCE_EXTS ALL_VK_CLIENT_INSTANCE_EXTS \
+     USE_VK_EXT(VK_EXT_headless_surface) \
+     USE_VK_EXT(VK_EXT_metal_surface) \
++    USE_VK_EXT(VK_KHR_display) \
+     USE_VK_EXT(VK_KHR_wayland_surface) \
+     USE_VK_EXT(VK_KHR_xlib_surface) \
+     USE_VK_EXT(VK_MVK_macos_surface)
+-- 
+2.43.0
+

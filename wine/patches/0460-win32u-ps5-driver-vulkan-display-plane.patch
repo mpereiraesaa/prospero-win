@@ -1,0 +1,192 @@
+From 4862960d01097205c291cea3106412b988499693 Mon Sep 17 00:00:00 2001
+From: Manuel Pereira <manuelpereiralds@gmail.com>
+Date: Mon, 28 Sep 2026 18:59:16 +0200
+Subject: [PATCH] win32u: Present Vulkan surfaces on the PS5's display plane.
+
+The PS5 user driver has no window system to present into. Its Vulkan
+driver makes each win32 surface a surface on the host's display plane
+(VK_KHR_display on the host instance, VK_KHR_win32_surface for the
+application), which scans out full screen. Creating one first asks the
+title to hand over the video output (pw_wine_release_display, found with
+dlsym like the other sink calls).
+
+The PS5 driver is installed on first use, which can be Vulkan's own
+initialisation. Loading it there must not refresh the display cache: the
+refresh asks Vulkan for its GPUs and would wait on the initialisation it
+runs inside.
+---
+ dlls/win32u/driver.c |   9 ++++
+ dlls/win32u/ps5drv.c | 101 +++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 110 insertions(+)
+
+diff --git a/dlls/win32u/driver.c b/dlls/win32u/driver.c
+index 3443c4ab3a..84a08b8246 100644
+--- a/dlls/win32u/driver.c
++++ b/dlls/win32u/driver.c
+@@ -1266,7 +1266,16 @@ static LRESULT loaderdrv_WintabProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM
+ 
+ static UINT loaderdrv_VulkanInit( UINT version, void *vulkan_handle, const struct vulkan_driver_funcs **driver_funcs )
+ {
++#ifdef WINE_PS5_USER_DRIVER
++    /* Vulkan's initialisation asks for this, and load_driver() would then
++     * refresh the display cache, which asks Vulkan for its GPUs: it would wait
++     * on the initialisation it runs inside. Installing the PS5 driver needs
++     * no display cache, and the next display query refreshes it. */
++    load_display_driver();
++    return user_driver->pVulkanInit( version, vulkan_handle, driver_funcs );
++#else
+     return load_driver()->pVulkanInit( version, vulkan_handle, driver_funcs );
++#endif
+ }
+ 
+ static UINT loaderdrv_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs )
+diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
+index cc3018a08e..705ddf240f 100644
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -13,6 +13,12 @@
+  * dlsym at load time: on the console they live in ntdll.prx, on a host
+  * build a test library provides them.
+  *
++ * Vulkan presents without the screen buffer: a win32 surface becomes a
++ * surface on the host's display plane (VK_KHR_display, the only presentation
++ * the PS5's Vulkan driver has), which scans out full screen.  The title owns
++ * the video output until then, so creating one asks the title to hand it
++ * over through pw_wine_release_display(); GDI frames are dropped from then on.
++ *
+  * This library is free software; you can redistribute it and/or
+  * modify it under the terms of the GNU Lesser General Public
+  * License as published by the Free Software Foundation; either
+@@ -32,6 +38,8 @@
+ #pragma makedep unix
+ #endif
+ 
++#include "config.h"
++
+ #include <dlfcn.h>
+ #include <pthread.h>
+ #include <stdint.h>
+@@ -45,6 +53,10 @@
+ #include "ntuser_private.h"
+ #include "wine/server.h"
+ #include "wine/debug.h"
++#ifdef SONAME_LIBVULKAN
++#include "wine/vulkan.h"
++#include "wine/vulkan_driver.h"
++#endif
+ 
+ #ifdef WINE_PS5_USER_DRIVER
+ 
+@@ -622,6 +634,89 @@ static BOOL ps5_SetCursorPos( INT x, INT y )
+     return TRUE;
+ }
+ 
++#ifdef SONAME_LIBVULKAN
++
++static int (*release_display)(void);
++
++static VkResult ps5_vulkan_surface_create( struct client_surface *client, const struct vulkan_instance *instance,
++                                           VkSurfaceKHR *handle )
++{
++    VkDisplaySurfaceCreateInfoKHR info = {.sType = VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR};
++    VkDisplayModePropertiesKHR mode;
++    VkDisplayPropertiesKHR display;
++    VkPhysicalDevice physical;
++    uint32_t count = 1;
++    VkResult res;
++
++    /* one GPU, one display, one mode: the first of each */
++    res = instance->p_vkEnumeratePhysicalDevices( instance->host.instance, &count, &physical );
++    if (res < VK_SUCCESS || !count) goto failed;
++    count = 1;
++    res = instance->p_vkGetPhysicalDeviceDisplayPropertiesKHR( physical, &count, &display );
++    if (res < VK_SUCCESS || !count) goto failed;
++    count = 1;
++    res = instance->p_vkGetDisplayModePropertiesKHR( physical, display.display, &count, &mode );
++    if (res < VK_SUCCESS || !count) goto failed;
++
++    info.displayMode = mode.displayMode;
++    info.planeIndex = 0;
++    info.planeStackIndex = 0;
++    info.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++    info.globalAlpha = 1.0f;
++    info.alphaMode = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
++    info.imageExtent = mode.parameters.visibleRegion;
++    if (release_display && release_display())
++    {
++        ERR( "the title kept the video output\n" );
++        return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
++    }
++    res = instance->p_vkCreateDisplayPlaneSurfaceKHR( instance->host.instance, &info, NULL, handle );
++    TRACE( "%s: %ux%u display plane surface 0x%s, res %d\n", debugstr_client_surface( client ),
++           info.imageExtent.width, info.imageExtent.height, wine_dbgstr_longlong( *handle ), res );
++    return res;
++
++failed:
++    ERR( "no host display (%u found), res %d\n", count, res );
++    return res < VK_SUCCESS ? res : VK_ERROR_INITIALIZATION_FAILED;
++}
++
++static VkBool32 ps5_get_physical_device_presentation_support( struct vulkan_physical_device *physical_device,
++                                                              uint32_t index )
++{
++    return VK_TRUE;
++}
++
++static void ps5_map_instance_extensions( struct vulkan_instance_extensions *extensions )
++{
++    if (extensions->has_VK_KHR_win32_surface) extensions->has_VK_KHR_display = 1;
++    if (extensions->has_VK_KHR_display) extensions->has_VK_KHR_win32_surface = 1;
++}
++
++static void ps5_map_device_extensions( struct vulkan_device_extensions *extensions )
++{
++}
++
++static const struct vulkan_driver_funcs ps5_vulkan_driver_funcs =
++{
++    .p_vulkan_surface_create = ps5_vulkan_surface_create,
++    .p_get_physical_device_presentation_support = ps5_get_physical_device_presentation_support,
++    .p_map_instance_extensions = ps5_map_instance_extensions,
++    .p_map_device_extensions = ps5_map_device_extensions,
++};
++
++static UINT ps5_VulkanInit( UINT version, void *vulkan_handle, const struct vulkan_driver_funcs **driver_funcs )
++{
++    if (version != WINE_VULKAN_DRIVER_VERSION)
++    {
++        ERR( "version mismatch, win32u wants %u but driver has %u\n", version, WINE_VULKAN_DRIVER_VERSION );
++        return STATUS_INVALID_PARAMETER;
++    }
++    *driver_funcs = &ps5_vulkan_driver_funcs;
++    return STATUS_SUCCESS;
++}
++
++#endif  /* SONAME_LIBVULKAN */
++
+ static const struct user_driver_funcs ps5_user_driver =
+ {
+     .pUpdateDisplayDevices = ps5_UpdateDisplayDevices,
+@@ -634,6 +729,9 @@ static const struct user_driver_funcs ps5_user_driver =
+     .pSetCursor = ps5_SetCursor,
+     .pSetCursorPos = ps5_SetCursorPos,
+     .pSetDesktopWindow = ps5_SetDesktopWindow,
++#ifdef SONAME_LIBVULKAN
++    .pVulkanInit = ps5_VulkanInit,
++#endif
+ };
+ 
+ /***********************************************************************
+@@ -664,6 +762,9 @@ void ps5_install_user_driver(void)
+     present_frame = dlsym( RTLD_DEFAULT, "pw_wine_present" );
+     next_input = dlsym( RTLD_DEFAULT, "pw_wine_next_input" );
+     input_fd = dlsym( RTLD_DEFAULT, "pw_wine_input_fd" );
++#ifdef SONAME_LIBVULKAN
++    release_display = dlsym( RTLD_DEFAULT, "pw_wine_release_display" );
++#endif
+     if (!present_frame) WARN( "no pw_wine_present: frames are not shown\n" );
+     TRACE( "desktop %ux%u, present %p, input %p\n", screen_width, screen_height, present_frame, next_input );
+     __wine_set_user_driver( &ps5_user_driver, WINE_GDI_DRIVER_VERSION );
+-- 
+2.43.0
+

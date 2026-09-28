@@ -28,10 +28,18 @@
 # title's pinned foundation predates it, so --prx-foundation names that checkout, and without it the
 # PRX link is skipped and says why.
 #
+# Vulkan (patches 0450-0460): win32u dlopens libvulkan.so, which pw_wine_dl
+# turns into libvulkan.prx, the PS5 Vulkan driver (ps5vk) linked from its SDK
+# (--ps5vk-sdk, a dist-sdk directory: lib/libps5vk.a, lib/libpsbc.a and the
+# AGC import facades). Without it libvulkan.prx is skipped and Vulkan
+# reports no driver; winevulkan.prx, Wine's Vulkan Unix side, is built
+# either way. ps5vk is GPL-3.0-or-later: a title that ships libvulkan.prx
+# ships a GPL work (see its SDK's LICENSE).
+#
 # Usage:
 #   tools/build_wine_ps5.sh [--check-patches] [--patches DIR] [--work DIR]
 #       [--source DIR] [--host-tools DIR] [--foundation DIR] [--sdk DIR]
-#       [--prx-foundation DIR] [--jobs N]
+#       [--prx-foundation DIR] [--ps5vk-sdk DIR] [--jobs N]
 set -eu
 
 WINE_COMMIT=490f6d5dcbb2a5047345b8af88d114bbcaad69a8
@@ -57,7 +65,8 @@ FREETYPE_EXPORTS="FT_Done_Face FT_Get_Char_Index FT_Get_First_Char FT_Get_Next_C
  FT_New_Memory_Face FT_Outline_Embolden FT_Outline_Get_Bitmap FT_Outline_Get_CBox
  FT_Outline_Transform FT_Outline_Translate FT_Property_Set FT_Render_Glyph FT_Set_Charmap
  FT_Set_Pixel_Sizes FT_Vector_Length FT_Vector_Transform FT_Vector_Unit"
-TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver"
+TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver dlls/winevulkan/winevulkan.so
+ dlls/opengl32/opengl32.so"
 # The PE modules the patches change: every xinput built from xinput1_3's
 # source reads the title's controller (patch 0470); xinput9_1_0 forwards to
 # xinput1_4.
@@ -69,7 +78,7 @@ CONFIGURE_ARGS="--host=x86_64-unknown-freebsd11 --build=x86_64-pc-linux-gnu
  --enable-archs=i386,x86_64 --disable-tests --without-x
  --without-fontconfig --without-gnutls --without-alsa --without-pulse
  --without-dbus --without-gstreamer --without-sdl --without-udev --without-usb
- --without-v4l2 --without-vulkan --without-wayland --without-opengl --without-oss
+ --without-v4l2 --without-wayland --without-opengl --without-oss
  --without-pcap --without-pcsclite --without-sane --without-krb5 --without-gphoto
  --without-netapi --without-inotify --without-capi --without-cups --without-gssapi
  --without-ffmpeg"
@@ -82,6 +91,7 @@ host_tools=${PROSPERO_WINE_BUILD:-$root/.deps/wine/build}
 foundation=${PS5_NATIVE_FOUNDATION:-$root/.deps/ps5-native-app-boilerplate}
 sdk=${PS5_PAYLOAD_SDK:-}
 prx_foundation=${PS5_PRX_FOUNDATION:-}
+ps5vk_sdk=${PS5VK_SDK:-}
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 check_only=0
 
@@ -96,6 +106,7 @@ while [ $# -gt 0 ]; do
     --foundation) foundation=$2; shift ;;
     --sdk) sdk=$2; shift ;;
     --prx-foundation) prx_foundation=$2; shift ;;
+    --ps5vk-sdk) ps5vk_sdk=$2; shift ;;
     --jobs) jobs=$2; shift ;;
     *) fail "unknown argument $1" ;;
     esac
@@ -201,7 +212,7 @@ if [ ! -f "$build/Makefile" ] || [ "$(cat "$build/.prospero-stamp" 2>/dev/null)"
     # which pw_wine_dl turns into libfreetype.prx beside ntdll.prx.
     (cd "$build" && "$tree/configure" $CONFIGURE_ARGS CC="$sdk/bin/prospero-clang" \
         FREETYPE_CFLAGS="-I$ft/src/include" FREETYPE_LIBS="$ft/libfreetype.a" \
-        ac_cv_lib_soname_freetype=libfreetype.so \
+        ac_cv_lib_soname_freetype=libfreetype.so ac_cv_lib_soname_vulkan=libvulkan.so \
         --with-wine-tools="$host_tools" > "$work/configure.log" 2>&1) ||
         fail "configure failed; see $work/configure.log"
     echo "$stamp" > "$build/.prospero-stamp"
@@ -236,7 +247,8 @@ status=0
 : > "$work/make.log"
 # LDFLAGS is not a make dependency, so relink the three targets every run.
 (cd "$build" && rm -f $TARGETS)
-for step in "dlls/ntdll/ntdll.so|$heap $dmem" "dlls/win32u/win32u.so|" "server/wineserver|$heap"; do
+for step in "dlls/ntdll/ntdll.so|$heap $dmem" "dlls/win32u/win32u.so|" "server/wineserver|$heap" \
+        "dlls/winevulkan/winevulkan.so|" "dlls/opengl32/opengl32.so|"; do
     target=${step%%|*}; objects=${step#*|}
     make -C "$build" -k -j"$jobs" LDFLAGS="$objects $base" "$target" \
         >> "$work/make.log" 2>&1 || status=$?
@@ -278,10 +290,12 @@ if lines:
                    if arg.endswith(".o") and not arg.startswith("/")))
 PY
 }
-# link_prx NAME TARGET "EXTRA OBJECTS" [IMPORTED MODULE]; TARGET "-" takes
-# only the extra objects (a module that is not one of Wine's own targets).
+# link_prx NAME TARGET "EXTRA OBJECTS" ["IMPORTED MODULES"] ["EXTRA STUB DIR"];
+# TARGET "-" takes only the extra objects (a module that is not one of
+# Wine's own targets).
 link_prx() {
-    name=$1; objects=
+    name=$1; objects=; stubs=
+    for module in ${4:-}; do stubs="$stubs --stub $module"; done
     [ "$2" = - ] || objects=$(link_objects "$2")
     log=$prx/$name.link.log
     [ -n "$objects$3" ] || { echo "no ELF link of $2 in make.log" > "$log"; prx_status=1; return; }
@@ -289,9 +303,9 @@ link_prx() {
     (cd "$build" && "$sdk/bin/prospero-lld" --shared -Bsymbolic -T "$pie" \
         -T "$root/wine/ps5/prx_eh_frame.ld" --eh-frame-hdr -soname "$name.prx" -z defs \
         --warn-unresolved-symbols -L"$work/ps5lib" -o "$prx/$name.shared.elf" $objects $3 ${4:-} \
-        "$sdk/target/lib/libunwind.a" --as-needed "$sdk"/target/lib/*.so) > "$log" 2>&1 &&
+        "$sdk/target/lib/libunwind.a" --as-needed "${5:-$sdk/target/lib}"/*.so) > "$log" 2>&1 &&
     "$tool" link --module --in "$prx/$name.shared.elf" --out "$prx/$name.elf" \
-        --stub-dir "$sdk/target/lib" ${4:+--stub "$4"} --module-sdk 0x02000009 \
+        --stub-dir "${5:-$sdk/target/lib}" $stubs --module-sdk 0x02000009 \
         --companion-sdk 0x08050001 --file-name "$name.prx" >> "$log" 2>&1 &&
     "$tool" self --sign --in "$prx/$name.elf" --out "$prx/sce_module/$name.prx" >> "$log" 2>&1 ||
         prx_status=1
@@ -333,10 +347,16 @@ if [ "$prx_status" = 0 ]; then
         __wine_unix_call_funcs __wine_unix_call_wow64_funcs
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/xinput_desc.c" \
         __wine_unix_call_funcs __wine_unix_call_wow64_funcs
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/winevulkan_desc.c" \
+        __wine_unix_call_funcs __wine_unix_call_wow64_funcs
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/opengl32_desc.c" \
+        __wine_unix_call_funcs __wine_unix_call_wow64_funcs
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libvulkan_desc.c" \
+        vkGetInstanceProcAddr vkGetDeviceProcAddr
     # shellcheck disable=SC2086
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libfreetype_desc.c" $FREETYPE_EXPORTS
     for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc wineps5_desc \
-            libfreetype_desc xinput_desc; do
+            libfreetype_desc xinput_desc winevulkan_desc opengl32_desc libvulkan_desc; do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
@@ -390,6 +410,33 @@ if [ "$prx_status" = 0 ]; then
         -c "$tree/dlls/xinput1_3/unixlib.c" -o "$prx/obj/xinput_unixlib.o" ||
         fail "cannot compile xinput's unixlib.c"
     link_prx xinput1_3 - "$prx/obj/xinput_unixlib.o $prx/obj/xinput_desc.o" "$prx/ntdll.shared.elf"
+    # Wine's Vulkan Unix side: it calls into ntdll and into win32u's Vulkan
+    # driver (__wine_get_vulkan_driver).
+    link_prx winevulkan dlls/winevulkan/winevulkan.so "$prx/obj/winevulkan_desc.o" \
+        "$prx/ntdll.shared.elf $prx/win32u.shared.elf"
+    # OpenGL's Unix side, without OpenGL (the console has none): wined3d, which
+    # Wine's d3d10.dll imports even over DXVK's d3d10core, needs opengl32 to
+    # initialise, and it does so with no driver.
+    link_prx opengl32 dlls/opengl32/opengl32.so "$prx/obj/opengl32_desc.o" \
+        "$prx/ntdll.shared.elf $prx/win32u.shared.elf"
+    # The Vulkan driver itself, from ps5vk's SDK: only what its two entry
+    # points reach, since the archive repeats a member. Its import facades
+    # join the SDK's stubs.
+    if [ -n "$ps5vk_sdk" ] && [ -f "$ps5vk_sdk/lib/libps5vk.a" ]; then
+        mkdir -p "$prx/vkstubs"
+        cp "$sdk"/target/lib/*.so "$ps5vk_sdk"/lib/libSceAgc*.so "$prx/vkstubs/"
+        "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC \
+            -c "$root/wine/ps5/pw_vulkan_libc.c" -o "$prx/obj/pw_vulkan_libc.o" ||
+            fail "cannot compile pw_vulkan_libc.c"
+        link_prx libvulkan - "-S -u vkGetInstanceProcAddr -u vkGetDeviceProcAddr \
+            $prx/obj/libvulkan_desc.o $prx/obj/pw_vulkan_libc.o $prx/obj/emutls.o \
+            $ps5vk_sdk/lib/libps5vk.a $ps5vk_sdk/lib/libpsbc.a $sdk/target/lib/libc++.a \
+            $sdk/target/lib/libc++abi.a" "" "$prx/vkstubs"
+        vulkan_status="libvulkan.prx from $ps5vk_sdk"
+    else
+        vulkan_status="skipped: no --ps5vk-sdk with lib/libps5vk.a"
+    fi
+    echo "vulkan: $vulkan_status"
     # Wine's own fonts, staged under share/wine/fonts beside the runtime.
     mkdir -p "$prx/fonts"
     cp "$tree"/fonts/*.ttf "$prx/fonts/"
@@ -403,7 +450,8 @@ build, log, report, sdk, commit, prx, prx_status = sys.argv[1:8]
 patches = sys.argv[8:]
 text = Path(log).read_text(errors="replace")
 owners = {"dlls/ntdll/": "dlls/ntdll/ntdll.so", "dlls/win32u/": "dlls/win32u/win32u.so",
-          "server/": "server/wineserver"}
+          "server/": "server/wineserver", "dlls/winevulkan/": "dlls/winevulkan/winevulkan.so",
+          "dlls/opengl32/": "dlls/opengl32/opengl32.so"}
 unresolved = {target: set() for target in owners.values()}
 # lld prints each unresolved symbol, then ">>> referenced by" lines whose
 # continuation names the object ("dir/file.o:(function)"); the object's
@@ -448,9 +496,12 @@ title_exports = exports("libkernel.so") | exports("libSceLibcInternal.so")
 objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{sdk}/bin/llvm-objdump"
 SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
-for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfreetype", "xinput1_3") if not prx_status.startswith("skipped") else ():
+for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfreetype", "xinput1_3",
+             "winevulkan", "opengl32", "libvulkan") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
+    if name == "libvulkan" and not link_log.is_file():
+        continue    # no ps5vk SDK given
     link_text = link_log.read_text(errors="replace") if link_log.is_file() else ""
     entry = {"built": module.is_file(),
              "unresolved": sorted(set(re.findall(r"undefined symbol: (\S+)", link_text))),
@@ -468,7 +519,7 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
         imports = {fields[7].split("@")[0] for fields in (line.split() for line in symbols.splitlines())
                    if len(fields) >= 8 and fields[6] == "UND"}
         provided = title_exports | (ntdll_exports if name in ("win32u", "wowprospero", "wineps5",
-                                                              "xinput1_3") else set())
+                                                              "xinput1_3", "winevulkan", "opengl32") else set())
         entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
         # The kernel kills a title that executes a syscall instruction outside
         # libkernel (measured: SYSTEM_ILLEGAL_FUNCTION_CALL). Wine's dispatchers

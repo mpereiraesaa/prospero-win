@@ -63,6 +63,9 @@ of the port never collide:
 | 0140 | `ntdll`: `NtQueryDirectoryFile` enters a directory by the name the server opened it with when `fchdir()` on the server's descriptor fails. The descriptor has no path in ntdll's working-directory emulation, so no directory could be listed |
 | 0150 | `server`: save the registry in 1 MiB writes: each `write()` costs about 3.3 ms on the console whatever its size, and stdio issued one per 64 KiB, so a 3.2 MB `system.reg` took 154 ms, during which the in-process server answers nothing |
 | 0400 | `win32u`: in-process PS5 user driver (`WINE_PS5_USER_DRIVER`, set on PS5); see [User driver](#user-driver) |
+| 0450 | `winevulkan`: `VK_KHR_display` becomes a host-only extension (in the Unix side's lists, never offered to applications, its client functions stay stubs and no thunk changes), so a driver can present through it; see [Vulkan](#vulkan) |
+| 0455 | `win32u`: ask the host for `VK_KHR_external_semaphore_capabilities`, `VK_KHR_external_memory_capabilities` (WoW64) and `VK_KHR_external_fence_capabilities` (the D3DKMT instance) only when it has them; a Vulkan 1.0 host without them refused every instance |
+| 0460 | `win32u`: the PS5 user driver's Vulkan driver: a win32 surface becomes a host display-plane surface, after the title releases its video output; installing the driver from Vulkan's initialisation does not refresh the display cache, which would wait on that initialisation |
 | 0470 | `xinput`: controller 0 is the PS5 title's, read through a Unix library (`xinput1_3.so`) from the title's sink; elsewhere xinput uses HID as before; see [XInput controller](#xinput-controller) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
 | 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
@@ -436,6 +439,53 @@ To use it on the console:
   `wowprospero.dll`, since Wine's default `wow64cpu.dll` needs 32-bit
   compatibility mode, which the console refuses.
 
+## Vulkan
+
+Direct3D games use DXVK, which runs on Vulkan, which on the console is
+[ps5vk](https://github.com/mpereiraesaa/ps5-vulkan). The chain:
+
+```text
+game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevulkan.dll
+  -> winevulkan.prx (Wine's Vulkan Unix side) -> win32u.prx (PS5 driver, patch 0460)
+  -> libvulkan.prx (ps5vk) -> AGC and VideoOut
+```
+
+- **Build.** Configure no longer disables Vulkan, and names the library
+  `libvulkan.so`, which `pw_wine_dl` loads as `libvulkan.prx` beside
+  ntdll. `--ps5vk-sdk DIR` (a ps5vk `dist-sdk`) links `libvulkan.prx` from
+  `libps5vk.a` and `libpsbc.a`: only what `vkGetInstanceProcAddr` and
+  `vkGetDeviceProcAddr` reach, with ps5vk's AGC import facades beside the
+  SDK's stubs. `wine/ps5/pw_vulkan_libc.c` supplies the few libc functions
+  it names that a title lacks (`popen`, `pclose`, `mkstemp`, `__assert`).
+  Without the SDK the module is skipped. `winevulkan.prx` and
+  `opengl32.prx` are built either way. The console has no OpenGL, but
+  `wined3d`, which Wine's `d3d10.dll` imports even over DXVK, needs
+  `opengl32` to initialise, and it does so with no driver. ps5vk is
+  GPL-3.0-or-later, so a title that ships `libvulkan.prx` ships a GPL work.
+- **Presentation.** Applications see `VK_KHR_surface` and
+  `VK_KHR_win32_surface`. The PS5 driver creates the host surface with
+  `vkCreateDisplayPlaneSurfaceKHR` on ps5vk's one display, mode and plane:
+  1920x1080, 60 Hz, BGRA8, two images. A game's desktop should be 1920x1080,
+  since Wine reports a swapchain whose size differs from the window as
+  suboptimal. Before creating the surface the driver asks the title to
+  release its video output (`pw_wine_release_display`), because ps5vk's
+  swapchain opens VideoOut itself.
+- **DLLs.** DXVK's DLLs go beside the game, and its profile sets
+  `dll_overrides` (`d3d11,dxgi=n`, `d3d9=n`, `d3d8,d3d9=n` or
+  `d3d10core,d3d11,dxgi=n`). The unmodified Win32-WSI DXVK build is the one
+  to use, since the PS5 surface is Wine's.
+- **32-bit games.** Wine's WoW64 thunks carry Vulkan calls from the DBT.
+  Mapping device memory for a 32-bit process also needs the host to place
+  it below 4 GiB (`VK_EXT_map_memory_placed` or
+  `VK_EXT_external_memory_host`).
+
+Console results (FW 12.02, 2026-09-28):
+
+| Program | Stopped at |
+| --- | --- |
+| Vulkan probe, x64 and x86 | Nowhere: instance, physical device, win32 surface, device and swapchain all succeed, and teardown is clean |
+| DXVK 2.6.2 D3D11, D3D10, D3D9, D3D8 (x64) | Device created (D3D11 feature level 11_0). The swapchain's back buffer is refused because ps5vk does not yet support `B8G8R8A8_UNORM` with color-attachment, sampled and transfer usage and `MUTABLE_FORMAT` (`vkGetPhysicalDeviceImageFormatProperties2` returns `VK_ERROR_FORMAT_NOT_SUPPORTED`) |
+
 ## Imports a title does not get
 
 The SDK stubs include `libkernel_sys`, so a PRX links against functions
@@ -592,7 +642,8 @@ process sees the real root, where `/app0` does not exist.
 The runtime is staged beside the title:
 - `ntdll.prx`, `win32u.prx` and `wineserver.prx` under
   `win/wine/lib/wine/x86_64-unix`, with `xinput1_3.prx` for games played in
-  xinput mode;
+  xinput mode, and `winevulkan.prx`, `opengl32.prx` and `libvulkan.prx` for
+  Vulkan and Direct3D ([Vulkan](#vulkan));
 - Wine's NLS files under `win/wine/share/wine/nls`.
 
 ## Console bring-up
