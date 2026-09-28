@@ -256,9 +256,9 @@ static struct pw_thread *get_thread(void)
         }
         /* Nothing here reads the step statistics; PW_WOW_STATS keeps them. */
         pw_x86_engine_set_counters( &thread->engine, getenv( "PW_WOW_STATS" ) != NULL );
-        /* A chain returns to this loop, which notices code flushes, after
-         * QUANTUM linked blocks: at a few instructions a block that is tens
-         * of microseconds. PW_WOW_QUANTUM overrides it. */
+        /* Blocks from the older emitter return to this loop after QUANTUM
+         * linked blocks. PW_WOW_QUANTUM overrides it, and also makes
+         * re-encoded blocks spend it (below). */
         {
             const char *quantum = getenv( "PW_WOW_QUANTUM" );
             unsigned long value = quantum ? strtoul( quantum, NULL, 10 ) : QUANTUM;
@@ -271,6 +271,12 @@ static struct pw_thread *get_thread(void)
         thread->trace = 1;
         pw_x86_engine_set_quantum( &thread->engine, 1 );
     }
+    /* Nothing here needs the dispatcher between linked blocks: code flushes
+     * are noticed when run() starts, and Wine suspends a thread with a
+     * signal. So re-encoded chains spend no budget, unless a mode above
+     * steps block by block or PW_WOW_QUANTUM asks for one. */
+    pw_x86_engine_set_unbounded_chains( &thread->engine, !thread->trace && !thread->prefer_host &&
+                                        !getenv( "PW_WOW_QUANTUM" ) );
     thread->cache_epoch = (uint32_t)code_generation;
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
@@ -479,6 +485,7 @@ static void profile_dump(void)
 {
     uint32_t n = __atomic_load_n( &profile_count, __ATOMIC_RELAXED ), blocks = 0, arena = 0, stubs = 0;
     uint32_t part[4] = { 0 };  /* re-encoded entry, body, exit; emitter blocks */
+    uint32_t exits[4] = { 0 }; /* exit samples by the block's exit kind */
     struct profile_block *table;
     uint64_t *rips;
     char name[512];
@@ -507,7 +514,12 @@ static void profile_dump(void)
             {
                 const size_t at = rips[j] - (uintptr_t)code;
                 if (!pw_x86_reencoded( &e->entry_contract ) || !e->exit_offset) part[3]++;
-                else part[at < e->chain_entry_offset ? 0 : at < e->exit_offset ? 1 : 2]++;
+                else
+                {
+                    unsigned where = at < e->chain_entry_offset ? 0 : at < e->exit_offset ? 1 : 2;
+                    part[where]++;
+                    if (where == 2) exits[e->exit.kind < 4 ? e->exit.kind : 0]++;
+                }
                 j++;
             }
             if (k < 65536) table[k].samples += j - i;
@@ -551,6 +563,9 @@ static void profile_dump(void)
              100.0 * arena / n, blocks, 100.0 * stubs / n );
     fprintf( out, "re-encoded: entry %.1f%%, body %.1f%%, exits %.1f%%; emitter blocks %.1f%%\n",
              100.0 * part[0] / n, 100.0 * part[1] / n, 100.0 * part[2] / n, 100.0 * part[3] / n );
+    fprintf( out, "exits by kind: direct jump %.1f%%, conditional %.1f%%, dynamic %.1f%%, other %.1f%%\n",
+             100.0 * exits[PW_X86_EXIT_DIRECT_JUMP] / n, 100.0 * exits[PW_X86_EXIT_CONDITIONAL] / n,
+             100.0 * exits[PW_X86_EXIT_DYNAMIC] / n, 100.0 * exits[0] / n );
     qsort( table, blocks, sizeof(*table), compare_block_samples );
     for (uint32_t k = 0; k < blocks && k < PROFILE_TOP; k++)
     {

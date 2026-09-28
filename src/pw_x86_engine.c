@@ -165,6 +165,13 @@ int pw_x86_engine_set_fault_markers(PwX86Engine *engine, unsigned enabled)
     return PW_OK;
 }
 
+int pw_x86_engine_set_unbounded_chains(PwX86Engine *engine, unsigned enabled)
+{
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    engine->unbounded_chains = enabled ? 1 : 0;
+    return PW_OK;
+}
+
 /* Record a published block for pw_x86_engine_fault_redirect. */
 static void map_block(PwX86Engine *engine, const PwX86CacheEntry *entry)
 {
@@ -252,7 +259,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         engine->no_counters,
         engine->reencode_enabled ? engine->chain_targets : NULL,
         engine->residency_enabled ? engine->global_resident : (uint8_t)0,
-        engine->fault_markers };
+        engine->fault_markers, engine->unbounded_chains };
     int last = PW_ERR_UNSUPPORTED;
     if (engine->reencode_enabled) {
         last = pw_x86_reencode(source, available, pc, scratch, sizeof(scratch), &best, &options);

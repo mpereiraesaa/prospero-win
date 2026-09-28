@@ -45,7 +45,10 @@ typedef struct Run {
     uint8_t data[0x1000];
     int status;
     uint64_t reencoded, chain_slots;
+    unsigned steps;
 } Run;
+
+static unsigned unbounded;  /* pw_x86_engine_set_unbounded_chains for run() */
 
 /* Run code from low+CODE until the guest returns to its sentinel. */
 static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
@@ -68,8 +71,10 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
     assert(pw_x86_engine_set_counters(&engine, 0) == PW_OK);
     assert(pw_x86_engine_set_flat_memory(&engine, low, low + SPAN) == PW_OK);
     assert(pw_x86_engine_set_reencode(&engine, reencode) == PW_OK);
+    assert(pw_x86_engine_set_unbounded_chains(&engine, unbounded) == PW_OK);
     r.status = PW_OK;
-    for (unsigned i = 0; i < 100000 && r.state.eip != 0xdead0000u; i++)
+    r.steps = 0;
+    for (unsigned i = 0; i < 100000 && r.state.eip != 0xdead0000u; i++, r.steps++)
         if ((r.status = pw_x86_engine_step(&engine, &r.state, &step)) != PW_OK) break;
     memcpy(r.data, guest + DATA, sizeof(r.data));
     r.reencoded = engine.reencoded_blocks;
@@ -345,6 +350,38 @@ static void test_return_targets(void)
 
 /* A refused access stops with every register and, since a branch reads
  * them later, the flags of the compare before it. */
+/* A loop with a call and a return in it: unbounded chains give the same
+ * result without returning to the dispatcher once linked, where bounded
+ * ones return whenever the budget runs out. */
+static void test_unbounded_chains(void)
+{
+    static const uint8_t code[] = {
+        0xb9, 0xb8, 0x0b, 0, 0,             /* 00 mov ecx, 3000 */
+        0x31, 0xc0,                         /* 05 xor eax, eax */
+        0xe8, 0x04, 0, 0, 0,                /* 07 L: call F */
+        0x49,                               /* 0c dec ecx */
+        0x75, 0xf8,                         /* 0d jnz L */
+        0xc3,                               /* 0f ret */
+        0x01, 0xc8,                         /* 10 F: add eax, ecx */
+        0xc3,                               /* 12 ret */
+    };
+    Run emitter = run(code, sizeof(code), 0), bounded, free_running;
+
+    bounded = run(code, sizeof(code), 1);
+    unbounded = 1;
+    free_running = run(code, sizeof(code), 1);
+    unbounded = 0;
+    assert(emitter.status == PW_OK && emitter.state.eip == 0xdead0000u);
+    assert(emitter.state.gpr[0] == 3000u * 3001u / 2);
+    same(&bounded, &emitter);
+    same(&free_running, &emitter);
+    /* 6000 charged exits at the default quantum of 64 against a handful of
+     * steps to translate and link the four blocks. */
+    if (free_running.steps > 16 || bounded.steps < 6000 / PW_X86_ENGINE_DEFAULT_QUANTUM)
+        fprintf(stderr, "unbounded chains: %u steps bounded, %u unbounded\n", bounded.steps, free_running.steps);
+    assert(free_running.steps <= 16 && bounded.steps >= 6000 / PW_X86_ENGINE_DEFAULT_QUANTUM);
+}
+
 static void test_fault(void)
 {
     static const uint8_t code[] = {
@@ -376,8 +413,9 @@ int main(void)
     test_control();
     test_mixed_and_indirect();
     test_return_targets();
+    test_unbounded_chains();
     test_fault();
     printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
-           "stack and calls, emitter hand-over, indirect targets, pinned returns, fault state\n");
+           "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, fault state\n");
     return 0;
 }

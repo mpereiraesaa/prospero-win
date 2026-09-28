@@ -66,6 +66,7 @@ typedef struct PwX86Engine {
      * overlaps each PW_X86_ENGINE_FAULT_GRANULE bytes of the arena (index +
      * 1; blocks follow each other through arena_next). */
     unsigned fault_markers;
+    unsigned unbounded_chains;  /* PwX86TranslateOptions.unbounded_chains */
     PwVmRegion block_map_region;
     uint32_t *block_map;
     uint32_t last_published;
@@ -107,6 +108,7 @@ int pw_x86_engine_set_flat_memory(PwX86Engine *, uint32_t low, uint32_t high);
  * every host fault in the engine's code region to
  * pw_x86_engine_fault_redirect. */
 int pw_x86_engine_set_fault_markers(PwX86Engine *, unsigned enabled);
+int pw_x86_engine_set_unbounded_chains(PwX86Engine *, unsigned enabled);
 /* Where to resume a host fault at rip: the refused-access path of the
  * marked access that faulted, or 0 when rip is not one (not ours). Safe in
  * a signal handler: it reads only the engine and its code. */

@@ -199,6 +199,10 @@ typedef struct PwX86TranslateOptions {
      * range faults, and send the host faults in its code region there. The
      * older emitter keeps its checks. */
     unsigned fault_markers;
+    /* Re-encoded blocks spend no chain budget: a chain returns to the
+     * dispatcher only at an unlinked exit or a missed lookup. For callers
+     * that need nothing from the dispatcher between blocks. */
+    unsigned unbounded_chains;
 } PwX86TranslateOptions;
 
 /* The fault table of a re-encoded block with fault markers, at

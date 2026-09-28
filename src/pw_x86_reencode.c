@@ -472,6 +472,7 @@ typedef struct Ctx {
     unsigned cold_count;
     uint32_t here;  /* the guest EIP of the instruction being translated */
     uint32_t block_pc;
+    unsigned bounded;  /* chains spend the budget (!unbounded_chains) */
 } Ctx;
 
 static void save_flags(Out *o)
@@ -667,7 +668,7 @@ static size_t emit_budget(Out *o)
 static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots, size_t jcc_rel)
 {
     Out *o = &c->o;
-    const int backward = target <= c->block_pc;
+    const int backward = c->bounded && target <= c->block_pc;
     size_t to_spent = 0, spent_rel = 0, stub_store;
 
     if (backward) {
@@ -711,7 +712,7 @@ static void emit_dynamic_exit(Ctx *c)
          * PC compared as not(slot) + pc + 1 == 0, all without flags. */
         const size_t budget = offsetof(PwX86State, chain_budget);
         uint64_t base = (uint64_t)(uintptr_t)c->chain_table;
-        size_t to_hit, to_miss, to_spent;
+        size_t to_hit, to_miss, to_spent = 0;
         b(o, 0x45); b(o, 0x0f); b(o, 0xb7); b(o, 0xda);                 /* movzx r11d, r10w */
         b(o, 0x4e); b(o, 0x8d); b(o, 0x1c); b(o, 0xdd); w32(o, 0);      /* lea r11, [r11*8] */
         b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x1b);                 /* lea r11, [r11+r11] */
@@ -725,15 +726,19 @@ static void emit_dynamic_exit(Ctx *c)
         mov_rcx_r9(o);
         to_miss = jump8(o, 0xeb);
         land8(o, to_hit);
-        load_state(o, 1, budget);                                       /* mov ecx, budget */
-        b(o, 0x8d); b(o, 0x49); b(o, 0xff);                             /* lea ecx, [rcx-1] */
-        store_state(o, 1, budget);
-        to_spent = jump8(o, 0xe3);                                      /* jrcxz spent */
+        if (c->bounded) {
+            load_state(o, 1, budget);                                   /* mov ecx, budget */
+            b(o, 0x8d); b(o, 0x49); b(o, 0xff);                         /* lea ecx, [rcx-1] */
+            store_state(o, 1, budget);
+            to_spent = jump8(o, 0xe3);                                  /* jrcxz spent */
+        }
         mov_rcx_r9(o);
         b(o, 0x4d); b(o, 0x8b); b(o, 0x5b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, host_code));
         b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
-        land8(o, to_spent);
-        mov_rcx_r9(o);
+        if (c->bounded) {
+            land8(o, to_spent);
+            mov_rcx_r9(o);
+        }
         land8(o, to_miss);
     }
     store_state(o, R10, offsetof(PwX86State, eip));
@@ -846,6 +851,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     c.chain_table = options->indirect_targets ? options->chain_targets : NULL;
     c.mask = options->indirect_mask;
     c.block_pc = pc;
+    c.bounded = !options->unbounded_chains;
 
     block->entry_contract.resident_mask = 0xff;
     for (unsigned g = 0; g < 8; g++)
