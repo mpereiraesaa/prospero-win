@@ -68,6 +68,7 @@ typedef struct PwX86Engine {
      * 1; blocks follow each other through arena_next). */
     unsigned fault_markers;
     unsigned unbounded_chains;  /* PwX86TranslateOptions.unbounded_chains */
+    unsigned superblocks;       /* PwX86TranslateOptions.superblocks */
     /* PwX86TranslateOptions.call_stack: the memory the caller gave, its top
      * (PwX86State.call_stack_top), and where the return stub ends. */
     uint8_t *call_stack_base;
@@ -116,6 +117,9 @@ int pw_x86_engine_set_flat_memory(PwX86Engine *, uint32_t low, uint32_t high);
  * pw_x86_engine_fault_redirect. */
 int pw_x86_engine_set_fault_markers(PwX86Engine *, unsigned enabled);
 int pw_x86_engine_set_unbounded_chains(PwX86Engine *, unsigned enabled);
+/* PwX86TranslateOptions.superblocks for blocks translated from now on: the
+ * caller's code memory must stay writable while it runs. */
+int pw_x86_engine_set_superblocks(PwX86Engine *, unsigned enabled);
 /* Run re-encoded calls and returns on a call stack in [base, base+bytes)
  * (PwX86TranslateOptions.call_stack), or stop with base NULL. Needs the
  * re-encoder, the indirect targets and unbounded chains, and no block

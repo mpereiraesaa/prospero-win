@@ -281,6 +281,11 @@ static struct pw_thread *get_thread(void)
      * steps block by block or PW_WOW_QUANTUM asks for one. */
     pw_x86_engine_set_unbounded_chains( &thread->engine, !thread->trace && !thread->prefer_host &&
                                         !getenv( "PW_WOW_QUANTUM" ) );
+    /* Blocks go on past conditional branches, whose side exits link
+     * themselves in the code memory, which stays writable here
+     * (PW_WOW_SUPERBLOCKS=0 ends blocks at every branch). */
+    pw_x86_engine_set_superblocks( &thread->engine, thread->engine.unbounded_chains &&
+                                   (!getenv( "PW_WOW_SUPERBLOCKS" ) || strcmp( getenv( "PW_WOW_SUPERBLOCKS" ), "0" )) );
     /* Calls and returns on a call stack, so the host predicts the returns
      * (PW_WOW_CALL_STACK=0 keeps the lookup); its guard sends a call that
      * runs out of it to redirect_fault. */

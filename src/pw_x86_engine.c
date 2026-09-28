@@ -225,6 +225,13 @@ int pw_x86_engine_call_stack_fault(const PwX86Engine *engine, uintptr_t address,
     return 1;
 }
 
+int pw_x86_engine_set_superblocks(PwX86Engine *engine, unsigned enabled)
+{
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    engine->superblocks = enabled ? 1 : 0;
+    return PW_OK;
+}
+
 int pw_x86_engine_set_unbounded_chains(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
@@ -319,7 +326,8 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         engine->no_counters,
         engine->reencode_enabled ? engine->chain_targets : NULL,
         engine->residency_enabled ? engine->global_resident : (uint8_t)0,
-        engine->fault_markers, engine->unbounded_chains, engine->call_stack_base != NULL };
+        engine->fault_markers, engine->unbounded_chains, engine->call_stack_base != NULL,
+        engine->superblocks };
     int last = PW_ERR_UNSUPPORTED;
     if (engine->reencode_enabled) {
         last = pw_x86_reencode(source, available, pc, scratch, sizeof(scratch), &best, &options);

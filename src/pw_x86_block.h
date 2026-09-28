@@ -215,6 +215,12 @@ typedef struct PwX86TranslateOptions {
      * from an empty call stack reaches the engine's return stub at the
      * start of the code arena. */
     unsigned call_stack;
+    /* With unbounded_chains: a re-encoded block goes on past a conditional
+     * branch (up to its length limit) and leaves through it as a side exit,
+     * which links itself: the first time the target is in the chain table,
+     * the exit rewrites its own jcc to jump there. So the caller's code must
+     * stay writable while it runs. */
+    unsigned superblocks;
 } PwX86TranslateOptions;
 
 /* The fault table of a re-encoded block with fault markers, at

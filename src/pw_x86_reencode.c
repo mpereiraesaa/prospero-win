@@ -486,6 +486,11 @@ typedef struct Ctx {
     uint32_t block_pc;
     unsigned bounded;  /* chains spend the budget (!unbounded_chains) */
     unsigned call_stack;
+    /* Side exits (PwX86TranslateOptions.superblocks): each jcc's rel32 and
+     * target. */
+    unsigned side_count;
+    size_t side_rel[MAX_INSTS];
+    uint32_t side_target[MAX_INSTS];
 } Ctx;
 
 static void save_flags(Out *o)
@@ -878,6 +883,52 @@ static void emit_call(Ctx *c, PwX86Block *block, uint32_t next, uint32_t target,
     block->exit.fallthrough_direct_offset = rest.direct;
 }
 
+/* The side exits: each loads its target into r10d and the address of its
+ * jcc's rel32 into r8, then all share one lookup of r10d in the chain
+ * table. A hit rewrites that rel32 to the target's chain entry (r11 - (r8 +
+ * 4), without flags: lea, not, lea) and goes there, so the jcc links itself
+ * the first time; a miss returns to the dispatcher at the target. */
+static void emit_side_exits(Ctx *c)
+{
+    Out *o = &c->o;
+    size_t to_common[MAX_INSTS], to_hit, to_miss;
+    uint64_t base = (uint64_t)(uintptr_t)c->chain_table;
+
+    if (!c->side_count) return;
+    for (unsigned k = 0; k < c->side_count; k++) {
+        land32(o, c->side_rel[k]);
+        b(o, 0x41); b(o, 0xba); w32(o, c->side_target[k]);         /* mov r10d, target */
+        b(o, 0x4c); b(o, 0x8d); b(o, 0x05);                         /* lea r8, [rip+rel] */
+        w32(o, (uint32_t)(c->side_rel[k] - (o->n + 4)));
+        to_common[k] = jump32(o);
+    }
+    for (unsigned k = 0; k < c->side_count; k++) land32(o, to_common[k]);
+    b(o, 0x45); b(o, 0x0f); b(o, 0xb7); b(o, 0xda);                 /* movzx r11d, r10w */
+    b(o, 0x4e); b(o, 0x8d); b(o, 0x1c); b(o, 0xdd); w32(o, 0);      /* lea r11, [r11*8] */
+    b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x1b);                 /* lea r11, [r11+r11] */
+    b(o, 0x49); b(o, 0xb9); w64(o, base);                           /* movabs r9, table */
+    b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x19);                 /* lea r11, [r9+r11] */
+    mov_r9_rcx(o);
+    b(o, 0x41); b(o, 0x8b); b(o, 0x0b);                             /* mov ecx, [r11] */
+    b(o, 0xf7); b(o, 0xd1);                                         /* not ecx */
+    b(o, 0x42); b(o, 0x8d); b(o, 0x4c); b(o, 0x11); b(o, 1);        /* lea ecx, [rcx+r10+1] */
+    to_hit = jump8(o, 0xe3);                                        /* jrcxz hit */
+    mov_rcx_r9(o);
+    to_miss = jump8(o, 0xeb);
+    land8(o, to_hit);
+    mov_rcx_r9(o);
+    b(o, 0x4d); b(o, 0x8b); b(o, 0x5b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, host_code));
+    b(o, 0x4d); b(o, 0x8d); b(o, 0x48); b(o, 4);                    /* lea r9, [r8+4] */
+    b(o, 0x49); b(o, 0xf7); b(o, 0xd1);                             /* not r9 */
+    b(o, 0x4f); b(o, 0x8d); b(o, 0x4c); b(o, 0x0b); b(o, 1);        /* lea r9, [r11+r9+1] */
+    b(o, 0x45); b(o, 0x89); b(o, 0x08);                             /* mov [r8], r9d */
+    b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
+    land8(o, to_miss);
+    store_state(o, R10, offsetof(PwX86State, eip));
+    emit_leave(o, c->call_stack);
+    b(o, 0x31); b(o, 0xc0); b(o, 0xc3);                             /* xor eax, eax; ret */
+}
+
 static void emit_cold_paths(Ctx *c, PwX86Block *block)
 {
     Out *o = &c->o;
@@ -927,7 +978,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     static const Kind terminals[] = { K_JMP, K_JCC, K_RET, K_JMPRM, K_CALL, K_CALLRM };
     Inst insts[MAX_INSTS];
     uint32_t live[MAX_INSTS];
-    unsigned count = 0;
+    unsigned count = 0, superblocks;
     size_t cursor = 0;
     Ctx c;
 
@@ -937,6 +988,8 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         !options->no_counters)
         return PW_ERR_UNSUPPORTED;
     memset(block, 0, sizeof(*block));
+    superblocks = options->superblocks && options->unbounded_chains && options->indirect_targets &&
+                  options->chain_targets;
     while (count < MAX_INSTS && cursor < bytes) {
         Inst *in = &insts[count];
         int terminal = 0;
@@ -945,13 +998,16 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         count++;
         for (unsigned k = 0; k < sizeof(terminals) / sizeof(terminals[0]); k++)
             if (in->kind == terminals[k]) terminal = 1;
+        /* A superblock goes on past a conditional branch: a side exit. */
+        if (terminal && in->kind == K_JCC && superblocks && count < MAX_INSTS) terminal = 0;
         if (terminal) break;
     }
     if (!count) return PW_ERR_UNSUPPORTED;
-    /* Flags live after each instruction; every flag is live after the block. */
+    /* Flags live after each instruction; every flag is live after the block,
+     * and before a side exit. */
     live[count - 1] = ALL_FLAGS;
     for (unsigned k = count - 1; k > 0; k--)
-        live[k - 1] = insts[k].use | (live[k] & ~insts[k].def);
+        live[k - 1] = insts[k].kind == K_JCC ? ALL_FLAGS : insts[k].use | (live[k] & ~insts[k].def);
 
     memset(&c, 0, sizeof(c));
     c.o.p = output; c.o.cap = capacity;
@@ -1122,6 +1178,13 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         case K_JCC: {
             ExitSlots taken, fall;
             size_t to_taken;
+            if (k < count - 1) {
+                /* A side exit (superblocks): the block goes on. */
+                b(o, 0x0f); b(o, (uint8_t)(0x80 | in->cond));
+                c.side_rel[c.side_count] = o->n; w32(o, 0);
+                c.side_target[c.side_count++] = in->target;
+                break;
+            }
             b(o, 0x0f); b(o, (uint8_t)(0x80 | in->cond)); to_taken = o->n; w32(o, 0);
             emit_chain_exit(&c, next, &fall, 0);
             emit_chain_exit(&c, in->target, &taken, to_taken);
@@ -1161,6 +1224,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         block->exit.target_reconcile_patch_offset = slots.reconcile_patch;
         block->exit.target_direct_offset = slots.direct;
     }
+    emit_side_exits(&c);
     emit_cold_paths(&c, block);
     if (c.o.failed) return PW_ERR_LIMIT;
     block->instructions = count;

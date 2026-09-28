@@ -57,6 +57,22 @@ static unsigned unbounded;  /* pw_x86_engine_set_unbounded_chains for run() */
  * 64 KiB guard, and the host faults the guard takes. */
 enum { CALL_STACK_BYTES = 0x4000 };
 static unsigned call_stack, call_stack_faults;
+/* run() with superblocks, whose side exits rewrite their own code: the
+ * engine's code stays writable (and executable) while it runs. */
+static unsigned superblocks;
+static PwVmBackend posix;
+
+static int writable_commit(void *context, const PwVmRegion *region, size_t offset, size_t bytes, unsigned protection)
+{
+    (void)protection;
+    return posix.commit(context, region, offset, bytes, PW_PROT_READ | PW_PROT_WRITE | PW_PROT_EXEC);
+}
+
+static int writable_protect(void *context, const PwVmRegion *region, size_t offset, size_t bytes, unsigned protection)
+{
+    (void)protection;
+    return posix.protect(context, region, offset, bytes, PW_PROT_READ | PW_PROT_WRITE | PW_PROT_EXEC);
+}
 static uint8_t *call_stack_region;
 static PwX86Engine *current;
 
@@ -90,13 +106,19 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
     initial(&r.state);
     memcpy(guest + STACK_TOP, &(uint32_t){ 0xdead0000u }, 4);
     assert(pw_vm_posix_backend(&vm) == PW_OK);
+    if (superblocks) {
+        posix = vm;
+        vm.commit = writable_commit;
+        vm.protect = writable_protect;
+    }
     assert(pw_x86_engine_init(&engine, &vm, entries, 512, 1u << 20, 1, view, NULL) == PW_OK);
     assert(pw_x86_engine_set_chaining(&engine, 1) == PW_OK);
     assert(pw_x86_engine_set_indirect(&engine, 1) == PW_OK);
     assert(pw_x86_engine_set_counters(&engine, 0) == PW_OK);
     assert(pw_x86_engine_set_flat_memory(&engine, low, low + SPAN) == PW_OK);
     assert(pw_x86_engine_set_reencode(&engine, reencode) == PW_OK);
-    assert(pw_x86_engine_set_unbounded_chains(&engine, unbounded || call_stack) == PW_OK);
+    assert(pw_x86_engine_set_unbounded_chains(&engine, unbounded || call_stack || superblocks) == PW_OK);
+    assert(pw_x86_engine_set_superblocks(&engine, superblocks) == PW_OK);
     if (call_stack && reencode)
         assert(pw_x86_engine_set_call_stack(&engine, call_stack_region + PW_X86_ENGINE_CALL_STACK_GUARD,
                                             CALL_STACK_BYTES) == PW_OK);
@@ -140,11 +162,24 @@ static Run run_call_stack(const uint8_t *code, size_t bytes)
     return r;
 }
 
+/* Run code with superblocks and a call stack. */
+static Run run_superblocks(const uint8_t *code, size_t bytes)
+{
+    Run r;
+    superblocks = 1;
+    r = run_call_stack(code, bytes);
+    superblocks = 0;
+    return r;
+}
+
 /* Both backends give the same result, and so does the re-encoder on a call
- * stack; the re-encoder took some blocks. */
+ * stack and with superblocks; the re-encoder took some blocks. */
 static void compare(const uint8_t *code, size_t bytes)
 {
     Run emitter = run(code, bytes, 0), reencoded = run(code, bytes, 1), stacked = run_call_stack(code, bytes);
+    Run super = run_superblocks(code, bytes);
+    same(&super, &emitter);
+    assert(super.reencoded);
     if (emitter.status != PW_OK || emitter.state.eip != 0xdead0000u)
         fprintf(stderr, "emitter stopped: status %d eip +%x\n", emitter.status, emitter.state.eip - low - CODE);
     assert(emitter.status == PW_OK && emitter.state.eip == 0xdead0000u);
@@ -472,6 +507,37 @@ static void test_call_stack(void)
     assert(call_stack_faults >= 1);
 }
 
+/* A branchy loop whose side exits are taken on alternate iterations, and
+ * one taken from the fallthrough of another: with superblocks the result
+ * matches the emitter, and once each side exit has linked itself the loop
+ * no longer returns to the dispatcher. */
+static void test_superblocks(void)
+{
+    static const uint8_t code[] = {
+        0xb9, 0xa0, 0x0f, 0, 0,             /* 00 mov ecx, 4000 */
+        0x31, 0xc0,                         /* 05 xor eax, eax */
+        0x31, 0xdb,                         /* 07 xor ebx, ebx */
+        0xf6, 0xc1, 0x01,                   /* 09 L: test cl, 1 */
+        0x74, 0x05,                         /* 0c jz E (side exit) */
+        0x83, 0xc0, 0x03,                   /* 0e add eax, 3 */
+        0xeb, 0x03,                         /* 11 jmp J */
+        0x83, 0xc3, 0x05,                   /* 13 E: add ebx, 5 */
+        0xf6, 0xc1, 0x02,                   /* 16 J: test cl, 2 */
+        0x75, 0x01,                         /* 19 jnz K (side exit) */
+        0x40,                               /* 1b inc eax */
+        0x39, 0xd8,                         /* 1c K: cmp eax, ebx */
+        0x49,                               /* 1e dec ecx */
+        0x75, 0xe8,                         /* 1f jnz L (last: the block's exit) */
+        0xc3,                               /* 21 ret */
+    };
+    Run emitter = run(code, sizeof(code), 0), super = run_superblocks(code, sizeof(code));
+
+    assert(emitter.status == PW_OK && emitter.state.eip == 0xdead0000u);
+    same(&super, &emitter);
+    if (super.steps > 40) fprintf(stderr, "superblocks: %u steps\n", super.steps);
+    assert(super.steps <= 40);
+}
+
 static void test_fault(void)
 {
     static const uint8_t code[] = {
@@ -520,8 +586,9 @@ int main(void)
     test_return_targets();
     test_unbounded_chains();
     test_call_stack();
+    test_superblocks();
     test_fault();
     printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
-           "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, fault state\n");
+           "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, fault state\n");
     return 0;
 }
