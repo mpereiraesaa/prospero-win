@@ -203,7 +203,8 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   previous action `sigaction` reports lies outside ntdll, Wine's own
   handler calls wowprospero first (patch 0610). On
   the console the null test's loads and stores are resumed exactly as on
-  the host. Three rounds
+  the host. (The markers themselves were later replaced by a fault table:
+  see [below](#direct-links-copied-operands-and-superblocks).) Three rounds
   each, medians 1607/1607/1627 against 1881/1961/1877, native 5819 in the
   same session; compression gains 24% to 30%.
   `PW_WOW_FAULT_MARKERS=0` keeps the guard.
@@ -216,13 +217,10 @@ machine load: three rounds, medians, total MIPS. Native (`wow64cpu`) rated
   with the state still in registers. Same rounds as above; compression
   gains 16% (1457-1556 against 1105-1290), decompression is unchanged.
 - **Chain quantum.** A chain returned to the dispatcher every 64 linked
-  blocks. wowprospero now allows 1024 (`PW_WOW_QUANTUM` overrides it). The
-  dispatcher return is where a thread notices another thread's code flush
-  or suspension; the longest chain is now 1024 blocks of at most 32
-  instructions, about 25 us at this rate, still far below a scheduler
-  tick. A flush by the thread itself arrives through a syscall, which
-  leaves the chain anyway. Pinball renders and plays with no `err:` lines.
-  Three rounds, native median 4850; decompression +20%.
+  blocks. wowprospero now allows 1024 (`PW_WOW_QUANTUM` overrides it).
+  Pinball renders and plays with no `err:` lines. Three rounds, native
+  median 4850; decompression +20%. (Re-encoded chains later dropped the
+  budget altogether: see unbounded chains below.)
 
 ### After the re-encoder
 
@@ -247,6 +245,81 @@ The DBT is 1.76× faster: 18.5% of native compressing and 22.3%
 decompressing. Residency is now neutral (it was a 2–14% loss), and lazy
 flags now pay 4%, because producers feed branches directly.
 
+### Direct links, copied operands and superblocks
+
+A sampling profiler (`PW_WOW_PROFILE=<file>`, host only: SIGPROF every
+millisecond of CPU, with the hottest blocks' host and guest bytes) showed
+where the time went: about 98% in translated code, and there in a few
+fixed costs around the guest's own instructions. Each row is an
+interleaved A/B against the build before it (two or three rounds,
+medians, total MIPS); the machine's load moved between sessions, so the
+share of native is from the session of the row.
+
+| Change | Before | After | Gain | vs native after |
+|---|---|---|---|---|
+| Guest EIP stored by the refused-access path, not before each access | 1886 | 1945 | +3% | 36% |
+| Direct links: exits are rel32 jumps the engine points at their target | 1987 | 3509 | +77% | 65% |
+| Memory operands copied with the guest's address size; a fault table instead of markers | 3692 | 4347 | +18% | 75% |
+| `rcx` kept in `r9` around `jrcxz` instead of `xchg` | 4306 | 4474 | +4% | 77% |
+| Unbounded chains: no budget in re-encoded code | 4317 | 4630 | +7% | 86% |
+| Stack accesses without the guard's `lea` | 4931 | 4970 | +1% | 85% |
+| Guest calls and returns on a host call stack | 4706 | 4706 | 0% | 82% |
+| Superblocks with self-linking side exits | 4706 | 5064 | +8% | **91%** |
+
+In the last session, three interleaved rounds: native 6715 / 4706 / 5739
+(compress / decompress / total), the DBT 5979 / 4444 / 5211: **89%
+compressing, 94% decompressing, 91% in total**, from 32% at the start of
+this work. The same `7za` compressing 25 MB of Wine sources and
+binaries (`a -mx=5 -mmt1`) writes a byte-identical archive under the DBT
+and natively, in 7.08 s against 6.64 s, and the DBT extracts it back
+unchanged.
+
+- **EIP on refused accesses.** Every guest access stored its EIP first.
+  The refused-access path of each access now stores it instead, as its
+  first instruction, so a fault inside the guest range that goes to Wine
+  still reports it exactly: the fault handler reads it from there
+  (`pw_x86_cold_path_eip`).
+- **Direct links.** A linked exit loaded the chain budget, decremented and
+  stored it, exchanged `rcx` twice around `jrcxz` and jumped through the
+  link slot in memory: about 11 instructions for blocks of about 8. An
+  exit is now one `jmp rel32` (a taken branch uses the `jcc`'s own), which
+  the engine rewrites whenever it sets the slot (`sync_direct`).
+- **Copied operands.** A memory operand was a `lea` into `r11`, the 8-byte
+  marker and the access through `r11`. With a `0x67` prefix the 32-bit
+  effective address, zero-extended, is the guest address, so the
+  instruction is copied with its own addressing (esp and edi mapped to
+  `r12` and `r13`), which also removes a cycle from every pointer chase.
+  Each block ends with a table of its accesses and their refused-access
+  paths, and the engine finds the block of a host fault through a map of
+  the first block over every 256 bytes of the arena.
+- **Unbounded chains.** wowprospero notices another thread's code flush
+  when `run()` starts, not at a dispatcher return, and Wine suspends a
+  thread with a signal: nothing needs the dispatcher between linked
+  blocks. Re-encoded blocks therefore spend no budget unless
+  `PW_WOW_TRACE`, `PW_WOW_HOSTEXEC_ALL` or `PW_WOW_QUANTUM` is set.
+- **Stack accesses.** A push stores below esp first, then moves esp with
+  one `lea`: two instructions instead of three, and one step on esp's
+  dependency chain.
+- **Call stack.** A guest call makes a host call to its callee on a
+  per-thread call stack, and a guest ret a host ret, so the CPU's return
+  predictor works; the landing after each call checks the guest's return
+  address and falls back to the lookup. It changes nothing in 7-Zip, whose
+  hot calls were already predicted, but on an i386 call benchmark a
+  function called from eight sites goes from 68% of native to 110%, and
+  calls through a table from 65% to 74%. `PW_WOW_CALL_STACK=0` turns it
+  off.
+- **Superblocks.** A block went to another block at every conditional
+  branch. It now goes on past it, up to 32 instructions, and the branch is
+  a side exit that links itself: the first time its target is in the chain
+  table, it rewrites its own `jcc` to jump there. The fallthrough path runs
+  straight on. `PW_WOW_SUPERBLOCKS=0` ends blocks at every branch.
+
+Tried and dropped: aligning blocks to 64 bytes and chain entries to 32
+(+1%, within the noise), and 64-instruction blocks (no change). Advertising
+every host CPU feature to the guest, as `wow64cpu` does, makes 7-Zip report
+the same features as native but does not change its rating: the gap is not
+in the code paths the guest picks.
+
 ## Comparison with published numbers
 
 Published ratios, total rating as a share of native:
@@ -259,24 +332,26 @@ Published ratios, total rating as a share of native:
 | Rosetta 2 | Apple M1 | 71% | [box86.org, 2022-03][b] |
 | FEX (x86 / x86-64) | Raspberry Pi 400 | 19% / 26% (FEX of 2022) | [box86.org, 2022-03][b] |
 | QEMU user (x86 / x86-64) | Raspberry Pi 400 | 11% / 16% | [box86.org, 2022-03][b] |
-| **prospero-win DBT** | i7-12700H (x86-64) | **29%** (20%, and 12% before that) | this page |
+| **prospero-win DBT** | i7-12700H (x86-64) | **91%** (29%, 20% and 12% before) | this page |
 
 These are indicative only. The others translate x86 to ARM on other
 hardware, and FEX has improved a lot since 2022. Our host is x86-64, so the
-guest instructions could nearly be copied. Today we sit at QEMU's level:
-roughly 4× short of box64.
+guest instructions can nearly be copied, which is most of why the ratio is
+higher than the ARM translators'.
 
 ## Where the time goes
 
-Measured with a temporary rdtsc probe on the dispatcher (perf is not
-available on this host), full-fix build:
+`PW_WOW_PROFILE` on the current build (7-Zip, one run): 98% of the samples
+are in translated code, 93% of them in the bodies of re-encoded blocks
+(the guest's own instructions, copied) and 4% in their exits; blocks from
+the older emitter take 0.3%. The hottest blocks are the match finder's
+hash-chain loads, whose samples sit on the load after a cache miss, as
+they would natively. What remains is mostly what copying cannot remove:
+the prefixes on copied instructions, the jump at the end of each
+32-instruction block, and the landing check after each call.
 
-- **97% of the DBT's time is in translated code**, 3% in fallbacks and
-  translation. The dispatcher is not the bottleneck: blocks run about 135
-  guest instructions per dispatcher return, and 3.9G linked transitions carry
-  32G guest instructions (about 8 instructions per block).
-- So the cost is the code we emit. The likely causes, in order, are the
-  follow-ups below.
+Before this work, a temporary rdtsc probe on the dispatcher had shown the
+same 97% in translated code; the follow-ups below were written then.
 
 ## Follow-ups
 
@@ -301,6 +376,13 @@ available on this host), full-fix build:
 
 ### Still open
 
+- **The call landing.** Each return checks the guest's address with a
+  flag-free sequence (5 instructions); where the flags are dead at the
+  call's next instruction, a `cmp`/`jne` would do.
+- **Cold code between hot blocks.** Every exit has its own stub and
+  reconciliation path, so a 32-instruction block takes about 3 KiB, most
+  of it never run. Sharing one leave routine per engine would put the hot
+  code of consecutive blocks closer together.
 - **What the re-encoder does not take yet** ends its block and goes to the
   emitter, which stores and reloads the pinned state: SSE and x87 (the
   largest remaining share in Wine and in 7-Zip's CRC and match finders),
