@@ -153,8 +153,9 @@ static int source_view( void *opaque, uint32_t pc, const uint8_t **source, size_
 }
 
 /* Zeroed memory above the guest's 4 GiB, from Wine's own virtual memory
- * (host_memory.h); NULL when there is none. */
-static void *allocate_above_guest( size_t bytes, ULONG protect )
+ * (host_memory.h), committed, or only reserved (type MEM_RESERVE); NULL
+ * when there is none. */
+static void *place_above_guest( size_t bytes, ULONG type, ULONG protect )
 {
     MEM_ADDRESS_REQUIREMENTS requirements = { (void *)0x100000000, NULL, 0 };
     MEM_EXTENDED_PARAMETER parameter = { 0 };
@@ -163,15 +164,34 @@ static void *allocate_above_guest( size_t bytes, ULONG protect )
 
     parameter.Type = MemExtendedParameterAddressRequirements;
     parameter.Pointer = &requirements;
-    if (NtAllocateVirtualMemoryEx( NtCurrentProcess(), &base, &size, MEM_RESERVE | MEM_COMMIT,
-                                   protect, &parameter, 1 ))
+    if (NtAllocateVirtualMemoryEx( NtCurrentProcess(), &base, &size, type, protect, &parameter, 1 ))
         return NULL;
     return base;
+}
+
+static void *allocate_above_guest( size_t bytes, ULONG protect )
+{
+    return place_above_guest( bytes, MEM_RESERVE | MEM_COMMIT, protect );
 }
 
 static void *allocate_code( size_t bytes )
 {
     return allocate_above_guest( bytes, PAGE_EXECUTE_READWRITE );
+}
+
+/* A code arena is reserved, and committed as translations fill it
+ * (host_memory.h): on the console committed memory is direct memory. */
+static void *reserve_code( size_t bytes )
+{
+    return place_above_guest( bytes, MEM_RESERVE, PAGE_NOACCESS );
+}
+
+static int commit_code( void *base, size_t bytes )
+{
+    SIZE_T size = bytes;
+
+    return NtAllocateVirtualMemory( NtCurrentProcess(), &base, 0, &size, MEM_COMMIT,
+                                    PAGE_EXECUTE_READWRITE ) ? -1 : 0;
 }
 
 static void release( void *base, size_t bytes )
@@ -716,6 +736,9 @@ static NTSTATUS process_init( void *args )
 
     host_memory.allocate = allocate_code;
     host_memory.release = release;
+    host_memory.reserve = reserve_code;
+    host_memory.commit = commit_code;
+    host_memory.lazy_bytes = (size_t)8 << 20;  /* the code arenas */
     host_memory.page = page > 0 ? (size_t)page : 0x1000;
     host_memory.alignment = 0x10000;  /* the allocation granularity */
     {

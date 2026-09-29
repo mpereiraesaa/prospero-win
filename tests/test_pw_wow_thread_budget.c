@@ -88,7 +88,68 @@ static void release_rwx(void *base, size_t bytes)
     assert(!munmap(base, bytes));
     releases++;
 }
-static PwWowHostMemory host_memory = { allocate_rwx, release_rwx, 4096, 4096 };
+static PwWowHostMemory host_memory = { allocate_rwx, release_rwx, 4096, 4096, NULL, NULL, 0 };
+
+/* Lazily committed regions: address space without access, made usable by
+ * commit, so a write before its commit faults. */
+static unsigned reservations, commits;
+static size_t committed_bytes;
+static void *reserve_none(size_t bytes)
+{
+    void *base = mmap(NULL, bytes, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED) return NULL;
+    reservations++;
+    allocations++;
+    return base;
+}
+static int commit_rwx(void *base, size_t bytes)
+{
+    commits++;
+    committed_bytes += bytes;
+    return mprotect(base, bytes, PROT_READ | PROT_WRITE | PROT_EXEC);
+}
+static PwWowHostMemory lazy_memory = { allocate_rwx, release_rwx, 4096, 4096, reserve_none, commit_rwx,
+                                       (size_t)2 << 20 };
+
+static void test_lazy_commit(void)
+{
+    PwVmBackend backend;
+    PwVmRegion small, big;
+    PwWowHostMemory half = lazy_memory;
+
+    half.commit = NULL;
+    assert(pw_wow_host_backend(&backend, &half) == PW_ERR_PRECONDITION);
+    assert(pw_wow_host_backend(&backend, &lazy_memory) == PW_OK);
+    reservations = commits = 0;
+    committed_bytes = 0;
+    /* Below lazy_bytes: committed at once, as before. */
+    assert(backend.reserve(backend.context, 1u << 20, 4096, &small) == PW_OK);
+    assert(!reservations && !small.handle);
+    ((uint8_t *)small.write_base)[(1u << 20) - 1] = 1;
+    assert(backend.protect(backend.context, &small, 0, 4096, PW_PROT_READ | PW_PROT_WRITE) == PW_OK && !commits);
+    /* A 3.5 MiB arena: reserved; commit (the engine's whole-arena call) and
+     * protect within what is committed cost nothing. */
+    assert(backend.reserve(backend.context, (7u << 20) / 2, 4096, &big) == PW_OK);
+    assert(reservations == 1 && big.handle && big.bytes == (7u << 20) / 2);
+    assert(backend.commit(backend.context, &big, 0, big.bytes, PW_PROT_READ | PW_PROT_WRITE) == PW_OK);
+    assert(!commits);
+    /* Writing its first page commits the first step. */
+    assert(backend.protect(backend.context, &big, 0, 4096, PW_PROT_READ | PW_PROT_WRITE) == PW_OK);
+    assert(commits == 1 && committed_bytes == PW_WOW_HOST_COMMIT_STEP);
+    ((uint8_t *)big.write_base)[PW_WOW_HOST_COMMIT_STEP - 1] = 0xc3;
+    assert(backend.protect(backend.context, &big, 8192, 8192, PW_PROT_READ | PW_PROT_EXEC) == PW_OK && commits == 1);
+    /* Across the step: up to the next one; the last is cut at the end. */
+    assert(backend.protect(backend.context, &big, PW_WOW_HOST_COMMIT_STEP - 4096, 8192,
+                           PW_PROT_READ | PW_PROT_WRITE) == PW_OK);
+    assert(commits == 2 && committed_bytes == 2 * PW_WOW_HOST_COMMIT_STEP);
+    assert(backend.protect(backend.context, &big, big.bytes - 4096, 4096, PW_PROT_READ | PW_PROT_WRITE) == PW_OK);
+    assert(commits == 3 && committed_bytes == big.bytes);
+    ((uint8_t *)big.write_base)[big.bytes - 1] = 0xc3;
+    /* Outside the region: refused, nothing committed. */
+    assert(backend.protect(backend.context, &big, big.bytes, 4096, PW_PROT_READ) == PW_ERR_PRECONDITION);
+    assert(backend.release(backend.context, &big) == PW_OK && !big.handle);
+    assert(backend.release(backend.context, &small) == PW_OK);
+}
 
 static void test_host_memory(void)
 {
@@ -251,15 +312,21 @@ int main(void)
     test_budgets();
     test_fit();
     test_host_memory();
+    test_lazy_commit();
     /* The translator in Wine's memory, as unix.c sets it up, then over
      * plain mappings with protection changes, as before. */
     assert(pw_wow_host_backend(&host, &host_memory) == PW_OK);
     test_second_thread();
     assert(allocations == releases && allocations > 1);
+    /* With the arenas committed as translations are written. */
+    commits = 0;
+    assert(pw_wow_host_backend(&host, &lazy_memory) == PW_OK);
+    test_second_thread();
+    assert(allocations == releases && commits > 0);
     assert(pw_vm_posix_backend(&host) == PW_OK);
     test_second_thread();
     printf("wow thread budget passed: first and later budgets, halving to the floor, fitting into "
-           "limited memory, Wine's read-write-execute memory, a second thread's first block and fs "
+           "limited memory, Wine's read-write-execute memory, lazily committed arenas, a second thread's first block and fs "
            "access, a guard miss as a fault\n");
     return 0;
 }
