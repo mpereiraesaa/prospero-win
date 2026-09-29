@@ -1,4 +1,4 @@
-From c13e56b6f611547b8d3b840d00046451d37601b9 Mon Sep 17 00:00:00 2001
+From 5317022a0e6c56b2a378c39056fd6e917a6a7f97 Mon Sep 17 00:00:00 2001
 From: Manuel Pereira <manuelpereiralds@gmail.com>
 Date: Mon, 28 Sep 2026 18:59:16 +0200
 Subject: [PATCH] win32u: Present Vulkan surfaces on the PS5's display plane.
@@ -6,10 +6,10 @@ Subject: [PATCH] win32u: Present Vulkan surfaces on the PS5's display plane.
 The PS5 user driver has no window system to present into. Its Vulkan
 driver makes each win32 surface a surface on the host's display plane
 (VK_KHR_display on the host instance, VK_KHR_win32_surface for the
-application), in the display mode whose size is the desktop's, which scans
-out full screen. It first asks the title to hand over the video output
-(pw_wine_release_display, found with dlsym like the other sink calls): a
-host driver may open it as soon as its displays are queried.
+application), always in the display's native mode, which scans out full
+screen; the desktop is scaled to it. It first asks the title to hand over
+the video output (pw_wine_release_display, found with dlsym like the other
+sink calls): a host driver may open it as soon as its displays are queried.
 
 The PS5 driver is installed on first use, which can be Vulkan's own
 initialisation. Loading it there must not refresh the display cache: the
@@ -17,8 +17,8 @@ refresh asks Vulkan for its GPUs and would wait on the initialisation it
 runs inside.
 ---
  dlls/win32u/driver.c |   9 ++++
- dlls/win32u/ps5drv.c | 116 +++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 125 insertions(+)
+ dlls/win32u/ps5drv.c | 117 +++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 126 insertions(+)
 
 diff --git a/dlls/win32u/driver.c b/dlls/win32u/driver.c
 index 3443c4ab3a..84a08b8246 100644
@@ -42,7 +42,7 @@ index 3443c4ab3a..84a08b8246 100644
  
  static UINT loaderdrv_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs )
 diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
-index cc3018a08e..018131fb50 100644
+index cc3018a08e..c50eab00c3 100644
 --- a/dlls/win32u/ps5drv.c
 +++ b/dlls/win32u/ps5drv.c
 @@ -13,6 +13,12 @@
@@ -78,7 +78,7 @@ index cc3018a08e..018131fb50 100644
  
  #ifdef WINE_PS5_USER_DRIVER
  
-@@ -622,6 +634,104 @@ static BOOL ps5_SetCursorPos( INT x, INT y )
+@@ -622,6 +634,105 @@ static BOOL ps5_SetCursorPos( INT x, INT y )
      return TRUE;
  }
  
@@ -105,7 +105,8 @@ index cc3018a08e..018131fb50 100644
 +        return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
 +    }
 +
-+    /* one GPU and one display; the mode whose size is the desktop's, else the first */
++    /* one GPU and one display, always in its native mode (the one at its physical
++     * resolution, else the first); the desktop is scaled to it, never the reverse */
 +    res = instance->p_vkEnumeratePhysicalDevices( instance->host.instance, &count, &physical );
 +    if (res < VK_SUCCESS || !count) goto failed;
 +    count = 1;
@@ -118,8 +119,8 @@ index cc3018a08e..018131fb50 100644
 +    {
 +        TRACE( "mode %u: %ux%u %u mHz\n", i, modes[i].parameters.visibleRegion.width,
 +               modes[i].parameters.visibleRegion.height, modes[i].parameters.refreshRate );
-+        if (modes[i].parameters.visibleRegion.width == screen_width &&
-+            modes[i].parameters.visibleRegion.height == screen_height)
++        if (modes[i].parameters.visibleRegion.width == display.physicalResolution.width &&
++            modes[i].parameters.visibleRegion.height == display.physicalResolution.height)
 +        {
 +            chosen = i;
 +            break;
@@ -183,7 +184,7 @@ index cc3018a08e..018131fb50 100644
  static const struct user_driver_funcs ps5_user_driver =
  {
      .pUpdateDisplayDevices = ps5_UpdateDisplayDevices,
-@@ -634,6 +744,9 @@ static const struct user_driver_funcs ps5_user_driver =
+@@ -634,6 +745,9 @@ static const struct user_driver_funcs ps5_user_driver =
      .pSetCursor = ps5_SetCursor,
      .pSetCursorPos = ps5_SetCursorPos,
      .pSetDesktopWindow = ps5_SetDesktopWindow,
@@ -193,7 +194,7 @@ index cc3018a08e..018131fb50 100644
  };
  
  /***********************************************************************
-@@ -664,6 +777,9 @@ void ps5_install_user_driver(void)
+@@ -664,6 +778,9 @@ void ps5_install_user_driver(void)
      present_frame = dlsym( RTLD_DEFAULT, "pw_wine_present" );
      next_input = dlsym( RTLD_DEFAULT, "pw_wine_next_input" );
      input_fd = dlsym( RTLD_DEFAULT, "pw_wine_input_fd" );
