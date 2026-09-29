@@ -691,6 +691,7 @@ int main(int argc, char **argv)
     /* wine, the executable, the profile's argument words, NULL */
     static const char *wine_argv[2 + PW_WINE_LAUNCH_WORDS + 1] = { "wine" };
     static char argument_words[PW_APP_ARGUMENTS_CAPACITY];
+    static char effective_dll_overrides[PW_APP_DLL_OVERRIDES_CAPACITY + sizeof(";opengl32=b")];
     static char ntdll_dir[256], ntdll_path[288];
     static const PwWineStartOps ops = {
         sceKernelLoadStartModule, sceKernelGetModuleInfo, set_env, start_thread };
@@ -750,9 +751,14 @@ int main(int argc, char **argv)
                      (unsigned)game->display.height);
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_DESKTOP", desktop };
         }
-        /* The game's own DLLs over Wine's builtins, e.g. DXVK's d3d11 and dxgi. */
-        if (game->app.dll_overrides[0])
-            extra[config.extra_env_count++] = (PwWineStartEnv){ "WINEDLLOVERRIDES", game->app.dll_overrides };
+        /* Profile graphics mode selects Wine's builtin WGL implementation;
+         * preserve other per-game overrides such as DXVK when composing it. */
+        int overrides_status = pw_app_profile_effective_dll_overrides(
+            &game->app, effective_dll_overrides, sizeof(effective_dll_overrides));
+        if (overrides_status == PW_OK && effective_dll_overrides[0])
+            extra[config.extra_env_count++] = (PwWineStartEnv){ "WINEDLLOVERRIDES", effective_dll_overrides };
+        else if (overrides_status != PW_OK)
+            PS5LOG_LOG("PW_WINE64 DLL overrides refused: %s", game->app.id);
         /* [debug] winedebug: this game's channels in place of the title's. */
         if (game->winedebug[0]) {
             extra[0].value = game->winedebug;
@@ -764,7 +770,7 @@ int main(int argc, char **argv)
                    scaling, view, pw_result_name(input_status),
                    game->input.preset[0] ? game->input.preset : "-",
                    game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse,
-                   game->app.dll_overrides[0] ? game->app.dll_overrides : "-");
+                   effective_dll_overrides[0] ? effective_dll_overrides : "-");
         /* What Wine gives the game as NumberOfProcessors. */
         PS5LOG_LOG("PW_WINE64 cpus online=%ld", sysconf(_SC_NPROCESSORS_ONLN));
         if (PW_WINE64_WAIT_WATCHDOG) setenv("WINE_PS5_WAIT_WATCHDOG", "1", 1);

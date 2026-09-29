@@ -27,6 +27,7 @@ int main(void)
 {
     PwAppProfile profile;
     PwAppProfile before;
+    char effective_overrides[PW_APP_DLL_OVERRIDES_CAPACITY + sizeof(";opengl32=b")];
 
     memset(&profile, 0xa5, sizeof(profile));
     assert(pw_app_profile_parse(valid_profile, sizeof(valid_profile) - 1u,
@@ -61,6 +62,39 @@ int main(void)
         "prefix=legacy-gl\nruntime=wine-wow64\n"
         "architecture=pe32\ngraphics=opengl\n", &profile) == PW_OK);
     assert(profile.graphics == PW_APP_GRAPHICS_OPENGL);
+    assert(pw_app_profile_effective_dll_overrides(&profile, effective_overrides,
+                                                   sizeof(effective_overrides)) == PW_OK);
+    assert(strcmp(effective_overrides, "opengl32=b") == 0);
+    assert(parse_text(
+        "[application]\n"
+        "id=legacy-gl\nname=OpenGL game\n"
+        "executable=C:\\Games\\LegacyGL\\game.exe\n"
+        "working_directory=C:\\Games\\LegacyGL\n"
+        "prefix=legacy-gl\nruntime=wine-wow64\n"
+        "architecture=pe32\ngraphics=opengl\n"
+        "dll_overrides=d3d9=n;dxgi=n\n", &profile) == PW_OK);
+    assert(pw_app_profile_effective_dll_overrides(&profile, effective_overrides,
+                                                   sizeof(effective_overrides)) == PW_OK);
+    assert(strcmp(effective_overrides, "d3d9=n;dxgi=n;opengl32=b") == 0);
+    assert(parse_text(
+        "[application]\n"
+        "id=legacy-gl\nname=OpenGL game\n"
+        "executable=C:\\Games\\LegacyGL\\game.exe\n"
+        "working_directory=C:\\Games\\LegacyGL\n"
+        "prefix=legacy-gl\nruntime=wine-wow64\n"
+        "architecture=pe32\ngraphics=opengl\n"
+        "dll_overrides=opengl32=b\n", &profile) == PW_OK);
+    assert(pw_app_profile_effective_dll_overrides(&profile, effective_overrides,
+                                                   sizeof(effective_overrides)) == PW_OK);
+    assert(strcmp(effective_overrides, "opengl32=b") == 0);
+    assert(parse_text(
+        "[application]\n"
+        "id=legacy-gl\nname=OpenGL game\n"
+        "executable=C:\\Games\\LegacyGL\\game.exe\n"
+        "working_directory=C:\\Games\\LegacyGL\n"
+        "prefix=legacy-gl\nruntime=wine-wow64\n"
+        "architecture=pe32\ngraphics=opengl\n"
+        "dll_overrides=opengl32=n\n", &profile) == PW_ERR_MALFORMED);
 
     assert(parse_text(
         "[application]\nid=pinball\nname=Pinball\n"
