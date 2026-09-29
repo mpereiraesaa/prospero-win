@@ -128,7 +128,7 @@ def main() -> int:
         prefix = library / "prefixes" / "test-game"
         calls = log.read_text()
         assert f"prefix={prefix}" in calls
-        assert "wine wineboot --init" in calls and "mscoree,mshtml=" in calls
+        assert "wine wineboot --init" in calls and ";mshtml=" in calls and ";mscoree=" in calls
         assert "ddraw=n" in calls and "winemenubuilder.exe=d" in calls
         assert "user=prospero" in calls
         assert (prefix / "installer-args").read_text().split()[1:] == ["/S", "/LANG=es"]
@@ -174,6 +174,26 @@ def main() -> int:
         (root / "lonely").mkdir()
         (root / "lonely" / "wine").write_text("")
         assert pw_install.main([str(script), "--library", str(root / "lib2"), "--wine", str(root / "lonely" / "wine")]) == 1
+
+        # install_gecko puts Wine's pinned Gecko in its download cache and
+        # leaves mshtml on; the packages are checked against their hashes.
+        pw_install.WINE_CACHE = root / "wine-cache"
+        pw_install.WINE_CACHE.mkdir()
+        digests = {}
+        for arch in ("x86", "x86_64"):
+            package = pw_install.WINE_CACHE / f"wine-gecko-9.9-{arch}.msi"
+            package.write_bytes(arch.encode())
+            digests[arch] = hashlib.sha256(arch.encode()).hexdigest()
+        pw_install.GECKO = ("9.9", digests)
+        gecko = root / "gecko.yml"
+        gecko.write_text("game_slug: gecko\nscript:\n  game: {exe: drive_c/x.exe}\n  installer:\n"
+                         "  - task: {name: create_prefix, install_gecko: true}\n")
+        log.write_text("")
+        assert pw_install.main([str(gecko), "--library", str(root / "glib"), "--wine", str(wine)]) == 1  # no exe
+        assert "mshtml=" not in log.read_text() and ";mscoree=" in log.read_text()
+        pw_install.GECKO = ("9.9", dict(digests, x86="0" * 64))
+        shutil.rmtree(root / "glib")
+        assert pw_install.main([str(gecko), "--library", str(root / "glib"), "--wine", str(wine)]) == 1
 
         # PE architecture from the optional header.
         assert pw_install.pe_architecture(setup) == "pe32"

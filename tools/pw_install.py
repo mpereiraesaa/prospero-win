@@ -59,6 +59,12 @@ DXVK_RELEASES = {
 DXVK_DLLS = ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi")
 WINETRICKS = ("20260125", "https://raw.githubusercontent.com/Winetricks/winetricks/20260125/src/winetricks",
               "431f82fc74000e6c864409f1d8fb495d696c03928808e3e8acffc45179312a7b")
+# Wine Gecko, which Wine's mshtml needs (an installer's license shown in an
+# Internet Explorer control, for one): the version and hashes the pinned Wine
+# names in dlls/appwiz.cpl/addons.c, both architectures for WoW64.
+GECKO = ("2.47.4", {"x86": "26cecc47706b091908f7f814bddb074c61beb8063318e9efc5a7f789857793d6",
+                    "x86_64": "e590b7d988a32d6aa4cf1d8aa3aa3d33766fdd4cf4c89c2dcc2095ecb28d066f"})
+WINE_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "wine"
 DOWNLOADS = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "prospero-win"
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 REG_TYPES = {"REG_SZ", "REG_DWORD", "REG_BINARY"}
@@ -74,11 +80,12 @@ def log(message: str) -> None:
     print(f"pw_install: {message}", flush=True)
 
 
-def fetch(url: str, sha256: str, name: str) -> Path:
+def fetch(url: str, sha256: str, name: str, directory: Path | None = None) -> Path:
     """A pinned download, kept in the user's cache and checked each time."""
-    path = DOWNLOADS / name
+    directory = directory or DOWNLOADS
+    path = directory / name
     if not path.is_file():
-        DOWNLOADS.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(parents=True, exist_ok=True)
         log(f"downloading {url}")
         with urllib.request.urlopen(url) as response, open(f"{path}.part", "wb") as out:
             shutil.copyfileobj(response, out)
@@ -234,8 +241,18 @@ class Installer:
         name = task.get("name")
         env = self.wine_env(task)
         if name == "create_prefix":
-            if not task.get("install_gecko") or not task.get("install_mono"):
-                env["WINEDLLOVERRIDES"] += ";mscoree,mshtml="
+            # As in Lutris, Gecko and Mono only when the script asks for them.
+            # wineboot installs Gecko from Wine's download cache, where the
+            # pinned packages are put first.
+            if task.get("install_gecko"):
+                version, digests = GECKO
+                for arch, digest in digests.items():
+                    fetch(f"https://dl.winehq.org/wine/wine-gecko/{version}/wine-gecko-{version}-{arch}.msi",
+                          digest, f"wine-gecko-{version}-{arch}.msi", WINE_CACHE)
+            else:
+                env["WINEDLLOVERRIDES"] += ";mshtml="
+            if not task.get("install_mono"):
+                env["WINEDLLOVERRIDES"] += ";mscoree="
             self.run([self.wine, "wineboot", "--init"], env)
         elif name == "wineexec":
             executable = self.path(str(task["executable"]))

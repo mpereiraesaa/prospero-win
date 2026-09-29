@@ -69,6 +69,12 @@ Differences from Lutris, all forced by the console:
   changing: the console has no OpenGL.
 - As in Lutris, Wine adds no menu entries or file associations to the PC
   (`winemenubuilder.exe=d`).
+- `create_prefix` with `install_gecko: true` puts Wine Gecko, the version
+  and hashes the pinned Wine names (2.47.4, x86 and x86_64), in Wine's
+  download cache first, so wineboot installs it without asking; without it
+  mshtml is off. Installers that show their license in an Internet Explorer
+  control (Blizzard's) need it. Mono follows `install_mono` the same way,
+  but is left for Wine to fetch.
 
 ## The `prospero` block
 
