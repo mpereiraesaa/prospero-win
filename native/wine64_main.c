@@ -86,8 +86,9 @@ static size_t catalog_count;
 static const char *library_root = PW_WINE64_ROOT_SANDBOX;
 
 /* The largest desktop shown: Wine's PS5 driver defaults to 800x600
- * (WINE_PS5_DESKTOP overrides); bigger frames are counted and dropped. */
-enum { PW_WINE64_MAX_FRAME = 1280 * 1024 * 4, PW_WINE64_TICK_US = 16000,
+ * (WINE_PS5_DESKTOP overrides, 1920x1080 for Warcraft III); bigger frames
+ * are counted and dropped. */
+enum { PW_WINE64_MAX_FRAME = 1920 * 1200 * 4, PW_WINE64_TICK_US = 16000,
        PW_WINE64_TICKS_PER_S = 60, PW_WINE64_CLOSE_WAIT_S = 5 };
 
 enum { PAD_CREATE = 0x1u, PAD_OPTIONS = 0x8u, PAD_UP = 0x10u, PAD_RIGHT = 0x20u,
@@ -186,6 +187,64 @@ static int wine_audio(void *context, const int16_t *frames)
 /* Scale a frame onto the whole screen as the profile asks (fit keeps the
  * aspect ratio: 800x600 becomes 1440x1080), straight into the scanout, and
  * flip it. */
+/*
+ * Once a game's Vulkan swapchain owns the video output, its GDI frames (a
+ * DirectShow movie drawn outside Direct3D) are shown through RADV's VideoOut
+ * WSI while no swapchain presents: libvulkan.prx's pw_videoout_idle and
+ * pw_videoout_show_tiled, found with Wine's dlsym among the modules it has
+ * loaded (a NULL handle), which never loads a second driver. The frame is
+ * drawn as the title's own presenter draws it.
+ */
+typedef struct VulkanFrames {
+    int resolved;
+    int (*idle)(void);
+    int (*show_tiled)(const void *, uint64_t, uint32_t, uint32_t);
+    uint32_t *tiled;
+    uint64_t shown, busy, failed;
+} VulkanFrames;
+
+static void vulkan_frames_resolve(VulkanFrames *vf, const PwPrxDescriptor *ntdll)
+{
+    void *(*wine_dlsym)(void *, const char *) = (void *(*)(void *, const char *))
+        (uintptr_t)pw_prx_lookup(ntdll, "dlsym");
+
+    vf->resolved = 1;
+    if (wine_dlsym) {
+        vf->idle = (int (*)(void))(uintptr_t)wine_dlsym(NULL, "pw_videoout_idle");
+        vf->show_tiled = (int (*)(const void *, uint64_t, uint32_t, uint32_t))
+            (uintptr_t)wine_dlsym(NULL, "pw_videoout_show_tiled");
+    }
+    if (vf->idle && vf->show_tiled) {
+        void *tiled = mmap(NULL, PW_VIDEOOUT_PS5_FRAME_BYTES, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANON, -1, 0);
+        vf->tiled = tiled == MAP_FAILED ? NULL : tiled;
+    }
+    PS5LOG_LOG("PW_WINE64 vulkan frames idle=%d show=%d buffer=%d", vf->idle != NULL,
+               vf->show_tiled != NULL, vf->tiled != NULL);
+}
+
+/* 1 when the newest GDI frame was shown through the Vulkan driver. */
+static int vulkan_frames_show(VulkanFrames *vf, uint64_t *sequence, int scaling)
+{
+    PwPresentView view;
+
+    if (!vf->tiled || !vf->idle()) return 0;
+    if (pw_wine_frame_box_take(&frames, sequence, frame_shown, PW_WINE64_MAX_FRAME, &view) != 1)
+        return 0;
+    const PwPresentFrame frame = { view.pixels, view.width, view.height, view.stride,
+                                   PW_PRESENT_BGRX8 };
+    if (pw_videoout_ps5_draw_scaled(&frame, scaling, 0x000000u, vf->tiled) != PW_OK) {
+        vf->failed++;
+        return 0;
+    }
+    int status = vf->show_tiled(vf->tiled, PW_VIDEOOUT_PS5_FRAME_BYTES, PW_VIDEOOUT_PS5_WIDTH,
+                                PW_VIDEOOUT_PS5_HEIGHT);
+    if (status == 0) vf->shown++;
+    else if (status == 1) vf->busy++;
+    else if (!vf->failed++) PS5LOG_LOG("PW_WINE64 vulkan frames show failed=%d", status);
+    return status == 0;
+}
+
 static int show_scaled(PwVideoOutPs5 *video, const PwPresentView *view, int scaling)
 {
     const PwPresentFrame frame = { view->pixels, view->width, view->height, view->stride,
@@ -521,6 +580,7 @@ int main(int argc, char **argv)
     int (*rumble)(uint32_t *, uint32_t *) = NULL;
     uint64_t vibrations = 0;
     uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
+    VulkanFrames vulkan_frames = { 0 };
     ps5log_config log_config;
     PwPadPs5Ops pad_ops;
     int status, video_status = PW_ERR_STATE, pad_status = PW_ERR_STATE, hid_status = PW_ERR_STATE;
@@ -769,6 +829,9 @@ int main(int argc, char **argv)
             show_scaled(&video, &view, scaling) == PW_OK) {
             shown++;          /* present waits for the vblank */
             presented = 1;
+        } else if (frame_shown && __atomic_load_n(&display_closed, __ATOMIC_ACQUIRE)) {
+            if (!vulkan_frames.resolved) vulkan_frames_resolve(&vulkan_frames, start.descriptor);
+            (void)vulkan_frames_show(&vulkan_frames, &shown_sequence, scaling);
         }
         if (!presented) usleep(PW_WINE64_TICK_US);
 
@@ -799,11 +862,12 @@ int main(int argc, char **argv)
             uint64_t v[16] = { 0 };
 
             PS5LOG_LOG("PW_WINE64 alive tick=%llu sink_calls=%lu frames_put=%llu shown=%llu "
-                       "rejected=%llu last=%ux%u inputs=%llu refused=%llu",
+                       "rejected=%llu last=%ux%u inputs=%llu refused=%llu vk_shown=%llu vk_busy=%llu",
                        (unsigned long long)tick, sink_calls, (unsigned long long)frames.sequence,
                        (unsigned long long)shown, (unsigned long long)frames.rejected,
                        frames.width, frames.height, (unsigned long long)posted,
-                       (unsigned long long)refused);
+                       (unsigned long long)refused, (unsigned long long)vulkan_frames.shown,
+                       (unsigned long long)vulkan_frames.busy);
             if (start.virtual_stats && tick % 300 == 0) {
                 static uint64_t faults_logged;
 

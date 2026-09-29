@@ -134,6 +134,25 @@ int main(void)
     fill_source(0x1234567u);
     check_same(800, 600, 800, 0xffffffu);
 
+    /* The Vulkan driver's order keeps the Wine pixel, made opaque: every
+     * pixel of it is the title's own with red and blue swapped back. */
+    {
+        const PwPresentFrame frame = { (const uint8_t *)source, 800, 600, 800 * 4u, PW_PRESENT_BGRX8 };
+        PwPresentPlacement placement;
+        static uint32_t bgra[TILED];
+
+        assert(pw_videoout_scanout_pixel(0x00112233u, 1) == 0xff112233u &&
+               pw_videoout_scanout_pixel(0x00112233u, 0) == 0xff332211u);
+        assert(pw_present_scale_placement(&frame, PW_PRESENT_SCALE_FIT, W, H, &placement) == PW_OK);
+        pw_videoout_tiles_scale(&tiles, &rows, &frame, &placement, 0x102030u, one_pass);
+        pw_videoout_tiles_scale_to(&tiles, &rows, &frame, &placement, 0x102030u, 1, bgra);
+        for (uint32_t y = 0; y < H; y++)
+            for (uint32_t x = 0; x < W; x++) {
+                const uint32_t i = pw_videoout_tiles_index(&tiles, x, y), p = one_pass[i];
+                assert(bgra[i] == ((p & 0xff00ff00u) | ((p >> 16) & 0xffu) | ((p & 0xffu) << 16)));
+            }
+    }
+
     benchmark();
     printf("videoout tiles passed: table indices equal the tiled formula for all %u pixels; "
            "scaling straight into the tiles writes the bytes of the two-pass path\n", W * H);

@@ -10,7 +10,8 @@
 #include "pw_videoout_layout.h"
 #include <string.h>
 
-enum { WIDTH=1920,HEIGHT=1080,FRAME_BYTES=0x1000000,MEMORY_BYTES=0x3000000 };
+enum { WIDTH=PW_VIDEOOUT_PS5_WIDTH,HEIGHT=PW_VIDEOOUT_PS5_HEIGHT,FRAME_BYTES=PW_VIDEOOUT_PS5_FRAME_BYTES,
+       MEMORY_BYTES=0x3000000 };
 typedef struct VideoBuffer {void *data,*metadata,*reserved0,*reserved1;} VideoBuffer;
 typedef struct VideoAttribute {uint8_t bytes[80];} VideoAttribute;
 extern size_t sceKernelGetDirectMemorySize(void);
@@ -52,7 +53,7 @@ int pw_videoout_ps5_open(PwVideoOutPs5 *video)
         {(uint8_t *)video->memory+FRAME_BYTES,0,0,0}};VideoAttribute attribute;
     memset(&attribute,0,sizeof(attribute));
     (void)sceVideoOutSetFlipRate(video->handle,0);
-    sceVideoOutSetBufferAttribute2(&attribute,0x8000000022000000ull,0,WIDTH,HEIGHT,0,0,0);
+    sceVideoOutSetBufferAttribute2(&attribute,PW_VIDEOOUT_PS5_PIXEL_FORMAT,0,WIDTH,HEIGHT,0,0,0);
     if(sceVideoOutRegisterBuffers2(video->handle,0,0,buffers,2,&attribute,0,NULL)<0)
         goto state_failed;
     video->buffers_registered=1;video->opened=1;
@@ -120,6 +121,17 @@ int pw_videoout_ps5_present_scaled(PwVideoOutPs5 *video,const PwPresentFrame *fr
     if(status!=PW_OK)return status;
     pw_videoout_tiles_scale(&tiles,&scale_rows,frame,&placement,background,draw_frame(video));
     return flip(video);
+}
+int pw_videoout_ps5_draw_scaled(const PwPresentFrame *frame,int mode,uint32_t background,
+                                uint32_t *out)
+{
+    if(!frame || !out)return PW_ERR_PRECONDITION;
+    PwPresentPlacement placement;
+    int status=pw_present_scale_placement(frame,mode,WIDTH,HEIGHT,&placement);
+    if(status!=PW_OK)return status;
+    pw_videoout_tiles_init(&tiles);
+    pw_videoout_tiles_scale_to(&tiles,&scale_rows,frame,&placement,background,1,out);
+    return PW_OK;
 }
 int pw_videoout_ps5_present(PwVideoOutPs5 *video,const PwPresentView *view)
 {

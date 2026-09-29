@@ -18,4 +18,15 @@ int pw_videoout_ps5_present(PwVideoOutPs5 *,const PwPresentView *);
  * the screen, where pw_present_scale then pw_videoout_ps5_present make two. */
 int pw_videoout_ps5_present_scaled(PwVideoOutPs5 *,const PwPresentFrame *frame,int mode,
                                    uint32_t background);
+
+/* The scanout the title draws: its size, pixel format and the bytes of one
+ * tiled frame. */
+enum { PW_VIDEOOUT_PS5_WIDTH=1920, PW_VIDEOOUT_PS5_HEIGHT=1080 };
+#define PW_VIDEOOUT_PS5_FRAME_BYTES 0x1000000u
+#define PW_VIDEOOUT_PS5_PIXEL_FORMAT 0x8000000022000000ull
+/* The same frame drawn into out (PW_VIDEOOUT_PS5_FRAME_BYTES), not shown,
+ * in the Vulkan driver's B8G8R8A8 order: for it to show once it owns the
+ * video output. */
+int pw_videoout_ps5_draw_scaled(const PwPresentFrame *frame,int mode,uint32_t background,
+                                uint32_t *out);
 #endif

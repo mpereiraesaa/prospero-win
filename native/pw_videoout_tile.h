@@ -61,6 +61,13 @@ static inline uint32_t pw_videoout_rgbx(uint32_t bgrx)
     return 0xff000000u | (bgrx & 0x0000ff00u) | ((bgrx >> 16) & 0xffu) | ((bgrx & 0xffu) << 16);
 }
 
+/* The pixel for a scanout: A8B8G8R8 (the title's own), or B8G8R8A8 (bgra,
+ * the Vulkan driver's, whose smaller sets VideoOut scales to the mode). */
+static inline uint32_t pw_videoout_scanout_pixel(uint32_t bgrx, int bgra)
+{
+    return bgra ? 0xff000000u | bgrx : pw_videoout_rgbx(bgrx);
+}
+
 /* Scratch for pw_videoout_tiles_scale, kept off the stack: the source
  * column of each shown column, and scanout rows converted ahead of tiling
  * (four, and one of background). */
@@ -81,16 +88,16 @@ typedef struct PwVideoOutScaleRows {
  * converted once. Source columns come from a table filled once per frame
  * and rows from one division each, so no pixel divides. placement must lie
  * inside the scanout and frame must be valid (pw_present_validate). */
-static inline void pw_videoout_tiles_scale(const PwVideoOutTiles *tiles, PwVideoOutScaleRows *rows,
-                                           const PwPresentFrame *frame,
-                                           const PwPresentPlacement *placement, uint32_t background,
-                                           uint32_t *output)
+static inline void pw_videoout_tiles_scale_to(const PwVideoOutTiles *tiles, PwVideoOutScaleRows *rows,
+                                              const PwPresentFrame *frame,
+                                              const PwPresentPlacement *placement, uint32_t background,
+                                              int bgra, uint32_t *output)
 {
     enum { W = PW_VIDEOOUT_TILE_WIDTH, H = PW_VIDEOOUT_TILE_HEIGHT };
     _Static_assert(W % 4 == 0 && H % 4 == 0, "4x4 blocks divide the scanout");
     const uint32_t left = placement->left, right = placement->left + placement->shown_width;
     const uint32_t top = placement->top, bottom = placement->top + placement->shown_height;
-    const uint32_t fill = pw_videoout_rgbx(background);
+    const uint32_t fill = pw_videoout_scanout_pixel(background, bgra);
     uint32_t *const background_row = rows->row[4];
 
     /* floor(i * width / shown_width), stepped without dividing */
@@ -123,7 +130,7 @@ static inline void pw_videoout_tiles_scale(const PwVideoOutTiles *tiles, PwVideo
             uint32_t *converted = rows->row[j];
             for (uint32_t x = 0; x < left; x++) converted[x] = fill;
             for (uint32_t x = left; x < right; x++)
-                converted[x] = pw_videoout_rgbx(source[rows->source_column[x - left]]);
+                converted[x] = pw_videoout_scanout_pixel(source[rows->source_column[x - left]], bgra);
             for (uint32_t x = right; x < W; x++) converted[x] = fill;
             line[j] = converted;
             previous = source_row;
@@ -137,5 +144,14 @@ static inline void pw_videoout_tiles_scale(const PwVideoOutTiles *tiles, PwVideo
             memcpy(block + 12, line[3] + x, 16);
         }
     }
+}
+
+/* pw_videoout_tiles_scale_to for the title's own scanout. */
+static inline void pw_videoout_tiles_scale(const PwVideoOutTiles *tiles, PwVideoOutScaleRows *rows,
+                                           const PwPresentFrame *frame,
+                                           const PwPresentPlacement *placement, uint32_t background,
+                                           uint32_t *output)
+{
+    pw_videoout_tiles_scale_to(tiles, rows, frame, placement, background, 0, output);
 }
 #endif

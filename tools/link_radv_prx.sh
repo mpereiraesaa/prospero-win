@@ -48,7 +48,7 @@ done
 "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$install/include" \
     -c "$root/wine/ps5/pw_vulkan_radv.c" -o "$work/obj/pw_vulkan_radv.o"
 python3 "$root/tools/gen_prx_descriptor.py" "$work/obj/libvulkan_desc.c" \
-    vkGetInstanceProcAddr vkGetDeviceProcAddr
+    vkGetInstanceProcAddr vkGetDeviceProcAddr pw_videoout_idle pw_videoout_show_tiled
 "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
     -c "$work/obj/libvulkan_desc.c" -o "$work/obj/libvulkan_desc.o"
 
