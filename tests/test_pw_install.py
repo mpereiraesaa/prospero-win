@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""tools/pw_install.py runs Lutris installer scripts with a given Wine.
+
+A fake Wine records each call and does what the real one would to the
+prefix: wineboot writes the registry files, regedit appends its .reg, and an
+installer .exe runs the shell script beside it."""
+from __future__ import annotations
+
+import hashlib
+import io
+import os
+import shutil
+import struct
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import pw_install  # noqa: E402
+
+FAKE_WINE = r"""#!/bin/sh
+echo "wine $* | prefix=$WINEPREFIX | overrides=$WINEDLLOVERRIDES" >> "$FAKE_LOG"
+case "$1" in
+wineboot)
+    mkdir -p "$WINEPREFIX/drive_c/windows/system32" "$WINEPREFIX/drive_c/windows/syswow64"
+    echo WINE REGISTRY > "$WINEPREFIX/system.reg"; echo WINE REGISTRY > "$WINEPREFIX/user.reg" ;;
+regedit) cat "$3" >> "$WINEPREFIX/user.reg" ;;
+*) [ -f "$1.sh" ] && sh "$1.sh" "$@"; exit "${FAKE_EXIT:-0}" ;;
+esac
+"""
+
+
+def pe(bits: int) -> bytes:
+    """The smallest header pw_install reads: MZ, e_lfanew, PE, magic."""
+    data = bytearray(0x100)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, 0x80)
+    data[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<H", data, 0x80 + 24, 0x10B if bits == 32 else 0x20B)
+    return bytes(data)
+
+
+def fake_dxvk(root: Path) -> tuple[Path, str]:
+    archive = root / "dxvk.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for bits in ("x32", "x64"):
+            for dll in pw_install.DXVK_DLLS:
+                payload = f"{bits}/{dll}".encode()
+                info = tarfile.TarInfo(f"dxvk-9.9/{bits}/{dll}.dll")
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+    return archive, hashlib.sha256(archive.read_bytes()).hexdigest()
+
+
+SCRIPT = r"""
+name: Test Game
+game_slug: test-game
+runner: wine
+prospero:
+  display: {desktop: 1920x1080, scaling: fit}
+  input: {preset: mouse}
+script:
+  game:
+    exe: drive_c/Games/Test/game.exe
+    args: -window -opengl
+    prefix: $GAMEDIR
+  files:
+  - setup: "N/A:Select the game's setup file"
+  wine:
+    dxvk: true
+    dxvk_version: "9.9"
+    overrides: {ddraw.dll: n}
+  installer:
+  - task: {name: create_prefix, prefix: $GAMEDIR, arch: win32}
+  - input_menu:
+      id: LANG
+      description: Language
+      options: [{en: English}, {es: Spanish}]
+      preselect: en
+  - task: {name: wineexec, executable: setup, args: /S /LANG=$INPUT_LANG, return_code: "0,25856"}
+  - task: {name: set_regedit, path: 'HKEY_CURRENT_USER\Software\Test\Video', key: reswidth,
+           value: $RESOLUTION_WIDTH, type: REG_DWORD}
+  - task: {name: set_regedit, path: 'HKEY_CURRENT_USER\Software\Test', key: InstallPath, value: 'C:\Games\Test'}
+  - write_config:
+      file: $GAMEDIR/drive_c/Games/Test/game.ini
+      section: Video
+      key: Height
+      value: $RESOLUTION_HEIGHT
+"""
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        wine = root / "wine" / "wine"
+        wine.parent.mkdir()
+        wine.write_text(FAKE_WINE)
+        wine.chmod(0o755)
+        (root / "wine" / "wineserver").write_text("#!/bin/sh\nexit 0\n")
+        (root / "wine" / "wineserver").chmod(0o755)
+        log = root / "calls.log"
+        os.environ["FAKE_LOG"] = str(log)
+        setup = root / "setup.exe"
+        setup.write_bytes(pe(32))
+        # The "installer" writes the game into the prefix, as a real one would.
+        (root / "setup.exe.sh").write_text(
+            'mkdir -p "$WINEPREFIX/drive_c/Games/Test"\n'
+            f'cp "{setup}" "$WINEPREFIX/drive_c/Games/Test/game.exe"\n'
+            'echo "$@" > "$WINEPREFIX/installer-args"\n')
+        archive, digest = fake_dxvk(root)
+        pw_install.DXVK_RELEASES["9.9"] = ("file://unused", digest)
+        pw_install.DOWNLOADS = root / "downloads"
+        pw_install.DOWNLOADS.mkdir()
+        os.link(archive, pw_install.DOWNLOADS / "dxvk-9.9.tar.gz")
+        script = root / "test.yml"
+        script.write_text(SCRIPT)
+        library = root / "library"
+        common = [str(script), "--library", str(library), "--wine", str(wine)]
+
+        # A missing N/A: file names the file and how to give it.
+        assert pw_install.main(common) == 1
+
+        assert pw_install.main(common + ["--file", f"setup={setup}", "--input", "LANG=es",
+                                         "--resolution", "2560x1440"]) == 0
+        prefix = library / "prefixes" / "test-game"
+        calls = log.read_text()
+        assert f"prefix={prefix}" in calls
+        assert "wine wineboot --init" in calls and "mscoree,mshtml=" in calls
+        assert "ddraw=n" in calls and "winemenubuilder.exe=d" in calls
+        assert (prefix / "installer-args").read_text().split()[1:] == ["/S", "/LANG=es"]
+        registry = (prefix / "user.reg").read_text()
+        assert '"reswidth"=dword:00000a00' in registry
+        assert '"InstallPath"="C:\\\\Games\\\\Test"' in registry
+        assert '"d3d8"="native"' in registry and '"dxgi"="native"' in registry
+        assert (prefix / "drive_c/windows/syswow64/d3d8.dll").read_bytes() == b"x32/d3d8"
+        assert (prefix / "drive_c/windows/system32/d3d11.dll").read_bytes() == b"x64/d3d11"
+        assert "Height=1440" in (prefix / "drive_c/Games/Test/game.ini").read_text()
+        assert not (library / ".cache" / "test-game").exists()
+        profile = (library / "profiles" / "test-game.profile").read_text()
+        for line in ("id = test-game", "name = Test Game", "executable = C:\\Games\\Test\\game.exe",
+                     "working_directory = C:\\Games\\Test", "arguments = -window -opengl",
+                     "dll_overrides = d3d8,d3d9,d3d10core,d3d11,dxgi,ddraw=n", "prefix = test-game",
+                     "runtime = wine-wow64", "architecture = pe32", "graphics = dxvk",
+                     "[display]", "desktop = 1920x1080", "scaling = fit", "[input]", "preset = mouse"):
+            assert line in profile.splitlines(), (line, profile)
+
+        # An installed game is never overwritten.
+        assert pw_install.main(common + ["--file", f"setup={setup}"]) == 1
+
+        # An exit code the script does not accept fails the install.
+        os.environ["FAKE_EXIT"] = "3"
+        assert pw_install.main(common + ["--slug", "other", "--file", f"setup={setup}"]) == 1
+        del os.environ["FAKE_EXIT"]
+
+        # Unknown directives and tasks are refused, not skipped.
+        for step in ("- gogdl_setup: {game_id: 1}", "- task: {name: winecfg}",
+                     "- task: {name: set_regedit, path: X, key: k, value: v, type: REG_MULTI_SZ}"):
+            bad = root / "bad.yml"
+            bad.write_text(f"game_slug: bad\nscript:\n  game: {{exe: x.exe}}\n  installer:\n  {step}\n")
+            assert pw_install.main([str(bad), "--library", str(root / "badlib"), "--wine", str(wine)]) == 1
+            shutil.rmtree(root / "badlib", ignore_errors=True)
+
+        # Only wine scripts, and only slugs a profile id accepts.
+        for text in ("game_slug: x\nrunner: dosbox\nscript: {}\n", "game_slug: Bad_Slug\nscript: {}\n"):
+            bad = root / "bad.yml"
+            bad.write_text(text)
+            assert pw_install.main([str(bad), "--library", str(root / "badlib"), "--wine", str(wine)]) == 1
+
+        # A Wine without a wineserver beside it is refused up front.
+        (root / "lonely").mkdir()
+        (root / "lonely" / "wine").write_text("")
+        assert pw_install.main([str(script), "--library", str(root / "lib2"), "--wine", str(root / "lonely" / "wine")]) == 1
+
+        # PE architecture from the optional header.
+        assert pw_install.pe_architecture(setup) == "pe32"
+        (root / "x64.exe").write_bytes(pe(64))
+        assert pw_install.pe_architecture(root / "x64.exe") == "pe64"
+    print("pw_install passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

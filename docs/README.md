@@ -14,6 +14,8 @@ planning stay outside the standalone repository.
 - [Wine on the PS5](WINE_PS5_BUILD.md): building Wine's Unix side, the patch
   series, the user, audio and XInput drivers, starting Wine in the title.
 - [Development](DEVELOPMENT.md): local gates and builds.
+- [Installing games](INSTALLING_GAMES.md): Lutris installer scripts run on
+  the PC with the pinned Wine, one prefix and profile per game.
 - [Hardware validation](HARDWARE_VALIDATION.md): accepted claims and evidence
   requirements.
 - [Telemetry](TELEMETRY.md): the title's `ps5log/1` records.
