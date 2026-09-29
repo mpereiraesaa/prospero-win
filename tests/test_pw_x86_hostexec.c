@@ -350,6 +350,41 @@ static void test_segment_stack(void)
     assert(run(&s, (const uint8_t[]){0x66}, 1) != PW_OK && s.eip == 0x1000);
 }
 
+/* CPUID: the host's, without the VEX/EVEX extensions and XSAVE the guest
+ * cannot run; SSE2 and the vendor stay. */
+static void test_cpuid(void)
+{
+    static const uint8_t cpuid[] = { 0x0f, 0xa2 };
+    uint32_t a, b, c, d, regs[4];
+    PwX86State s;
+
+    reset_state(&s);
+    s.gpr[0] = 1; s.gpr[1] = 0;
+    assert(run(&s, cpuid, sizeof(cpuid)) == PW_OK && s.eip == 0x1002);
+    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    assert(s.gpr[0] == a && s.gpr[2] == d && (d & (1u << 26)));          /* SSE2 */
+    assert(!(s.gpr[1] & ((1u << 12) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29))));
+    assert(s.gpr[1] == (c & ~((1u << 12) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29))));
+
+    reset_state(&s);
+    s.gpr[0] = 7; s.gpr[1] = 0;
+    assert(run(&s, cpuid, sizeof(cpuid)) == PW_OK);
+    assert(!(s.gpr[3] & ((1u << 3) | (1u << 5) | (1u << 8) | (1u << 16))));   /* BMI1 AVX2 BMI2 AVX-512F */
+
+    reset_state(&s);
+    s.gpr[0] = 0; s.gpr[1] = 0;
+    assert(run(&s, cpuid, sizeof(cpuid)) == PW_OK);
+    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0), "c"(0));
+    assert(s.gpr[0] == a && s.gpr[3] == b && s.gpr[2] == d && s.gpr[1] == c);   /* vendor */
+
+    regs[0] = regs[1] = regs[2] = regs[3] = ~0u;
+    pw_x86_cpuid_mask(0x0d, 0, regs);
+    assert(!regs[0] && !regs[1] && !regs[2] && !regs[3]);
+    regs[2] = ~0u;
+    pw_x86_cpuid_mask(0x80000001u, 0, regs);
+    assert(!(regs[2] & ((1u << 11) | (1u << 16) | (1u << 21))) && (regs[2] & 1u));
+}
+
 static void test_refusals_and_cache(void)
 {
     PwX86State s;
@@ -403,9 +438,10 @@ int main(void)
     test_guest_mxcsr();
     test_segment_stores();
     test_segment_stack();
+    test_cpuid();
     test_refusals_and_cache();
     assert(pw_x86_hostexec_destroy(&hx) == PW_OK);
-    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR, segment stores, segment push and pop; %llu stubs\n",
+    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR, segment stores, segment push and pop, CPUID; %llu stubs\n",
            (unsigned long long)hx.compiled);
     return 0;
 }

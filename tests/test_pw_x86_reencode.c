@@ -387,6 +387,48 @@ static void test_control(void)
     compare(code, sizeof(code));
 }
 
+/* MPX's bnd prefix (F2) on jumps, calls and returns, as FFmpeg's assembly
+ * has it (LAV Filters): a processor without MPX ignores it. */
+static void test_bnd_branches(void)
+{
+    static const uint8_t code[] = {
+        0xb9, 0x04, 0, 0, 0,                /* 00 mov ecx, 4 */
+        0x31, 0xc0,                         /* 05 xor eax, eax */
+        0x40,                               /* 07 L: inc eax */
+        0x49,                               /* 08 dec ecx */
+        0xf2, 0x75, 0xfb,                   /* 09 bnd jnz L */
+        0xf2, 0xe8, 0x12, 0, 0, 0,          /* 0c bnd call F */
+        0x85, 0xc0,                         /* 12 test eax, eax */
+        0xf2, 0x0f, 0x85, 0x01, 0, 0, 0,    /* 14 bnd jnz near +1 */
+        0x40,                               /* 1b inc eax */
+        0xf2, 0xe9, 0x00, 0, 0, 0,          /* 1c bnd jmp +0 */
+        0xf2, 0xc3,                         /* 22 bnd ret */
+        0x01, 0xc0,                         /* 24 F: add eax, eax */
+        0xf2, 0xc3,                         /* 26 bnd ret */
+    };
+    /* The same without the prefix. */
+    static const uint8_t plain[] = {
+        0xb9, 0x04, 0, 0, 0,                /* 00 mov ecx, 4 */
+        0x31, 0xc0,                         /* 05 xor eax, eax */
+        0x40,                               /* 07 L: inc eax */
+        0x49,                               /* 08 dec ecx */
+        0x75, 0xfc,                         /* 09 jnz L */
+        0xe8, 0x0f, 0, 0, 0,                /* 0b call F */
+        0x85, 0xc0,                         /* 10 test eax, eax */
+        0x0f, 0x85, 0x01, 0, 0, 0,          /* 12 jnz near +1 */
+        0x40,                               /* 18 inc eax */
+        0xe9, 0x00, 0, 0, 0,                /* 19 jmp +0 */
+        0xc3,                               /* 1e ret */
+        0x01, 0xc0,                         /* 1f F: add eax, eax */
+        0xc3,                               /* 21 ret */
+    };
+    Run bnd = run(code, sizeof(code), 0), without = run(plain, sizeof(plain), 0);
+
+    compare(code, sizeof(code));
+    assert(bnd.state.gpr[0] == 8 && without.state.gpr[0] == 8);
+    same(&bnd, &without);
+}
+
 /* A block the re-encoder stops in the middle (div, which it leaves to the
  * emitter) and indirect calls and jumps through registers and memory. */
 static void test_mixed_and_indirect(void)
@@ -680,7 +722,9 @@ static void test_native_fp_gpr(void)
 /* Re-encoded FP code around an instruction only the emitter takes (div):
  * the chain leaves through C at each crossing, which never links the two
  * kinds, and the guest's xmm and x87 values live across it survive the
- * emitter, which uses xmm as scratch. Also pause and cpuid. */
+ * emitter, which uses xmm as scratch. Also pause, and cpuid, which the
+ * host-exec stepper runs with the guest's feature mask (as wowprospero
+ * does). */
 static void test_native_fp_emitter(void)
 {
     static const uint8_t code[] = {
@@ -696,7 +740,9 @@ static void test_native_fp_emitter(void)
     uint32_t a, b, c, d;
 
     native_fp = 1;
+    hostexec_fallback = 1;
     native = run(code, sizeof(code), 1);
+    hostexec_fallback = 0;
     native_fp = 0;
     assert(native.status == PW_OK && native.state.eip == 0xdead0000u);
     memcpy(&sum, native.data + 64, 8);
@@ -872,6 +918,7 @@ int main(void)
     test_atomic_and_segments();
     test_memory();
     test_control();
+    test_bnd_branches();
     test_mixed_and_indirect();
     test_return_targets();
     test_unbounded_chains();

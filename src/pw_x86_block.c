@@ -1589,6 +1589,18 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
     return pw_x86_translate_opts(source, bytes, pc, output, capacity, block, &options);
 }
 
+
+/* A jump, call or return, which the bnd prefix (F2) may precede. */
+static int bnd_branch(const uint8_t *code, size_t bytes)
+{
+    if (!bytes) return 0;
+    if ((code[0] >= 0x70 && code[0] <= 0x7f) || code[0] == 0xe8 || code[0] == 0xe9 ||
+        code[0] == 0xeb || code[0] == 0xc2 || code[0] == 0xc3)
+        return 1;
+    if (bytes >= 2 && code[0] == 0x0f && code[1] >= 0x80 && code[1] <= 0x8f) return 1;
+    return bytes >= 2 && code[0] == 0xff && (((code[1] >> 3) & 7) == 2 || ((code[1] >> 3) & 7) == 4);
+}
+
 int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
                           uint8_t *output, size_t capacity, PwX86Block *block,
                           const PwX86TranslateOptions *options)
@@ -1619,6 +1631,12 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
     /* Pass 1: Instruction boundary and semantic decode */
     while (cursor < bytes && count < 32) {
         DecodedInst *d = &insts[count];
+        /* F2 on a jump, call or return is MPX's bnd, which a processor
+         * without MPX ignores (FFmpeg's assembly has it): the branch is
+         * decoded past it. Its target is relative to its end, which the
+         * prefix does not move. */
+        if (source[cursor] == 0xf2 && bnd_branch(source + cursor + 1, bytes - cursor - 1))
+            cursor++;
         d->cursor = cursor;
         const uint8_t op = source[cursor];
         d->op = op;

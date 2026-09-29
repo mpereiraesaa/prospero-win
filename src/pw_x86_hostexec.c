@@ -65,7 +65,7 @@ static int secondary_class(uint8_t op, uint8_t modrm, int have_modrm)
     case 0x01:
         /* Only XGETBV and RDTSCP are unprivileged and stateless here. */
         return have_modrm && (modrm == 0xd0 || modrm == 0xf9) ? N : X;
-    case 0x31: case 0xa2: case 0x77: return N;               /* RDTSC CPUID EMMS */
+    case 0x31: case 0x77: return N;                          /* RDTSC EMMS */
     case 0x38: case 0x3a: return M;                          /* checked by caller */
     }
     if (op >= 0xc8 && op <= 0xcf) return X; /* BSWAP r: register in opcode, use translator */
@@ -502,6 +502,43 @@ static int publish(PwX86HostExec *h, const uint8_t *stub, size_t bytes, uint32_t
 /* PUSH m32 (FF /6) and POP m32 (8F /0) use the guest stack implicitly, so
  * they are emulated here instead of being rewritten for the host. The SEH
  * prologue/epilogue pair `push fs:[0]` / `pop fs:[0]` is the common case. */
+/*
+ * CPUID as the host's, less what the guest cannot run: AVX, AVX2, FMA, F16C,
+ * BMI1/2 and AVX-512 are VEX or EVEX encoded, which neither translator nor
+ * this stepper takes, and XSAVE/OSXSAVE advertise the state they need.
+ * Software then takes its SSE paths, as on an older processor (FFmpeg in LAV
+ * Filters picked AVX on the PS5's Zen 2).
+ */
+void pw_x86_cpuid_mask(uint32_t leaf, uint32_t subleaf, uint32_t regs[4])
+{
+    (void)subleaf;
+    if (leaf == 1) {
+        regs[2] &= ~((1u << 12) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29));
+    } else if (leaf == 7) {
+        regs[1] &= ~((1u << 3) | (1u << 5) | (1u << 8) | (1u << 16) | (1u << 17) | (1u << 21) |
+                     (1u << 26) | (1u << 27) | (1u << 28) | (1u << 30) | (1u << 31));
+        regs[2] &= ~((1u << 1) | (1u << 6) | (1u << 11) | (1u << 12) | (1u << 14));
+        regs[3] &= ~((1u << 2) | (1u << 3) | (1u << 8) | (1u << 23));
+    } else if (leaf == 0x0d) {
+        regs[0] = regs[1] = regs[2] = regs[3] = 0;        /* no XSAVE state */
+    } else if (leaf == 0x80000001u) {
+        regs[2] &= ~((1u << 11) | (1u << 16) | (1u << 21));   /* XOP, FMA4, TBM */
+    }
+}
+
+static int cpuid_form(PwX86State *s, const uint8_t *src, size_t n)
+{
+    uint32_t regs[4];
+
+    if (n < 2 || src[0] != 0x0f || src[1] != 0xa2) return PW_ERR_UNSUPPORTED;
+    __asm__ volatile ("cpuid" : "=a"(regs[0]), "=b"(regs[1]), "=c"(regs[2]), "=d"(regs[3])
+                      : "a"(s->gpr[0]), "c"(s->gpr[1]));
+    pw_x86_cpuid_mask(s->gpr[0], s->gpr[1], regs);
+    s->gpr[0] = regs[0]; s->gpr[3] = regs[1]; s->gpr[1] = regs[2]; s->gpr[2] = regs[3];
+    s->eip += 2;
+    return PW_OK;
+}
+
 static int stack_memory_form(PwX86State *s, const uint8_t *src, size_t n)
 {
     size_t at = 0;
@@ -614,6 +651,10 @@ int pw_x86_hostexec_step(PwX86HostExec *h, PwX86State *s, const uint8_t *src, si
     int status;
 
     if (!h || !h->initialized || !s || !src) return PW_ERR_PRECONDITION;
+    if (cpuid_form(s, src, n) == PW_OK) {
+        h->executed++;
+        return PW_OK;
+    }
     status = pw_x86_hostexec_plan(s, src, n, &plan);
     if (status == PW_ERR_UNSUPPORTED &&
         (stack_memory_form(s, src, n) == PW_OK || flags_stack_form(s, src, n) == PW_OK ||

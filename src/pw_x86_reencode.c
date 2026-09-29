@@ -471,8 +471,8 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
         } else if (x >= 0xc8 && x <= 0xcf) {
             if (in->opsize16) return 0;
             in->kind = K_BSWAP; in->reg = x & 7;
-        } else if (x == 0x31 || x == 0xa2) {
-            in->kind = K_PLAIN;                       /* rdtsc, cpuid: as the host's */
+        } else if (x == 0x31) {
+            in->kind = K_PLAIN;                       /* rdtsc: as the host's */
         } else if (x == 0x0d || x == 0x18) {
             in->kind = K_RM; in->reg_kind = EXT; in->rm_kind = RMRAW; MODRM();
             if (in->mod == 3) return 0;
@@ -587,6 +587,12 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
 #undef IMM
 #undef NEED
     if (i > 15) return 0;
+    /* F2 on a jump, call or return is MPX's bnd, which a processor without
+     * MPX ignores: FFmpeg's assembly (LAV Filters) has bnd jcc, jmp and ret.
+     * These are emitted afresh, so the prefix is dropped. */
+    if (in->rep == 0xf2 && (in->kind == K_JCC || in->kind == K_JMP || in->kind == K_CALL ||
+                            in->kind == K_RET || in->kind == K_JMPRM || in->kind == K_CALLRM))
+        rep_ok = 1;
     if (in->rep && !rep_ok) return 0;
     in->len = (uint8_t)i;
     /* fs only on a memory operand; lock only on a read-modify-write of one. */

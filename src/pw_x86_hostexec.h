@@ -69,4 +69,7 @@ int pw_x86_hostexec_plan(const PwX86State *, const uint8_t *source, size_t bytes
  * advance EIP. Flags must already be canonical (no deferred flags). */
 int pw_x86_hostexec_step(PwX86HostExec *, PwX86State *, const uint8_t *source,
                          size_t bytes);
+/* The CPUID features the guest sees: the host's less VEX/EVEX extensions
+ * (AVX...) and XSAVE, which neither translator runs. regs: eax ebx ecx edx. */
+void pw_x86_cpuid_mask(uint32_t leaf, uint32_t subleaf, uint32_t regs[4]);
 #endif
