@@ -1,147 +1,163 @@
 # Installing games
 
-Games are installed on the PC and played on the PS5. Installers start other
-processes, show wizards and ask for keys; the PC has the same Wine as the
-title (the pinned WoW64 build, `wine-11.17-54-g490f6d5`), so the prefix it
-writes is one the console reads as is. The console's Wine does not start
-processes (patch 0550 turns process creation off; whether a title could
-fork has not been measured), so an installer could not run there today.
+Games are installed on your PC and played on the PS5. Installers are full
+Windows programs: they open wizards, ask for CD keys and write the registry.
+Your PC runs them with the same Wine the PS5 uses, so the result is a prefix
+the console reads as it is. You then copy it over with one command, and copy
+it back when you want to keep your saves on the PC too.
 
-## The PC's Wine
+(The PS5 side doesn't run installers itself: its Wine has process creation
+turned off, and installers start other programs.)
 
-`tools/build_host_wine.sh` builds it: the revision the title runs, with the
-same patch series (the PS5-only parts compile only for the console), for the
-desktop, with X11, FreeType, Vulkan and audio, so installers open their
-windows on the PC and DXVK can be tried there. It is installed stripped, as
-Wine's distribution packages are, and prints the path of its `wine`:
+## Once: the PC's Wine
+
+Build the Wine that matches the PS5's (same revision and patches, built for
+the desktop so installer windows appear on your screen):
 
 ```sh
 tools/build_host_wine.sh --source <pinned Wine checkout> --jobs 8
 ```
 
-Installs run as the user `prospero`, as the title does
-(`native/wine64_main.c`), so the prefix's profile folder is
+It prints the path of its `wine` when it's done. Installs run as the user
+`prospero`, as the PS5 app does, so the prefix's user folder is
 `C:\users\prospero` on both.
 
-## Recipes: Lutris installer scripts
+## Installing a game: Warcraft III as the example
 
-A game's recipe is a [Lutris installer
+Each game has a recipe in
+[prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles)
+(`recipes/`). A recipe is a [Lutris installer
 script](https://github.com/lutris/lutris/blob/master/docs/installers.rst),
-the YAML format the Lutris community maintains for thousands of Windows
-games. A script from lutris.net can be used as it is or adapted; recipes
-hold no game files and no keys. `tools/pw_install.py` runs a script with the
-pinned host Wine instead of Lutris's Wine builds:
+the format the Lutris community uses for thousands of Windows games. It holds
+no game files and no keys, only the steps.
 
 ```sh
-python3 tools/pw_install.py recipe.yml --library ~/prospero-library \
-    --wine <wine build>/build-wow64/wine --file installer=/path/to/setup.exe
+python3 tools/pw_install.py ../prospero-win-profiles/recipes/warcraft-iii-reign-of-chaos.yml \
+    --library ~/prospero-library --wine <path printed above> \
+    --file installer=/path/to/Warcraft\ III/Installer.exe
 ```
 
-- **`--library DIR`** mirrors `/data/prospero-win` on the console. The game
-  gets its own prefix, `DIR/prefixes/<slug>` (the script's `$GAMEDIR`), and
-  a profile, `DIR/profiles/<slug>.profile`, whose `prefix = <slug>`.
-- **`files`**: a `N/A:` file (the user's own copy) is given with
-  `--file ID=PATH`; `http(s)` files are downloaded into `$CACHE`, which is
-  deleted afterwards (`--keep-cache` keeps it). Steam sources are refused.
-  A file given as `{url: ..., filename: ..., sha256: ...}` (our key; Lutris
-  ignores it) is kept in the download cache and checked against its hash on
-  every install, as a third-party mod or DLL should be.
-- **Interactive installers** open their window on the PC: the user clicks
-  through them and types keys there. Nothing records what is typed.
-- **`input_menu`** takes `--input ID=VALUE`, asks on a terminal, or uses its
-  `preselect`.
-- **`$RESOLUTION`** is `--resolution` (1920x1080 by default).
+Blizzard's installer opens on your screen. Enter your CD key there, keep the
+default folder and close it when it's done. The recipe then adds what the game
+needs on the PS5: LAV Filters for the cinematics, the RenderEdge widescreen
+fix, DXVK for Direct3D, and the resolution.
 
-Supported directives: `move`, `copy`, `merge`, `extract` (zip and tar
-built in, anything else through `7z`), `chmodx`, `execute`, `write_file`,
-`write_config`, `write_json`, `input_menu`, `insert-disc` (`--disc DIR`).
-Wine tasks: `create_prefix`, `wineexec` (with `return_code`),
-`winetricks` (pinned to 20260125), `set_regedit` (`REG_SZ`, `REG_DWORD`,
-`REG_BINARY`), `delete_registry_key`, `set_regedit_file`, `winekill`,
-`eject_disc`. Anything else is refused, never skipped: a recipe either runs
-as written or says what it needs.
+You end up with:
 
-Differences from Lutris, all forced by the console:
+```text
+~/prospero-library/
+  prefixes/warcraft-iii-reign-of-chaos/        the game's Wine prefix
+  profiles/warcraft-iii-reign-of-chaos.profile the profile the launcher reads
+```
 
-- `arch: win32` still makes a WoW64 prefix: the pinned Wine is WoW64 only,
-  and it runs 32-bit programs there.
-- `wine: {dxvk: true, dxvk_version: ...}` installs that DXVK release
-  (pinned by SHA-256; 2.6.2 today) into the prefix's `system32` and
-  `syswow64`, native in the prefix's registry and in the profile's
-  `dll_overrides`. Scripts that turn DXVK off for OpenGL (`-opengl`) need
-  changing: the console has no OpenGL.
-- As in Lutris, Wine adds no menu entries or file associations to the PC
-  (`winemenubuilder.exe=d`).
-- `create_prefix` with `install_gecko: true` puts Wine Gecko, the version
-  and hashes the pinned Wine names (2.47.4, x86 and x86_64), in Wine's
-  download cache first, so wineboot installs it without asking; without it
-  mshtml is off. Installers that show their license in an Internet Explorer
-  control (Blizzard's) need it. Mono follows `install_mono` the same way,
-  but is left for Wine to fetch.
+`~/prospero-library` mirrors `/data/prospero-win` on the PS5.
 
-## The `prospero` block
+## Copying it to the PS5
 
-Lutris ignores unknown top-level keys, so a recipe carries what only the
-console needs in a `prospero` block, which becomes the profile's
-`[display]` and `[input]` sections:
+```sh
+python3 tools/pw_prefix.py push warcraft-iii-reign-of-chaos \
+    --library ~/prospero-library --host <PS5 IP> \
+    --cpu-dll <Wine build>/dlls/wowprospero/x86_64-windows/wowprospero.dll
+```
+
+This copies the prefix and the profile over FTP and adds the game to the
+launcher's list. The first push takes a while, since a prefix is a few
+hundred MB; later pushes send only what changed. `--cpu-dll` is prospero-win's
+translator DLL, which 32-bit games need inside the prefix. The first push asks
+for it, and later pushes send it again only when it changes.
+
+Then copy the controller presets (prospero-win-profiles' `input/*.input`) to
+`/data/prospero-win/input/` if you haven't yet.
+
+## Keeping saves in sync
+
+On the PS5 the prefix is the game's live copy: settings and saves change
+there. Before pushing again, bring those changes back:
+
+```sh
+python3 tools/pw_prefix.py pull warcraft-iii-reign-of-chaos --library ~/prospero-library --host <PS5 IP>
+python3 tools/pw_prefix.py status warcraft-iii-reign-of-chaos --library ~/prospero-library --host <PS5 IP>
+```
+
+A push refuses to overwrite a PS5 prefix that changed since your last sync,
+so you don't lose saves by accident. `--force` overrides that when you really
+mean it.
+
+## A game without a recipe
+
+Look for the game on [lutris.net](https://lutris.net/): most Windows games
+already have a script, and it often works as it is. Save it as a `.yml` file,
+add a `prospero` block for the PS5 (below), and run it the same way. A few
+things differ from Lutris:
+
+- **Direct3D goes through DXVK.** `wine: {dxvk: true}` installs DXVK 2.6.2
+  into the prefix. Scripts that use OpenGL instead (`-opengl` and the like)
+  need changing: there's no OpenGL on the PS5 yet.
+- **32-bit games** (`arch: win32`) still get a 64-bit prefix. The PS5's Wine
+  is WoW64 only, and it runs 32-bit programs inside a 64-bit prefix.
+- **Installers that show a web page** (a license, for example) need
+  `install_gecko: true` on `create_prefix`.
+- **Anything the script asks** (`input_menu`) can be answered with
+  `--input ID=VALUE`; `$RESOLUTION` is `--resolution`, 1920x1080 by default.
+
+If a recipe uses something `pw_install.py` doesn't support, it stops and says
+which step, rather than skip it and leave a half-installed game.
+
+When it works, please send the recipe to prospero-win-profiles.
+
+### The `prospero` block
+
+Lutris ignores top-level keys it doesn't know, so a recipe carries the PS5's
+settings in a `prospero` block. They become the profile's `[display]` and
+`[input]` sections:
 
 ```yaml
 prospero:
-  name: Warcraft III          # the launcher's name (default: the script's name)
-  display: {desktop: 1920x1080, scaling: fit, view: window}
-  input: {preset: mouse, mode: keyboard}
+  name: Warcraft III          # the name in the launcher
+  display: {desktop: 1920x1080, scaling: fit}
+  input: {preset: warcraft3}
 ```
 
-The profile's `[application]` section comes from the script's `game`
-section: `exe` (under `drive_c`, written as a `C:\` path), `args`,
-`working_dir` (default: the exe's folder), and the PE architecture read from
-the exe. The generated profile passes prospero-win-profiles'
-`tools/check_profiles.py`.
+The profile's `[application]` section comes from the script's `game` section:
+the executable, its arguments and its working folder.
 
-## Prefix size
+## Reference
 
-`wineboot` copies Wine's PE modules into the prefix: about 1.5 GB each from
-a development build, which carries debug information, and about 300 MB from
-`build_host_wine.sh`'s stripped installation.
+### What `pw_install.py` supports
 
-## To the console and back
+- **Directives:** `move`, `copy`, `merge`, `extract` (zip and tar, anything
+  else through `7z`), `chmodx`, `execute`, `write_file`, `write_config`,
+  `write_json`, `input_menu`, `insert-disc` (`--disc DIR`).
+- **Wine tasks:** `create_prefix`, `wineexec` (with `return_code`),
+  `winetricks` (pinned to 20260125), `set_regedit` (`REG_SZ`, `REG_DWORD`,
+  `REG_BINARY`), `delete_registry_key`, `set_regedit_file`, `winekill`,
+  `eject_disc`.
+- **Files:**
+  - `N/A:` files are your own copies, given with `--file ID=PATH`.
+  - `http(s)` files are downloaded.
+  - A file written as `{url: ..., filename: ..., sha256: ...}` is kept in the
+    download cache and checked against its hash on every install. That's our
+    addition (Lutris ignores it), for mods and DLLs from third parties.
+  - Steam sources aren't supported.
+- **Menus:** as in Lutris, Wine adds no menu entries or file associations to
+  your PC.
 
-`tools/pw_prefix.py` copies a game to `/data/prospero-win` over the
-console's FTP server and brings back what the console changed:
+### Details of `pw_prefix.py`
 
-```sh
-python3 tools/pw_prefix.py push <slug> --library ~/prospero-library --host <PS5 IP> \
-    --cpu-dll <build>/dlls/wowprospero/x86_64-windows/wowprospero.dll
-python3 tools/pw_prefix.py pull <slug> --library ~/prospero-library --host <PS5 IP>
-python3 tools/pw_prefix.py status <slug> --library ~/prospero-library --host <PS5 IP>
-```
+- **Manifest:** `~/prospero-library/.pw/<slug>.json` records each file's size
+  and SHA-256, which is how pushes send only what changed. `--delete` also
+  removes files your PC no longer has.
+- **Symbolic links:** a PS5 app can't make them, so prospero-win keeps them
+  in a `.pw-symlinks` file per folder:
+  - links inside the prefix (the `c:` and `z:` drives) are written there;
+  - links pointing outside it (Wine's Desktop and Documents into your home
+    folder) become empty folders.
+- **The one registry difference:** the PS5 can't run 32-bit code directly, so
+  the prefix's WoW64 CPU setting
+  (`HKLM\Software\Microsoft\Wow64\x86`) names prospero-win's translator
+  there and Wine's `wow64cpu.dll` on your PC. Push and pull switch it for you.
 
-- **push** sends `prefixes/<slug>` and `profiles/<slug>.profile`, and adds
-  the profile to `profiles.lst` when the console has one. A manifest,
-  `LIBRARY/.pw/<slug>.json`, records each file's size and SHA-256, so later
-  pushes send only what changed; `--delete` also removes what the PC no
-  longer has. Each file's size is checked after it is stored.
-- The console's prefix is the game's live state (settings in the registry,
-  saves beside the game). A push refuses a console prefix this PC never
-  synced, or one whose registry changed since the last sync: **pull**
-  first, which fetches every file the console changed. `--force` overrides.
-- A title cannot make symbolic links: prospero-win keeps them in a
-  `.pw-symlinks` table per directory. A push writes the links inside the
-  prefix there (`dosdevices`' `c:` and `z:`); links out of it (Wine's
-  Desktop or Documents into the PC's home) become empty directories, and
-  serial and parallel port links are left out.
-- One registry value differs between the two machines: WoW64's i386 CPU
-  (`HKLM\\Software\\Microsoft\\Wow64\\x86`). The PC's Wine writes
-  `wow64cpu.dll`; the console refuses 32-bit mode and needs prospero-win's
-  DBT, `wowprospero.dll`, or a 32-bit game dies at start with a stack
-  overflow in `wow64cpu`. A push writes the console's value into
-  `system.reg` and a pull writes the PC's back, so the same prefix runs on
-  both; the manifest records the console's bytes.
-- WoW64 loads that CPU from the prefix's `system32` and does not fall back
-  to the runtime's copy (`c0000135`), so a push also puts
-  `wowprospero.dll` there: `--cpu-dll`, `tools/build_wowprospero.sh`'s
-  `x86_64-windows/wowprospero.dll`. The first push of a game refuses to go
-  without it; later pushes send it again only when it changed, and
-  `--delete` leaves it.
-- In the lab, claim the console in the shared mailbox around a push, as
-  for any console operation.
+### Prefix size
+
+A prefix holds its own copy of Wine's DLLs: about 300 MB with
+`build_host_wine.sh`'s stripped build, plus the game.
