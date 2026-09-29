@@ -94,6 +94,25 @@ in its own title process, with the stable baseline restored afterwards:
 The ps5log runs, the host comparison and the method are in
 [DBT benchmark](DBT_BENCHMARK.md#on-the-console).
 
+## DXVK on the console's Vulkan
+
+On 2026-09-28 and 2026-09-29 (FW 12.02) DXVK 2.6.2's test programs ran in
+the title through Wine, one launcher profile per run, with the stable
+baseline restored after each:
+
+- on `ps5-vulkan`: the D3D8–D3D11 pixel controls, x64 and x86, read back
+  both frames correctly, and a 32-bit process mapped host-visible memory
+  below 4 GiB;
+- on RADV (Mesa): the same pixel controls, the D3D8–D3D11 draw controls
+  (shaders compiled on the console, a triangle and its background read
+  back), x64 and x86, and 32-bit placed maps;
+- on RADV, 1920x1080 D3D11 and D3D9 patterns filled the whole 4K screen,
+  observed on the TV and in a Remote Play capture, as did a D3D11
+  swapchain resized from 1080p to 4K in one process.
+
+No Direct3D game has been run yet. Details and the fixes this took are in
+[WINE_PS5_BUILD.md](WINE_PS5_BUILD.md#vulkan).
+
 ## Evidence rules
 
 A screenshot or video proves appearance only. Runtime acceptance requires:

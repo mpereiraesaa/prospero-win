@@ -34,7 +34,9 @@
 # AGC import facades). Without it libvulkan.prx is skipped and Vulkan
 # reports no driver; winevulkan.prx, Wine's Vulkan Unix side, is built
 # either way. ps5vk is GPL-3.0-or-later: a title that ships libvulkan.prx
-# ships a GPL work (see its SDK's LICENSE).
+# ships a GPL work (see its SDK's LICENSE). RADV's libvulkan.prx, built
+# outside this script (docs/WINE_PS5_BUILD.md, Vulkan), can replace it in
+# the staged runtime.
 #
 # Usage:
 #   tools/build_wine_ps5.sh [--check-patches] [--patches DIR] [--work DIR]

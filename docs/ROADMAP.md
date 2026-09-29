@@ -8,8 +8,9 @@ bring-up plan. The public direction is intentionally concise:
   fixing gaps in Wine's PS5 patches and drivers rather than per title;
 - make startup and frame pacing competitive through the DBT and the
   presentation path, measured with exact control comparisons;
-- use DXVK over `ps5-vulkan` for Direct3D rather than building another D3D
-  implementation.
+- use DXVK over the console's Vulkan (`ps5-vulkan` or RADV) for Direct3D
+  rather than building another D3D implementation, and move from DXVK's
+  test programs to real Direct3D games.
 
 Current capabilities and limitations are documented in
 [ARCHITECTURE.md](ARCHITECTURE.md) and

@@ -37,7 +37,11 @@ speed across these benchmarks ([DBT benchmark](docs/DBT_BENCHMARK.md)). Fonts, a
 driver and the XInput controller are built and host-tested; their console
 validation is recorded in [hardware validation](docs/HARDWARE_VALIDATION.md)
 as it lands.
-Direct3D through DXVK over `ps5-vulkan` is not yet available.
+Direct3D goes through unmodified DXVK 2.6.2 on the console's Vulkan, either
+`ps5-vulkan` or RADV (Mesa). DXVK's D3D8–D3D11 test programs, 32- and
+64-bit, read back correct frames on both, draw with compiled shaders on
+RADV, and fill a 4K screen from a 1080p swapchain on RADV
+([Vulkan](docs/WINE_PS5_BUILD.md#vulkan)); no Direct3D game has been run yet.
 
 ## Build and test
 

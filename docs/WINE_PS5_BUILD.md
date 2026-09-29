@@ -67,7 +67,7 @@ of the port never collide:
 | 0455 | `win32u`: ask the host for `VK_KHR_external_semaphore_capabilities`, `VK_KHR_external_memory_capabilities` (WoW64) and `VK_KHR_external_fence_capabilities` (the D3DKMT instance) only when it has them; a Vulkan 1.0 host without them refused every instance |
 | 0456 | `win32u`: a swapchain whose size differs from the window's gets `VkSwapchainPresentScalingCreateInfoEXT` chained in front of the application's structures instead of replacing them; dropping DXVK's format list while keeping its mutable-format flag crashed Mesa's WSI |
 | 0457 | `win32u`: the WoW64 placed-map check reads its properties through `vkGetPhysicalDeviceProperties2KHR`; the core entry point is NULL on win32u's Vulkan 1.0 instances, so a host with `VK_EXT_map_memory_placed` (RADV) crashed every 32-bit process |
-| 0460 | `win32u`: the PS5 user driver's Vulkan driver: a win32 surface becomes a host display-plane surface, after the title releases its video output; installing the driver from Vulkan's initialisation does not refresh the display cache, which would wait on that initialisation |
+| 0460 | `win32u`: the PS5 user driver's Vulkan driver: a win32 surface becomes a host display-plane surface in the display's native mode, after the title releases its video output (before the first display query); installing the driver from Vulkan's initialisation does not refresh the display cache, which would wait on that initialisation |
 | 0470 | `xinput`: controller 0 is the PS5 title's, read through a Unix library (`xinput1_3.so`) from the title's sink; elsewhere xinput uses HID as before; see [XInput controller](#xinput-controller) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
 | 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
@@ -444,12 +444,15 @@ To use it on the console:
 ## Vulkan
 
 Direct3D games use DXVK, which runs on Vulkan, which on the console is
-[ps5vk](https://github.com/mpereiraesaa/ps5-vulkan). The chain:
+either [ps5vk](https://github.com/mpereiraesaa/ps5-vulkan) or RADV, Mesa's
+AMD driver ([mpereiraesaa/PS5_Mesa](https://github.com/mpereiraesaa/PS5_Mesa),
+built by [mpereiraesaa/PS5_Vulkan](https://github.com/mpereiraesaa/PS5_Vulkan)).
+Both are a `libvulkan.prx`; nothing else in the runtime changes. The chain:
 
 ```text
 game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevulkan.dll
   -> winevulkan.prx (Wine's Vulkan Unix side) -> win32u.prx (PS5 driver, patch 0460)
-  -> libvulkan.prx (ps5vk) -> AGC and VideoOut
+  -> libvulkan.prx (ps5vk or RADV) -> AGC and VideoOut
 ```
 
 - **Build.** Configure no longer disables Vulkan, and names the library
@@ -463,15 +466,34 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   `opengl32.prx` are built either way. The console has no OpenGL, but
   `wined3d`, which Wine's `d3d10.dll` imports even over DXVK, needs
   `opengl32` to initialise, and it does so with no driver. ps5vk is
-  GPL-3.0-or-later, so a title that ships `libvulkan.prx` ships a GPL work.
+  GPL-3.0-or-later, so a title that ships ps5vk's `libvulkan.prx` ships a
+  GPL work.
+- **RADV.** `tools/build-radv.sh release` in PS5_Vulkan builds RADV's
+  archive (`libvulkan_radeon.ps5.a`) from its pinned PS5_Mesa revision. It
+  exports only Vulkan's ICD entry points, so the `libvulkan.prx` Wine loads
+  adds two functions, `vkGetInstanceProcAddr` calling
+  `vk_icdGetInstanceProcAddr` and `vkGetDeviceProcAddr` calling
+  `vk_common_GetDeviceProcAddr`, linked with PS5_Vulkan's
+  `tools/radv-link.sh` recipe. That PRX replaces ps5vk's in the staged
+  runtime; `build_wine_ps5.sh` does not build it yet. Mesa is MIT-licensed.
 - **Presentation.** Applications see `VK_KHR_surface` and
   `VK_KHR_win32_surface`. The PS5 driver creates the host surface with
-  `vkCreateDisplayPlaneSurfaceKHR` on ps5vk's one display, mode and plane:
-  1920x1080, 60 Hz, BGRA8, two images. A game's desktop should be 1920x1080,
-  since Wine reports a swapchain whose size differs from the window as
-  suboptimal. Before creating the surface the driver asks the title to
-  release its video output (`pw_wine_release_display`), because ps5vk's
-  swapchain opens VideoOut itself.
+  `vkCreateDisplayPlaneSurfaceKHR` on the driver's one display and plane,
+  always in the display's native mode, the one at its physical resolution
+  (3840x2160 with RADV on a 4K TV, 1920x1080 with ps5vk); the desktop is
+  scaled to it, never the reverse (patch 0460). Before its first display
+  query the driver asks the title to release its video output
+  (`pw_wine_release_display`): RADV opens VideoOut as soon as its displays
+  are enumerated, and caches a failed open for the whole process, while
+  ps5vk opens it with the swapchain.
+- **Swapchain size.** The swapchain is the window's size, normally the
+  profile's desktop. RADV takes any size up to the mode's and VideoOut
+  scales it to the whole screen (PS5_Mesa #1; 1920x1080 on 3840x2160 was
+  measured). ps5vk takes only 1920x1080, so with ps5vk a game's desktop
+  should be 1920x1080. When Wine has to create a host swapchain larger than
+  the window it adds `VkSwapchainPresentScalingCreateInfoEXT` in front of
+  the application's structures (patch 0456); dropping them crashed DXVK's
+  swapchain in Mesa's WSI.
 - **DLLs.** DXVK's DLLs go beside the game, and its profile sets
   `dll_overrides` (`d3d11,dxgi=n`, `d3d9=n`, `d3d8,d3d9=n` or
   `d3d10core,d3d11,dxgi=n`). The unmodified Win32-WSI DXVK build is the one
@@ -480,7 +502,9 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   Host-visible memory must be mapped below 4 GiB for 32-bit code: ps5vk
   returns such addresses itself through a low CPU alias, so Wine's plain
   `vkMapMemory` path works without `VK_EXT_map_memory_placed` or
-  `VK_EXT_external_memory_host`.
+  `VK_EXT_external_memory_host`. RADV offers `VK_EXT_map_memory_placed`,
+  which Wine uses (alignment 16384); patch 0457 lets it query that
+  extension's properties at all.
 
 Console results (FW 12.02, 2026-09-28 and 2026-09-29). The test programs
 are ps5vk's DXVK 2.6.2 PE frontends (one per API), with the unmodified
@@ -501,6 +525,26 @@ gained DXVK's mutable BGRA8 back buffer, its barriers, clear-only render
 passes, transfer-only submissions, the D3D9 presenter's `R,G,B,ONE` view and
 the back buffer's hand-back after a readback. The pixels checked are the back
 buffer's, read through the API; the physical scanout was not captured.
+
+Console results with RADV (FW 12.02, 2026-09-29): Mesa's release archive
+linked as `libvulkan.prx`, the same staged runtime otherwise, stable build
+restored after each run. The draw controls also compile a vertex and a pixel
+shader on the console (Wine's `d3dcompiler_47`), draw a triangle and read
+back its centre and a corner of the background. The scanout controls hold a
+four-colour 1920x1080 pattern for 30 frames.
+
+| Program | Result |
+| --- | --- |
+| Vulkan probe, x64 | Instance, device `PlayStation 5 GPU (RADV NAVI21)`, win32 surface on the 3840x2160 59.94 Hz plane, device and swapchain all succeed |
+| DXVK 2.6.2 D3D11, D3D10, D3D9, D3D8 pixel controls, x64 and x86 | 8/8: both frames read back `844c1cff`, then `1c4c84ff`, no mismatches, every call `S_OK` |
+| DXVK 2.6.2 D3D11, D3D10, D3D9, D3D8 draw controls, x64 and x86 | 8/8: triangle centre `0000ffff` and both backgrounds in each frame, both presents `S_OK` |
+| `vkmap` probe, x86 | Two host-visible buffers map at 32-bit addresses (`0xac0000`, `0xad0000`) through placed maps; a 1,024-byte GPU copy has no mismatches |
+| D3D11 and D3D9 1920x1080 scanout controls | Pass, and the pattern fills the whole screen on the TV and in a Remote Play capture (before PS5_Mesa #1 it sat in the top-left quarter) |
+| D3D11 3840x2160 control; one D3D11 swapchain resized from 1920x1080 to 3840x2160 | Pass; the resize shows correctly on the TV |
+
+The pixel, draw and `vkmap` rows ran on PS5_Mesa `cedb774` before the
+scaling change; D3D11 draw x64, D3D9 draw x86 and the probe ran again after
+it. Swapchain sizes other than 1920x1080 and 3840x2160 are untested.
 
 ## Imports a title does not get
 

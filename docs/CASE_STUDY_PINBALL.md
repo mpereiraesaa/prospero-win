@@ -42,7 +42,8 @@ Holding Options+Create closes the game (Alt+F4) and returns to the launcher.
 The executable has no static DirectDraw or Direct3D dependency. Its visible
 path uses GDI operations such as `BitBlt` and `StretchDIBits`, while audio uses
 WinMM/WaveMix PCM. That made it possible to validate the CPU and native
-platform layers before the separate DXVK and `ps5-vulkan` path is ready.
+platform layers before the separate DXVK path over `ps5-vulkan` or RADV was
+ready.
 
 The target also provided realistic instruction coverage for the PE32 DBT. The
 sanitized aggregate fixture is stored at

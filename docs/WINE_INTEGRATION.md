@@ -2,7 +2,8 @@
 
 Wine is the Windows subsystem for prospero-win: its own PE modules, its Unix
 side and its object server run inside the PS5 title. DXVK is the Direct3D
-implementation, and `ps5-vulkan` is its future native graphics backend:
+implementation, on the console's Vulkan driver: `ps5-vulkan` or RADV (Mesa),
+either one loaded as `libvulkan.prx`:
 
 ```text
 Windows game (PE32 or PE64)
@@ -11,7 +12,7 @@ Windows game (PE32 or PE64)
         -> the title: VideoOut, AudioOut, DualSense, files
 
   -> DXVK d3d8/d3d9/d3d10/d3d11 + DXGI DLLs
-     -> ps5-vulkan
+     -> winevulkan -> libvulkan.prx: ps5-vulkan or RADV
         -> AGC / VideoOut / gfx1013
 ```
 
@@ -30,7 +31,7 @@ route to this title. Therefore:
 - PE64/AMD64 code runs natively, through Wine's own x86_64 PE modules and
   their Windows/SysV transitions;
 - both use the same Wine Unix side and native PS5 service layer;
-- CPU translation is never mixed into DXVK or `ps5-vulkan`.
+- CPU translation is never mixed into DXVK or the Vulkan driver.
 
 This avoids an unnecessary x86-64-to-x86-64 DBT for modern titles while
 retaining one Windows subsystem for both architectures.
@@ -170,15 +171,17 @@ percentage is claimed without an exact control comparison on PS5.
 ## Graphics boundary
 
 prospero-win will not grow a second native D3D9 renderer. The graphics path is
-DXVK over `ps5-vulkan`. Until that backend satisfies the pinned DXVK consumer
-profile, work here is limited to the Windows/DXGI-facing loader, object,
-threading and presentation contracts that do not fabricate Vulkan support.
+unmodified DXVK over the console's Vulkan driver, `ps5-vulkan` or RADV, which
+Wine reaches through `winevulkan` and the PS5 user driver's display-plane
+surface ([Vulkan](WINE_PS5_BUILD.md#vulkan)). Fixes on this side stay in
+Wine's patches (the swapchain chain, WoW64 placed maps, the display's native
+mode), not in DXVK.
 
-The current `ps5-vulkan` implementation already demonstrates native gfx1013
-graphics and compute, but its public documentation still identifies missing
-DXVK requirements including Vulkan version/features, broad descriptors and
-formats, WSI/swapchain behavior and other graphics state. An unmodified DXVK
-start is therefore not yet a current compatibility claim.
+On the console DXVK 2.6.2's D3D8–D3D11 test programs, x64 and x86, read
+back correct frames on both drivers; on RADV they also draw with shaders
+compiled on the console, and a 1080p swapchain fills a 4K screen. These are
+test programs: no Direct3D game has been run yet, so an unmodified DXVK
+game is not yet a compatibility claim.
 
 ## Provenance and licensing
 
