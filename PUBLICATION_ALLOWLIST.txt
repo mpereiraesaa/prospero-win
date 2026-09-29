@@ -195,6 +195,7 @@ wine/patches/0610-ntdll-ps5-segv-hook-for-the-wow64-cpu.patch
 wine/patches/0620-ntdll-generic-processor-topology.patch
 wine/patches/0630-win32u-ps5-driver-display-modes.patch
 wine/patches/0640-win32u-ps5-flush-period.patch
+wine/patches/0650-win32u-ps5-black-surfaces.patch
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
