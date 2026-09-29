@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 29 Sep 2026 22:30:00 +0200
+Subject: [PATCH] win32u: Flush a drawing thread's surface once per frame on
+ the PS5.
+
+The PS5 shows a window's drawing when its surface is flushed. A thread
+that draws without going idle, as a DirectShow video renderer does, is
+flushed only when a drawing ends more than 50 ms after the first drawing
+since the last flush. A renderer drawing a frame every 41 ms therefore had
+every other frame flushed: Warcraft III's 24 fps cinematics reached the TV
+at about 14 frames a second, although the renderer drew all 24 (measured).
+On the PS5 the period counts from the last forced flush, and is one 60 Hz
+frame: a drawing that ends 16 ms or more after it is shown at once.
+---
+ dlls/win32u/dibdrv/dc.c | 22 ++++++++-
+ 1 file changed, 22 insertions(+), 0 deletions(-)
+
+--- a/dlls/win32u/dibdrv/dc.c
+--- a/dlls/win32u/dibdrv/dc.c
++++ b/dlls/win32u/dibdrv/dc.c
+@@ -496,7 +496,17 @@
+  * can paint to the same window.
+  */
+ 
++#ifdef WINE_PS5_USER_DRIVER
++/* The PS5 shows a window's drawing only when its surface is flushed, and a
++ * thread that draws without going idle is flushed only here. Counting from
++ * the first drawing after a flush, a DirectShow renderer drawing a frame
++ * every 41 ms had every other frame flushed: a 24 fps movie showed at 14.
++ * The period counts from the last forced flush instead, and is one 60 Hz
++ * frame: each frame drawn later than that is shown at once. */
++#define FLUSH_PERIOD 16
++#else
+ #define FLUSH_PERIOD 50  /* time in ms since drawing started for forcing a surface flush */
++#endif
+ 
+ struct windrv_physdev
+ {
+@@ -521,8 +531,12 @@
+     if (!dev->lock_count++)
+     {
+         window_surface_lock( surface );
++#ifdef WINE_PS5_USER_DRIVER
++        if (!surface->draw_start_ticks) surface->draw_start_ticks = NtGetTickCount();
++#else
+         if (IsRectEmpty( dev->dibdrv->bounds ) || !surface->draw_start_ticks)
+             surface->draw_start_ticks = NtGetTickCount();
++#endif
+     }
+ }
+ 
+@@ -532,9 +546,18 @@
+ 
+     if (!--dev->lock_count)
+     {
++#ifdef WINE_PS5_USER_DRIVER
++        DWORD now = NtGetTickCount();
++        BOOL flush = now - surface->draw_start_ticks >= FLUSH_PERIOD;
++
++        if (flush) surface->draw_start_ticks = now;
++        window_surface_unlock( surface );
++        if (flush) window_surface_flush( dev->surface );
++#else
+         DWORD ticks = NtGetTickCount() - surface->draw_start_ticks;
+         window_surface_unlock( surface );
+         if (ticks > FLUSH_PERIOD) window_surface_flush( dev->surface );
++#endif
+     }
+ }
+ 
