@@ -242,6 +242,9 @@ native/wine64_main.c
 src/pw_hid.c
 src/pw_hid.h
 tests/test_pw_hid.c
+native/pw_hid_ps5.c
+native/pw_hid_ps5.h
+tests/test_pw_hid_ps5.c
 native/pw_data_mount.h
 tests/test_pw_data_mount.c
 tests/test_pw_data_mount_native.c

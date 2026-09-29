@@ -27,6 +27,7 @@
 #include "pw_data_mount.h"
 #include "pw_audio_ps5.h"
 #include "pw_pad_ps5.h"
+#include "pw_hid_ps5.h"
 #include "pw_videoout_ps5.h"
 #include "pw_wine_library.h"
 #include "../src/pw_present.h"
@@ -437,6 +438,11 @@ static void install_early_fault_report(PwWineStart *start)
 
 /* ---- PS5 bindings for the start sequence ------------------------------ */
 
+static void hid_log(const char *line)
+{
+    PS5LOG_LOG("PW_WINE64 hid %s", line);
+}
+
 static int set_env(const char *name, const char *value)
 {
     return setenv(name, value, 1);
@@ -505,6 +511,7 @@ int main(int argc, char **argv)
     static PwWineStart start;
     static PwVideoOutPs5 video;
     static PwPadPs5 pad;
+    static PwHidPs5 hid;
     static PwGameInput game_input;
     const PwGameProfile *game = NULL;
     int scaling = PW_PRESENT_SCALE_FIT;
@@ -516,13 +523,14 @@ int main(int argc, char **argv)
     uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
     ps5log_config log_config;
     PwPadPs5Ops pad_ops;
-    int status, video_status = PW_ERR_STATE, pad_status = PW_ERR_STATE;
+    int status, video_status = PW_ERR_STATE, pad_status = PW_ERR_STATE, hid_status = PW_ERR_STATE;
     uint64_t close_requested = 0, combo_ticks = 0, started = now_ns();
 
     ps5log_config_defaults(&log_config);
     if (ps5log_load_config(ps5log_default_conf_paths, ps5log_default_conf_path_count,
                            &log_config, NULL) == 0)
         ps5log_init(&log_config, PW_TITLE_ID, PW_APP_NAME, now_ns());
+    pw_hid_ps5_preload(hid_log);   /* before the /data grant changes the title's credentials */
     open_library();
     (void)pw_wine_launch_parse(argc, argv, catalog, catalog_count, &launch);
     PS5LOG_LOG("PW_WINE64 args argc=%d mode=%s profile=%s cycle=%u refused=%u", argc,
@@ -619,6 +627,15 @@ int main(int argc, char **argv)
         if (pad_status == PW_OK)
             pad_status = pw_pad_ps5_open(&pad, &pad_ops, pad_open_map,
                                          sizeof(pad_open_map) / sizeof(pad_open_map[0]));
+        /* A USB keyboard and mouse, the foreground user's, as the pad's. */
+        if (post_input) {
+            int32_t user = pad_status == PW_OK ? pad.user_id : -1;
+            if (user < 0 && pw_pad_ps5_platform_ops(&pad_ops) == PW_OK) {
+                (void)pad_ops.user_initialize(NULL);
+                (void)pad_ops.foreground_user(&user);
+            }
+            hid_status = pw_hid_ps5_open(&hid, pw_hid_ps5_system_ops(hid_log), user);
+        }
         {
             uint8_t *storage = mmap(NULL, 2u * PW_WINE64_MAX_FRAME, PROT_READ | PROT_WRITE,
                                     MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -634,10 +651,10 @@ int main(int argc, char **argv)
             if (set_release) set_release(wine_release_display, NULL);
         }
         PS5LOG_LOG("PW_WINE64 display present_sink=%d frames=%d post_input=%d xinput=%d video=%s "
-                   "pad=%s", set_present != NULL, frame_shown != NULL, post_input != NULL,
+                   "pad=%s hid=%s", set_present != NULL, frame_shown != NULL, post_input != NULL,
                    set_pad != NULL,
                    pw_result_name(video_status),
-                   pw_result_name(pad_status));
+                   pw_result_name(pad_status), pw_result_name(hid_status));
         {
             void (*set_audio)(PwWineAudioSink, void *) = (void (*)(PwWineAudioSink, void *))
                 (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_audio_sink");
@@ -673,7 +690,7 @@ int main(int argc, char **argv)
         PwWineInput events[2 * PW_GAME_BUTTON_COUNT + 1];
         int presented = 0;
 
-        /* A stick moves the pointer over what the frames show. It starts in the
+        /* The pointer moves over what the frames show. It starts in the
          * middle and keeps its place when their size changes, as when a menu
          * widens the game's windows. A game presenting with Vulkan sends no
          * frames once it has the video output: then the pointer moves over
@@ -686,6 +703,28 @@ int main(int argc, char **argv)
                 pw_wine_pointer_init(&pointer, bound_width, bound_height);
             else if (pointer.width != bound_width || pointer.height != bound_height)
                 pw_wine_pointer_resize(&pointer, bound_width, bound_height);
+        }
+        /* The USB keyboard and mouse; one plugged in later is found by a
+         * retry every few seconds. */
+        if (post_input && hid.ops.load_module) {
+            PwHidPs5Poll poll;
+            PwWineInput input;
+
+            if (hid_status != PW_OK && tick % (5 * PW_WINE64_TICKS_PER_S) == 0)
+                hid_status = pw_hid_ps5_retry(&hid);
+            pw_hid_ps5_poll(&hid, &poll);
+            if ((poll.dx || poll.dy) && pointer.width &&
+                pw_wine_pointer_move(&pointer, poll.dx, poll.dy, &input)) {
+                if (post_input(&input) == 0) posted++;
+                else refused++;
+            }
+            for (size_t i = 0; i < poll.count; i++) {
+                input = (PwWineInput){ poll.events[i].kind == PW_HID_EVENT_KEY ? PW_WINE_INPUT_KEY :
+                                       PW_WINE_INPUT_MOUSE_BUTTON, poll.events[i].code, 0, 0,
+                                       poll.events[i].down };
+                if (post_input(&input) == 0) posted++;
+                else refused++;
+            }
         }
         if (pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK) {
             size_t count = pw_wine_game_inputs(&game_input, pad.core.pressed_edges,

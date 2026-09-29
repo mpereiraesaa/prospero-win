@@ -108,10 +108,10 @@ common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
 sources=(
     native/wine64_main.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c
     native/pw_agc_submit_lifecycle.c native/pw_videoout_ps5.c native/pw_data_mount.c
-    native/pw_wine_display.c native/pw_wine_library.c
+    native/pw_wine_display.c native/pw_wine_library.c native/pw_hid_ps5.c
     src/pw_result.c src/pw_wine_start.c src/pw_wine_launch.c src/pw_game_profile.c
     src/pw_app_profile.c src/pw_profile_catalog.c src/pw_launcher_render.c src/pw_present.c
-    src/pw_pad.c wine/ps5/pw_wine_prx.c
+    src/pw_pad.c src/pw_hid.c wine/ps5/pw_wine_prx.c
 )
 objects=()
 for source in "${sources[@]}"; do
