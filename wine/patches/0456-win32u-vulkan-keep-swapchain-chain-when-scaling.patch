@@ -1,0 +1,32 @@
+From 602d1bc1202223bfa1f5da67b8c1e7a9e58aa89c Mon Sep 17 00:00:00 2001
+From: Manuel Pereira <manuelpereiralds@gmail.com>
+Date: Tue, 29 Sep 2026 10:42:04 +0200
+Subject: [PATCH] win32u: Keep the application's swapchain chain when adding
+ present scaling.
+
+When the swapchain size differs from the window's, vkCreateSwapchainKHR
+adds VkSwapchainPresentScalingCreateInfoEXT to the host create info, but it
+replaced the whole pNext chain with it. The application's structures were
+lost while its flags were kept: DXVK's MUTABLE_FORMAT swapchain without its
+VkImageFormatListCreateInfo made Mesa's WSI dereference a missing format
+list and crash. Chain the scaling info in front of the application's
+structures instead.
+---
+ dlls/win32u/vulkan.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
+index 10a3297aae..71bb1f093b 100644
+--- a/dlls/win32u/vulkan.c
++++ b/dlls/win32u/vulkan.c
+@@ -1863,6 +1863,7 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
+         physical_device->extensions.has_VK_KHR_swapchain_maintenance1)
+     {
+         scaling.scalingBehavior = VK_PRESENT_SCALING_STRETCH_BIT_EXT;
++        scaling.pNext = create_info_host.pNext;
+         create_info_host.pNext = &scaling;
+     }
+ 
+-- 
+2.43.0
+
