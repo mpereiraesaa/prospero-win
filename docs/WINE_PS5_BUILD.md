@@ -475,28 +475,30 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   `d3d10core,d3d11,dxgi=n`). The unmodified Win32-WSI DXVK build is the one
   to use, since the PS5 surface is Wine's.
 - **32-bit games.** Wine's WoW64 thunks carry Vulkan calls from the DBT.
-  Mapping device memory for a 32-bit process also needs the host to place
-  it below 4 GiB (`VK_EXT_map_memory_placed` or
-  `VK_EXT_external_memory_host`).
+  Host-visible memory must be mapped below 4 GiB for 32-bit code: ps5vk
+  returns such addresses itself through a low CPU alias, so Wine's plain
+  `vkMapMemory` path works without `VK_EXT_map_memory_placed` or
+  `VK_EXT_external_memory_host`.
 
-Console results (FW 12.02, 2026-09-28). The test programs are ps5vk's DXVK
-2.6.2 PE frontends (one per API): each creates a 1920x1080 window, clears
-two frames to known colours and presents each.
+Console results (FW 12.02, 2026-09-28 and 2026-09-29). The test programs
+are ps5vk's DXVK 2.6.2 PE frontends (one per API), with the unmodified
+Win32-WSI DXVK DLLs: each creates a 1920x1080 window, clears two frames to
+known colours and presents each. Their `-pixels` variants also read the
+back buffer back (`GetRenderTargetData`/`LockRect`, or a staging copy and
+`Map`) and check the centre pixel before each `Present`.
 
 | Program | Result |
 | --- | --- |
 | Vulkan probe, x64 and x86 | Instance, physical device, win32 surface, device and swapchain all succeed, and teardown is clean |
-| DXVK 2.6.2 D3D11, D3D10, D3D9, D3D8, x64 and x86 | Both frames presented: every call returns `S_OK`, and ps5vk logs each frame's clear colour (`ff1c4c84`, then `ff844c1c`) and a completed flip (`PS5VK_VIDEO_PRESENTED`, tokens 1 and 2) |
+| DXVK 2.6.2 D3D11, D3D10, D3D9, D3D8 pixel controls, x64 and x86 | Both frames read back with the expected centre pixel (`844c1cff`, then `1c4c84ff`) and no mismatches; every call returns `S_OK`; ps5vk logs a completed flip for each frame (`PS5VK_VIDEO_PRESENTED`, tokens 1 and 2) and no refusal |
+| ps5vk's `vkmap` probe, x86 | Two host-visible buffers map at 32-bit addresses (`0x818e0000`, `0x81900000`) through ps5vk's low CPU alias, and a 1,024-byte GPU copy between them has no mismatches |
 
-These passes used a diagnostic ps5vk SDK (`libps5vk.a` SHA-256
-`fc0db342…`) built from uncommitted ps5vk sources. On the way to it, ps5vk
-gained support for DXVK's mutable BGRA8 back buffer, its barriers,
-clear-only render passes, transfer-only submissions and the D3D9
-presenter's `R,G,B,ONE` view. Until those changes land in ps5vk, a
-released ps5vk SDK stops at the first of them. The pixels were not read back from the scanout: the
-evidence is the clear values and the completed flips. The x86 programs
-never map device memory, so mapping it below 4 GiB for a 32-bit process is
-still untested.
+All of these ran on one ps5vk SDK (`libps5vk.a` SHA-256 `98f8a17c…`),
+whose changes are merged in ps5vk (through PR #607). Along the way ps5vk
+gained DXVK's mutable BGRA8 back buffer, its barriers, clear-only render
+passes, transfer-only submissions, the D3D9 presenter's `R,G,B,ONE` view and
+the back buffer's hand-back after a readback. The pixels checked are the back
+buffer's, read through the API; the physical scanout was not captured.
 
 ## Imports a title does not get
 
