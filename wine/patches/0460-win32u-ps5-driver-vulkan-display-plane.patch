@@ -1,4 +1,4 @@
-From 4862960d01097205c291cea3106412b988499693 Mon Sep 17 00:00:00 2001
+From c13e56b6f611547b8d3b840d00046451d37601b9 Mon Sep 17 00:00:00 2001
 From: Manuel Pereira <manuelpereiralds@gmail.com>
 Date: Mon, 28 Sep 2026 18:59:16 +0200
 Subject: [PATCH] win32u: Present Vulkan surfaces on the PS5's display plane.
@@ -6,9 +6,10 @@ Subject: [PATCH] win32u: Present Vulkan surfaces on the PS5's display plane.
 The PS5 user driver has no window system to present into. Its Vulkan
 driver makes each win32 surface a surface on the host's display plane
 (VK_KHR_display on the host instance, VK_KHR_win32_surface for the
-application), which scans out full screen. Creating one first asks the
-title to hand over the video output (pw_wine_release_display, found with
-dlsym like the other sink calls).
+application), in the display mode whose size is the desktop's, which scans
+out full screen. It first asks the title to hand over the video output
+(pw_wine_release_display, found with dlsym like the other sink calls): a
+host driver may open it as soon as its displays are queried.
 
 The PS5 driver is installed on first use, which can be Vulkan's own
 initialisation. Loading it there must not refresh the display cache: the
@@ -16,8 +17,8 @@ refresh asks Vulkan for its GPUs and would wait on the initialisation it
 runs inside.
 ---
  dlls/win32u/driver.c |   9 ++++
- dlls/win32u/ps5drv.c | 101 +++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 110 insertions(+)
+ dlls/win32u/ps5drv.c | 116 +++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 125 insertions(+)
 
 diff --git a/dlls/win32u/driver.c b/dlls/win32u/driver.c
 index 3443c4ab3a..84a08b8246 100644
@@ -41,7 +42,7 @@ index 3443c4ab3a..84a08b8246 100644
  
  static UINT loaderdrv_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs )
 diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
-index cc3018a08e..705ddf240f 100644
+index cc3018a08e..018131fb50 100644
 --- a/dlls/win32u/ps5drv.c
 +++ b/dlls/win32u/ps5drv.c
 @@ -13,6 +13,12 @@
@@ -77,7 +78,7 @@ index cc3018a08e..705ddf240f 100644
  
  #ifdef WINE_PS5_USER_DRIVER
  
-@@ -622,6 +634,89 @@ static BOOL ps5_SetCursorPos( INT x, INT y )
+@@ -622,6 +634,104 @@ static BOOL ps5_SetCursorPos( INT x, INT y )
      return TRUE;
  }
  
@@ -89,37 +90,52 @@ index cc3018a08e..705ddf240f 100644
 +                                           VkSurfaceKHR *handle )
 +{
 +    VkDisplaySurfaceCreateInfoKHR info = {.sType = VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR};
-+    VkDisplayModePropertiesKHR mode;
++    VkDisplayModePropertiesKHR modes[16];
 +    VkDisplayPropertiesKHR display;
 +    VkPhysicalDevice physical;
-+    uint32_t count = 1;
++    uint32_t count = 1, chosen = 0, i;
 +    VkResult res;
 +
-+    /* one GPU, one display, one mode: the first of each */
-+    res = instance->p_vkEnumeratePhysicalDevices( instance->host.instance, &count, &physical );
-+    if (res < VK_SUCCESS || !count) goto failed;
-+    count = 1;
-+    res = instance->p_vkGetPhysicalDeviceDisplayPropertiesKHR( physical, &count, &display );
-+    if (res < VK_SUCCESS || !count) goto failed;
-+    count = 1;
-+    res = instance->p_vkGetDisplayModePropertiesKHR( physical, display.display, &count, &mode );
-+    if (res < VK_SUCCESS || !count) goto failed;
-+
-+    info.displayMode = mode.displayMode;
-+    info.planeIndex = 0;
-+    info.planeStackIndex = 0;
-+    info.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-+    info.globalAlpha = 1.0f;
-+    info.alphaMode = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
-+    info.imageExtent = mode.parameters.visibleRegion;
++    /* A host driver may open the video output as soon as its displays are
++     * queried (RADV does; ps5vk waits for the swapchain), so the title lets
++     * go of it first. */
 +    if (release_display && release_display())
 +    {
 +        ERR( "the title kept the video output\n" );
 +        return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
 +    }
++
++    /* one GPU and one display; the mode whose size is the desktop's, else the first */
++    res = instance->p_vkEnumeratePhysicalDevices( instance->host.instance, &count, &physical );
++    if (res < VK_SUCCESS || !count) goto failed;
++    count = 1;
++    res = instance->p_vkGetPhysicalDeviceDisplayPropertiesKHR( physical, &count, &display );
++    if (res < VK_SUCCESS || !count) goto failed;
++    count = ARRAY_SIZE(modes);
++    res = instance->p_vkGetDisplayModePropertiesKHR( physical, display.display, &count, modes );
++    if (res < VK_SUCCESS || !count) goto failed;
++    for (i = 0; i < count; i++)
++    {
++        TRACE( "mode %u: %ux%u %u mHz\n", i, modes[i].parameters.visibleRegion.width,
++               modes[i].parameters.visibleRegion.height, modes[i].parameters.refreshRate );
++        if (modes[i].parameters.visibleRegion.width == screen_width &&
++            modes[i].parameters.visibleRegion.height == screen_height)
++        {
++            chosen = i;
++            break;
++        }
++    }
++
++    info.displayMode = modes[chosen].displayMode;
++    info.planeIndex = 0;
++    info.planeStackIndex = 0;
++    info.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++    info.globalAlpha = 1.0f;
++    info.alphaMode = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
++    info.imageExtent = modes[chosen].parameters.visibleRegion;
 +    res = instance->p_vkCreateDisplayPlaneSurfaceKHR( instance->host.instance, &info, NULL, handle );
-+    TRACE( "%s: %ux%u display plane surface 0x%s, res %d\n", debugstr_client_surface( client ),
-+           info.imageExtent.width, info.imageExtent.height, wine_dbgstr_longlong( *handle ), res );
++    TRACE( "%s: mode %u of %u, %ux%u display plane surface 0x%s, res %d\n", debugstr_client_surface( client ),
++           chosen, count, info.imageExtent.width, info.imageExtent.height, wine_dbgstr_longlong( *handle ), res );
 +    return res;
 +
 +failed:
@@ -167,7 +183,7 @@ index cc3018a08e..705ddf240f 100644
  static const struct user_driver_funcs ps5_user_driver =
  {
      .pUpdateDisplayDevices = ps5_UpdateDisplayDevices,
-@@ -634,6 +729,9 @@ static const struct user_driver_funcs ps5_user_driver =
+@@ -634,6 +744,9 @@ static const struct user_driver_funcs ps5_user_driver =
      .pSetCursor = ps5_SetCursor,
      .pSetCursorPos = ps5_SetCursorPos,
      .pSetDesktopWindow = ps5_SetDesktopWindow,
@@ -177,7 +193,7 @@ index cc3018a08e..705ddf240f 100644
  };
  
  /***********************************************************************
-@@ -664,6 +762,9 @@ void ps5_install_user_driver(void)
+@@ -664,6 +777,9 @@ void ps5_install_user_driver(void)
      present_frame = dlsym( RTLD_DEFAULT, "pw_wine_present" );
      next_input = dlsym( RTLD_DEFAULT, "pw_wine_next_input" );
      input_fd = dlsym( RTLD_DEFAULT, "pw_wine_input_fd" );
