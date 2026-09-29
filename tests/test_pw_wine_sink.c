@@ -45,9 +45,9 @@ static void test_display_release(void)
     assert(pw_wine_present(frame,4,3,16)==0 && calls==before+2);
     release_status=0;assert(pw_wine_release_display()==0 && release_calls==2);
     pw_wine_sink_stats(&s);assert(s.display_released);
-    const uint64_t dropped=s.frames_dropped;
-    assert(pw_wine_present(frame,4,3,16)==-1 && calls==before+2);
-    pw_wine_sink_stats(&s);assert(s.frames_dropped==dropped+1);
+    /* Frames still reach the title, which shows them while no swapchain
+     * presents. */
+    assert(pw_wine_present(frame,4,3,16)==0 && calls==before+3);
     /* Once released, the title is not asked again. */
     assert(pw_wine_release_display()==0 && release_calls==2);
 }

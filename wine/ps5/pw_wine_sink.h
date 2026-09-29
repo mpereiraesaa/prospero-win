@@ -13,8 +13,9 @@
  * gamepad state in it, Wine's xinput reads it (its Unix library, patch
  * 0470, finds these calls with dlsym) and leaves the rumble it asks for.
  * A game that presents with Vulkan scans out itself (patch 0460): the
- * driver asks the title once to release the video output, and frames are
- * no longer passed to the title after that.
+ * driver asks the title once to release the video output. Frames still
+ * reach the title after that, which shows them through the Vulkan driver
+ * while no swapchain presents (a DirectShow movie drawn with GDI).
  * Sound goes out like frames: Wine's audio driver (wine/wineps5) hands its
  * mix to the title's one audio port, one grain at a time. */
 
@@ -43,8 +44,7 @@ typedef int (*PwWineAudioSink)(void *context,const int16_t *frames);
 typedef int (*PwWineDisplayRelease)(void *context);
 
 typedef struct PwWineSinkStats {
-    uint64_t frames,frames_dropped;       /* dropped: no sink set, it failed, or
-                                             the display was released */
+    uint64_t frames,frames_dropped;       /* dropped: no sink set or it failed */
     uint64_t inputs_posted,inputs_dropped,inputs_delivered;
     uint64_t grains,grains_dropped;       /* audio; dropped as for frames */
     uint32_t display_released;            /* 1 once Vulkan took the video output */
@@ -74,8 +74,7 @@ void pw_wine_set_pad(const PwWinePad *pad);
  * last call, else 0. */
 int pw_wine_rumble(uint32_t *left,uint32_t *right);
 
-/* Driver side. -1 when no sink is set, the arguments are invalid or the
- * display was released. */
+/* Driver side. -1 when no sink is set or the arguments are invalid. */
 int pw_wine_present(const void *bgra,uint32_t width,uint32_t height,uint32_t stride);
 /* Asks the title to release the video output, once: 0 when it did (or has
  * nothing to release), else the title's refusal, and it may be asked again. */

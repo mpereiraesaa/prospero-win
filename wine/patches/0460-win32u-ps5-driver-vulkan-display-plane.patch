@@ -53,7 +53,7 @@ index cc3018a08e..c50eab00c3 100644
 + * surface on the host's display plane (VK_KHR_display, the only presentation
 + * the PS5's Vulkan driver has), which scans out full screen.  The title owns
 + * the video output until then, so creating one asks the title to hand it
-+ * over through pw_wine_release_display(); GDI frames are dropped from then on.
++ * over through pw_wine_release_display(); GDI frames go to it as before.
 + *
   * This library is free software; you can redistribute it and/or
   * modify it under the terms of the GNU Lesser General Public

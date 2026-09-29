@@ -68,7 +68,7 @@ int pw_wine_present(const void *bgra,uint32_t width,uint32_t height,uint32_t str
     int status=-1;
     /* The lock also serialises frames: the sink sees one at a time. */
     pthread_mutex_lock(&lock);
-    if(sink && !stats.display_released && bgra && width && height && stride>=width*4u)
+    if(sink && bgra && width && height && stride>=width*4u)
         status=sink(sink_context,bgra,width,height,stride);
     if(status)stats.frames_dropped++;
     else stats.frames++;
