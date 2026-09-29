@@ -463,12 +463,14 @@ static void open_library(void)
         if (game->display.width)
             snprintf(catalog_detail[catalog_count], sizeof(catalog_detail[0]), "%s  %s  %ux%u",
                      game->app.architecture == PW_APP_ARCH_PE64 ? "pe64" : "pe32",
-                     game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" : "gdi",
+                     game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" :
+                     game->app.graphics == PW_APP_GRAPHICS_OPENGL ? "opengl" : "gdi",
                      (unsigned)game->display.width, (unsigned)game->display.height);
         else
             snprintf(catalog_detail[catalog_count], sizeof(catalog_detail[0]), "%s  %s",
                      game->app.architecture == PW_APP_ARCH_PE64 ? "pe64" : "pe32",
-                     game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" : "gdi");
+                     game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" :
+                     game->app.graphics == PW_APP_GRAPHICS_OPENGL ? "opengl" : "gdi");
         catalog[catalog_count] = (PwWineApp){ game->app.id, game->app.name,
                                               catalog_detail[catalog_count], game->app.executable };
         catalog_count++;

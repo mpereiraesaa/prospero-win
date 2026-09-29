@@ -38,11 +38,17 @@
 # AMD driver, MIT) instead: DIR is a PS5_Vulkan checkout whose
 # tools/build-radv.sh release has built its pinned PS5_Mesa revision, linked
 # by tools/link_radv_prx.sh. The two options are exclusive.
+# OpenGL (patch 0660): --ps5-opengl-sdk names an installed
+# ps5-opengl-core33 package. Its GPL-3.0-or-later static archive is linked into
+# win32u.prx; distributed builds must preserve the SDK's source and license
+# obligations. It supplies Core-profile WGL calls, not a desktop compatibility
+# profile or the fixed-function API used by many older games.
 #
 # Usage:
 #   tools/build_wine_ps5.sh [--check-patches] [--patches DIR] [--work DIR]
 #       [--source DIR] [--host-tools DIR] [--foundation DIR] [--sdk DIR]
-#       [--prx-foundation DIR] [--ps5vk-sdk DIR | --radv DIR] [--jobs N]
+#       [--prx-foundation DIR] [--ps5vk-sdk DIR | --radv DIR]
+#       [--ps5-opengl-sdk DIR] [--jobs N]
 set -eu
 
 WINE_COMMIT=490f6d5dcbb2a5047345b8af88d114bbcaad69a8
@@ -96,6 +102,7 @@ foundation=${PS5_NATIVE_FOUNDATION:-$root/.deps/ps5-native-app-boilerplate}
 sdk=${PS5_PAYLOAD_SDK:-}
 prx_foundation=${PS5_PRX_FOUNDATION:-}
 ps5vk_sdk=${PS5VK_SDK:-}
+ps5opengl_sdk=${PS5_OPENGL_SDK:-}
 radv=${PROSPERO_RADV:-}
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 check_only=0
@@ -112,6 +119,7 @@ while [ $# -gt 0 ]; do
     --sdk) sdk=$2; shift ;;
     --prx-foundation) prx_foundation=$2; shift ;;
     --ps5vk-sdk) ps5vk_sdk=$2; shift ;;
+    --ps5-opengl-sdk) ps5opengl_sdk=$2; shift ;;
     --radv) radv=$2; shift ;;
     --jobs) jobs=$2; shift ;;
     *) fail "unknown argument $1" ;;
@@ -120,6 +128,13 @@ while [ $# -gt 0 ]; do
 done
 
 [ -z "$ps5vk_sdk" ] || [ -z "$radv" ] || fail "--ps5vk-sdk and --radv both name libvulkan.prx; give one"
+[ -z "$ps5opengl_sdk" ] || [ -f "$ps5opengl_sdk/lib/libPS5OpenGLCore33.a" ] ||
+    fail "no PS5 OpenGL Core 3.3 SDK at $ps5opengl_sdk"
+[ -z "$ps5opengl_sdk" ] || [ -f "$ps5opengl_sdk/manifest.sha256" ] ||
+    fail "PS5 OpenGL SDK is missing manifest.sha256"
+[ -z "$ps5opengl_sdk" ] ||
+    (cd "$ps5opengl_sdk" && sha256sum --status --check manifest.sha256) ||
+    fail "PS5 OpenGL SDK does not match its SHA-256 manifest"
 
 # The series: NNNN-lower-case-name.patch, unique numbers below 0900, each a
 # mail-formatted patch with a subject. Printed in the order it is applied.
@@ -207,9 +222,16 @@ for patch in $ordered; do
     echo "applied $patch"
 done
 
+# The PS5 OpenGL SDK is optional. When supplied, Wine's generic EGL/WGL
+# frontend binds directly to its static EGL symbols and the win32u PRX links
+# the SDK into the runtime.
+opengl_cflags="-g -O2"
+if [ -n "$ps5opengl_sdk" ]; then opengl_cflags="$opengl_cflags -DWINE_PS5_OPENGL"; fi
+
 # Reconfigure whenever the patches or the arguments change.
 stamp=$(
-    { printf '%s\n' "$WINE_COMMIT" "$CONFIGURE_ARGS" "$sdk" "$FREETYPE_SHA256"
+    { printf '%s\n' "$WINE_COMMIT" "$CONFIGURE_ARGS" "$sdk" "$FREETYPE_SHA256" \
+        "$ps5opengl_sdk" "$opengl_cflags"
       for patch in $ordered; do cat "$patches/$patch"; done; } | sha256sum | cut -c1-64)
 build=$work/build
 if [ ! -f "$build/Makefile" ] || [ "$(cat "$build/.prospero-stamp" 2>/dev/null)" != "$stamp" ]; then
@@ -219,6 +241,7 @@ if [ ! -f "$build/Makefile" ] || [ "$(cat "$build/.prospero-stamp" 2>/dev/null)"
     # FreeType is found by its flags; its soname is the name Wine dlopens,
     # which pw_wine_dl turns into libfreetype.prx beside ntdll.prx.
     (cd "$build" && "$tree/configure" $CONFIGURE_ARGS CC="$sdk/bin/prospero-clang" \
+        CFLAGS="$opengl_cflags" \
         FREETYPE_CFLAGS="-I$ft/src/include" FREETYPE_LIBS="$ft/libfreetype.a" \
         ac_cv_lib_soname_freetype=libfreetype.so ac_cv_lib_soname_vulkan=libvulkan.so \
         --with-wine-tools="$host_tools" > "$work/configure.log" 2>&1) ||
@@ -308,13 +331,38 @@ link_prx() {
     [ "$2" = - ] || objects=$(link_objects "$2")
     log=$prx/$name.link.log
     [ -n "$objects$3" ] || { echo "no ELF link of $2 in make.log" > "$log"; prx_status=1; return; }
-    # shellcheck disable=SC2086
-    (cd "$build" && "$sdk/bin/prospero-lld" --shared -Bsymbolic -T "$pie" \
-        -T "$root/wine/ps5/prx_eh_frame.ld" --eh-frame-hdr -soname "$name.prx" -z defs \
-        --warn-unresolved-symbols -L"$work/ps5lib" -o "$prx/$name.shared.elf" $objects $3 ${4:-} \
-        "$sdk/target/lib/libunwind.a" --as-needed "${5:-$sdk/target/lib}"/*.so) > "$log" 2>&1 &&
+    if [ "$name" = win32u ] && [ -n "$ps5opengl_sdk" ]; then
+        opengl_stubs=$prx/opengl-stubs
+        mkdir -p "$opengl_stubs"
+        cp "$sdk"/target/lib/*.so "$opengl_stubs/"
+        for import in "$ps5opengl_sdk"/lib/*.so; do
+            [ -e "$import" ] || continue
+            [ -e "$opengl_stubs/$(basename "$import")" ] || cp "$import" "$opengl_stubs/"
+        done
+        # The OpenGL SDK's consumer graph includes C++ objects. Use the SDK's
+        # C++ driver for its libc++/ABI dependencies, while keeping Wine's
+        # module linker script, imports and signatures intact.
+        # shellcheck disable=SC2086
+        (cd "$build" && "$sdk/bin/prospero-clang++" -shared -fuse-ld=lld \
+            -Wl,-Bsymbolic -Wl,-T,"$pie" -Wl,-T,"$root/wine/ps5/prx_eh_frame.ld" \
+            -Wl,--eh-frame-hdr -Wl,-soname,"$name.prx" -Wl,-z,defs \
+            -Wl,--warn-unresolved-symbols -L"$work/ps5lib" -L"$ps5opengl_sdk/lib" \
+            -Wl,-u,ps5_agc_gate2_run -o "$prx/$name.shared.elf" $objects $3 ${4:-} \
+            -Wl,--start-group -lPS5OpenGLCore33 -Wl,--end-group \
+            -lSceAgc -lSceAgcDriver -lSceVideoOut -lkernel_web -lSceSystemService \
+            "$sdk/target/lib/libunwind.a" -Wl,--start-group -lc++ -lc++abi -Wl,--end-group \
+            -Wl,--as-needed "$opengl_stubs"/*.so) > "$log" 2>&1 &&
+        stubs_dir=$opengl_stubs
+    else
+        # shellcheck disable=SC2086
+        (cd "$build" && "$sdk/bin/prospero-lld" --shared -Bsymbolic -T "$pie" \
+            -T "$root/wine/ps5/prx_eh_frame.ld" --eh-frame-hdr -soname "$name.prx" -z defs \
+            --warn-unresolved-symbols -L"$work/ps5lib" -o "$prx/$name.shared.elf" $objects $3 ${4:-} \
+            "$sdk/target/lib/libunwind.a" --as-needed "${5:-$sdk/target/lib}"/*.so) > "$log" 2>&1
+        stubs_dir=${5:-$sdk/target/lib}
+    fi &&
     "$tool" link --module --in "$prx/$name.shared.elf" --out "$prx/$name.elf" \
-        --stub-dir "${5:-$sdk/target/lib}" $stubs --module-sdk 0x02000009 \
+        --stub-dir "$stubs_dir" $stubs --module-sdk 0x02000009 \
         --companion-sdk 0x08050001 --file-name "$name.prx" >> "$log" 2>&1 &&
     "$tool" self --sign --in "$prx/$name.elf" --out "$prx/sce_module/$name.prx" >> "$log" 2>&1 ||
         prx_status=1

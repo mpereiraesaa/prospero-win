@@ -1,0 +1,325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prospero Win <prospero-win@invalid>
+Date: Tue, 29 Sep 2026 23:50:00 +0200
+Subject: [PATCH] win32u: route PS5 WGL through the static EGL SDK
+
+Enable Wine's existing EGL WGL frontend against the PS5 OpenGL Core SDK.
+The SDK has a static EGL implementation and no EGL platform-display or
+client-extension entry points, so the PS5 build binds the core EGL exports
+directly and uses EGL_DEFAULT_DISPLAY with Wine's offscreen framebuffer
+surfaces. The regular PS5 user driver remains responsible for presenting
+those surfaces through its existing GDI path.
+
+The SDK creates Core 3.3 contexts for legacy WGL context requests so modern
+applications using the Core API can start. The SDK does not implement the
+fixed-function API or a desktop compatibility profile, so older applications
+that use those features remain unsupported.
+---
+--- a/dlls/win32u/driver.c
++++ b/dlls/win32u/driver.c
+@@ -1280,7 +1280,14 @@
+ 
+ static UINT loaderdrv_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs )
+ {
++#ifdef WINE_PS5_USER_DRIVER
++    /* WGL can be the first display API reached by a title. Install the PS5
++     * user driver before the OpenGL frontend asks it for platform settings. */
++    load_display_driver();
++    return user_driver->pOpenGLInit( version, opengl_funcs, driver_funcs );
++#else
+     return load_driver()->pOpenGLInit( version, opengl_funcs, driver_funcs );
++#endif
+ }
+ 
+ static const struct user_driver_funcs lazy_load_driver =
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -57,6 +57,9 @@
+ #include "wine/vulkan.h"
+ #include "wine/vulkan_driver.h"
+ #endif
++#ifdef WINE_PS5_OPENGL
++#include "wine/opengl_driver.h"
++#endif
+ 
+ #ifdef WINE_PS5_USER_DRIVER
+ 
+@@ -776,6 +779,29 @@
+ 
+ #endif  /* SONAME_LIBVULKAN */
+ 
++#ifdef WINE_PS5_OPENGL
++
++static UINT ps5_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
++                            const struct opengl_driver_funcs **driver_funcs )
++{
++    if (version != WINE_OPENGL_DRIVER_VERSION)
++    {
++        ERR( "OpenGL driver version mismatch, win32u wants %u but driver has %u\n",
++             version, WINE_OPENGL_DRIVER_VERSION );
++        return STATUS_INVALID_PARAMETER;
++    }
++    if (!opengl_funcs->p_eglGetProcAddress)
++    {
++        WARN( "the PS5 EGL frontend is unavailable\n" );
++        return STATUS_NOT_SUPPORTED;
++    }
++    /* win32u's EGL frontend is linked to the PS5 static EGL implementation;
++     * it owns WGL pixel formats, pbuffer surfaces and context translation. */
++    return STATUS_SUCCESS;
++}
++
++#endif  /* WINE_PS5_OPENGL */
++
+ static const struct user_driver_funcs ps5_user_driver =
+ {
+     .pUpdateDisplayDevices = ps5_UpdateDisplayDevices,
+@@ -792,6 +818,9 @@
+ #ifdef SONAME_LIBVULKAN
+     .pVulkanInit = ps5_VulkanInit,
+ #endif
++#ifdef WINE_PS5_OPENGL
++    .pOpenGLInit = ps5_OpenGLInit,
++#endif
+ };
+ 
+ /***********************************************************************
+--- a/dlls/win32u/opengl.c
++++ b/dlls/win32u/opengl.c
+@@ -84,6 +84,30 @@
+ static struct wgl_pixel_format *pixel_formats;
+ static UINT formats_count, onscreen_count;
+ 
++#ifdef WINE_PS5_OPENGL
++/* The PS5 OpenGL SDK is linked into win32u rather than loaded from a host
++ * libEGL.so. Keep these references explicit so the linker pulls the EGL
++ * entry points from its static archive. */
++extern __eglMustCastToProperFunctionPointerType eglGetProcAddress( const char *name );
++extern const char *eglQueryString( EGLDisplay display, EGLint name );
++extern EGLDisplay eglGetDisplay( EGLNativeDisplayType display_id );
++extern EGLBoolean eglInitialize( EGLDisplay display, EGLint *major, EGLint *minor );
++extern EGLBoolean eglBindAPI( EGLenum api );
++extern EGLBoolean eglChooseConfig( EGLDisplay display, const EGLint *attribs, EGLConfig *configs,
++                                   EGLint config_size, EGLint *num_config );
++extern EGLContext eglCreateContext( EGLDisplay display, EGLConfig config, EGLContext share,
++                                    const EGLint *attribs );
++extern EGLSurface eglCreatePbufferSurface( EGLDisplay display, EGLConfig config, const EGLint *attribs );
++extern EGLBoolean eglDestroyContext( EGLDisplay display, EGLContext context );
++extern EGLBoolean eglDestroySurface( EGLDisplay display, EGLSurface surface );
++extern EGLBoolean eglGetConfigAttrib( EGLDisplay display, EGLConfig config, EGLint attrib, EGLint *value );
++extern EGLBoolean eglGetConfigs( EGLDisplay display, EGLConfig *configs, EGLint config_size, EGLint *num_config );
++extern EGLint eglGetError( void );
++extern EGLBoolean eglMakeCurrent( EGLDisplay display, EGLSurface draw, EGLSurface read, EGLContext context );
++extern EGLBoolean eglQuerySurface( EGLDisplay display, EGLSurface surface, EGLint attrib, EGLint *value );
++extern EGLBoolean eglTerminate( EGLDisplay display );
++#endif
++
+ static DWORD get_ascii_config_key( HKEY defkey, HKEY appkey, const char *name,
+                                    char *buffer, DWORD size )
+ {
+@@ -1052,7 +1076,7 @@
+     return &surface->base;
+ }
+ 
+-#ifdef SONAME_LIBEGL
++#if defined(SONAME_LIBEGL) || defined(WINE_PS5_OPENGL)
+ 
+ static const struct opengl_drawable_funcs egldrv_pbuffer_funcs;
+ 
+@@ -1063,7 +1087,13 @@
+ 
+ static void egldrv_init_egl_platform( struct egl_platform *platform )
+ {
++#ifdef WINE_PS5_OPENGL
++    /* The PS5 SDK accepts EGL_DEFAULT_DISPLAY, but has no platform-display
++     * extensions. WGL drawables use the generic pbuffer/framebuffer path. */
++    platform->type = 0;
++#else
+     platform->type = EGL_PLATFORM_SURFACELESS_MESA;
++#endif
+     platform->native_display = 0;
+ }
+ 
+@@ -1364,6 +1394,15 @@
+ {
+     const struct opengl_funcs *funcs = &display_funcs;
+     const struct egl_platform *egl = &display_egl;
++#ifdef WINE_PS5_OPENGL
++    static const EGLint ps5_default_core_attribs[] =
++    {
++        EGL_CONTEXT_MAJOR_VERSION_KHR, 3,
++        EGL_CONTEXT_MINOR_VERSION_KHR, 3,
++        EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
++        EGL_NONE,
++    };
++#endif
+     EGLint err, egl_attribs[16], *attribs_end = egl_attribs;
+ 
+     TRACE( "format %d, share %p, attribs %p\n", format, share, attribs );
+@@ -1427,7 +1466,12 @@
+      *    > purposes except eglCreateContext.
+      */
+     funcs->p_eglBindAPI( EGL_OPENGL_API );
+-    *context = funcs->p_eglCreateContext( egl->display, EGL_NO_CONFIG_KHR, share, attribs ? egl_attribs : NULL );
++    *context = funcs->p_eglCreateContext( egl->display, EGL_NO_CONFIG_KHR, share,
++#ifdef WINE_PS5_OPENGL
++                                          attribs ? egl_attribs : ps5_default_core_attribs );
++#else
++                                          attribs ? egl_attribs : NULL );
++#endif
+ 
+     if ((err = funcs->p_eglGetError()) != EGL_SUCCESS || !*context)
+     {
+@@ -1490,6 +1534,38 @@
+     struct opengl_funcs *funcs = &display_funcs;
+     const char *extensions;
+ 
++#ifdef WINE_PS5_OPENGL
++    EGLDisplay display;
++    EGLint major, minor;
++
++    funcs->p_eglGetProcAddress = (void *)eglGetProcAddress;
++    funcs->p_eglQueryString = eglQueryString;
++    funcs->p_eglBindAPI = eglBindAPI;
++    funcs->p_eglChooseConfig = eglChooseConfig;
++    funcs->p_eglCreateContext = eglCreateContext;
++    funcs->p_eglCreatePbufferSurface = eglCreatePbufferSurface;
++    funcs->p_eglDestroyContext = eglDestroyContext;
++    funcs->p_eglDestroySurface = eglDestroySurface;
++    funcs->p_eglGetConfigAttrib = eglGetConfigAttrib;
++    funcs->p_eglGetConfigs = eglGetConfigs;
++    funcs->p_eglGetDisplay = eglGetDisplay;
++    funcs->p_eglGetError = eglGetError;
++    funcs->p_eglInitialize = eglInitialize;
++    funcs->p_eglMakeCurrent = eglMakeCurrent;
++    funcs->p_eglQuerySurface = eglQuerySurface;
++    funcs->p_eglTerminate = eglTerminate;
++    if (!(display = eglGetDisplay( EGL_DEFAULT_DISPLAY )) ||
++        !eglInitialize( display, &major, &minor ))
++    {
++        ERR( "Failed to initialize the PS5 EGL display\n" );
++        return FALSE;
++    }
++    if (!(extensions = funcs->p_eglQueryString( display, EGL_EXTENSIONS )))
++    {
++        ERR( "Failed to query PS5 EGL extensions\n" );
++        return FALSE;
++    }
++#else
+     if (!(funcs->egl_handle = dlopen( SONAME_LIBEGL, RTLD_NOW | RTLD_GLOBAL )))
+     {
+         ERR( "Failed to load %s: %s\n", SONAME_LIBEGL, dlerror() );
+@@ -1505,7 +1581,9 @@
+     LOAD_FUNCPTR( eglGetProcAddress );
+     LOAD_FUNCPTR( eglQueryString );
+ #undef LOAD_FUNCPTR
++#endif
+ 
++#ifndef WINE_PS5_OPENGL
+     if (!(extensions = funcs->p_eglQueryString( EGL_NO_DISPLAY, EGL_EXTENSIONS )))
+     {
+         ERR( "Failed to find client extensions\n" );
+@@ -1513,6 +1591,9 @@
+     }
+     TRACE( "EGL client extensions:\n" );
+     dump_extensions( extensions );
++#else
++    TRACE( "PS5 EGL extensions: %s\n", extensions );
++#endif
+ 
+ #define CHECK_EXTENSION( ext )                                  \
+     if (!has_extension( extensions, #ext ))                     \
+@@ -1520,25 +1601,53 @@
+         ERR( "Failed to find required extension %s\n", #ext );  \
+         goto failed;                                            \
+     }
++#ifndef WINE_PS5_OPENGL
+     CHECK_EXTENSION( EGL_KHR_client_get_all_proc_addresses );
+     CHECK_EXTENSION( EGL_EXT_platform_base );
++#endif
+ #undef CHECK_EXTENSION
+ 
++#ifdef WINE_PS5_OPENGL
++#define USE_GL_FUNC( func ) \
++    if (!funcs->p_##func) funcs->p_##func = (void *)funcs->p_eglGetProcAddress( #func );
++#else
+ #define USE_GL_FUNC( func )                                                                     \
+     if (!funcs->p_##func && !(funcs->p_##func = (void *)funcs->p_eglGetProcAddress( #func )))   \
+     {                                                                                           \
+         ERR( "Failed to load symbol %s\n", #func );                                             \
+         goto failed;                                                                            \
+     }
++#endif
+     ALL_EGL_FUNCS
+ #undef USE_GL_FUNC
+ 
++#ifdef WINE_PS5_OPENGL
++#define REQUIRE_EGL_FUNC( func ) \
++    if (!funcs->p_##func) { ERR( "Missing required PS5 EGL function %s\n", #func ); goto failed; }
++    REQUIRE_EGL_FUNC( eglBindAPI );
++    REQUIRE_EGL_FUNC( eglChooseConfig );
++    REQUIRE_EGL_FUNC( eglCreateContext );
++    REQUIRE_EGL_FUNC( eglCreatePbufferSurface );
++    REQUIRE_EGL_FUNC( eglDestroyContext );
++    REQUIRE_EGL_FUNC( eglDestroySurface );
++    REQUIRE_EGL_FUNC( eglGetConfigAttrib );
++    REQUIRE_EGL_FUNC( eglGetConfigs );
++    REQUIRE_EGL_FUNC( eglGetDisplay );
++    REQUIRE_EGL_FUNC( eglInitialize );
++    REQUIRE_EGL_FUNC( eglMakeCurrent );
++    REQUIRE_EGL_FUNC( eglQuerySurface );
++    REQUIRE_EGL_FUNC( eglTerminate );
++#undef REQUIRE_EGL_FUNC
++#endif
++
+     *driver_funcs = &egldrv_funcs;
+     return TRUE;
+ 
+ failed:
++#ifndef WINE_PS5_OPENGL
+     dlclose( funcs->egl_handle );
+     funcs->egl_handle = NULL;
++#endif
+     return FALSE;
+ }
+ 
+@@ -1568,7 +1677,9 @@
+         return FALSE;                                                                              \
+     }
+     CHECK_EXTENSION( EGL_KHR_create_context );
++#ifndef WINE_PS5_OPENGL
+     CHECK_EXTENSION( EGL_KHR_create_context_no_error );
++#endif
+     CHECK_EXTENSION( EGL_KHR_no_config_context );
+ #undef CHECK_EXTENSION
+ 
+@@ -1638,7 +1749,11 @@
+ 
+ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_driver_funcs *driver_funcs )
+ {
++#ifdef WINE_PS5_OPENGL
++    if (!funcs->p_eglGetProcAddress || !driver_funcs->p_init_egl_platform) return;
++#else
+     if (!funcs->egl_handle || !driver_funcs->p_init_egl_platform) return;
++#endif
+ 
+     driver_funcs->p_init_egl_platform( &display_egl );
+     if (!display_egl.type) display_egl.display = funcs->p_eglGetDisplay( EGL_DEFAULT_DISPLAY );
+@@ -1647,7 +1762,7 @@
+     init_egl_devices( funcs );
+ }
+ 
+-#else /* SONAME_LIBEGL */
++#else /* SONAME_LIBEGL || WINE_PS5_OPENGL */
+ 
+ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
+ {
+@@ -1659,7 +1774,7 @@
+ {
+ }
+ 
+-#endif /* SONAME_LIBEGL */
++#endif /* SONAME_LIBEGL || WINE_PS5_OPENGL */
+ 
+ static UINT read_drm_device_prop( const char *name, const char *prop )
+ {

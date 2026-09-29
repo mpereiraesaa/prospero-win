@@ -234,6 +234,9 @@ static int parse_field(PwAppProfile *profile, uint32_t *fields,
         } else if (equal_ascii(value, (size_t)(value_end - value), "dxvk")) {
             profile->graphics = PW_APP_GRAPHICS_DXVK;
             status = PW_OK;
+        } else if (equal_ascii(value, (size_t)(value_end - value), "opengl")) {
+            profile->graphics = PW_APP_GRAPHICS_OPENGL;
+            status = PW_OK;
         } else {
             status = PW_ERR_UNSUPPORTED;
         }

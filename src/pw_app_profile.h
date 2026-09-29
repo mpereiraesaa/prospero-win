@@ -25,6 +25,7 @@ typedef enum PwAppGraphics {
     PW_APP_GRAPHICS_AUTO = 0,
     PW_APP_GRAPHICS_GDI = 1,
     PW_APP_GRAPHICS_DXVK = 2,
+    PW_APP_GRAPHICS_OPENGL = 3,
 } PwAppGraphics;
 
 /* Stable, allocation-free description of one Windows application. Paths are

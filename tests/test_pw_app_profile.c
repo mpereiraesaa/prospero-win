@@ -54,6 +54,15 @@ int main(void)
     assert(profile.arguments[0] == '\0');
 
     assert(parse_text(
+        "[application]\n"
+        "id=legacy-gl\nname=OpenGL game\n"
+        "executable=C:\\Games\\LegacyGL\\game.exe\n"
+        "working_directory=C:\\Games\\LegacyGL\n"
+        "prefix=legacy-gl\nruntime=wine-wow64\n"
+        "architecture=pe32\ngraphics=opengl\n", &profile) == PW_OK);
+    assert(profile.graphics == PW_APP_GRAPHICS_OPENGL);
+
+    assert(parse_text(
         "[application]\nid=pinball\nname=Pinball\n"
         "executable=C:\\pinball.exe\nworking_directory=C:\\Games\n"
         "startup_command_id=65535\nprefix=pinball\nruntime=wine\n"
