@@ -31,6 +31,7 @@
 #include "pw_videoout_ps5.h"
 #include "pw_wine_library.h"
 #include "../src/pw_present.h"
+#include "../src/pw_spinner.h"
 #include "pw_wine_display.h"
 #include "../include/prospero_win.h"
 
@@ -223,17 +224,70 @@ static void vulkan_frames_resolve(VulkanFrames *vf, const PwPrxDescriptor *ntdll
                vf->show_tiled != NULL, vf->tiled != NULL);
 }
 
-/* 1 when the newest GDI frame was shown through the Vulkan driver. */
-static int vulkan_frames_show(VulkanFrames *vf, uint64_t *sequence, int scaling)
-{
-    PwPresentView view;
+/*
+ * While a game loads, Wine and the game show nothing for seconds: the
+ * title shows a spinner (src/pw_spinner.h) until the game's first frame
+ * with content, or until it has presented with Vulkan for a second on end.
+ * One present is not enough: a Direct3D game presents once when it creates
+ * its device, then loads for seconds (Warcraft III: 25 s, measured). Blank
+ * frames until then are not shown. Half a second passes first, so a game
+ * that is quick to show something never flashes it.
+ */
+enum { PW_WINE64_SPINNER_DELAY_MS = 500, PW_WINE64_SPINNER_STEP_MS = 83,
+       PW_WINE64_PRESENTING_MS = 1000 };
+typedef struct Loading {
+    int content;               /* the game has shown something */
+    uint32_t *pixels;          /* PW_SPINNER_WIDTH x PW_SPINNER_HEIGHT */
+    uint32_t step;
+    uint64_t next_ns;
+    uint64_t presenting_since;  /* the Vulkan driver busy without a pause, or 0 */
+} Loading;
 
-    if (!vf->tiled || !vf->idle()) return 0;
-    if (pw_wine_frame_box_take(&frames, sequence, frame_shown, PW_WINE64_MAX_FRAME, &view) != 1)
-        return 0;
-    const PwPresentFrame frame = { view.pixels, view.width, view.height, view.stride,
-                                   PW_PRESENT_BGRX8 };
-    if (pw_videoout_ps5_draw_scaled(&frame, scaling, 0x000000u, vf->tiled) != PW_OK) {
+/* The game has shown something: no more spinner. */
+static void loading_done(Loading *loading, const char *by)
+{
+    if (loading->content) return;
+    loading->content = 1;
+    PS5LOG_LOG("PW_WINE64 loading done by=%s spinner_steps=%u", by, loading->step);
+}
+
+/* The spinner's next image, or NULL when none is due. */
+static const PwPresentFrame *loading_frame(Loading *loading, uint64_t now, uint64_t started,
+                                           PwPresentFrame *frame)
+{
+    if (loading->content || now - started < PW_WINE64_SPINNER_DELAY_MS * 1000000ull ||
+        now < loading->next_ns)
+        return NULL;
+    if (!loading->pixels) {
+        void *pixels = mmap(NULL, (size_t)PW_SPINNER_WIDTH * PW_SPINNER_HEIGHT * 4,
+                            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (pixels == MAP_FAILED) {
+            loading_done(loading, "no-memory");
+            return NULL;
+        }
+        loading->pixels = pixels;
+    }
+    pw_spinner_draw(loading->pixels, PW_SPINNER_WIDTH, PW_SPINNER_HEIGHT, PW_SPINNER_WIDTH,
+                    loading->step++);
+    loading->next_ns = now + PW_WINE64_SPINNER_STEP_MS * 1000000ull;
+    *frame = (PwPresentFrame){ (const uint8_t *)loading->pixels, PW_SPINNER_WIDTH, PW_SPINNER_HEIGHT,
+                               PW_SPINNER_WIDTH * 4, PW_PRESENT_BGRX8 };
+    return frame;
+}
+
+/* Whether a frame the game drew is shown: always once it has shown content. */
+static int loading_admits(Loading *loading, const PwPresentView *view)
+{
+    if (!loading->content &&
+        !pw_spinner_frame_blank(view->pixels, view->width, view->height, view->stride))
+        loading_done(loading, "frame");
+    return loading->content;
+}
+
+/* Draws frame for the Vulkan driver and shows it: 1 when shown. */
+static int vulkan_frames_flip(VulkanFrames *vf, const PwPresentFrame *frame, int scaling)
+{
+    if (pw_videoout_ps5_draw_scaled(frame, scaling, 0x000000u, vf->tiled) != PW_OK) {
         vf->failed++;
         return 0;
     }
@@ -243,6 +297,34 @@ static int vulkan_frames_show(VulkanFrames *vf, uint64_t *sequence, int scaling)
     else if (status == 1) vf->busy++;
     else if (!vf->failed++) PS5LOG_LOG("PW_WINE64 vulkan frames show failed=%d", status);
     return status == 0;
+}
+
+/* 1 when the newest GDI frame, or the spinner while the game loads, was
+ * shown through the Vulkan driver. A game presenting has shown content. */
+static int vulkan_frames_show(VulkanFrames *vf, uint64_t *sequence, int scaling, Loading *loading,
+                              uint64_t now, uint64_t started)
+{
+    PwPresentView view;
+    PwPresentFrame spinner;
+    const PwPresentFrame *next;
+
+    if (!vf->tiled) return 0;
+    if (!vf->idle()) {
+        if (!loading->presenting_since) loading->presenting_since = now;
+        else if (now - loading->presenting_since >= PW_WINE64_PRESENTING_MS * 1000000ull)
+            loading_done(loading, "vulkan");
+        return 0;
+    }
+    loading->presenting_since = 0;
+    if (pw_wine_frame_box_take(&frames, sequence, frame_shown, PW_WINE64_MAX_FRAME, &view) == 1 &&
+        loading_admits(loading, &view)) {
+        const PwPresentFrame frame = { view.pixels, view.width, view.height, view.stride,
+                                       PW_PRESENT_BGRX8 };
+        return vulkan_frames_flip(vf, &frame, scaling);
+    }
+    if ((next = loading_frame(loading, now, started, &spinner)))
+        return vulkan_frames_flip(vf, next, PW_PRESENT_SCALE_FIT);
+    return 0;
 }
 
 static int show_scaled(PwVideoOutPs5 *video, const PwPresentView *view, int scaling)
@@ -581,6 +663,7 @@ int main(int argc, char **argv)
     uint64_t vibrations = 0;
     uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
     VulkanFrames vulkan_frames = { 0 };
+    Loading loading = { 0 };
     ps5log_config log_config;
     PwPadPs5Ops pad_ops;
     int status, video_status = PW_ERR_STATE, pad_status = PW_ERR_STATE, hid_status = PW_ERR_STATE;
@@ -823,15 +906,23 @@ int main(int argc, char **argv)
             PS5LOG_LOG("PW_WINE64 display released to vulkan close=%s shown=%llu",
                        pw_result_name(closed), (unsigned long long)shown);
         }
-        if (video_status == PW_OK && frame_shown &&
-            pw_wine_frame_box_take(&frames, &shown_sequence, frame_shown, PW_WINE64_MAX_FRAME,
-                                   &view) == 1 &&
-            show_scaled(&video, &view, scaling) == PW_OK) {
-            shown++;          /* present waits for the vblank */
-            presented = 1;
+        if (video_status == PW_OK && frame_shown) {
+            PwPresentFrame spinner;
+            const PwPresentFrame *next;
+
+            if (pw_wine_frame_box_take(&frames, &shown_sequence, frame_shown, PW_WINE64_MAX_FRAME,
+                                       &view) == 1 && loading_admits(&loading, &view)) {
+                if (show_scaled(&video, &view, scaling) == PW_OK) {
+                    shown++;          /* present waits for the vblank */
+                    presented = 1;
+                }
+            } else if ((next = loading_frame(&loading, now, started, &spinner)) &&
+                       pw_videoout_ps5_present_scaled(&video, next, PW_PRESENT_SCALE_FIT, 0) == PW_OK) {
+                presented = 1;
+            }
         } else if (frame_shown && __atomic_load_n(&display_closed, __ATOMIC_ACQUIRE)) {
             if (!vulkan_frames.resolved) vulkan_frames_resolve(&vulkan_frames, start.descriptor);
-            (void)vulkan_frames_show(&vulkan_frames, &shown_sequence, scaling);
+            (void)vulkan_frames_show(&vulkan_frames, &shown_sequence, scaling, &loading, now, started);
         }
         if (!presented) usleep(PW_WINE64_TICK_US);
 
