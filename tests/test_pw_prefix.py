@@ -63,6 +63,8 @@ def main() -> int:
         (prefix / "drive_c/Games/Game/data.mpq").write_bytes(b"x" * 1000)
         for name in pw_prefix.REGISTRY:
             (prefix / name).write_text(f"WINE REGISTRY {name}\n")
+        cpu = '[Software\\\\Microsoft\\\\Wow64\\\\x86] 1\n@="wow64cpu.dll"\n\n[Other]\n@="wow64cpu.dll"\n'
+        (prefix / "system.reg").write_text("WINE REGISTRY system.reg\n" + cpu)
         os.symlink("../drive_c", prefix / "dosdevices/c:")
         os.symlink("/", prefix / "dosdevices/z:")
         os.symlink("/dev/ttyS0", prefix / "dosdevices/com1")
@@ -79,6 +81,10 @@ def main() -> int:
 
         assert pw_prefix.main(["push", "game", *common], remote) == 0
         assert (remote_prefix / "drive_c/Games/Game/game.exe").read_bytes() == b"MZ game"
+        # The console's CPU backend is written on the way, the PC's is kept.
+        console_reg = (remote_prefix / "system.reg").read_text()
+        assert console_reg.count("wowprospero.dll") == 1 and '[Other]\n@="wow64cpu.dll"' in console_reg
+        assert (prefix / "system.reg").read_text().count("wowprospero") == 0
         assert (remote_prefix / "dosdevices/.pw-symlinks").read_text() == "c:\t../drive_c\nz:\t/\n"
         assert (remote_prefix / "drive_c/users/prospero/Desktop").is_dir()
         assert not (remote_prefix / ".wineserver").exists()
@@ -104,6 +110,9 @@ def main() -> int:
         assert pw_prefix.main(["push", "game", *common], remote) == 1
         assert pw_prefix.main(["pull", "game", *common], remote) == 0
         assert "volume" in (prefix / "user.reg").read_text()
+        # A pull brings system.reg back with the PC's backend, and does not
+        # count the swap as a change.
+        assert "wowprospero" not in (prefix / "system.reg").read_text()
         assert (prefix / "drive_c/Games/Game/save1.sav").read_bytes() == b"save"
         assert pw_prefix.main(["push", "game", *common], remote) == 0
 

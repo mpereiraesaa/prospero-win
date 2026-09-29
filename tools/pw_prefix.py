@@ -39,6 +39,33 @@ from pathlib import Path
 LINK_TABLE = ".pw-symlinks"
 SKIP = {".wineserver", LINK_TABLE}
 REGISTRY = ("system.reg", "user.reg", "userdef.reg")
+# The one setting the console and the PC must differ in: WoW64's i386 CPU.
+# The PC's Wine uses wow64cpu.dll; on the console 32-bit mode is refused and
+# prospero-win's DBT, wowprospero.dll, takes its place (WINE_PS5_BUILD.md).
+# A push writes the console's value, a pull the PC's, so one prefix runs on
+# both; the manifest records the console's bytes.
+CPU_KEY = b"[Software\\\\Microsoft\\\\Wow64\\\\x86]"
+PC_CPU, CONSOLE_CPU = b'@="wow64cpu.dll"', b'@="wowprospero.dll"'
+
+
+def swap_cpu(key: str, data: bytes, old: bytes, new: bytes) -> bytes:
+    """system.reg with the Wow64\\x86 default changed from old to new."""
+    if key != "system.reg":
+        return data
+    start = data.find(CPU_KEY)
+    if start < 0:
+        return data
+    end = data.find(b"\n[", start + 1)
+    end = len(data) if end < 0 else end
+    return data[:start] + data[start:end].replace(old, new) + data[end:]
+
+
+def to_console(key: str, data: bytes) -> bytes:
+    return swap_cpu(key, data, PC_CPU, CONSOLE_CPU)
+
+
+def to_pc(key: str, data: bytes) -> bytes:
+    return swap_cpu(key, data, CONSOLE_CPU, PC_CPU)
 
 
 class SyncError(Exception):
@@ -182,7 +209,7 @@ class Sync:
             self.remote.makedirs(posixpath.join(self.remote_prefix, directory) if directory else self.remote_prefix)
         pushed, sent = {}, 0
         for key, path in sorted(files.items()):
-            data = path.read_bytes()
+            data = to_console(key, path.read_bytes())
             entry = [len(data), sha256(data)]
             pushed[key] = entry
             if known.get(key) == entry:
@@ -243,9 +270,9 @@ class Sync:
                 continue
             data = self.remote.read(f"{self.remote_prefix}/{key}")
             entry = [len(data), sha256(data)]
-            if not local.is_file() or sha256(local.read_bytes()) != entry[1]:
+            if not local.is_file() or sha256(to_console(key, local.read_bytes())) != entry[1]:
                 local.parent.mkdir(parents=True, exist_ok=True)
-                local.write_bytes(data)
+                local.write_bytes(to_pc(key, data))
                 fetched += 1
             pulled[key] = entry
         self.save(pulled)
@@ -254,8 +281,8 @@ class Sync:
     def status(self) -> None:
         known = (self.manifest or {}).get("files", {})
         files, _, _ = local_tree(self.prefix) if self.prefix.is_dir() else ({}, set(), {})
-        changed = [key for key, path in files.items() if known.get(key, [None])[0] != path.stat().st_size
-                   or known[key][1] != sha256(path.read_bytes())]
+        changed = [key for key, path in files.items()
+                   if known.get(key, [None, None])[1] != sha256(to_console(key, path.read_bytes()))]
         log(f"{self.slug}: {len(files)} local files, {len(changed)} not on the console yet; "
             f"console registry changed: {', '.join(self.registry_drift()) or 'no'}")
 

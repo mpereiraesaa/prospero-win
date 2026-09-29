@@ -126,5 +126,12 @@ python3 tools/pw_prefix.py status <slug> --library ~/prospero-library --host <PS
   prefix there (`dosdevices`' `c:` and `z:`); links out of it (Wine's
   Desktop or Documents into the PC's home) become empty directories, and
   serial and parallel port links are left out.
+- One registry value differs between the two machines: WoW64's i386 CPU
+  (`HKLM\\Software\\Microsoft\\Wow64\\x86`). The PC's Wine writes
+  `wow64cpu.dll`; the console refuses 32-bit mode and needs prospero-win's
+  DBT, `wowprospero.dll`, or a 32-bit game dies at start with a stack
+  overflow in `wow64cpu`. A push writes the console's value into
+  `system.reg` and a pull writes the PC's back, so the same prefix runs on
+  both; the manifest records the console's bytes.
 - In the lab, claim the console in the shared mailbox around a push, as
   for any console operation.
