@@ -9,67 +9,86 @@
   <img src="https://img.shields.io/badge/license-LGPL--2.1--or--later-blue" alt="License: LGPL-2.1-or-later">
 </p>
 
-**prospero-win** is an experimental Windows compatibility runtime for native
-PlayStation 5 homebrew. It runs Wine itself inside a PS5 title: Wine's PE
-modules, its Unix side and its object server, with prospero-win's IA-32
-dynamic binary translator as Wine's WoW64 CPU for 32-bit code.
+**prospero-win runs Windows games on a jailbroken PS5.** It's a homebrew app
+that carries its own copy of [Wine](https://www.winehq.org/). 32-bit Windows
+code goes through our own x86 translator, and Direct3D goes through
+[DXVK](https://github.com/doitsujin/dxvk) on the console's Vulkan. You pick a
+game from its launcher and play it with a DualSense, or with a USB keyboard
+and mouse.
+
+It's experimental. A handful of games run well, many won't run yet, and it
+has only been tested on one console, on firmware 12.02.
+
+## What runs
+
+| Game | How it runs |
+| --- | --- |
+| Warcraft III: Reign of Chaos (1.27a) | Plays: menus, skirmish, campaign cinematics with sound, widescreen with RenderEdge. Direct3D 9 through DXVK. |
+| Space Cadet Pinball | Plays full screen with the DualSense. |
+| Wine's Minesweeper | Plays with a stick-driven pointer. |
+| 7-Zip, nbench, a pi program | Benchmarks. The translator reaches about 85–93% of the console's native speed ([details](docs/DBT_BENCHMARK.md)). |
+
+Game profiles, controller presets and install recipes live in
+[prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles).
+If you get a game running, a profile there is the best way to share it.
+
+## Try it
+
+You need a PS5 that can run homebrew: an FTP server and ELF loader
+(for example from [ps5-payload-dev](https://github.com/ps5-payload-dev)), a
+loader that installs apps from `/data/homebrew` (such as
+[ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)), and the
+[Lapy JB daemon](https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon), which
+gives the app access to `/data` where your games live. You also need your own
+copy of the game, and a Linux PC to install it on.
+
+[Getting started](docs/GETTING_STARTED.md) walks through the whole setup, and
+[installing games](docs/INSTALLING_GAMES.md) covers adding a game.
+
+### Other firmwares
+
+Everything so far was tested on firmware 12.02. The app itself doesn't use
+firmware-specific offsets. The parts that depend on firmware are the
+jailbreak, the loader and the Lapy JB daemon (which lists 3.00–12.00). If you
+try another firmware, please open an issue saying what worked and what
+didn't, with the firmware version. That's exactly the information we're
+missing.
+
+## How it works
 
 ```text
-Windows application → Wine (PE + Unix side, in the title) → prospero-win → PS5 services
-      PE32 code ──► prospero-win DBT (WoW64 CPU)        graphics: GDI → PS5 user driver → VideoOut
+Windows game (.exe)
+  └─ Wine: its Windows DLLs, its Unix side and its server, all inside the PS5 app
+       ├─ 32-bit code ─► prospero-win's x86 translator (Wine's WoW64 CPU)
+       ├─ Direct3D 8–11 ─► DXVK ─► Vulkan (RADV) ─► the TV
+       ├─ 2D drawing (GDI), movies ─► the app's own display path ─► the TV
+       └─ sound, DualSense, USB keyboard and mouse ─► the PS5's own services
 ```
 
-## Current status
+Each game starts in a fresh process with its own Wine prefix, and closing it
+takes you back to the launcher. [Architecture](docs/ARCHITECTURE.md) and
+[Wine on the PS5](docs/WINE_PS5_BUILD.md) go into the details.
 
-On an owned PS5 running firmware 12.02, the title boots into its own
-launcher, which lists the games described by profiles under
-`/data/prospero-win`. Each game runs in its own title process through Wine.
-The original Windows Space Cadet Pinball (PE32, through the DBT) has been
-played full-screen with the DualSense, and Wine's Minesweeper (PE64) with a
-stick-driven cursor drawn by Wine's PS5 user driver. A profile chooses the
-prefix, the desktop size and scaling, the button bindings or an XInput
-controller, and the pointer.
-
-The DBT runs 7-Zip's benchmark at 91% of native speed on an x86-64 host,
-nbench at 92–97% and a Super PI-style pi program at 98%. On the console it
-rates 7-Zip at about 3360 MIPS, an estimated 85–93% of the console's native
-speed across these benchmarks ([DBT benchmark](docs/DBT_BENCHMARK.md)). Fonts, audio through Wine's PS5
-driver and the XInput controller are built and host-tested; their console
-validation is recorded in [hardware validation](docs/HARDWARE_VALIDATION.md)
-as it lands.
-Direct3D goes through unmodified DXVK 2.6.2 on the console's Vulkan, either
-`ps5-vulkan` or RADV (Mesa). DXVK's D3D8–D3D11 test programs, 32- and
-64-bit, read back correct frames on both, draw with compiled shaders on
-RADV, and fill a 4K screen from a 1080p swapchain on RADV
-([Vulkan](docs/WINE_PS5_BUILD.md#vulkan)); no Direct3D game has been run yet.
-
-## Build and test
+## Building from source
 
 ```sh
-make -j2 all          # host tests, publication audit, whitespace
-make -j2 sanitize
-tools/build_native.sh # the PS5 title (needs the pinned payload SDK)
+make -j2 all            # host tests, the publication audit, whitespace
+tools/build_native.sh   # the PS5 app (needs the pinned PS5 payload SDK)
+tools/build_wine_ps5.sh # Wine's PS5 modules
 ```
 
-Wine's PRXs are built by `tools/build_wine_ps5.sh`; see
-[development](docs/DEVELOPMENT.md). Games are user-supplied: copy an
-installed game into a prefix under `/data/prospero-win` and add a profile.
-Profiles checked on the console, their input presets and the benchmark
-programs' build are kept in [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles). Do not commit Windows binaries,
-game data, captures, telemetry transcripts, SDK files or private paths.
+[Development](docs/DEVELOPMENT.md) covers the toolchains and checks. Pull
+requests are welcome: [contributing](CONTRIBUTING.md) explains the ground
+rules.
 
-## Documentation
+## What this project is not
 
-- [Architecture](docs/ARCHITECTURE.md) · [Wine integration](docs/WINE_INTEGRATION.md)
-- [Wine on the PS5](docs/WINE_PS5_BUILD.md): build, patches, drivers, profiles
-- [Hardware validation](docs/HARDWARE_VALIDATION.md) · [Roadmap](docs/ROADMAP.md)
-- [DBT benchmark](docs/DBT_BENCHMARK.md) · [Development](docs/DEVELOPMENT.md) · [Contributing](CONTRIBUTING.md)
+It doesn't bypass DRM or anti-cheat, it doesn't load kernel drivers, and it
+doesn't ship games. Please don't open issues or pull requests with Windows
+binaries, game files or keys.
 
-Pinball is a compatibility test, not the scope of the project. DRM,
-anti-cheat, kernel drivers and distribution of proprietary game files are out
-of scope. Hardware claims are tied to exact artifacts and structured
-`ps5log/1` evidence; screenshots alone do not establish runtime correctness.
+## License
 
-Licensed under [LGPL-2.1-or-later](LICENSE) · See [licensing notes](LICENSING.md)
-and [third-party notices](NOTICE.md). `PPSA99995` is a local development
-identifier, not an official Sony assignment.
+[LGPL-2.1-or-later](LICENSE), like Wine. See the [licensing notes](LICENSING.md)
+and [third-party notices](NOTICE.md). `PPSA99995` is a local title ID we
+picked, not one assigned by Sony.

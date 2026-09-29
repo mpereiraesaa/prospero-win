@@ -1,29 +1,32 @@
 # Documentation
 
-This directory contains the public technical documentation for prospero-win.
-Raw captures, telemetry transcripts, reverse-engineering workspaces,
-proprietary inputs, agent reports, chronological bring-up notes and internal
-planning stay outside the standalone repository.
+## Playing
 
-## Start here
+- [Getting started](GETTING_STARTED.md): what you need on the PS5, installing
+  the app, your first game, getting a log.
+- [Installing games](INSTALLING_GAMES.md): installing a game on your PC with
+  a Lutris recipe and copying it to the PS5.
+- [Controls](CONTROLS.md): the DualSense presets, Xbox controller mode, USB
+  keyboard and mouse.
 
-- [Architecture](ARCHITECTURE.md): layers, repository layout, the title, the
-  DBT's ownership rules.
-- [Wine integration](WINE_INTEGRATION.md): Wine's WoW64 layer with the DBT as
-  its i386 CPU, measured platform facts, profiles and prefixes, graphics.
-- [Wine on the PS5](WINE_PS5_BUILD.md): building Wine's Unix side, the patch
-  series, the user, audio and XInput drivers, starting Wine in the title.
-- [Development](DEVELOPMENT.md): local gates and builds.
-- [Installing games](INSTALLING_GAMES.md): Lutris installer scripts run on
-  the PC with the pinned Wine, one prefix and profile per game.
-- [Hardware validation](HARDWARE_VALIDATION.md): accepted claims and evidence
-  requirements.
-- [Telemetry](TELEMETRY.md): the title's `ps5log/1` records.
-- [Pinball case study](CASE_STUDY_PINBALL.md): the first playable PE32 target.
-- [Box86 opcode catalog](BOX86_OPCODE_CATALOG.md): generated DBT coverage
-  checklist.
-- [DBT benchmark](DBT_BENCHMARK.md): 7-Zip's benchmark, DBT against native,
-  mode bisection and the gaps it shows.
+## How it works
 
-Historical phase plans and day-to-day compatibility notebooks are deliberately
-not part of the public documentation surface.
+- [Architecture](ARCHITECTURE.md): the layers, the repository, the app and
+  the x86 translator.
+- [Wine integration](WINE_INTEGRATION.md): Wine's WoW64 layer with the
+  translator as its 32-bit CPU, profiles and prefixes, graphics.
+- [Wine on the PS5](WINE_PS5_BUILD.md): building Wine for the PS5, the patch
+  series, the display, sound and controller drivers, and the console
+  bring-up notes.
+- [Telemetry](TELEMETRY.md): the log the app sends, record by record.
+
+## Working on it
+
+- [Development](DEVELOPMENT.md): checks and builds.
+- [Hardware validation](HARDWARE_VALIDATION.md): what counts as working on
+  the console, and the evidence behind it.
+- [DBT benchmark](DBT_BENCHMARK.md): how fast the translator is, measured
+  against native code.
+- [Box86 opcode catalog](BOX86_OPCODE_CATALOG.md): the translator's
+  instruction coverage checklist.
+- [Pinball case study](CASE_STUDY_PINBALL.md): the first game that ran.
