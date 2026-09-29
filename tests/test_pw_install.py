@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import pw_install  # noqa: E402
 
 FAKE_WINE = r"""#!/bin/sh
-echo "wine $* | prefix=$WINEPREFIX | overrides=$WINEDLLOVERRIDES" >> "$FAKE_LOG"
+echo "wine $* | prefix=$WINEPREFIX | overrides=$WINEDLLOVERRIDES | user=$USER" >> "$FAKE_LOG"
 case "$1" in
 wineboot)
     mkdir -p "$WINEPREFIX/drive_c/windows/system32" "$WINEPREFIX/drive_c/windows/syswow64"
@@ -130,6 +130,7 @@ def main() -> int:
         assert f"prefix={prefix}" in calls
         assert "wine wineboot --init" in calls and "mscoree,mshtml=" in calls
         assert "ddraw=n" in calls and "winemenubuilder.exe=d" in calls
+        assert "user=prospero" in calls
         assert (prefix / "installer-args").read_text().split()[1:] == ["/S", "/LANG=es"]
         registry = (prefix / "user.reg").read_text()
         assert '"reswidth"=dword:00000a00' in registry

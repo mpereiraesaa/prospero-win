@@ -195,6 +195,9 @@ class Installer:
         # the PC's desktop.
         overrides = {"winemenubuilder.exe": "d", **self.overrides}
         overrides.update({str(k).removesuffix(".dll"): str(v) for k, v in ((task or {}).get("overrides") or {}).items()})
+        # The title runs Wine as USER=prospero (native/wine64_main.c): the
+        # prefix's profile folder and registry paths must be that user's.
+        env.update(USER="prospero", LOGNAME="prospero")
         env.update(WINEPREFIX=str(Path(prefix).resolve()), WINEARCH="win64",
                    WINEDEBUG=env.get("WINEDEBUG", "-all"),
                    WINEDLLOVERRIDES=";".join(f"{name}={mode}" for name, mode in overrides.items()))

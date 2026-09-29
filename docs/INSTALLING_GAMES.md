@@ -7,6 +7,22 @@ writes is one the console reads as is. The console's Wine does not start
 processes (patch 0550 turns process creation off; whether a title could
 fork has not been measured), so an installer could not run there today.
 
+## The PC's Wine
+
+`tools/build_host_wine.sh` builds it: the revision the title runs, with the
+same patch series (the PS5-only parts compile only for the console), for the
+desktop, with X11, FreeType, Vulkan and audio, so installers open their
+windows on the PC and DXVK can be tried there. It is installed stripped, as
+Wine's distribution packages are, and prints the path of its `wine`:
+
+```sh
+tools/build_host_wine.sh --source <pinned Wine checkout> --jobs 8
+```
+
+Installs run as the user `prospero`, as the title does
+(`native/wine64_main.c`), so the prefix's profile folder is
+`C:\users\prospero` on both.
+
 ## Recipes: Lutris installer scripts
 
 A game's recipe is a [Lutris installer
@@ -75,7 +91,34 @@ the exe. The generated profile passes prospero-win-profiles'
 
 ## Prefix size
 
-`wineboot` copies Wine's PE modules into the prefix. From a development
-build they carry debug information, about 1.5 GB per prefix; stripped, as
-Wine's distribution packages are, about 300 MB. A stripped installation of
-the pinned Wine for the PC is the next step.
+`wineboot` copies Wine's PE modules into the prefix: about 1.5 GB each from
+a development build, which carries debug information, and about 300 MB from
+`build_host_wine.sh`'s stripped installation.
+
+## To the console and back
+
+`tools/pw_prefix.py` copies a game to `/data/prospero-win` over the
+console's FTP server and brings back what the console changed:
+
+```sh
+python3 tools/pw_prefix.py push <slug> --library ~/prospero-library --host <PS5 IP>
+python3 tools/pw_prefix.py pull <slug> --library ~/prospero-library --host <PS5 IP>
+python3 tools/pw_prefix.py status <slug> --library ~/prospero-library --host <PS5 IP>
+```
+
+- **push** sends `prefixes/<slug>` and `profiles/<slug>.profile`, and adds
+  the profile to `profiles.lst` when the console has one. A manifest,
+  `LIBRARY/.pw/<slug>.json`, records each file's size and SHA-256, so later
+  pushes send only what changed; `--delete` also removes what the PC no
+  longer has. Each file's size is checked after it is stored.
+- The console's prefix is the game's live state (settings in the registry,
+  saves beside the game). A push refuses a console prefix this PC never
+  synced, or one whose registry changed since the last sync: **pull**
+  first, which fetches every file the console changed. `--force` overrides.
+- A title cannot make symbolic links: prospero-win keeps them in a
+  `.pw-symlinks` table per directory. A push writes the links inside the
+  prefix there (`dosdevices`' `c:` and `z:`); links out of it (Wine's
+  Desktop or Documents into the PC's home) become empty directories, and
+  serial and parallel port links are left out.
+- In the lab, claim the console in the shared mailbox around a push, as
+  for any console operation.

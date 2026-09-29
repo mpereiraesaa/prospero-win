@@ -250,3 +250,6 @@ wine/ps5/pw_vulkan_radv.c
 docs/INSTALLING_GAMES.md
 tests/test_pw_install.py
 tools/pw_install.py
+tests/test_pw_prefix.py
+tools/build_host_wine.sh
+tools/pw_prefix.py
