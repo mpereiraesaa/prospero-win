@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 29 Sep 2026 21:00:00 +0200
+Subject: [PATCH] win32u: Let applications set display modes on the PS5.
+
+The PS5 user driver reported its desktop's size as the only display mode
+and refused every change. For such a driver, win32u offers the usual
+modes below that one, keeps the one an application sets, and maps the
+application's windows onto the desktop, scaled uniformly from the top
+left. It needs the driver to accept the change and to show that part.
+Warcraft III sets 800x600 for its cinematics; refused, they were drawn
+unscaled in the top left corner. The driver now accepts modes up to the
+desktop's size and presents the part a mode covers, which the title
+centres on the TV as it does any frame.
+---
+ dlls/win32u/ps5drv.c | 47 ++++-
+ 1 file changed, 45 insertions(+), 2 deletions(-)
+
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -86,6 +86,11 @@
+ 
+ static pthread_mutex_t screen_lock = PTHREAD_MUTEX_INITIALIZER;
+ static UINT screen_width = 800, screen_height = 600;
++/* The display mode an application set, at most the desktop's. win32u maps
++ * a smaller mode onto the desktop scaled uniformly from its top left, so
++ * frames show that part, content_width x content_height, which the title
++ * then centres on the TV as it does any frame. */
++static UINT content_width, content_height;
+ static UINT32 *screen;
+ static struct ps5_window windows[PS5_MAX_WINDOWS];
+ static UINT window_count;
+@@ -155,7 +160,7 @@
+ /* screen_lock held: the part of the screen a frame shows */
+ static RECT view_rect(void)
+ {
+-    RECT screen_rect = {0, 0, screen_width, screen_height}, box = {0, 0, 0, 0};
++    RECT screen_rect = {0, 0, content_width, content_height}, box = {0, 0, 0, 0};
+     UINT i;
+ 
+     if (!view_windows) return screen_rect;
+@@ -174,7 +179,8 @@
+     view = view_rect();
+     width = view.right - view.left;
+     height = view.bottom - view.top;
+-    if ((!cursor_image || !frame) && width == (INT)screen_width && height == (INT)screen_height)
++    if ((!cursor_image || !frame) && width == (INT)screen_width && height == (INT)screen_height &&
++        !view.left && !view.top)
+     {
+         present_frame( screen, screen_width, screen_height, screen_width * 4 );
+         return;
+@@ -214,6 +220,43 @@
+     return STATUS_SUCCESS;
+ }
+ 
++/* An application's display mode, one win32u offers below the desktop's
++ * (Warcraft III plays its cinematics at 800x600): win32u keeps it and maps
++ * the application's windows onto the desktop, and frames show the part the
++ * mode covers there. */
++static LONG ps5_ChangeDisplaySettings( DEVMODEW *displays, const WCHAR *primary_name, HWND hwnd, DWORD flags,
++                                       void *param )
++{
++    DEVMODEW *mode;
++
++    for (mode = displays; mode->dmSize; mode = (DEVMODEW *)((char *)(mode + 1) + mode->dmDriverExtra))
++    {
++        UINT width, height;
++
++        if (wcsicmp( mode->dmDeviceName, primary_name )) continue;
++        width = (mode->dmFields & DM_PELSWIDTH) ? mode->dmPelsWidth : screen_width;
++        height = (mode->dmFields & DM_PELSHEIGHT) ? mode->dmPelsHeight : screen_height;
++        if (!width || !height || width > screen_width || height > screen_height) return DISP_CHANGE_BADMODE;
++        if (flags & CDS_TEST) return DISP_CHANGE_SUCCESSFUL;
++        pthread_mutex_lock( &screen_lock );
++        /* scaled uniformly to fit the desktop, as win32u maps it */
++        if ((UINT64)width * screen_height <= (UINT64)height * screen_width)
++        {
++            content_width = (UINT)((UINT64)width * screen_height / height);
++            content_height = screen_height;
++        }
++        else
++        {
++            content_width = screen_width;
++            content_height = (UINT)((UINT64)height * screen_width / width);
++        }
++        TRACE( "mode %ux%u shown as %ux%u\n", width, height, content_width, content_height );
++        present_screen();
++        pthread_mutex_unlock( &screen_lock );
++    }
++    return DISP_CHANGE_SUCCESSFUL;
++}
++
+ /***********************************************************************
+  *           window surfaces
+  */
+@@ -736,6 +779,7 @@
+ static const struct user_driver_funcs ps5_user_driver =
+ {
+     .pUpdateDisplayDevices = ps5_UpdateDisplayDevices,
++    .pChangeDisplaySettings = ps5_ChangeDisplaySettings,
+     .pCreateWindow = ps5_CreateWindow,
+     .pCreateWindowSurface = ps5_CreateWindowSurface,
+     .pWindowPosChanged = ps5_WindowPosChanged,
+@@ -767,6 +811,8 @@
+         screen_width = width;
+         screen_height = height;
+     }
++    content_width = screen_width;
++    content_height = screen_height;
+     view_windows = mode && !strcmp( mode, "window" );
+     SetRect( &view, 0, 0, screen_width, screen_height );
+     if (!(screen = calloc( (size_t)screen_width * screen_height, sizeof(*screen) )) ||
