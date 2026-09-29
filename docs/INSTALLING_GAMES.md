@@ -43,6 +43,9 @@ python3 tools/pw_install.py recipe.yml --library ~/prospero-library \
 - **`files`**: a `N/A:` file (the user's own copy) is given with
   `--file ID=PATH`; `http(s)` files are downloaded into `$CACHE`, which is
   deleted afterwards (`--keep-cache` keeps it). Steam sources are refused.
+  A file given as `{url: ..., filename: ..., sha256: ...}` (our key; Lutris
+  ignores it) is kept in the download cache and checked against its hash on
+  every install, as a third-party mod or DLL should be.
 - **Interactive installers** open their window on the PC: the user clicks
   through them and types keys there. Nothing records what is typed.
 - **`input_menu`** takes `--input ID=VALUE`, asks on a terminal, or uses its

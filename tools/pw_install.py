@@ -170,14 +170,20 @@ class Installer:
     def resolve_files(self) -> None:
         for item in self.script.get("files") or []:
             (file_id, spec), = item.items()
-            filename = None
+            filename = digest = None
             if isinstance(spec, dict):
-                filename, spec = spec.get("filename"), spec.get("url", "")
+                # sha256 is ours, not Lutris's: a download pinned to its hash,
+                # as a third-party mod or DLL should be (Lutris ignores it).
+                filename, digest, spec = spec.get("filename"), spec.get("sha256"), spec.get("url", "")
             spec = self.expand(str(spec))
             if file_id in self.given_files:
                 path = Path(self.given_files[file_id]).expanduser().resolve()
             elif spec.startswith("N/A"):
                 raise InstallError(f"file {file_id!r}: {spec[4:] or 'supply it'} (--file {file_id}=PATH)")
+            elif digest is not None:
+                if not re.match(r"^(https?|file)://", spec):
+                    raise InstallError(f"file {file_id!r}: sha256 is for downloads, not {spec!r}")
+                path = fetch(spec, str(digest).lower(), filename or spec.rsplit("/", 1)[-1])
             elif re.match(r"^https?://", spec):
                 path = self.cache / (filename or spec.rsplit("/", 1)[-1])
                 self.cache.mkdir(parents=True, exist_ok=True)

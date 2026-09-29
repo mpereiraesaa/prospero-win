@@ -195,6 +195,29 @@ def main() -> int:
         shutil.rmtree(root / "glib")
         assert pw_install.main([str(gecko), "--library", str(root / "glib"), "--wine", str(wine)]) == 1
 
+        # A file pinned by sha256 is downloaded to the cache and checked; a
+        # wrong hash fails the install.
+        mod = root / "mod.mix"
+        mod.write_bytes(pe(32))
+        pinned = hashlib.sha256(mod.read_bytes()).hexdigest()
+        for digest, expected in ((pinned, 0), ("0" * 64, 1)):
+            for cached in pw_install.DOWNLOADS.glob("pinned-*.mix"):
+                cached.unlink()
+            modded = root / "modded.yml"
+            modded.write_text(
+                "game_slug: modded\nscript:\n  game: {exe: drive_c/Games/Test/game.exe}\n"
+                f"  files:\n  - mod: {{url: '{mod.as_uri()}', filename: pinned-mod.mix, sha256: \"{digest}\"}}\n"
+                "  - setup: \"N/A:setup\"\n  installer:\n"
+                "  - task: {name: create_prefix, prefix: $GAMEDIR, arch: win32}\n"
+                "  - task: {name: wineexec, executable: setup}\n"
+                "  - copy: {src: mod, dst: $GAMEDIR/drive_c/Games/Test}\n")
+            shutil.rmtree(root / "modlib", ignore_errors=True)
+            assert pw_install.main([str(modded), "--library", str(root / "modlib"), "--wine", str(wine),
+                                    "--file", f"setup={setup}"]) == expected
+            if not expected:
+                copied = root / "modlib" / "prefixes" / "modded" / "drive_c/Games/Test/pinned-mod.mix"
+                assert copied.read_bytes() == mod.read_bytes()
+
         # PE architecture from the optional header.
         assert pw_install.pe_architecture(setup) == "pe32"
         (root / "x64.exe").write_bytes(pe(64))
