@@ -181,6 +181,7 @@ wine/patches/0440-win32u-ps5-driver-cursor-edges.patch
 wine/patches/0450-winevulkan-host-display-extension.patch
 wine/patches/0455-win32u-vulkan-optional-host-external-capabilities.patch
 wine/patches/0456-win32u-vulkan-keep-swapchain-chain-when-scaling.patch
+wine/patches/0457-win32u-vulkan-placed-map-properties-khr.patch
 wine/patches/0460-win32u-ps5-driver-vulkan-display-plane.patch
 wine/patches/0470-xinput-ps5-title-controller.patch
 wine/patches/0560-ntdll-stderr-output-sink.patch

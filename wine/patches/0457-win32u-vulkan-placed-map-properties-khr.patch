@@ -1,0 +1,32 @@
+From 1803cf73d259ca7efb88f94ad2d06062682632a0 Mon Sep 17 00:00:00 2001
+From: Manuel Pereira <manuelpereiralds@gmail.com>
+Date: Tue, 29 Sep 2026 10:53:45 +0200
+Subject: [PATCH] win32u: Query placed-map properties through the KHR entry
+ point.
+
+The placed-map check for WoW64 processes asked the host for its properties
+with the core vkGetPhysicalDeviceProperties2, which a Vulkan 1.0 instance
+does not return (win32u's own instances are 1.0). A host offering
+VK_EXT_map_memory_placed, like RADV on the PS5, then crashed every 32-bit
+process on a NULL call. Use vkGetPhysicalDeviceProperties2KHR, as the
+features query just before it and the external memory host path already do.
+---
+ dlls/win32u/vulkan.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
+index 10a3297aae..c76971f0fe 100644
+--- a/dlls/win32u/vulkan.c
++++ b/dlls/win32u/vulkan.c
+@@ -515,7 +515,7 @@ static VkResult init_physical_device( struct vulkan_physical_device *physical_de
+             VkPhysicalDeviceMapMemoryPlacedPropertiesEXT map_placed_props = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAP_MEMORY_PLACED_PROPERTIES_EXT};
+             VkPhysicalDeviceProperties2 props = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,.pNext = &map_placed_props};
+ 
+-            instance->p_vkGetPhysicalDeviceProperties2( host_physical_device, &props );
++            instance->p_vkGetPhysicalDeviceProperties2KHR( host_physical_device, &props );
+             physical_device->map_placed_align = map_placed_props.minPlacedMemoryMapAlignment;
+             TRACE( "Using placed map with alignment %u\n", physical_device->map_placed_align );
+         }
+-- 
+2.43.0
+
