@@ -171,8 +171,8 @@ int pw_wine_pointer_move(PwWinePointer *pointer, int32_t dx, int32_t dy, PwWineI
     int64_t x, y;
 
     if (!pointer || !out) return 0;
-    x = clamp(pointer->x + ((int64_t)dx << 16), pointer->width);
-    y = clamp(pointer->y + ((int64_t)dy << 16), pointer->height);
+    x = clamp(pointer->x + ((int64_t)dx * 65536), pointer->width);
+    y = clamp(pointer->y + ((int64_t)dy * 65536), pointer->height);
     int moved = (x >> 16) != (pointer->x >> 16) || (y >> 16) != (pointer->y >> 16);
     pointer->x = x;
     pointer->y = y;
