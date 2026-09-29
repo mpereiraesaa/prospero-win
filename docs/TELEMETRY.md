@@ -21,6 +21,7 @@ Every record the title writes starts with `PW_WINE64`:
 | `launcher` / `launcher chose` | VideoOut and pad status, games, cycle; the chosen game or `sync` |
 | `restart` / `restart failed` | the `LoadExec` target, cycle, reason and eboot; the failure code |
 | `profile` | the game's id, prefix, desktop, scaling, view and input mode |
+| `winedebug` | the game's own `WINEDEBUG`, when its profile's `[debug]` section sets one |
 | `ntdll` / `load` / `environment` / `run` | the runtime found, `ntdll.prx` loaded (stage, module, segments), Wine's environment, `__wine_main` started |
 | `display` / `audio` | the present sink, input and XInput hooks, VideoOut; the audio sink and port |
 | `alive` | about once a second: Wine's output lines, frames delivered, shown and rejected with the last size, inputs posted and refused; then Wine's VM call counters (`mmap=`) |

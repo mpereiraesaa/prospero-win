@@ -186,7 +186,7 @@ static int display_field(PwGameDisplay *display, uint32_t *seen, const uint8_t *
     return PW_ERR_UNSUPPORTED;
 }
 
-enum { SECTION_NONE, SECTION_APPLICATION, SECTION_DISPLAY, SECTION_INPUT };
+enum { SECTION_NONE, SECTION_APPLICATION, SECTION_DISPLAY, SECTION_INPUT, SECTION_DEBUG };
 
 /* One line: its trimmed extent and where the next begins. */
 static size_t next_line(const uint8_t *bytes, size_t length, size_t cursor,
@@ -208,7 +208,28 @@ static int section_of(const uint8_t *begin, const uint8_t *end)
     begin++, end--;
     return is(begin, (size_t)(end - begin), "application") ? SECTION_APPLICATION :
            is(begin, (size_t)(end - begin), "display") ? SECTION_DISPLAY :
-           is(begin, (size_t)(end - begin), "input") ? SECTION_INPUT : -1;
+           is(begin, (size_t)(end - begin), "input") ? SECTION_INPUT :
+           is(begin, (size_t)(end - begin), "debug") ? SECTION_DEBUG : -1;
+}
+
+/* [debug] winedebug = Wine's channel list (e.g. +seh,warn+module,-all):
+ * letters, digits and _ + - , = . only, so nothing but a WINEDEBUG value
+ * reaches Wine's environment. */
+static int debug_field(PwGameProfile *profile, const uint8_t *key, size_t key_length,
+                       const uint8_t *value, size_t value_length)
+{
+    if (!is(key, key_length, "winedebug")) return PW_ERR_MALFORMED;
+    if (!value_length || value_length >= sizeof(profile->winedebug) || profile->winedebug[0])
+        return PW_ERR_MALFORMED;
+    for (size_t i = 0; i < value_length; i++) {
+        uint8_t c = value[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '_' || c == '+' || c == '-' || c == ',' || c == '=' || c == '.'))
+            return PW_ERR_MALFORMED;
+    }
+    memcpy(profile->winedebug, value, value_length);
+    profile->winedebug[value_length] = 0;
+    return PW_OK;
 }
 
 /* key = value lines of the display/input sections; application lines are
@@ -246,7 +267,9 @@ static int parse_sections(const uint8_t *bytes, size_t length, PwGameProfile *pr
         value = equals + 1;
         trim(&value, &end);
         if (begin == key_end) return PW_ERR_MALFORMED;
-        int status = section == SECTION_DISPLAY ?
+        int status = section == SECTION_DEBUG ?
+            debug_field(profile, begin, (size_t)(key_end - begin), value, (size_t)(end - value)) :
+            section == SECTION_DISPLAY ?
             display_field(&profile->display, &display_seen, begin, (size_t)(key_end - begin),
                           value, (size_t)(end - value)) :
             input_field(input_only ? input_only : &profile->input, begin,

@@ -18,6 +18,10 @@
  *   cross = space          ; <button> = <key> | mouse_left | mouse_right |
  *   r2 = mouse_left        ;            mouse_middle | vk:0xNN | none
  *
+ *   [debug]
+ *   winedebug = +seh,+virtual   ; Wine's debug channels for this game (default:
+ *                               ; the title's, err+all,+loaddll,+process)
+ *
  * Buttons: cross circle square triangle l1 r1 l2 r2 l3 r3 up down left
  * right options create touchpad. An input preset file holds only an [input]
  * section; the profile's own [input] lines override it. Unknown sections,
@@ -32,6 +36,7 @@ enum {
     PW_GAME_DESKTOP_MIN_W = 320, PW_GAME_DESKTOP_MIN_H = 200,
     PW_GAME_DESKTOP_MAX_W = 3840, PW_GAME_DESKTOP_MAX_H = 2160,
     PW_GAME_MOUSE_SPEED_DEFAULT = 1200, PW_GAME_MOUSE_SPEED_MAX = 20000,
+    PW_GAME_WINEDEBUG_CAPACITY = 128,
 };
 
 typedef enum PwGameScaling { PW_GAME_SCALING_FIT = 0, PW_GAME_SCALING_INTEGER,
@@ -67,6 +72,8 @@ typedef struct PwGameProfile {
     PwAppProfile app;
     PwGameDisplay display;
     PwGameInput input;          /* this profile's own [input] lines */
+    /* [debug] winedebug: WINEDEBUG for this game, empty for the title's. */
+    char winedebug[PW_GAME_WINEDEBUG_CAPACITY];
 } PwGameProfile;
 
 /* Parse a whole profile. [application] must come first; [display] and

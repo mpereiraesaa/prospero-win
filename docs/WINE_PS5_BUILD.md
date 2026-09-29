@@ -634,6 +634,11 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   - `[input]` binds each DualSense button to a key or a mouse button, and a
     stick moves the pointer. `preset = <name>` shares a mapping from
     `<root>/input/<name>.input`.
+  - `[debug] winedebug` sets `WINEDEBUG` for that game in place of the
+    title's (`err+all,+loaddll,+process`), without rebuilding it, e.g.
+    `winedebug = err+all,+seh` for one run. Only a channel list is taken
+    (letters, digits and `_ + - , = .`), and the log names it
+    (`PW_WINE64 winedebug=`). Change it and push the profile again.
   - `mode = xinput` also makes the DualSense the game's XInput controller
     0 (see [XInput controller](#xinput-controller)).
     - Cross, Circle, Square and Triangle are A, B, X and Y. L1/R1 are the

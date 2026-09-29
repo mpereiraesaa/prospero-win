@@ -548,6 +548,11 @@ int main(int argc, char **argv)
         /* The game's own DLLs over Wine's builtins, e.g. DXVK's d3d11 and dxgi. */
         if (game->app.dll_overrides[0])
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINEDLLOVERRIDES", game->app.dll_overrides };
+        /* [debug] winedebug: this game's channels in place of the title's. */
+        if (game->winedebug[0]) {
+            extra[0].value = game->winedebug;
+            PS5LOG_LOG("PW_WINE64 winedebug=%s", game->winedebug);
+        }
         PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s input=%s "
                    "preset=%s mode=%s mouse=%d dll_overrides=%s", game->app.id, prefix,
                    desktop[0] ? desktop : "default",

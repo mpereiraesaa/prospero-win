@@ -58,6 +58,12 @@ static void test_profile(void)
     assert(p.display.width == 320 && p.input.mouse == PW_GAME_STICK_LEFT);
     assert(parse(APP "[display]\ndesktop = 3840x2160\n[input]\nmouse = none\ncross = enter\n", &p) == PW_OK);
     assert(p.input.mouse == PW_GAME_STICK_NONE && p.input.bindings[CROSS].code == 0x0d);
+
+    /* [debug] winedebug: a game's own Wine channels, anywhere after [application]. */
+    assert(!p.winedebug[0]);
+    assert(parse(APP "[debug]\nwinedebug = +seh,warn+module,-all\n[display]\nview = desktop\n", &p) == PW_OK);
+    assert(!strcmp(p.winedebug, "+seh,warn+module,-all") && p.display.view == PW_GAME_VIEW_DESKTOP);
+    assert(parse(APP "[debug]\nwinedebug = trace+d3d.9,err=all\n", &p) == PW_OK);
 }
 
 static void test_refusals(void)
@@ -67,6 +73,15 @@ static void test_refusals(void)
         APP "[display]\n[display]\n",                          /* duplicate section */
         APP "[input]\n[input]\n",
         APP "[sound]\n",                                       /* unknown section */
+        APP "[debug]\nwinedebug = +seh\n[debug]\n",            /* duplicate section */
+        APP "[debug]\nwinedebug =\n",                         /* empty */
+        APP "[debug]\nwinedebug = +seh;rm\n",                  /* not a channel list */
+        APP "[debug]\nwinedebug = +seh all\n",
+        APP "[debug]\nwinedebug = $HOME\n",
+        APP "[debug]\nwinedebug = +seh\nwinedebug = +relay\n",  /* twice */
+        APP "[debug]\nrelay = on\n",                           /* unknown key */
+        APP "[debug]\nwinedebug = +aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",   /* too long */
         APP "[display\n",
         APP "[]\n",
         APP "[display]\ncolour = 32\n",                        /* unknown key */
