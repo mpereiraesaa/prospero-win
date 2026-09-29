@@ -21,7 +21,7 @@ for path in PUBLIC_STATUS_DOCS:
 
 readme = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
 # The public status names what runs on the console today, not a removed path.
-assert "runs Wine itself inside a PS5 title" in readme
+assert "carries its own copy of [Wine]" in readme and "all inside the PS5 app" in readme
 assert "direct Win32 path has been validated" not in readme
 
 print("prospero-win status vocabulary: PASS")

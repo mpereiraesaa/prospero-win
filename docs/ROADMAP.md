@@ -1,18 +1,15 @@
-# Public direction
+# Where it's going
 
-prospero-win does not publish its internal task queue or chronological
-bring-up plan. The public direction is intentionally concise:
+- **More games.** Warcraft III runs through DXVK on RADV; the next step is a
+  wider set of Direct3D 8–11 games, fixing what they need in Wine's PS5
+  drivers and patches rather than game by game.
+- **Other firmwares.** Everything so far was tested on 12.02. Reports from
+  other firmwares tell us what depends on the firmware.
+- **OpenGL games**, through the PS5's own OpenGL, alongside DXVK.
+- **DirectInput controllers.** Today the DualSense reaches games as a
+  keyboard and mouse, or as an Xbox controller through XInput.
+- **Speed.** The x86 translator reaches 85–93% of native speed on the
+  benchmarks; startup and frame pacing come next, measured against native
+  runs.
 
-- keep Pinball (PE32) and Minesweeper (PE64) stable as hardware regressions;
-- extend compatibility from evidence produced by independent applications,
-  fixing gaps in Wine's PS5 patches and drivers rather than per title;
-- make startup and frame pacing competitive through the DBT and the
-  presentation path, measured with exact control comparisons;
-- use DXVK over the console's Vulkan (`ps5-vulkan` or RADV) for Direct3D
-  rather than building another D3D implementation, and move from DXVK's
-  test programs to real Direct3D games.
-
-Current capabilities and limitations are documented in
-[ARCHITECTURE.md](ARCHITECTURE.md) and
-[HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md). Only completed, repeatable
-results are promoted into the public status in the project README.
+Pinball and Minesweeper stay as regression tests for every change.
