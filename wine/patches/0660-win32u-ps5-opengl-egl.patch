@@ -1,19 +1,19 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Prospero Win <prospero-win@invalid>
-Date: Tue, 29 Sep 2026 23:50:00 +0200
+Date: Wed, 30 Sep 2026 00:00:00 +0200
 Subject: [PATCH] win32u: route PS5 WGL through the static EGL SDK
 
-Enable Wine's existing EGL WGL frontend against the PS5 OpenGL Core SDK.
-The SDK has a static EGL implementation and no EGL platform-display or
-client-extension entry points, so the PS5 build binds the core EGL exports
+Enable Wine's existing EGL WGL frontend against the PS5 OpenGL SDK. The
+SDK has a static EGL implementation and no EGL platform-display or
+client-extension entry points, so the PS5 build binds core EGL exports
 directly and uses EGL_DEFAULT_DISPLAY with Wine's offscreen framebuffer
 surfaces. The regular PS5 user driver remains responsible for presenting
 those surfaces through its existing GDI path.
 
-The SDK creates Core 3.3 contexts for legacy WGL context requests so modern
-applications using the Core API can start. The SDK does not implement the
-fixed-function API or a desktop compatibility profile, so older applications
-that use those features remain unsupported.
+The SDK provides Core and compatibility contexts. A legacy WGL context
+request has no attributes, so pass EGL's compatibility-profile default through
+to support fixed-function applications. Individual Windows games remain
+unvalidated.
 ---
 --- a/dlls/win32u/driver.c
 +++ b/dlls/win32u/driver.c
@@ -140,37 +140,19 @@ that use those features remain unsupported.
      platform->native_display = 0;
  }
  
-@@ -1364,6 +1394,15 @@
- {
-     const struct opengl_funcs *funcs = &display_funcs;
-     const struct egl_platform *egl = &display_egl;
-+#ifdef WINE_PS5_OPENGL
-+    static const EGLint ps5_default_core_attribs[] =
-+    {
-+        EGL_CONTEXT_MAJOR_VERSION_KHR, 3,
-+        EGL_CONTEXT_MINOR_VERSION_KHR, 3,
-+        EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
-+        EGL_NONE,
-+    };
-+#endif
-     EGLint err, egl_attribs[16], *attribs_end = egl_attribs;
- 
-     TRACE( "format %d, share %p, attribs %p\n", format, share, attribs );
-@@ -1427,7 +1466,12 @@
+@@ -1427,7 +1457,10 @@
       *    > purposes except eglCreateContext.
       */
      funcs->p_eglBindAPI( EGL_OPENGL_API );
 -    *context = funcs->p_eglCreateContext( egl->display, EGL_NO_CONFIG_KHR, share, attribs ? egl_attribs : NULL );
++    /* A legacy wglCreateContext request has no profile attributes. Preserve
++     * EGL's compatibility-profile default on PS5 for fixed-function games. */
 +    *context = funcs->p_eglCreateContext( egl->display, EGL_NO_CONFIG_KHR, share,
-+#ifdef WINE_PS5_OPENGL
-+                                          attribs ? egl_attribs : ps5_default_core_attribs );
-+#else
 +                                          attribs ? egl_attribs : NULL );
-+#endif
  
      if ((err = funcs->p_eglGetError()) != EGL_SUCCESS || !*context)
      {
-@@ -1490,6 +1534,38 @@
+@@ -1490,6 +1523,38 @@
      struct opengl_funcs *funcs = &display_funcs;
      const char *extensions;
  
@@ -209,7 +191,7 @@ that use those features remain unsupported.
      if (!(funcs->egl_handle = dlopen( SONAME_LIBEGL, RTLD_NOW | RTLD_GLOBAL )))
      {
          ERR( "Failed to load %s: %s\n", SONAME_LIBEGL, dlerror() );
-@@ -1505,7 +1581,9 @@
+@@ -1505,7 +1570,9 @@
      LOAD_FUNCPTR( eglGetProcAddress );
      LOAD_FUNCPTR( eglQueryString );
  #undef LOAD_FUNCPTR
@@ -219,7 +201,7 @@ that use those features remain unsupported.
      if (!(extensions = funcs->p_eglQueryString( EGL_NO_DISPLAY, EGL_EXTENSIONS )))
      {
          ERR( "Failed to find client extensions\n" );
-@@ -1513,6 +1591,9 @@
+@@ -1513,6 +1580,9 @@
      }
      TRACE( "EGL client extensions:\n" );
      dump_extensions( extensions );
@@ -229,7 +211,7 @@ that use those features remain unsupported.
  
  #define CHECK_EXTENSION( ext )                                  \
      if (!has_extension( extensions, #ext ))                     \
-@@ -1520,25 +1601,53 @@
+@@ -1520,25 +1590,53 @@
          ERR( "Failed to find required extension %s\n", #ext );  \
          goto failed;                                            \
      }
@@ -283,7 +265,7 @@ that use those features remain unsupported.
      return FALSE;
  }
  
-@@ -1568,7 +1677,9 @@
+@@ -1568,7 +1666,9 @@
          return FALSE;                                                                              \
      }
      CHECK_EXTENSION( EGL_KHR_create_context );
@@ -293,7 +275,7 @@ that use those features remain unsupported.
      CHECK_EXTENSION( EGL_KHR_no_config_context );
  #undef CHECK_EXTENSION
  
-@@ -1638,7 +1749,11 @@
+@@ -1638,7 +1738,11 @@
  
  static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_driver_funcs *driver_funcs )
  {
@@ -305,7 +287,7 @@ that use those features remain unsupported.
  
      driver_funcs->p_init_egl_platform( &display_egl );
      if (!display_egl.type) display_egl.display = funcs->p_eglGetDisplay( EGL_DEFAULT_DISPLAY );
-@@ -1647,7 +1762,7 @@
+@@ -1647,7 +1751,7 @@
      init_egl_devices( funcs );
  }
  
@@ -314,7 +296,7 @@ that use those features remain unsupported.
  
  static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
  {
-@@ -1659,7 +1774,7 @@
+@@ -1659,7 +1763,7 @@
  {
  }
  
