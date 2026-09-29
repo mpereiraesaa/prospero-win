@@ -69,7 +69,7 @@ FREETYPE_EXPORTS="FT_Done_Face FT_Get_Char_Index FT_Get_First_Char FT_Get_Next_C
  FT_Outline_Transform FT_Outline_Translate FT_Property_Set FT_Render_Glyph FT_Set_Charmap
  FT_Set_Pixel_Sizes FT_Vector_Length FT_Vector_Transform FT_Vector_Unit"
 TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver dlls/winevulkan/winevulkan.so
- dlls/opengl32/opengl32.so"
+ dlls/opengl32/opengl32.so dlls/ws2_32/ws2_32.so"
 # The PE modules the patches change: every xinput built from xinput1_3's
 # source reads the title's controller (patch 0470); xinput9_1_0 forwards to
 # xinput1_4.
@@ -255,7 +255,7 @@ status=0
 # LDFLAGS is not a make dependency, so relink the three targets every run.
 (cd "$build" && rm -f $TARGETS)
 for step in "dlls/ntdll/ntdll.so|$heap $dmem" "dlls/win32u/win32u.so|" "server/wineserver|$heap" \
-        "dlls/winevulkan/winevulkan.so|" "dlls/opengl32/opengl32.so|"; do
+        "dlls/winevulkan/winevulkan.so|" "dlls/opengl32/opengl32.so|" "dlls/ws2_32/ws2_32.so|"; do
     target=${step%%|*}; objects=${step#*|}
     make -C "$build" -k -j"$jobs" LDFLAGS="$objects $base" "$target" \
         >> "$work/make.log" 2>&1 || status=$?
@@ -358,12 +358,14 @@ if [ "$prx_status" = 0 ]; then
         __wine_unix_call_funcs __wine_unix_call_wow64_funcs
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/opengl32_desc.c" \
         __wine_unix_call_funcs __wine_unix_call_wow64_funcs
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/ws2_32_desc.c" \
+        __wine_unix_call_funcs __wine_unix_call_wow64_funcs
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libvulkan_desc.c" \
         vkGetInstanceProcAddr vkGetDeviceProcAddr
     # shellcheck disable=SC2086
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libfreetype_desc.c" $FREETYPE_EXPORTS
     for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc wineps5_desc \
-            libfreetype_desc xinput_desc winevulkan_desc opengl32_desc libvulkan_desc; do
+            libfreetype_desc xinput_desc winevulkan_desc opengl32_desc ws2_32_desc libvulkan_desc; do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
@@ -426,6 +428,13 @@ if [ "$prx_status" = 0 ]; then
     # initialise, and it does so with no driver.
     link_prx opengl32 dlls/opengl32/opengl32.so "$prx/obj/opengl32_desc.o" \
         "$prx/ntdll.shared.elf $prx/win32u.shared.elf"
+    # Winsock's Unix side: games import ws2_32 even when they never go online
+    # (Warcraft III's does), and it does not initialise without it.
+    "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC \
+        -c "$root/wine/ps5/pw_ws2_32_libc.c" -o "$prx/obj/pw_ws2_32_libc.o" ||
+        fail "cannot compile pw_ws2_32_libc.c"
+    link_prx ws2_32 dlls/ws2_32/ws2_32.so \
+        "$prx/obj/ws2_32_desc.o $prx/obj/pw_ws2_32_libc.o $prx/obj/emutls.o" "$prx/ntdll.shared.elf"
     # The Vulkan driver itself, from ps5vk's SDK: only what its two entry
     # points reach, since the archive repeats a member. Its import facades
     # join the SDK's stubs.
@@ -467,7 +476,7 @@ patches = sys.argv[8:]
 text = Path(log).read_text(errors="replace")
 owners = {"dlls/ntdll/": "dlls/ntdll/ntdll.so", "dlls/win32u/": "dlls/win32u/win32u.so",
           "server/": "server/wineserver", "dlls/winevulkan/": "dlls/winevulkan/winevulkan.so",
-          "dlls/opengl32/": "dlls/opengl32/opengl32.so"}
+          "dlls/opengl32/": "dlls/opengl32/opengl32.so", "dlls/ws2_32/": "dlls/ws2_32/ws2_32.so"}
 unresolved = {target: set() for target in owners.values()}
 # lld prints each unresolved symbol, then ">>> referenced by" lines whose
 # continuation names the object ("dir/file.o:(function)"); the object's
@@ -513,7 +522,7 @@ objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{
 SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
 for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfreetype", "xinput1_3",
-             "winevulkan", "opengl32", "libvulkan") if not prx_status.startswith("skipped") else ():
+             "winevulkan", "opengl32", "ws2_32", "libvulkan") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
     if name == "libvulkan" and not link_log.is_file():
@@ -535,7 +544,7 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
         imports = {fields[7].split("@")[0] for fields in (line.split() for line in symbols.splitlines())
                    if len(fields) >= 8 and fields[6] == "UND"}
         provided = title_exports | (ntdll_exports if name in ("win32u", "wowprospero", "wineps5",
-                                                              "xinput1_3", "winevulkan", "opengl32") else set())
+                                                              "xinput1_3", "winevulkan", "opengl32", "ws2_32") else set())
         entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
         # The kernel kills a title that executes a syscall instruction outside
         # libkernel (measured: SYSTEM_ILLEGAL_FUNCTION_CALL). Wine's dispatchers

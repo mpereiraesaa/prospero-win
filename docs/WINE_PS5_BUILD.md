@@ -705,7 +705,12 @@ The runtime is staged beside the title:
 - `ntdll.prx`, `win32u.prx` and `wineserver.prx` under
   `win/wine/lib/wine/x86_64-unix`, with `xinput1_3.prx` for games played in
   xinput mode, and `winevulkan.prx`, `opengl32.prx` and `libvulkan.prx` for
-  Vulkan and Direct3D ([Vulkan](#vulkan));
+  Vulkan and Direct3D ([Vulkan](#vulkan)), and `ws2_32.prx`, Winsock's
+  Unix side, which games import even offline (Warcraft III's `War3.exe`
+  stops at start without it). A title has every socket call it makes but
+  the old resolver's `gethostbyaddr` and its `h_errno`, which
+  `wine/ps5/pw_ws2_32_libc.c` provides (a reverse lookup through
+  `getnameinfo`, and a per-thread error);
 - Wine's NLS files under `win/wine/share/wine/nls`.
 
 ## Console bring-up
