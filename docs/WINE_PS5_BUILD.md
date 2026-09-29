@@ -471,11 +471,13 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
 - **RADV.** `tools/build-radv.sh release` in PS5_Vulkan builds RADV's
   archive (`libvulkan_radeon.ps5.a`) from its pinned PS5_Mesa revision. It
   exports only Vulkan's ICD entry points, so the `libvulkan.prx` Wine loads
-  adds two functions, `vkGetInstanceProcAddr` calling
-  `vk_icdGetInstanceProcAddr` and `vkGetDeviceProcAddr` calling
-  `vk_common_GetDeviceProcAddr`, linked with PS5_Vulkan's
-  `tools/radv-link.sh` recipe. That PRX replaces ps5vk's in the staged
-  runtime; `build_wine_ps5.sh` does not build it yet. Mesa is MIT-licensed.
+  adds two functions (`wine/ps5/pw_vulkan_radv.c`): `vkGetInstanceProcAddr`
+  calling `vk_icdGetInstanceProcAddr` and `vkGetDeviceProcAddr` calling
+  `vk_common_GetDeviceProcAddr`. `build_wine_ps5.sh --radv DIR`, with DIR
+  that PS5_Vulkan checkout, links it in place of ps5vk's
+  (`tools/link_radv_prx.sh`, with PS5_Vulkan's own `tools/radv-link.sh`
+  recipe and payload SDK), and reports the PS5_Mesa revision; `--radv` and
+  `--ps5vk-sdk` are exclusive. Mesa is MIT-licensed.
 - **Presentation.** Applications see `VK_KHR_surface` and
   `VK_KHR_win32_surface`. The PS5 driver creates the host surface with
   `vkCreateDisplayPlaneSurfaceKHR` on the driver's one display and plane,

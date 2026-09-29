@@ -34,14 +34,15 @@
 # AGC import facades). Without it libvulkan.prx is skipped and Vulkan
 # reports no driver; winevulkan.prx, Wine's Vulkan Unix side, is built
 # either way. ps5vk is GPL-3.0-or-later: a title that ships libvulkan.prx
-# ships a GPL work (see its SDK's LICENSE). RADV's libvulkan.prx, built
-# outside this script (docs/WINE_PS5_BUILD.md, Vulkan), can replace it in
-# the staged runtime.
+# ships a GPL work (see its SDK's LICENSE). --radv DIR links RADV (Mesa's
+# AMD driver, MIT) instead: DIR is a PS5_Vulkan checkout whose
+# tools/build-radv.sh release has built its pinned PS5_Mesa revision, linked
+# by tools/link_radv_prx.sh. The two options are exclusive.
 #
 # Usage:
 #   tools/build_wine_ps5.sh [--check-patches] [--patches DIR] [--work DIR]
 #       [--source DIR] [--host-tools DIR] [--foundation DIR] [--sdk DIR]
-#       [--prx-foundation DIR] [--ps5vk-sdk DIR] [--jobs N]
+#       [--prx-foundation DIR] [--ps5vk-sdk DIR | --radv DIR] [--jobs N]
 set -eu
 
 WINE_COMMIT=490f6d5dcbb2a5047345b8af88d114bbcaad69a8
@@ -94,6 +95,7 @@ foundation=${PS5_NATIVE_FOUNDATION:-$root/.deps/ps5-native-app-boilerplate}
 sdk=${PS5_PAYLOAD_SDK:-}
 prx_foundation=${PS5_PRX_FOUNDATION:-}
 ps5vk_sdk=${PS5VK_SDK:-}
+radv=${PROSPERO_RADV:-}
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 check_only=0
 
@@ -109,11 +111,14 @@ while [ $# -gt 0 ]; do
     --sdk) sdk=$2; shift ;;
     --prx-foundation) prx_foundation=$2; shift ;;
     --ps5vk-sdk) ps5vk_sdk=$2; shift ;;
+    --radv) radv=$2; shift ;;
     --jobs) jobs=$2; shift ;;
     *) fail "unknown argument $1" ;;
     esac
     shift
 done
+
+[ -z "$ps5vk_sdk" ] || [ -z "$radv" ] || fail "--ps5vk-sdk and --radv both name libvulkan.prx; give one"
 
 # The series: NNNN-lower-case-name.patch, unique numbers below 0900, each a
 # mail-formatted patch with a subject. Printed in the order it is applied.
@@ -435,8 +440,17 @@ if [ "$prx_status" = 0 ]; then
             $ps5vk_sdk/lib/libps5vk.a $ps5vk_sdk/lib/libpsbc.a $sdk/target/lib/libc++.a \
             $sdk/target/lib/libc++abi.a" "" "$prx/vkstubs"
         vulkan_status="libvulkan.prx from $ps5vk_sdk"
+    elif [ -n "$radv" ]; then
+        # RADV, from a PS5_Vulkan checkout's release archive and its own link
+        # recipe (tools/link_radv_prx.sh).
+        if revision=$(bash "$root/tools/link_radv_prx.sh" "$radv" "$prx" "$tool" "$pie"); then
+            vulkan_status="libvulkan.prx from RADV, PS5_Mesa $revision"
+        else
+            prx_status=1
+            vulkan_status="RADV link failed (see $prx/libvulkan.link.log)"
+        fi
     else
-        vulkan_status="skipped: no --ps5vk-sdk with lib/libps5vk.a"
+        vulkan_status="skipped: no --ps5vk-sdk with lib/libps5vk.a, and no --radv"
     fi
     echo "vulkan: $vulkan_status"
     # Wine's own fonts, staged under share/wine/fonts beside the runtime.
@@ -503,7 +517,7 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
     if name == "libvulkan" and not link_log.is_file():
-        continue    # no ps5vk SDK given
+        continue    # neither a ps5vk SDK nor RADV given
     link_text = link_log.read_text(errors="replace") if link_log.is_file() else ""
     entry = {"built": module.is_file(),
              "unresolved": sorted(set(re.findall(r"undefined symbol: (\S+)", link_text))),

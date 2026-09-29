@@ -154,6 +154,7 @@ tools/build_wowprospero.sh
 tools/run_wine_dbt_host.sh
 tests/test_build_wine_ps5.py
 tools/build_wine_ps5.sh
+tools/link_radv_prx.sh
 tools/gen_prx_descriptor.py
 tests/test_gen_prx_descriptor.py
 wine/patches/0100-ntdll-no-fstab-device-on-ps5.patch
@@ -245,3 +246,4 @@ wine/ps5/pw_wine_cwd.c
 wine/ps5/pw_wine_cwd.h
 wine/ps5/pw_wine_cwd_libc.c
 wine/ps5/pw_vulkan_libc.c
+wine/ps5/pw_vulkan_radv.c
