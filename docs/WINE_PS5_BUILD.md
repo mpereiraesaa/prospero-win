@@ -716,7 +716,11 @@ The runtime is staged beside the title:
   stops at start without it). A title has every socket call it makes but
   the old resolver's `gethostbyaddr` and its `h_errno`, which
   `wine/ps5/pw_ws2_32_libc.c` provides (a reverse lookup through
-  `getnameinfo`, and a per-thread error);
+  `getnameinfo`, and a per-thread error); and `crypt32.prx`, CryptoAPI's
+  Unix side, without which `crypt32.dll` refuses to load: FFmpeg's
+  `avformat` imports it, so LAV Filters, the DirectShow splitter and
+  decoders Warcraft III's cinematics play through, need it (the console's
+  Wine has no GStreamer, which Wine's own splitters are built on);
 - Wine's NLS files under `win/wine/share/wine/nls`.
 
 ## Console bring-up
