@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 29 Sep 2026 20:10:00 +0200
+Subject: [PATCH] ntdll: Report a generic processor topology where the host
+ gives none.
+
+GetLogicalProcessorInformation failed with STATUS_NOT_IMPLEMENTED on any
+host but Linux, macOS and hwloc builds, the PS5 among them. Microsoft's
+Concurrency Runtime reads it to size its scheduler and throws
+scheduler_resource_allocation_error when it fails: LAV Filters' video
+decoder, which Warcraft III's cinematics play through, then died on the
+console. Such a host now reports one package, a core per logical
+processor with its L1 and L2 caches, a shared L3, and one NUMA node.
+---
+ dlls/ntdll/unix/system.c | 31 +++++++++++++++++++++++++++++--
+ 1 file changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -1612,10 +1612,39 @@
+ 
+ #else
+ 
++/* A host with no topology source (the PS5): one package, a core per logical
++ * processor, one NUMA node, and typical caches. Programs that size thread
++ * pools from GetLogicalProcessorInformation, as Microsoft's Concurrency
++ * Runtime does, fail without it. */
+ static NTSTATUS create_logical_proc_info(void)
+ {
+-    FIXME("stub\n");
+-    return STATUS_NOT_IMPLEMENTED;
++    static CACHE_DESCRIPTOR caches[] =
++    {
++        { 1, 8, 64, 32 * 1024, CacheInstruction },
++        { 1, 8, 64, 32 * 1024, CacheData },
++        { 2, 8, 64, 512 * 1024, CacheUnified },
++        { 3, 16, 64, 4 * 1024 * 1024, CacheUnified },
++    };
++    unsigned int count = peb->NumberOfProcessors, i, j;
++    ULONG_PTR all_cpus_mask = 0;
++
++    if (!count) count = 1;
++    for (i = 0; i < count; i++) all_cpus_mask |= (ULONG_PTR)1 << i;
++    if (!logical_proc_info_add_by_id( RelationProcessorPackage, 0, all_cpus_mask ))
++        return STATUS_NO_MEMORY;
++    for (i = 0; i < count; i++)
++    {
++        ULONG_PTR mask = (ULONG_PTR)1 << i;
++
++        if (!logical_proc_info_add_by_id( RelationProcessorCore, i, mask ))
++            return STATUS_NO_MEMORY;
++        for (j = 0; j < 3; j++)
++            if (!logical_proc_info_add_cache( mask, &caches[j] )) return STATUS_NO_MEMORY;
++    }
++    if (!logical_proc_info_add_cache( all_cpus_mask, &caches[3] )) return STATUS_NO_MEMORY;
++    if (!logical_proc_info_add_numa_node( all_cpus_mask, 0 )) return STATUS_NO_MEMORY;
++    logical_proc_info_add_group( count, all_cpus_mask );
++    return STATUS_SUCCESS;
+ }
+ #endif
+ 
