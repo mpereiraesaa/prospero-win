@@ -1,5 +1,11 @@
 # Wine's Unix side for PS5
 
+> This is the developers' deep dive: how Wine is built for the PS5, what each
+> patch does, and the notes from bringing it up on the console, with the
+> measurements behind each decision. To play games, start with
+> [getting started](GETTING_STARTED.md); to build and package the app, see
+> [development](DEVELOPMENT.md).
+
 Wine's PE modules already run through the IA-32 DBT and the WoW64 backend.
 Its Unix side (`ntdll.so`, `win32u.so` and `wineserver`) is what runs Wine's
 system services, and on the console it has to be native PS5 code. This note
