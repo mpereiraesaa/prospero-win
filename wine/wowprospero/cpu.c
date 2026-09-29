@@ -182,7 +182,14 @@ void WINAPI BTCpuNotifyUnmapViewOfSection( void *addr, BOOL is_after, NTSTATUS s
 
 static void raise_guest_exception( I386_CONTEXT *ctx, DWORD code, UINT address, UINT write )
 {
+    static LONG logged;
     EXCEPTION_RECORD rec = { 0 };
+
+    /* The first exceptions a process raises into the guest, for the log: a
+     * storm of faults usually starts from one of them. */
+    if (InterlockedIncrement( &logged ) <= 16)
+        ERR( "guest exception %#lx at eip %#lx esp %#lx address %#x write %u\n",
+             code, ctx->Eip, ctx->Esp, address, write );
 
     rec.ExceptionCode = code;
     rec.ExceptionAddress = ULongToPtr( ctx->Eip );
@@ -237,6 +244,15 @@ void WINAPI BTCpuSimulate(void)
             continue;
         }
         stack = ULongToPtr( ctx->Esp );
+        /* A guest stack pointer in the first 64 KiB is never a valid stack:
+         * name where the guest left it, once per process. */
+        if (ctx->Esp < 0x10000)
+        {
+            static LONG warned;
+            if (!InterlockedExchange( &warned, 1 ))
+                ERR( "guest esp %#lx at eip %#lx after reason %u (eax %#lx ebp %#lx)\n",
+                     ctx->Esp, ctx->Eip, params.reason, ctx->Eax, ctx->Ebp );
+        }
         switch (params.reason)
         {
         case PW_WOW_SYSCALL:

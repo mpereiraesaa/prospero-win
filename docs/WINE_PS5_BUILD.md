@@ -74,6 +74,7 @@ of the port never collide:
 | 0520 | `ntdll`: name the ntdll directory with `WINE_PS5_NTDLL_DIR` when `dladdr` cannot (PRX) |
 | 0530 | `ntdll`: with host pages larger than 4 KiB, store the x64 syscall-dispatcher pointer (0x7ffe1000) through the USD host page instead of mapping a separate page (needs the USD section sized to a host page) |
 | 0540 | `ntdll`: count host `mmap`/`munmap`/`mprotect`, resolved faults and per-image cost (`__wine_virtual_stats`, `WINEDEBUG=+module`); skip an `mprotect` that leaves every host page of its range unchanged (tracked host protection). Pinball start on the host: 1,810 → 749 `mprotect` with 16 KiB pages, → 730 with 4 KiB |
+| 0545 | `ntdll`: a fixed 16-entry table of the pages that fault most often (space-saving), with the fault kind, the page and host-page protection, how the fault ended and the last PC, read by the title through `__wine_virtual_fault_top` for its `fault_top` records |
 | 0550 | `ntdll`: `NtCreateUserProcess` and `__wine_unix_spawnvp` return `STATUS_NOT_SUPPORTED` on PS5: a title can neither fork nor exec (the prefix is initialised offline and the desktop is created in process) |
 | 0560 | `ntdll`: all Unix-side stderr goes through a sink the title sets with `__wine_ps5_set_output_sink` (a title cannot give Wine a usable fd 2); `fatal_error` formats into a local buffer |
 | 0570 | `ntdll`: reserve address space with a fixed, no-overwrite `sceKernelReserveVirtualRange`, since `MAP_FIXED \| MAP_EXCL` replaces existing mappings on FW 12.02; the view heap gets 64 MiB above 4 GiB |

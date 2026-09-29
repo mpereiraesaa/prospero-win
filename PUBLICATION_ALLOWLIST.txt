@@ -254,3 +254,4 @@ tests/test_pw_prefix.py
 tools/build_host_wine.sh
 tools/pw_prefix.py
 wine/ps5/pw_ws2_32_libc.c
+wine/patches/0545-ntdll-keep-the-pages-that-fault-most-often.patch

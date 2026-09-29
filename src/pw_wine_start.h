@@ -58,6 +58,9 @@ typedef struct PwWineStart {
     /* Direct memory and heap counters (wine/ps5/pw_wine_dmem_ps5.c); NULL
      * when ntdll does not export them. */
     unsigned int (*memory_stats)(uint64_t *out, unsigned int count);
+    /* The pages that fault most often (Wine patch 0545), four values each:
+     * count, page, last PC, info; NULL when ntdll does not export it. */
+    unsigned int (*fault_top)(uint64_t *out, unsigned int count);
     int module_start_result;
     void *adopted;                   /* pw_wine_dl_adopt handle, NULL if not exported */
     int argc;

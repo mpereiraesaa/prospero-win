@@ -48,6 +48,8 @@ int pw_wine_start_load(PwWineStart *start, const PwWineStartConfig *config,
         pw_prx_lookup(start->descriptor, "__wine_virtual_stats");
     start->memory_stats = (unsigned int (*)(uint64_t *, unsigned int))
         pw_prx_lookup(start->descriptor, "__wine_ps5_memory_stats");
+    start->fault_top = (unsigned int (*)(uint64_t *, unsigned int))
+        pw_prx_lookup(start->descriptor, "__wine_virtual_fault_top");
     if (!start->wine_main) return fail(start, PW_WINE_START_ENTRY, PW_ERR_NOT_FOUND);
 
     /* The firmware loads the module without running its entry. */

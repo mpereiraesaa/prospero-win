@@ -24,6 +24,7 @@ Every record the title writes starts with `PW_WINE64`:
 | `ntdll` / `load` / `environment` / `run` | the runtime found, `ntdll.prx` loaded (stage, module, segments), Wine's environment, `__wine_main` started |
 | `display` / `audio` | the present sink, input and XInput hooks, VideoOut; the audio sink and port |
 | `alive` | about once a second: Wine's output lines, frames delivered, shown and rejected with the last size, inputs posted and refused; then Wine's VM call counters (`mmap=`) |
+| `fault_top` | every five seconds, when Wine's fault count grew: the pages that faulted most (Wine patch 0545), ranked, with the count, the 4 KiB page, the last faulting PC, the kind (0 read, 1 write, 8 execute), the page's and its host page's protection, and how it ended (1 resolved, 2 access violation, 3 other). One page at tens of thousands of faults a second is a loop, not a workload |
 | `close requested` / `close timeout` | Options+Create (or the unattended deadline) sent Alt+F4; the game did not close in time |
 | `rumble` | an XInput game's motor levels and the pad's result |
 | `fault` | a fault before Wine's handlers: signal, address, RIP and the ntdll segment |

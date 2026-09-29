@@ -750,11 +750,30 @@ int main(int argc, char **argv)
                        frames.width, frames.height, (unsigned long long)posted,
                        (unsigned long long)refused);
             if (start.virtual_stats && tick % 300 == 0) {
+                static uint64_t faults_logged;
+
                 start.virtual_stats(v, 16);
                 PS5LOG_LOG("PW_WINE64 mmap=%llu munmap=%llu mprotect=%llu skipped=%llu "
                            "faults=%llu images=%llu",
                            (unsigned long long)v[0], (unsigned long long)v[1], (unsigned long long)v[2],
                            (unsigned long long)v[4], (unsigned long long)v[5], (unsigned long long)v[6]);
+                /* Where the faults are, when there were more since the last
+                 * line: the pages counted most (Wine patch 0545). kind 0
+                 * read, 1 write, 8 execute; result 1 resolved, 2 access
+                 * violation, 3 other. */
+                if (start.fault_top && v[5] > faults_logged) {
+                    uint64_t top[4 * 4];
+                    unsigned n = start.fault_top(top, 4 * 4);
+
+                    for (unsigned i = 0; i < n; i++)
+                        PS5LOG_LOG("PW_WINE64 fault_top rank=%u count=%llu page=%#llx pc=%#llx kind=%u "
+                                   "vprot=%#x host_vprot=%#x result=%u",
+                                   i + 1, (unsigned long long)top[i * 4], (unsigned long long)top[i * 4 + 1],
+                                   (unsigned long long)top[i * 4 + 2], (unsigned)(top[i * 4 + 3] >> 24),
+                                   (unsigned)(top[i * 4 + 3] >> 16) & 0xffu,
+                                   (unsigned)(top[i * 4 + 3] >> 8) & 0xffu, (unsigned)top[i * 4 + 3] & 0xffu);
+                    faults_logged = v[5];
+                }
             }
             if (tick % 300 == 0) {
                 uint64_t m[6] = { 0 };
