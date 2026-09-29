@@ -46,6 +46,10 @@ REGISTRY = ("system.reg", "user.reg", "userdef.reg")
 # both; the manifest records the console's bytes.
 CPU_KEY = b"[Software\\\\Microsoft\\\\Wow64\\\\x86]"
 PC_CPU, CONSOLE_CPU = b'@="wow64cpu.dll"', b'@="wowprospero.dll"'
+# WoW64 loads its CPU from the prefix's system32 and does not fall back to
+# the runtime's copy (c0000135 without it), so a push puts the console's
+# there: --cpu-dll, tools/build_wowprospero.sh's output.
+CPU_DLL = "drive_c/windows/system32/wowprospero.dll"
 
 
 def swap_cpu(key: str, data: bytes, old: bytes, new: bytes) -> bytes:
@@ -178,6 +182,7 @@ class Sync:
         self.manifest = json.loads(self.manifest_path.read_text()) if self.manifest_path.is_file() else None
         self.remote = remote or FtpRemote(args.host, args.port)
         self.force, self.delete = args.force, getattr(args, "delete", False)
+        self.cpu_dll = Path(args.cpu_dll) if getattr(args, "cpu_dll", None) else None
 
     def save(self, files: dict[str, list]) -> None:
         self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,6 +210,15 @@ class Sync:
                 raise SyncError(f"the console changed {', '.join(drift)} since the last sync: pull first, or --force")
         known = (self.manifest or {}).get("files", {})
         files, dirs, links = local_tree(self.prefix)
+        if self.cpu_dll:
+            if not self.cpu_dll.is_file():
+                raise SyncError(f"--cpu-dll {self.cpu_dll} does not exist")
+            files[CPU_DLL] = self.cpu_dll
+            dirs.add(posixpath.dirname(CPU_DLL))
+        elif CPU_DLL not in files and CPU_DLL not in known and \
+                self.remote.size(f"{self.remote_prefix}/{CPU_DLL}") is None:
+            raise SyncError("the console needs wowprospero.dll in the prefix: give --cpu-dll "
+                            "(tools/build_wowprospero.sh's x86_64-windows/wowprospero.dll)")
         for directory in sorted(dirs):
             self.remote.makedirs(posixpath.join(self.remote_prefix, directory) if directory else self.remote_prefix)
         pushed, sent = {}, 0
@@ -225,7 +239,7 @@ class Sync:
             self.remote.write(where, text)
         removed = 0
         if self.delete:
-            for key in sorted(set(known) - set(files)):
+            for key in sorted(set(known) - set(files) - {CPU_DLL}):
                 self.remote.delete(f"{self.remote_prefix}/{key}")
                 removed += 1
         self.push_profile()
@@ -297,6 +311,7 @@ def main(argv: list[str] | None = None, remote=None) -> int:
     parser.add_argument("--remote", default="/data/prospero-win")
     parser.add_argument("--force", action="store_true", help="overwrite what the console changed")
     parser.add_argument("--delete", action="store_true", help="remove files the PC no longer has")
+    parser.add_argument("--cpu-dll", help="wowprospero.dll to put in the prefix's system32 (push)")
     args = parser.parse_args(argv)
     if remote is None and not args.host:
         print("pw_prefix: give --host or PS5_HOST", file=sys.stderr)

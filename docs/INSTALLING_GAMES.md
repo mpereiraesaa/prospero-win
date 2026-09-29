@@ -107,7 +107,8 @@ a development build, which carries debug information, and about 300 MB from
 console's FTP server and brings back what the console changed:
 
 ```sh
-python3 tools/pw_prefix.py push <slug> --library ~/prospero-library --host <PS5 IP>
+python3 tools/pw_prefix.py push <slug> --library ~/prospero-library --host <PS5 IP> \
+    --cpu-dll <build>/dlls/wowprospero/x86_64-windows/wowprospero.dll
 python3 tools/pw_prefix.py pull <slug> --library ~/prospero-library --host <PS5 IP>
 python3 tools/pw_prefix.py status <slug> --library ~/prospero-library --host <PS5 IP>
 ```
@@ -133,5 +134,11 @@ python3 tools/pw_prefix.py status <slug> --library ~/prospero-library --host <PS
   overflow in `wow64cpu`. A push writes the console's value into
   `system.reg` and a pull writes the PC's back, so the same prefix runs on
   both; the manifest records the console's bytes.
+- WoW64 loads that CPU from the prefix's `system32` and does not fall back
+  to the runtime's copy (`c0000135`), so a push also puts
+  `wowprospero.dll` there: `--cpu-dll`, `tools/build_wowprospero.sh`'s
+  `x86_64-windows/wowprospero.dll`. The first push of a game refuses to go
+  without it; later pushes send it again only when it changed, and
+  `--delete` leaves it.
 - In the lab, claim the console in the shared mailbox around a push, as
   for any console operation.

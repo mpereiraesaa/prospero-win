@@ -79,7 +79,14 @@ def main() -> int:
         common = ["--library", str(library)]
         remote_prefix = console / "data/prospero-win/prefixes/game"
 
-        assert pw_prefix.main(["push", "game", *common], remote) == 0
+        # Without wowprospero.dll a 32-bit game could not start: the first
+        # push asks for it, then puts it in the prefix's system32.
+        assert pw_prefix.main(["push", "game", *common], remote) == 1
+        cpu_dll = root / "wowprospero.dll"
+        cpu_dll.write_bytes(b"MZ wowprospero")
+        assert pw_prefix.main(["push", "game", "--cpu-dll", str(cpu_dll), *common], remote) == 0
+        assert (remote_prefix / "drive_c/windows/system32/wowprospero.dll").read_bytes() == b"MZ wowprospero"
+        assert not (prefix / "drive_c/windows/system32/wowprospero.dll").exists()
         assert (remote_prefix / "drive_c/Games/Game/game.exe").read_bytes() == b"MZ game"
         # The console's CPU backend is written on the way, the PC's is kept.
         console_reg = (remote_prefix / "system.reg").read_text()
@@ -125,6 +132,7 @@ def main() -> int:
         (prefix / "drive_c/Games/Game/data.mpq").unlink()
         assert pw_prefix.main(["push", "game", "--delete", *common], remote) == 0
         assert not (remote_prefix / "drive_c/Games/Game/data.mpq").exists()
+        assert (remote_prefix / "drive_c/windows/system32/wowprospero.dll").exists()
 
         # A console prefix this PC never synced is not overwritten.
         other = root / "other-library"
