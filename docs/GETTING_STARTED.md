@@ -32,8 +32,9 @@ Wine runtime and its modules. Upload the whole folder to `/data/homebrew/` on
 the PS5 over FTP, then let your loader register it. It appears on the home
 screen as **prospero-win**.
 
-There's no download yet; for now you build the folder yourself
-([building from source](../README.md#building-from-source)).
+There's no download yet. For now you build the folder yourself: build the
+pieces and put them together with `tools/package_release.sh`
+([packaging the app](DEVELOPMENT.md#packaging-the-app)).
 
 ## 2. Open it once
 

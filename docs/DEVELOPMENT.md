@@ -59,6 +59,29 @@ The Wine runtime is staged beside the title under `win/wine` and the library
 hardware claim needs the exact artifacts and the title's `ps5log/1` records
 ([telemetry](TELEMETRY.md), [hardware validation](HARDWARE_VALIDATION.md)).
 
+## Packaging the app
+
+The folder a player uploads to `/data/homebrew` is the title with its Wine
+runtime beside it. `tools/package_release.sh` puts it together from four
+builds:
+
+```sh
+tools/build_native.sh                  # the title: dist/PPSA99995
+tools/build_wine_ps5.sh --radv <PS5_Vulkan checkout>   # Wine's PS5 modules, RADV
+tools/build_host_wine.sh               # the same Wine for the PC: its PE modules
+tools/build_wowprospero.sh             # the 32-bit CPU: wowprospero.dll
+tools/package_release.sh --title dist/PPSA99995 --wine-ps5 .deps/wine-ps5 \
+    --host-wine <host Wine install>/usr \
+    --cpu-dll <Wine build>/dlls/wowprospero/x86_64-windows/wowprospero.dll \
+    --out release --zip
+```
+
+It writes `release/PPSA99995/` (about 350 MB) and, with `--zip`,
+`release/PPSA99995.zip`. The title's `dev.conf`, which names the builder's
+PC, is left out; a player adds their own to get a log. Wine's PE modules are
+the host build's, less import libraries and the drivers that need the PC's
+own libraries (X11, GStreamer, pcap, scanners).
+
 ## DBT work on the host
 
 `tools/build_wowprospero.sh` builds the WoW64 CPU backend for a host Wine
