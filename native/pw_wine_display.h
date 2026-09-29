@@ -80,4 +80,8 @@ void pw_wine_pointer_resize(PwWinePointer *pointer, uint32_t width, uint32_t hei
  * MOUSE_MOVE in out when the pointer reached another pixel, else 0. */
 int pw_wine_pointer_step(PwWinePointer *pointer, uint8_t stick_x, uint8_t stick_y,
                          uint32_t speed, uint32_t elapsed_us, PwWineInput *out);
+/* Move by a mouse's motion, dx and dy desktop pixels, kept on the desktop.
+ * 1 and an absolute MOUSE_MOVE in out when the pointer reached another
+ * pixel, else 0. */
+int pw_wine_pointer_move(PwWinePointer *pointer, int32_t dx, int32_t dy, PwWineInput *out);
 #endif

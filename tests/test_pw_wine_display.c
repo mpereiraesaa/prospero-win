@@ -150,6 +150,20 @@ static void test_pointer(void)
     pw_wine_pointer_init(NULL, 1, 1);
 }
 
+static void test_pointer_move(void)
+{
+    PwWinePointer pointer;
+    PwWineInput move;
+
+    /* A mouse's motion in pixels, kept on the desktop; no event within a pixel. */
+    pw_wine_pointer_init(&pointer, 1920, 1080);
+    assert(pw_wine_pointer_move(&pointer, 10, -20, &move) == 1);
+    assert(move.type == PW_WINE_INPUT_MOUSE_MOVE && move.x == 970 && move.y == 520);
+    assert(!pw_wine_pointer_move(&pointer, 0, 0, &move));
+    assert(pw_wine_pointer_move(&pointer, -5000, 5000, &move) == 1 && move.x == 0 && move.y == 1079);
+    assert(!pw_wine_pointer_move(&pointer, -1, 1, &move));
+}
+
 static void test_pointer_resize(void)
 {
     PwWinePointer pointer;
@@ -245,6 +259,7 @@ int main(void)
     test_threads();
     test_inputs();
     test_pointer();
+    test_pointer_move();
     test_pointer_resize();
     test_pad();
     printf("wine display passed: frame box copy, newest frame, refusals, concurrent put/take, "

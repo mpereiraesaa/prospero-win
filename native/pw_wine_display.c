@@ -166,6 +166,21 @@ void pw_wine_pointer_resize(PwWinePointer *pointer, uint32_t width, uint32_t hei
     pointer->y = clamp(pointer->y, pointer->height);
 }
 
+int pw_wine_pointer_move(PwWinePointer *pointer, int32_t dx, int32_t dy, PwWineInput *out)
+{
+    int64_t x, y;
+
+    if (!pointer || !out) return 0;
+    x = clamp(pointer->x + ((int64_t)dx << 16), pointer->width);
+    y = clamp(pointer->y + ((int64_t)dy << 16), pointer->height);
+    int moved = (x >> 16) != (pointer->x >> 16) || (y >> 16) != (pointer->y >> 16);
+    pointer->x = x;
+    pointer->y = y;
+    if (!moved) return 0;
+    *out = (PwWineInput){ PW_WINE_INPUT_MOUSE_MOVE, 0, (int32_t)(x >> 16), (int32_t)(y >> 16), 0 };
+    return 1;
+}
+
 int pw_wine_pointer_step(PwWinePointer *pointer, uint8_t stick_x, uint8_t stick_y,
                          uint32_t speed, uint32_t elapsed_us, PwWineInput *out)
 {
