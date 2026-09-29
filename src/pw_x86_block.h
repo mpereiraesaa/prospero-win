@@ -79,6 +79,13 @@ typedef struct PwX86State {
      * run on it: the host rsp to return to C with, and the top of the call
      * stack each entry from C starts at. */
     uintptr_t host_rsp, call_stack_top;
+    /* The selectors of ES, CS, SS, DS, FS and GS as the host's Wine gives
+     * them to the guest (its thread context), which segment-register stores
+     * and pushes must match: WoW64 compares a restored context's SS with its
+     * own (wow64's ss32_sel), and the host decides the values (0x2b data on
+     * Linux, others on the PS5). 0 leaves Windows' own values. Last in the
+     * structure: the emitter addresses the fields above by offset. */
+    uint16_t selector[6];
 } PwX86State;
 
 uint32_t pw_x86_compute_canonical_flags(const PwX86DeferredFlags *df, uint32_t prev_eflags);

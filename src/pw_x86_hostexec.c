@@ -142,6 +142,13 @@ static int modrm_address(const PwX86State *s, const uint8_t *p, size_t n,
  * 6 and 7 are not segment registers. */
 static const uint16_t guest_selector[6] = { 0x2b, 0x23, 0x2b, 0x2b, 0x53, 0x2b };
 
+/* The selector the guest sees in a segment register: the host Wine's (the
+ * thread context's), or Windows' when the state has none. */
+static uint16_t selector_of(const PwX86State *s, unsigned reg)
+{
+    return s->selector[reg] ? s->selector[reg] : guest_selector[reg];
+}
+
 /* MOV r/m16, Sreg (8C /r): the selector is a constant here, so the host runs
  * "mov word [address], selector" or, for a register, "mov r32, selector"
  * (32-bit forms zero-extend it, as every processor since the Pentium Pro
@@ -157,7 +164,7 @@ static int segment_store(const PwX86State *s, const uint8_t *src, size_t n, size
     modrm = src[at + 1];
     reg = (modrm >> 3) & 7;
     if (reg > 5) return PW_ERR_UNSUPPORTED;
-    selector = guest_selector[reg];
+    selector = selector_of(s, reg);
     plan->out_bytes = 0;
     if ((modrm >> 6) == 3) {
         if ((modrm & 7) == 4) return PW_ERR_UNSUPPORTED;       /* ESP */
@@ -555,6 +562,49 @@ static int flags_stack_form(PwX86State *s, const uint8_t *src, size_t n)
     return PW_OK;
 }
 
+/* PUSH and POP of ES, CS, SS and DS (06 07 0E 16 17 1E 1F), which 64-bit
+ * mode does not have, so the host cannot run them. A push stores the
+ * selector the guest sees (selector_of), zero-extended to 32 bits, or 16
+ * bits with a 66 prefix. The data segments are flat, so a pop only moves ESP;
+ * it takes a selector the guest could hold (null for ES and DS, or one of
+ * its six) and refuses anything else, where the processor would raise #GP.
+ * Miles Sound System (mss32.dll) saves and restores DS and ES this way. */
+static int segment_stack_form(PwX86State *s, const uint8_t *src, size_t n)
+{
+    unsigned at = 0, size = 4, reg, pop;
+    uint32_t value = 0;
+    uint16_t selector;
+
+    if (n && src[0] == 0x66) { size = 2; at = 1; }
+    if (at >= n) return PW_ERR_UNSUPPORTED;
+    switch (src[at]) {
+    case 0x06: reg = 0; pop = 0; break;
+    case 0x07: reg = 0; pop = 1; break;
+    case 0x0e: reg = 1; pop = 0; break;
+    case 0x16: reg = 2; pop = 0; break;
+    case 0x17: reg = 2; pop = 1; break;
+    case 0x1e: reg = 3; pop = 0; break;
+    case 0x1f: reg = 3; pop = 1; break;
+    default: return PW_ERR_UNSUPPORTED;
+    }
+    if (!pop) {
+        value = selector_of(s, reg);
+        s->gpr[4] -= size;
+        memcpy((void *)(uintptr_t)s->gpr[4], &value, size);
+    } else {
+        memcpy(&value, (const void *)(uintptr_t)s->gpr[4], size);
+        selector = (uint16_t)value;
+        if (!(selector == 0 && reg != 2)) {
+            unsigned known = 0;
+            for (unsigned i = 0; i < 6; i++) known |= selector == selector_of(s, i);
+            if (!known) return PW_ERR_UNSUPPORTED;
+        }
+        s->gpr[4] += size;
+    }
+    s->eip += at + 1;
+    return PW_OK;
+}
+
 int pw_x86_hostexec_step(PwX86HostExec *h, PwX86State *s, const uint8_t *src, size_t n)
 {
     PwX86HostExecPlan plan;
@@ -566,7 +616,8 @@ int pw_x86_hostexec_step(PwX86HostExec *h, PwX86State *s, const uint8_t *src, si
     if (!h || !h->initialized || !s || !src) return PW_ERR_PRECONDITION;
     status = pw_x86_hostexec_plan(s, src, n, &plan);
     if (status == PW_ERR_UNSUPPORTED &&
-        (stack_memory_form(s, src, n) == PW_OK || flags_stack_form(s, src, n) == PW_OK)) {
+        (stack_memory_form(s, src, n) == PW_OK || flags_stack_form(s, src, n) == PW_OK ||
+         segment_stack_form(s, src, n) == PW_OK)) {
         h->executed++;
         return PW_OK;
     }

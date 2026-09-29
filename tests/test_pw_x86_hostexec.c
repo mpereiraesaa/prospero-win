@@ -265,6 +265,91 @@ static void test_segment_stores(void)
     assert(pw_x86_hostexec_plan(&s, (const uint8_t[]){0x8e, 0xd8}, 2, &plan) == PW_ERR_UNSUPPORTED);
 }
 
+static void test_segment_stack(void)
+{
+    /* PUSH ES, CS, SS, DS: the selector, zero-extended, 4 bytes lower. */
+    static const uint8_t push_op[4] = { 0x06, 0x0e, 0x16, 0x1e };
+    static const uint16_t pushed[4] = { 0x2b, 0x23, 0x2b, 0x2b };
+    PwX86State s;
+    uint32_t dword, esp;
+    uint16_t word;
+
+    for (unsigned i = 0; i < 4; i++) {
+        reset_state(&s);
+        esp = s.gpr[4];
+        memset(guest + 0x8000 - 4, 0xee, 4);
+        assert(run(&s, &push_op[i], 1) == PW_OK);
+        memcpy(&dword, guest + 0x8000 - 4, 4);
+        assert(dword == pushed[i] && s.gpr[4] == esp - 4 && s.eip == 0x1001);
+    }
+    /* 66 1E: push ds as a word. */
+    reset_state(&s);
+    memset(guest + 0x8000 - 4, 0xee, 4);
+    assert(run(&s, (const uint8_t[]){0x66, 0x1e}, 2) == PW_OK);
+    memcpy(&word, guest + 0x8000 - 2, 2);
+    assert(word == 0x2b && guest[0x8000 - 3] == 0xee && s.gpr[4] == addr(0x8000 - 2) && s.eip == 0x1002);
+
+    /* Miles's save and restore: push ds; push es; mov eax, 0; pop es; pop ds. */
+    reset_state(&s);
+    assert(run(&s, (const uint8_t[]){0x1e}, 1) == PW_OK);
+    assert(run(&s, (const uint8_t[]){0x06}, 1) == PW_OK && s.gpr[4] == addr(0x8000 - 8));
+    s.eip += 5;                                  /* mov eax, 0 runs in the translator */
+    assert(run(&s, (const uint8_t[]){0x07}, 1) == PW_OK && s.gpr[4] == addr(0x8000 - 4));
+    assert(run(&s, (const uint8_t[]){0x1f}, 1) == PW_OK && s.gpr[4] == addr(0x8000) && s.eip == 0x1009);
+
+    /* A pop takes null for ES and DS, and the selectors a guest sees. */
+    for (unsigned i = 0; i < 3; i++) {
+        static const uint8_t pop_op[3] = { 0x07, 0x17, 0x1f };
+        static const uint32_t good[4] = { 0x2b, 0x23, 0x53, 0xffff002b };
+        for (unsigned g = 0; g < 4; g++) {
+            reset_state(&s);
+            s.gpr[4] = addr(0x7000);
+            memcpy(guest + 0x7000, &good[g], 4);
+            assert(run(&s, &pop_op[i], 1) == PW_OK && s.gpr[4] == addr(0x7004));
+        }
+        reset_state(&s);
+        s.gpr[4] = addr(0x7000);
+        memset(guest + 0x7000, 0, 4);
+        assert(run(&s, &pop_op[i], 1) == (pop_op[i] == 0x17 ? PW_ERR_UNSUPPORTED : PW_OK));
+    }
+    /* Anything else is refused and leaves ESP and EIP alone, as #GP would. */
+    reset_state(&s);
+    s.gpr[4] = addr(0x7000);
+    dword = 0x1234;
+    memcpy(guest + 0x7000, &dword, 4);
+    assert(run(&s, (const uint8_t[]){0x1f}, 1) == PW_ERR_UNSUPPORTED && s.gpr[4] == addr(0x7000) && s.eip == 0x1000);
+    /* 66 07: pop es as a word. */
+    reset_state(&s);
+    s.gpr[4] = addr(0x7000);
+    word = 0x2b;
+    memcpy(guest + 0x7000, &word, 2);
+    assert(run(&s, (const uint8_t[]){0x66, 0x07}, 2) == PW_OK && s.gpr[4] == addr(0x7002) && s.eip == 0x1002);
+    /* The host's selectors, when the state has them (the PS5's are not
+     * Windows'): stores and pushes use them, pops take them. */
+    reset_state(&s);
+    s.selector[0] = s.selector[2] = s.selector[3] = s.selector[5] = 0x3b;
+    s.selector[1] = 0x33; s.selector[4] = 0x63;
+    assert(run(&s, (const uint8_t[]){0x16}, 1) == PW_OK);
+    memcpy(&dword, guest + 0x8000 - 4, 4);
+    assert(dword == 0x3b);
+    assert(run(&s, (const uint8_t[]){0x0e}, 1) == PW_OK);
+    memcpy(&dword, guest + 0x8000 - 8, 4);
+    assert(dword == 0x33);
+    s.gpr[1] = 0;
+    assert(run(&s, (const uint8_t[]){0x8c, 0xd1}, 2) == PW_OK && s.gpr[1] == 0x3b);   /* mov ecx, ss */
+    assert(run(&s, (const uint8_t[]){0x8c, 0xe1}, 2) == PW_OK && s.gpr[1] == 0x63);   /* mov ecx, fs */
+    assert(run(&s, (const uint8_t[]){0x1f}, 1) == PW_OK);                             /* pop ds (0x33) */
+    assert(run(&s, (const uint8_t[]){0x17}, 1) == PW_OK && s.gpr[4] == addr(0x8000)); /* pop ss (0x3b) */
+    s.gpr[4] = addr(0x7000);
+    dword = 0x2b;                                   /* Windows' value is no longer one of them */
+    memcpy(guest + 0x7000, &dword, 4);
+    assert(run(&s, (const uint8_t[]){0x07}, 1) == PW_ERR_UNSUPPORTED);
+    reset_state(&s);
+    s.eip = 0x1000; s.gpr[4] = addr(0x8000);
+    /* A prefix alone is not one of them. */
+    assert(run(&s, (const uint8_t[]){0x66}, 1) != PW_OK && s.eip == 0x1000);
+}
+
 static void test_refusals_and_cache(void)
 {
     PwX86State s;
@@ -317,9 +402,10 @@ int main(void)
     test_fp_forms();
     test_guest_mxcsr();
     test_segment_stores();
+    test_segment_stack();
     test_refusals_and_cache();
     assert(pw_x86_hostexec_destroy(&hx) == PW_OK);
-    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR, segment stores; %llu stubs\n",
+    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR, segment stores, segment push and pop; %llu stubs\n",
            (unsigned long long)hx.compiled);
     return 0;
 }

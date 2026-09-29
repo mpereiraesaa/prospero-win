@@ -15,7 +15,9 @@
  * registers and MXCSR, executes it and stores them back, preserving the host
  * FPU control word, MXCSR and callee-saved registers.
  *
- * A segment-register store (8C) stores the selector a WoW64 guest sees.
+ * A segment-register store (8C) stores the selector a WoW64 guest sees, and
+ * PUSH/POP of ES, CS, SS and DS (06 07 0E 16 17 1E 1F) are emulated: the
+ * push stores that selector, the pop checks it and moves ESP.
  *
  * Refused (PW_ERR_UNSUPPORTED): control transfers, implicit stack users,
  * instructions invalid in 64-bit mode, segment-register loads, privileged or

@@ -341,6 +341,12 @@ static void load_state( PwX86State *state, const I386_CONTEXT *ctx, UINT teb32 )
     state->memory[0].low = GUEST_LOW;
     state->memory[0].high = GUEST_HIGH;
     state->memory[0].permissions = PW_X86_READ | PW_X86_WRITE | PW_X86_EXEC;
+    state->selector[0] = LOWORD(ctx->SegEs);
+    state->selector[1] = LOWORD(ctx->SegCs);
+    state->selector[2] = LOWORD(ctx->SegSs);
+    state->selector[3] = LOWORD(ctx->SegDs);
+    state->selector[4] = LOWORD(ctx->SegFs);
+    state->selector[5] = LOWORD(ctx->SegGs);
 }
 
 /* The guest's x87 and SSE state is the thread's own hardware state whenever
