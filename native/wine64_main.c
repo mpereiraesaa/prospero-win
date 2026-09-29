@@ -476,6 +476,8 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
+    /* Wine's desktop: the profile's, or the PS5 driver's 800x600 (patch 0400). */
+    uint32_t desktop_width = 800, desktop_height = 600;
     static PwWineStartEnv extra[] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -541,6 +543,8 @@ int main(int argc, char **argv)
         scaling = (int)game->display.scaling;
         if (game->display.view == PW_GAME_VIEW_DESKTOP) snprintf(view, sizeof(view), "desktop");
         if (game->display.width) {
+            desktop_width = game->display.width;
+            desktop_height = game->display.height;
             snprintf(desktop, sizeof(desktop), "%ux%u", (unsigned)game->display.width,
                      (unsigned)game->display.height);
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_DESKTOP", desktop };
@@ -669,18 +673,25 @@ int main(int argc, char **argv)
         PwWineInput events[2 * PW_GAME_BUTTON_COUNT + 1];
         int presented = 0;
 
+        /* A stick moves the pointer over what the frames show. It starts in the
+         * middle and keeps its place when their size changes, as when a menu
+         * widens the game's windows. A game presenting with Vulkan sends no
+         * frames once it has the video output: then the pointer moves over
+         * Wine's whole desktop. */
+        int vulkan = __atomic_load_n(&display_closed, __ATOMIC_ACQUIRE);
+        uint32_t bound_width = vulkan ? desktop_width : frames.width;
+        uint32_t bound_height = vulkan ? desktop_height : frames.height;
+        if (bound_width) {
+            if (!pointer.width)
+                pw_wine_pointer_init(&pointer, bound_width, bound_height);
+            else if (pointer.width != bound_width || pointer.height != bound_height)
+                pw_wine_pointer_resize(&pointer, bound_width, bound_height);
+        }
         if (pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK) {
             size_t count = pw_wine_game_inputs(&game_input, pad.core.pressed_edges,
                                                pad.core.released_edges, events,
                                                sizeof(events) / sizeof(events[0]) - 1);
-            /* A stick moves the pointer over what the frames show. It starts
-             * in the middle and keeps its place when their size changes, as
-             * when a menu widens the game's windows. */
-            if (game_input.mouse != PW_GAME_STICK_NONE && frames.width) {
-                if (!pointer.width)
-                    pw_wine_pointer_init(&pointer, frames.width, frames.height);
-                else if (pointer.width != frames.width || pointer.height != frames.height)
-                    pw_wine_pointer_resize(&pointer, frames.width, frames.height);
+            if (game_input.mouse != PW_GAME_STICK_NONE && pointer.width) {
                 const PwPadPs5Stick *stick = game_input.mouse == PW_GAME_STICK_LEFT ?
                                              &pad.left_stick : &pad.right_stick;
                 count += (size_t)pw_wine_pointer_step(&pointer, stick->x, stick->y,
