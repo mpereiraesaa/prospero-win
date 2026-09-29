@@ -1,9 +1,17 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_spinner.h"
-#include <math.h>
 #include <string.h>
 
-#define PW_SPINNER_PI 3.14159265358979323846
+/* Where each dot sits on the ring, clockwise from the top: cos and sin of
+ * -90, -60, ... 240 degrees. */
+static const double ring_x[PW_SPINNER_DOTS] = {
+    0.0, 0.5, 0.8660254037844386, 1.0, 0.8660254037844386, 0.5,
+    0.0, -0.5, -0.8660254037844386, -1.0, -0.8660254037844386, -0.5,
+};
+static const double ring_y[PW_SPINNER_DOTS] = {
+    -1.0, -0.8660254037844386, -0.5, 0.0, 0.5, 0.8660254037844386,
+    1.0, 0.8660254037844386, 0.5, 0.0, -0.5, -0.8660254037844386,
+};
 
 void pw_spinner_draw(uint32_t *pixels, uint32_t width, uint32_t height, uint32_t stride, uint32_t step)
 {
@@ -15,8 +23,7 @@ void pw_spinner_draw(uint32_t *pixels, uint32_t width, uint32_t height, uint32_t
         /* The bright dot is step's; the ones it left fade behind it. */
         const uint32_t age = (step % PW_SPINNER_DOTS + PW_SPINNER_DOTS - i) % PW_SPINNER_DOTS;
         const uint32_t level = age * 20u >= 200u ? 55u : 255u - age * 20u;
-        const double angle = 2.0 * PW_SPINNER_PI * i / PW_SPINNER_DOTS - PW_SPINNER_PI / 2.0;
-        const double x0 = cx + ring * cos(angle), y0 = cy + ring * sin(angle);
+        const double x0 = cx + ring * ring_x[i], y0 = cy + ring * ring_y[i];
         const int32_t top = (int32_t)(y0 - dot - 1), bottom = (int32_t)(y0 + dot + 1);
         const int32_t left = (int32_t)(x0 - dot - 1), right = (int32_t)(x0 + dot + 1);
 
