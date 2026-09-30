@@ -72,17 +72,13 @@ Useful readings:
 - `cpu_ms` tells a wait from a spin: during a stall, a spinning thread adds
   about 1000 a second, a waiting process almost nothing.
 
-When a stall disappears as soon as you turn on Wine's channels (they make
-every thread slower and talk to the server more), build the app with
-`PW_WINE64_WAIT_WATCHDOG=1` instead. Every two seconds Wine's server then
-logs what each thread waits on, each message queue's state and every
-pending async I/O, a few lines at a time, so the timing barely changes. A
-thread the game needs that is in no server wait at all is blocked in
-host-side code; the snapshot then shows its i386 stack and, if it waits
-on a critical section, which one and which thread owns it (that is how
-[#250](https://github.com/mpereiraesaa/prospero-win/issues/250) was
-found). Resolve the stack's addresses with the module bases in the
-`+loaddll` lines and the export or COFF symbols of the PE files.
+If a stall disappears as soon as you turn on Wine's channels, build the app
+with `PW_WINE64_WAIT_WATCHDOG=1` instead ([what it logs](TELEMETRY.md)).
+Every two seconds it shows what each thread waits on, in a few lines, so the
+timing barely changes. A thread outside any wait is blocked in host code: the
+snapshot then gives its i386 stack and the lock it waits on, with the lock's
+owner. Resolve addresses with the `+loaddll` module bases and the PE files'
+symbols.
 
 ## 3. Turn on Wine's channels for one game
 
@@ -163,6 +159,9 @@ A result is worth something when someone else can repeat it. Record:
 - whether each claim was measured on the console or only assumed (on the PC,
   or from documentation).
 
+A random delay needs many runs: judge a change over ten launches or more.
+Four good launches once looked like a fix and weren't.
+
 "The PS5 can't do X" is a claim to measure before you write it down.
 
 ## Symptoms we've seen
@@ -171,7 +170,7 @@ What each looked like, and what it turned out to be. Newest first.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Warcraft III's intro started 0.4–32 s after its decoder was ready (twice never); the app idle at 0.1 cores meanwhile; heavy logging or a key press made it go away | Lock starvation in Wine's DirectShow ([#250](https://github.com/mpereiraesaa/prospero-win/issues/250)). `IBaseFilter::GetState()` held the renderer's filter lock while waiting for it to finish pausing, and the graph polls it every 10 ms during `Run()`; the thread delivering the first frame needed that lock and, woken ~1 ms after each release on the PS5, always found it taken again. Found with the wait watchdog (`PW_WINE64_WAIT_WATCHDOG=1`), which named the waiting thread's critical section and its owner | Wine patch 0700: the renderers wait with the filter lock released. The intro now starts 0.19 s after the decoder is ready, every time. The LAV settings in the recipe were a red herring |
+| Warcraft III's intro started 0.2–32 s late, or never; the app idle; logging or a key press made it go away | Lock starvation in Wine's DirectShow ([#250](https://github.com/mpereiraesaa/prospero-win/issues/250)): `GetState()` held the renderer's lock while polled every 10 ms, and the PS5's ~1 ms thread wake-up always lost the race for it. Code that re-takes a lock right after releasing it can starve waiters here, not on Linux | Patch 0700: renderers wait without the lock (intro 0.19 s late, 6/6) |
 | The stick and USB mouse didn't move the pointer; keys worked. `inputs` grew, nothing refused | win32u (Wine 11) holds a driver's mouse motion until a button or `MOUSEEVENTF_MOVE_NOCOALESCE` sends it; the PS5 driver never sent it. Before, the pointer only seemed to move because the driver answered `GetCursorPos` itself | Wine patch 0670: relative motion, sent with `MOUSEEVENTF_MOVE_NOCOALESCE` |
 | An RTS map didn't scroll at the screen's edges | The app sent absolute positions, and nothing while the pointer was held at an edge; the game's own `SetCursorPos` was overridden | Patch 0670: the app sends motion, Wine keeps the only pointer |
 | A white rectangle while the game loaded | win32u fills a new window surface with white; a Direct3D window is never painted | Patch 0650: new surfaces start black on the PS5 |
