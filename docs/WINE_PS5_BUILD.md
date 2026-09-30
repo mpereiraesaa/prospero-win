@@ -531,17 +531,21 @@ back buffer back (`GetRenderTargetData`/`LockRect`, or a staging copy and
 ## OpenGL
 
 The optional [PS5 OpenGL SDK](https://github.com/blackbearreloaded/ps5-opengl)
-provides an EGL/WGL backend for Windows games that need OpenGL instead of
-Direct3D/DXVK. Build Wine with `tools/build_wine_ps5.sh --ps5-opengl-sdk DIR`,
-where `DIR` is the installed SDK prefix. The build links the SDK's static EGL
-archive into `win32u.prx` and resolves its EGL entry points there; without this
-option, the ordinary build remains unchanged.
+provides the EGL implementation used by Wine's experimental WGL backend for
+Windows games that need OpenGL instead of Direct3D/DXVK. Build Wine with
+`tools/build_wine_ps5.sh --ps5-opengl-sdk DIR`, where `DIR` is the installed
+SDK prefix. The build links the SDK's static EGL archive into `win32u.prx` and
+resolves its EGL entry points there; without this option, the ordinary build
+remains unchanged.
 
 To select the backend for one game, set `graphics = opengl` in that game's
 application profile. This selects Wine's builtin `opengl32` and enables the
 PS5 EGL driver for that launch. DXVK and GDI profiles leave EGL initialization
-off. The SDK includes compatibility and Core contexts; the legacy WGL context
-request uses its compatibility default for fixed-function games. The SDK is
+off. Upstream describes the SDK as experimental OpenGL 4.6 Core and does not
+claim desktop compatibility-profile support. Its current EGL source maps a
+default context request to Mesa's compatibility API, but fixed-function WGL
+games have not yet been validated on the console. Treat `graphics = opengl` as
+experimental until a real legacy game renders successfully. The SDK is
 GPL-3.0-or-later, so distributed builds must preserve its source and license
 notices.
 
