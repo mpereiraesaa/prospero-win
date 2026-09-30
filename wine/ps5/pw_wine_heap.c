@@ -15,6 +15,9 @@ enum {
 };
 #define MAGIC_SMALL UINT64_C(0x70775f68656170c5)
 #define MAGIC_LARGE UINT64_C(0x70775f6865617071)
+/* In front of an aligned block's pointer, inside the block that holds it:
+ * class_index is how far back that block's pointer is. */
+#define MAGIC_ALIGNED UINT64_C(0x70775f68656170a1)
 
 /* Every block starts with this header; the caller's pointer follows it. */
 typedef struct Header { uint64_t magic; uint32_t class_index; uint32_t requested; } Header;
@@ -147,6 +150,25 @@ static Header *owned(const void *pointer)
     Header *header=small_header(pointer);
     return header?header:large_header(pointer);
 }
+/* The block holding an aligned pointer, read only once the pointer is known
+ * to lie inside memory this heap handed out. */
+static Header *owned_aligned(const void *pointer,void **base)
+{
+    const uint8_t *p=pointer;
+    if(!p || ((uintptr_t)p&(HEADER-1)))return NULL;
+    if(!owned_span(p)) {
+        uint32_t slot=large_slot(p);
+        if(!slot)return NULL;
+        const uint8_t *start=larges[slot-1];
+        if(p<=start || p>=start+((Header *)(start-HEADER))->requested)return NULL;
+    }
+    Header *mark=(Header *)(p-HEADER);
+    if(mark->magic!=MAGIC_ALIGNED || mark->class_index<HEADER || mark->class_index>(uintptr_t)p)return NULL;
+    Header *header=owned(p-mark->class_index);
+    if(!header)return NULL;
+    *base=(void *)(p-mark->class_index);
+    return header;
+}
 
 void *pw_wine_heap_malloc(size_t bytes)
 {
@@ -162,12 +184,35 @@ void *pw_wine_heap_calloc(size_t count,size_t bytes)
     if(result)memset(result,0,count*bytes);
     return result;
 }
+void *pw_wine_heap_memalign(size_t alignment,size_t bytes)
+{
+    if(!alignment || (alignment&(alignment-1)))return NULL;
+    if(alignment<=HEADER)return pw_wine_heap_malloc(bytes);
+    if(bytes>SIZE_MAX-alignment || alignment>UINT32_MAX) {
+        pthread_mutex_lock(&lock);stats.failures++;pthread_mutex_unlock(&lock);return NULL;
+    }
+    pthread_mutex_lock(&lock);
+    uint8_t *base=allocate(bytes+alignment),*result=NULL;
+    if(base) {
+        /* base is 16-byte aligned, so the gap is 16..alignment bytes and the
+         * mark in front of result stays inside the block. */
+        result=(uint8_t *)(((uintptr_t)base+HEADER+alignment-1)&~(uintptr_t)(alignment-1));
+        *(Header *)(result-HEADER)=(Header){MAGIC_ALIGNED,(uint32_t)(result-base),(uint32_t)bytes};
+    }
+    pthread_mutex_unlock(&lock);
+    return result;
+}
 void pw_wine_heap_free(void *pointer)
 {
     if(!pointer)return;
     pthread_mutex_lock(&lock);
+    void *base;
     Header *header=owned(pointer);
-    if(header)release(header);else stats.foreign_frees++;
+    if(header)release(header);
+    else if((header=owned_aligned(pointer,&base))) {
+        ((Header *)((uint8_t *)pointer-HEADER))->magic=0;release(header);
+    }
+    else stats.foreign_frees++;
     pthread_mutex_unlock(&lock);
 }
 void *pw_wine_heap_realloc(void *pointer,size_t bytes)
@@ -175,7 +220,17 @@ void *pw_wine_heap_realloc(void *pointer,size_t bytes)
     if(!pointer)return pw_wine_heap_malloc(bytes);
     if(!bytes){pw_wine_heap_free(pointer);return NULL;}
     pthread_mutex_lock(&lock);
+    void *base;
     Header *header=owned(pointer);
+    if(!header && (header=owned_aligned(pointer,&base))) {
+        /* An aligned block moves to an ordinary one, as realloc allows. */
+        size_t old=((Header *)((uint8_t *)pointer-HEADER))->requested;
+        void *moved=allocate(bytes);
+        if(moved){memcpy(moved,pointer,old<bytes?old:bytes);
+                  ((Header *)((uint8_t *)pointer-HEADER))->magic=0;release(header);}
+        pthread_mutex_unlock(&lock);
+        return moved;
+    }
     if(!header) {
         /* Not ours: its size is unknown, so it cannot be moved safely. */
         stats.failures++;pthread_mutex_unlock(&lock);return NULL;
@@ -194,8 +249,11 @@ void *pw_wine_heap_realloc(void *pointer,size_t bytes)
 size_t pw_wine_heap_usable_size(const void *pointer)
 {
     pthread_mutex_lock(&lock);
+    void *base;
     Header *header=owned(pointer);size_t usable=0;
-    if(header)usable=header->magic==MAGIC_SMALL?class_bytes(header->class_index)-HEADER:
+    if(!header && owned_aligned(pointer,&base))
+        usable=((Header *)((const uint8_t *)pointer-HEADER))->requested;
+    else if(header)usable=header->magic==MAGIC_SMALL?class_bytes(header->class_index)-HEADER:
         (size_t)(((LargeHeader *)header-1)->mapped-HEADER-sizeof(LargeHeader));
     pthread_mutex_unlock(&lock);
     return usable;

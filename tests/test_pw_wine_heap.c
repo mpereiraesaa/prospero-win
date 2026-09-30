@@ -18,7 +18,9 @@ static void *worker(void *seed_pointer)
             pw_wine_heap_free(live[slot]);live[slot]=NULL;
         } else {
             size_t size=(seed>>16)%((seed&1)?200000u:3000u)+1;
-            uint8_t *bytes=pw_wine_heap_malloc(size);assert(bytes);
+            size_t alignment=(size_t)32<<((seed>>4)%9);   /* 32 .. 8192 */
+            uint8_t *bytes=(seed&2)?pw_wine_heap_memalign(alignment,size):pw_wine_heap_malloc(size);
+            assert(bytes && (!(seed&2) || !((uintptr_t)bytes&(alignment-1))));
             for(size_t k=0;k<size;k++)bytes[k]=(uint8_t)(slot^k);
             live[slot]=bytes;sizes[slot]=size;
         }
@@ -71,6 +73,32 @@ int main(void)
     pw_wine_heap_free(zero);pw_wine_heap_free(zero);   /* double free is refused */
     pw_wine_heap_free(c);pw_wine_heap_free(NULL);
     pw_wine_heap_stats(&s);assert(s.foreign_frees==4 && s.live_bytes==0);
+    /* Aligned blocks, small and large: aligned, writable, freed like others. */
+    static const size_t alignments[]={32,64,256,4096,16384,65536};
+    static const size_t sizes[]={1,48,3000,70000,300000};
+    for(size_t i=0;i<sizeof(alignments)/sizeof(alignments[0]);i++)
+        for(size_t j=0;j<sizeof(sizes)/sizeof(sizes[0]);j++) {
+            uint8_t *aligned=pw_wine_heap_memalign(alignments[i],sizes[j]);
+            assert(aligned && !((uintptr_t)aligned&(alignments[i]-1)));
+            memset(aligned,0x5a,sizes[j]);
+            assert(pw_wine_heap_usable_size(aligned)==sizes[j]);
+            pw_wine_heap_free(aligned);
+        }
+    pw_wine_heap_stats(&s);assert(s.live_bytes==0 && s.foreign_frees==4 && !s.large_live);
+    /* 16 bytes or less is an ordinary block; other alignments are refused. */
+    uint8_t *plain=pw_wine_heap_memalign(16,40);assert(plain && pw_wine_heap_usable_size(plain)==48);
+    pw_wine_heap_free(plain);
+    assert(!pw_wine_heap_memalign(0,8) && !pw_wine_heap_memalign(24,8) && !pw_wine_heap_memalign(64,SIZE_MAX-8));
+    /* realloc moves an aligned block to an ordinary one with its bytes. */
+    uint8_t *page=pw_wine_heap_memalign(4096,100);assert(page);
+    for(int i=0;i<100;i++)page[i]=(uint8_t)(i*3);
+    uint8_t *grown=pw_wine_heap_realloc(page,9000);assert(grown);
+    for(int i=0;i<100;i++)assert(grown[i]==(uint8_t)(i*3));
+    pw_wine_heap_free(grown);
+    /* A freed aligned block's pointer is foreign afterwards, like any double free. */
+    uint8_t *twice=pw_wine_heap_memalign(128,32);assert(twice);
+    pw_wine_heap_free(twice);pw_wine_heap_free(twice);
+    pw_wine_heap_stats(&s);assert(s.foreign_frees==5 && s.live_bytes==0);
     /* Concurrent use keeps every block intact and returns to zero live bytes. */
     pthread_t threads[THREADS];
     for(uintptr_t t=0;t<THREADS;t++)assert(!pthread_create(&threads[t],NULL,worker,(void *)(t+1)));

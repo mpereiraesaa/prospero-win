@@ -19,6 +19,9 @@ void *pw_wine_heap_malloc(size_t bytes);
 void *pw_wine_heap_calloc(size_t count,size_t bytes);
 void *pw_wine_heap_realloc(void *pointer,size_t bytes);
 void pw_wine_heap_free(void *pointer);
+/* A block aligned to alignment, a power of two; free and realloc take it
+ * like any other. NULL for a bad alignment or no memory. */
+void *pw_wine_heap_memalign(size_t alignment,size_t bytes);
 /* Usable bytes of a block this heap returned, 0 for anything else. */
 size_t pw_wine_heap_usable_size(const void *pointer);
 void pw_wine_heap_stats(PwWineHeapStats *stats);
