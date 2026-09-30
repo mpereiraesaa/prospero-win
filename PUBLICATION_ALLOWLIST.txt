@@ -198,6 +198,8 @@ wine/patches/0630-win32u-ps5-driver-display-modes.patch
 wine/patches/0640-win32u-ps5-flush-period.patch
 wine/patches/0650-win32u-ps5-black-surfaces.patch
 wine/patches/0660-win32u-ps5-opengl-egl.patch
+wine/patches/0661-win32u-ps5-opengl-fbo-compat.patch
+wine/patches/0662-win32u-ps5-opengl-present-gl21.patch
 wine/patches/0670-win32u-ps5-relative-mouse.patch
 wine/patches/0680-server-ps5-wait-watchdog.patch
 wine/patches/0690-ntdll-ps5-slow-operation-log.patch
