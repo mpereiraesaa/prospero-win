@@ -13,9 +13,15 @@ rectangle, reports motion against an edge, and keeps the one position
 SetCursorPos also moves. The driver reads that position back to draw the
 cursor, and stops the pointer at what a frame shows where that is less
 than the screen.
+
+win32u coalesces a driver's pointer motion until a button or
+MOUSEEVENTF_MOVE_NOCOALESCE sends it, as winex11, winewayland and
+winemac do; the driver never flushed, so no motion reached the server
+and only the driver's own GetCursorPos made the pointer seem to move.
+Each move is now sent with MOUSEEVENTF_MOVE_NOCOALESCE.
 ---
- dlls/win32u/ps5drv.c | 73 +++++++++++++++++++++++++++++++++++-------
- 1 file changed, 63 insertions(+), 10 deletions(-)
+ dlls/win32u/ps5drv.c | 75 +++++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 65 insertions(+), 10 deletions(-)
 
 --- a/dlls/win32u/ps5drv.c
 +++ b/dlls/win32u/ps5drv.c
@@ -28,7 +34,7 @@ than the screen.
      UINT down;
  };
  
-@@ -467,6 +467,66 @@ static void send_mouse( HWND hwnd, DWORD flags, INT x, INT y )
+@@ -467,6 +467,68 @@ static void send_mouse( HWND hwnd, DWORD flags, INT x, INT y )
      NtUserSendHardwareInput( hwnd, 0, &input, 0 );
  }
  
@@ -72,16 +78,18 @@ than the screen.
 +    pthread_mutex_lock( &screen_lock );
 +    shown = view;
 +    pthread_mutex_unlock( &screen_lock );
++    /* win32u coalesces a driver's motion until a button or NOCOALESCE sends
++     * it; each move goes to the server now, so the position read back is it */
 +    if (!placed)
 +    {
 +        placed = TRUE;
-+        send_mouse( hwnd, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, (shown.left + shown.right) / 2,
-+                    (shown.top + shown.bottom) / 2 );
++        send_mouse( hwnd, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE_NOCOALESCE,
++                    (shown.left + shown.right) / 2, (shown.top + shown.bottom) / 2 );
 +    }
 +    if (!server_cursor_pos( &pos )) return;
 +    dx = shown_motion( pos.x, dx, shown.left, shown.right, screen_width );
 +    dy = shown_motion( pos.y, dy, shown.top, shown.bottom, screen_height );
-+    if (dx || dy) send_mouse( hwnd, MOUSEEVENTF_MOVE, dx, dy );
++    if (dx || dy) send_mouse( hwnd, MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE, dx, dy );
 +    if (!server_cursor_pos( &pos )) return;
 +    pthread_mutex_lock( &screen_lock );
 +    if (cursor.x != pos.x || cursor.y != pos.y)
@@ -95,7 +103,7 @@ than the screen.
  static BOOL ps5_ProcessEvents( DWORD mask )
  {
      static const DWORD button_flags[3][2] =
-@@ -507,14 +567,7 @@ static BOOL ps5_ProcessEvents( DWORD mask )
+@@ -507,14 +569,7 @@ static BOOL ps5_ProcessEvents( DWORD mask )
              NtUserSendHardwareInput( hwnd, 0, &input, 0 );
              break;
          case 2:
@@ -111,7 +119,7 @@ than the screen.
              break;
          case 3:
              if (event.code < 3) send_mouse( hwnd, button_flags[event.code][event.down != 0], 0, 0 );
-@@ -663,7 +716,7 @@ static void ps5_SetCursor( HWND hwnd, HCURSOR handle )
+@@ -663,7 +718,7 @@ static void ps5_SetCursor( HWND hwnd, HCURSOR handle )
  
  static BOOL ps5_GetCursorPos( POINT *pos )
  {
