@@ -42,6 +42,7 @@ loader that installs apps from `/data/homebrew` (such as
 gives the app access to `/data` where your games live. You also need your own
 copy of the game, and a Linux PC to install it on.
 
+The app itself is a zip on the [Releases page](https://github.com/mpereiraesaa/prospero-win/releases).
 [Getting started](docs/GETTING_STARTED.md) walks through the whole setup, and
 [installing games](docs/INSTALLING_GAMES.md) covers adding a game.
 

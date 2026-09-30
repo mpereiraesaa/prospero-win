@@ -32,9 +32,14 @@ Wine runtime and its modules. Upload the whole folder to `/data/homebrew/` on
 the PS5 over FTP, then let your loader register it. It appears on the home
 screen as **prospero-win**.
 
-There's no download yet. For now you build the folder yourself: build the
-pieces and put them together with `tools/package_release.sh`
-([packaging the app](DEVELOPMENT.md#packaging-the-app)).
+Download `prospero-win-<version>.zip` from the
+[Releases page](https://github.com/mpereiraesaa/prospero-win/releases) and
+unzip it to get the folder. If no release is listed yet, or you want the
+latest code, build the pieces and put them together with
+`tools/package_release.sh` ([packaging the app](DEVELOPMENT.md#packaging-the-app)).
+
+To update, replace the whole `PPSA99995` folder. Your games and settings live
+in `/data/prospero-win` and are kept.
 
 ## 2. Open it once
 

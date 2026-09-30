@@ -82,6 +82,27 @@ PC, is left out; a player adds their own to get a log. Wine's PE modules are
 the host build's, less import libraries and the drivers that need the PC's
 own libraries (X11, GStreamer, pcap, scanners).
 
+## Making a release
+
+Players download the app folder from the repository's Releases page. A
+release is a version tag plus the zip from `tools/package_release.sh`:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+# The Release workflow runs the host checks and opens a draft release.
+tools/publish_release.sh --tag v0.1.0 --zip release/PPSA99995.zip
+# Check the draft on GitHub, then:
+tools/publish_release.sh --tag v0.1.0 --zip release/PPSA99995.zip --publish
+```
+
+The zip is built on your machine because the PS5 builds need the payload SDK
+and take hours; GitHub only drafts the release and hosts the file.
+`publish_release.sh` uploads it as `prospero-win-<tag>.zip` with a
+`SHA256SUMS` file, and refuses a zip that holds a `dev.conf` or any `.exe`.
+The draft's text comes from `.github/release-notes.md`, followed by the
+merged pull requests since the previous tag. Before you publish, install
+the zip on a console and run a game from a clean `/data/homebrew`.
+
 ## DBT work on the host
 
 `tools/build_wowprospero.sh` builds the WoW64 CPU backend for a host Wine

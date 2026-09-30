@@ -270,5 +270,9 @@ tools/build_host_wine.sh
 tools/pw_prefix.py
 tools/package_release.sh
 tests/test_package_release.py
+tools/publish_release.sh
+tests/test_publish_release.py
+.github/workflows/release.yml
+.github/release-notes.md
 wine/ps5/pw_ws2_32_libc.c
 wine/patches/0545-ntdll-keep-the-pages-that-fault-most-often.patch

@@ -128,6 +128,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_docs_links.py
 	python3 tests/test_native_contract.py
 	python3 tests/test_package_release.py
+	python3 tests/test_publish_release.py
 	python3 tests/test_x86_differential.py
 	$(BUILD)/dbt_differential < tests/fixtures/dbt_differential_forms.txt
 	$(BUILD)/dbt_differential global < tests/fixtures/dbt_differential_forms.txt
