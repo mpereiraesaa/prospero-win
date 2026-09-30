@@ -23,6 +23,8 @@
 ## Working on it
 
 - [Development](DEVELOPMENT.md): checks and builds.
+- [Debugging guide](DEBUGGING_GUIDE.md): how to find out why a game doesn't
+  start or misbehaves, and the symptoms we've seen with their causes.
 - [Hardware validation](HARDWARE_VALIDATION.md): what counts as working on
   the console, and the evidence behind it.
 - [DBT benchmark](DBT_BENCHMARK.md): how fast the translator is, measured
