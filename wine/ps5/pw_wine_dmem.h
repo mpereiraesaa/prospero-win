@@ -60,6 +60,8 @@ typedef struct PwWineDmemRun {
 
 typedef struct PwWineDmemStats {
     uint64_t backed_bytes, peak_backed_bytes;
+    /* Of those, below 4 GiB: the part an i386 guest's address space holds. */
+    uint64_t low_backed_bytes, peak_low_backed_bytes;
     uint64_t allocations, releases, maps, protects, failures;
     uint32_t runs, peak_runs;
 } PwWineDmemStats;

@@ -38,11 +38,19 @@ static int valid(const PwWineDmem *d, uintptr_t address, size_t bytes)
     return 0;
 }
 
-static void note_backed(PwWineDmem *d, int64_t delta)
+/* bytes at address became backed (sign 1) or stopped being (-1). */
+static void note_backed(PwWineDmem *d, uintptr_t address, size_t bytes, int sign)
 {
-    d->stats.backed_bytes += (uint64_t)delta;
+    const uint64_t four_gib = (uint64_t)1 << 32;
+    uint64_t end = (uint64_t)address + bytes;
+    uint64_t low = address >= four_gib ? 0 : (end < four_gib ? end : four_gib) - address;
+
+    d->stats.backed_bytes += sign > 0 ? bytes : -(uint64_t)bytes;
+    d->stats.low_backed_bytes += sign > 0 ? low : -low;
     if (d->stats.backed_bytes > d->stats.peak_backed_bytes)
         d->stats.peak_backed_bytes = d->stats.backed_bytes;
+    if (d->stats.low_backed_bytes > d->stats.peak_low_backed_bytes)
+        d->stats.peak_low_backed_bytes = d->stats.low_backed_bytes;
 }
 
 static void insert_at(PwWineDmem *d, uint32_t index, PwWineDmemRun run)
@@ -76,7 +84,7 @@ static void forget(PwWineDmem *d, uintptr_t low, uintptr_t high)
                 d->stats.failures++;
             else
                 d->stats.releases++;
-            note_backed(d, -(int64_t)(to - from));
+            note_backed(d, from, to - from, -1);
         }
         if (keep_left) d->runs[i].bytes = from - run.address;
         if (keep_right) {
@@ -140,7 +148,7 @@ static int back(PwWineDmem *d, uintptr_t address, size_t bytes, unsigned protect
         }
         d->stats.protects++;
     }
-    note_backed(d, (int64_t)bytes);
+    note_backed(d, address, bytes, 1);
     /* Direct memory handed out in order often continues the run before. */
     add_run(d, (PwWineDmemRun){ address, bytes, offset });
     return 0;

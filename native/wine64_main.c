@@ -1039,17 +1039,20 @@ int main(int argc, char **argv)
                 }
             }
             if (tick % 300 == 0) {
-                uint64_t m[6] = { 0 };
+                uint64_t m[8] = { 0 };
                 size_t flexible = 0;
 
-                if (start.memory_stats) start.memory_stats(m, 6);
+                if (start.memory_stats) start.memory_stats(m, 8);
                 (void)sceKernelAvailableFlexibleMemorySize(&flexible);
+                /* dmem_low: the part below 4 GiB, where an i386 guest's own
+                 * memory lives (2 GiB, or 4 GiB when large-address-aware). */
                 PS5LOG_LOG("PW_WINE64 memory flexible_free=%zuK dmem=%lluK dmem_peak=%lluK runs=%llu "
-                           "dmem_failures=%llu heap=%lluK heap_peak=%lluK",
+                           "dmem_failures=%llu heap=%lluK heap_peak=%lluK dmem_low=%lluK dmem_low_peak=%lluK",
                            flexible >> 10, (unsigned long long)(m[0] >> 10),
                            (unsigned long long)(m[1] >> 10), (unsigned long long)m[2],
                            (unsigned long long)m[3], (unsigned long long)(m[4] >> 10),
-                           (unsigned long long)(m[5] >> 10));
+                           (unsigned long long)(m[5] >> 10), (unsigned long long)(m[6] >> 10),
+                           (unsigned long long)(m[7] >> 10));
             }
         }
     }

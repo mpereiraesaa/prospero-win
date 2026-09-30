@@ -119,8 +119,8 @@ static void test_refused(void)
         assert(used() == 0);
         assert(!__wine_ps5_mprotect(base, PAGE, PROT_READ) && !__wine_ps5_munmap(base, PAGE));
         {
-            uint64_t counters[6] = { 1, 1, 1, 1 };
-            assert(__wine_ps5_memory_stats(counters, 6) == 6 && !counters[0] && !counters[2]);
+            uint64_t counters[8] = { 1, 1, 1, 1, 1, 1, 1, 1 };
+            assert(__wine_ps5_memory_stats(counters, 8) == 8 && !counters[0] && !counters[2] && !counters[6]);
         }
         _exit(0);
     }
@@ -158,11 +158,14 @@ int main(void)
     assert(used() == 2 && base[0] == 0 && base[2 * PAGE - 1] == 0);
     {
         /* The title's counters: backed now, peak (the self-check's page was
-         * the first), runs, refusals; then the heap's. */
+         * the first), runs, refusals; then the heap's; then the part below
+         * 4 GiB, all of it for a region below 4 GiB. */
         uint64_t counters[8] = { 0 };
-        assert(__wine_ps5_memory_stats(counters, 8) == 6);
+        const uint64_t low = (uintptr_t)base < ((uintptr_t)1 << 32) ? 2 * PAGE : 0;
+        assert(__wine_ps5_memory_stats(counters, 8) == 8);
         assert(counters[0] == 2 * PAGE && counters[1] == 2 * PAGE && counters[2] == 1 && counters[3] == 0);
-        assert(__wine_ps5_memory_stats(counters, 1) == 6);
+        assert(counters[6] == low && counters[7] == low);
+        assert(__wine_ps5_memory_stats(counters, 1) == 8);
     }
     memset(base, 0x33, 2 * PAGE);
     /* Read-execute, then back: the bytes stay. */

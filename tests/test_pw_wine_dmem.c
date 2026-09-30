@@ -120,6 +120,10 @@ static PwWineDmem dmem;
 static PwWineDmemRun runs[RUNS];
 
 static uintptr_t at(unsigned page) { return (uintptr_t)space + (uintptr_t)page * PAGE; }
+/* The model's space straddles 4 GiB at this page, inside the first region,
+ * so the below-4-GiB counters see runs on both sides and across it. */
+#define FOUR_GIB ((uintptr_t)1 << 32)
+enum { LOW_PAGES = 100 };
 static unsigned allocated_pages(void)
 {
     unsigned count = 0;
@@ -129,7 +133,7 @@ static unsigned allocated_pages(void)
 /* The table, the model and the counters describe the same memory. */
 static void check_consistent(void)
 {
-    unsigned mapped = 0;
+    unsigned mapped = 0, mapped_low = 0;
     PwWineDmemStats stats;
 
     for (uint32_t i = 0; i < dmem.run_count; i++) {
@@ -141,9 +145,15 @@ static void check_consistent(void)
             else assert(state[p] == MAPPED && phys_of[p] == run->offset + (int64_t)b);
         }
     }
-    for (unsigned p = 0; p < PAGES; p++) mapped += state[p] == MAPPED;
+    for (unsigned p = 0; p < PAGES; p++) {
+        mapped += state[p] == MAPPED;
+        mapped_low += state[p] == MAPPED && at(p) < FOUR_GIB;
+    }
     pw_wine_dmem_stats(&dmem, &stats);
     assert(stats.backed_bytes == (uint64_t)mapped * PAGE);
+    assert(stats.low_backed_bytes == (uint64_t)mapped_low * PAGE);
+    assert(stats.peak_low_backed_bytes >= stats.low_backed_bytes &&
+           stats.peak_low_backed_bytes <= stats.peak_backed_bytes);
     assert(allocated_pages() == mapped);
     assert(stats.runs == dmem.run_count);
 }
@@ -323,8 +333,9 @@ int main(void)
 {
     PwWineDmemStats stats;
 
-    space = mmap(NULL, (size_t)(PAGES + 1) * PAGE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    assert(space != MAP_FAILED && !((uintptr_t)space % 4096));
+    space = mmap((void *)(FOUR_GIB - (uintptr_t)LOW_PAGES * PAGE), (size_t)(PAGES + 1) * PAGE, PROT_NONE,
+                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    assert(space == (uint8_t *)(FOUR_GIB - (uintptr_t)LOW_PAGES * PAGE));
     /* Host pages are 4 KiB; the model's 16 KiB pages need that alignment. */
     space = (uint8_t *)(((uintptr_t)space + PAGE - 1) & ~(uintptr_t)(PAGE - 1));
     phys_fd = memfd_create("pw_wine_dmem", 0);
@@ -335,8 +346,12 @@ int main(void)
     test_merge_and_failures();
     test_random();
     pw_wine_dmem_stats(&dmem, &stats);
+    /* memory was backed on both sides of 4 GiB */
+    assert(stats.peak_low_backed_bytes > 0 && stats.peak_low_backed_bytes < stats.peak_backed_bytes);
     printf("wine dmem passed: regions, commit, protect, replace, split and merged runs, "
-           "caller mappings, kernel failures, a full table and 20000 random operations; peak %u runs, %llu KiB\n",
-           stats.peak_runs, (unsigned long long)(stats.peak_backed_bytes >> 10));
+           "caller mappings, kernel failures, a full table, 20000 random operations and the "
+           "below-4-GiB split; peak %u runs, %llu KiB, %llu KiB below 4 GiB\n",
+           stats.peak_runs, (unsigned long long)(stats.peak_backed_bytes >> 10),
+           (unsigned long long)(stats.peak_low_backed_bytes >> 10));
     return 0;
 }

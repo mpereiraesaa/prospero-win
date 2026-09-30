@@ -246,13 +246,14 @@ int __wine_ps5_mprotect(void *address, size_t bytes, int protection)
 }
 
 /* For the title's log, as __wine_virtual_stats: direct memory backed now and
- * at most, its runs and refused calls, then the heap's mapped and peak
- * mapped bytes. Returns how many counters there are. */
+ * at most, its runs and refused calls, the heap's mapped and peak mapped
+ * bytes, then the direct memory backed below 4 GiB now and at most. Returns
+ * how many counters there are. */
 unsigned int __wine_ps5_memory_stats(uint64_t *out, unsigned int count)
 {
     PwWineDmemStats dmem_stats = { 0 };
     PwWineHeapStats heap_stats;
-    uint64_t values[6];
+    uint64_t values[8];
 
     if (state > 0) pw_wine_dmem_stats(&dmem, &dmem_stats);
     pw_wine_heap_stats(&heap_stats);
@@ -262,6 +263,8 @@ unsigned int __wine_ps5_memory_stats(uint64_t *out, unsigned int count)
     values[3] = dmem_stats.failures;
     values[4] = heap_stats.mapped_bytes;
     values[5] = heap_stats.peak_mapped_bytes;
-    for (unsigned int i = 0; i < count && i < 6; i++) out[i] = values[i];
-    return 6;
+    values[6] = dmem_stats.low_backed_bytes;
+    values[7] = dmem_stats.peak_low_backed_bytes;
+    for (unsigned int i = 0; i < count && i < 8; i++) out[i] = values[i];
+    return 8;
 }
