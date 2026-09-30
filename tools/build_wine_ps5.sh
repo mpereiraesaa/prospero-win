@@ -446,57 +446,8 @@ if [ "$prx_status" = 0 ]; then
         # Mesa's embedded diagnostics name these libc APIs, but a title has no
         # process launcher or syslog daemon. Keep those paths inert and supply
         # only the SDK's TLS helper; do not pull its syscall-bearing libc.a.
-        cat > "$prx/obj/pw_opengl_libc.c" <<'EOF'
-#include <errno.h>
-#include <stdio.h>
-#include <syslog.h>
-#include <unistd.h>
-
-int mkstemp(char *template)
-{
-    (void)template;
-    errno = ENOSYS;
-    return -1;
-}
-
-int mkstemps(char *template, int suffix_length)
-{
-    (void)template;
-    (void)suffix_length;
-    errno = ENOSYS;
-    return -1;
-}
-
-void openlog(const char *ident, int option, int facility)
-{
-    (void)ident;
-    (void)option;
-    (void)facility;
-}
-
-FILE *popen(const char *command, const char *mode)
-{
-    (void)command;
-    (void)mode;
-    errno = ENOSYS;
-    return NULL;
-}
-
-int pclose(FILE *stream)
-{
-    (void)stream;
-    errno = ECHILD;
-    return -1;
-}
-
-/* Mesa's C++ users observe this zero-initialized emulated-TLS pointer. */
-void mesa_glapi_tls_context_init(void) __asm__("_ZTH23_mesa_glapi_tls_Context");
-void mesa_glapi_tls_context_init(void)
-{
-}
-EOF
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC \
-            -c "$prx/obj/pw_opengl_libc.c" -o "$prx/obj/pw_opengl_libc.o" ||
+            -c "$root/wine/ps5/pw_opengl_libc.c" -o "$prx/obj/pw_opengl_libc.o" ||
             fail "cannot compile OpenGL libc shims"
         (cd "$prx/obj" && "$sdk/bin/llvm-ar" x "$sdk/target/lib/libc.a" emutls.o) ||
             fail "no emutls.o in the payload SDK's libc.a"

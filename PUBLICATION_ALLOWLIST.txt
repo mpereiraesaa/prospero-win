@@ -267,6 +267,7 @@ tests/test_pw_wine_cwd.c
 wine/ps5/pw_wine_cwd.c
 wine/ps5/pw_wine_cwd.h
 wine/ps5/pw_wine_cwd_libc.c
+wine/ps5/pw_opengl_libc.c
 wine/ps5/pw_vulkan_libc.c
 wine/ps5/pw_vulkan_radv.c
 docs/INSTALLING_GAMES.md
