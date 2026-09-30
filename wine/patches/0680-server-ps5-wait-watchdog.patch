@@ -1,0 +1,196 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Wed, 30 Sep 2026 13:30:00 +0200
+Subject: [PATCH] server: A wait watchdog for the PS5 (diagnostic, off by
+ default).
+
+Heavy WINEDEBUG channels hid the stall they were meant to explain
+(prospero-win#250). With WINE_PS5_WAIT_WATCHDOG set, every two seconds
+the server writes a snapshot instead: each process's pending asyncs
+with their fd, each thread's message queue (wake bits and masks,
+pending messages, a SendMessage it waits for or has not answered), and
+each thread's current wait with its objects' dumps. Unset, nothing
+changes.
+---
+ server/async.c  | 20 ++++++++++++++++++++
+ server/fd.c     | 13 +++++++++++++
+ server/queue.c  | 39 +++++++++++++++++++++++++++++++++++++++
+ server/thread.c | 52 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 124 insertions(+)
+
+--- a/server/async.c
++++ b/server/async.c
+@@ -618,6 +618,26 @@ void async_set_result( struct object *obj, unsigned int status, apc_param_t tota
+     }
+ }
+ 
++extern void dump_fd_state( struct fd *fd );
++
++/* WINE_PS5_WAIT_WATCHDOG: every async of a process that has not completed */
++void dump_process_asyncs( struct process *process )
++{
++    struct async *async;
++
++    LIST_FOR_EACH_ENTRY( async, &process->asyncs, struct async, process_entry )
++    {
++        fprintf( stderr, "wine-ps5: async tid=%04x initial=%08x iosb=%08x pending=%u signaled=%u alerted=%u "
++                 "terminated=%u unknown=%u blocking=%u system=%u queued=%u comp=%u",
++                 async->thread ? async->thread->id : 0, async->initial_status,
++                 async->iosb ? async->iosb->status : 0, async->pending, async->signaled, async->alerted,
++                 async->terminated, async->unknown_status, async->blocking, async->is_system,
++                 async->queue != NULL, async->completion != NULL );
++        dump_fd_state( async->fd );
++        fprintf( stderr, "\n" );
++    }
++}
++
+ int async_queue_has_waiting_asyncs( struct async_queue *queue )
+ {
+     struct async *async;
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -916,6 +916,19 @@ static int get_next_timeout( struct timespec *ts )
+     return ret;
+ }
+ 
++/* WINE_PS5_WAIT_WATCHDOG: an fd's unix side and whether the loop watches it */
++void dump_fd_state( struct fd *fd )
++{
++    struct stat st;
++    int mode = -1;
++
++    if (!fd) { fprintf( stderr, " fd=none" ); return; }
++    if (fd->unix_fd != -1 && !fstat( fd->unix_fd, &st )) mode = st.st_mode & S_IFMT;
++    fprintf( stderr, " fd=%d mode=%o poll=%d events=%x name=%s", fd->unix_fd, mode, fd->poll_index,
++             fd->poll_index >= 0 ? pollfd[fd->poll_index].events : -1,
++             fd->unix_name ? fd->unix_name : "-" );
++}
++
+ /* server main poll() loop */
+ void main_loop(void)
+ {
+--- a/server/queue.c
++++ b/server/queue.c
+@@ -1282,6 +1282,45 @@ static void msg_queue_dump( struct object *obj, int verbose )
+              queue_shm->wake_bits, queue_shm->wake_mask );
+ }
+ 
++/* WINE_PS5_WAIT_WATCHDOG: a queue's wake state, pending messages, and the
++ * sent messages it waits for or has not answered. */
++void dump_queue_state( struct msg_queue *queue )
++{
++    queue_shm_t *shm = queue->shared;
++    struct message_result *res;
++    struct list *ptr;
++    unsigned int counts[NB_MSG_KINDS], i;
++
++    for (i = 0; i < NB_MSG_KINDS; i++)
++    {
++        counts[i] = 0;
++        LIST_FOR_EACH( ptr, &queue->msg_list[i] ) counts[i]++;
++    }
++    fprintf( stderr, "queue=%p bits=%x mask=%x changed=%x/%x sent=%u posted=%u",
++             queue, shm->wake_bits, shm->wake_mask, shm->changed_bits, shm->changed_mask,
++             counts[SEND_MESSAGE], counts[POST_MESSAGE] );
++    if ((ptr = list_head( &queue->send_result )))
++    {
++        res = LIST_ENTRY( ptr, struct message_result, sender_entry );
++        fprintf( stderr, " waits-reply msg=%04x win=%08x to=%p replied=%d",
++                 res->msg ? res->msg->msg : 0, res->msg ? res->msg->win : 0, res->receiver, res->replied );
++    }
++    if ((res = queue->recv_result))
++        fprintf( stderr, " handling msg=%04x win=%08x from=%p replied=%d",
++                 res->msg ? res->msg->msg : 0, res->msg ? res->msg->win : 0, res->sender, res->replied );
++    for (i = 0; i < NB_MSG_KINDS; i++)
++    {
++        struct message *msg;
++        unsigned int n = 0;
++        LIST_FOR_EACH_ENTRY( msg, &queue->msg_list[i], struct message, entry )
++        {
++            if (n++ == 3) break;
++            fprintf( stderr, " %s[%04x win=%08x]", i == SEND_MESSAGE ? "S" : "P", msg->msg, msg->win );
++        }
++    }
++    fprintf( stderr, "\n" );
++}
++
+ static void msg_queue_destroy( struct object *obj )
+ {
+     struct msg_queue *queue = (struct msg_queue *)obj;
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -74,6 +74,7 @@ struct thread_wait
+     client_ptr_t            key;        /* wait key for keyed events */
+     client_ptr_t            cookie;     /* magic cookie to return to client */
+     abstime_t               when;
++    timeout_t               start;      /* monotonic_time when the wait began */
+     struct timeout_user    *user;
+     int                     status;     /* status to return (unless STATUS_PENDING) */
+     struct wait_queue_entry queues[1];
+@@ -1054,6 +1055,55 @@ static unsigned int end_wait( struct thread *thread, unsigned int status )
+ }
+ 
+ /* build the thread wait structure */
++/* WINE_PS5_WAIT_WATCHDOG: every two seconds, report what each thread waits
++ * on in the server and its message queue's state. A few lines every two
++ * seconds, so it barely changes the timing it is there to explain. */
++extern void dump_queue_state( struct msg_queue *queue );
++extern void dump_process_asyncs( struct process *process );
++
++static void wait_watchdog( void *arg )
++{
++    struct thread *thread;
++    struct thread_wait *wait;
++    int i;
++
++    fprintf( stderr, "wine-ps5: wait snapshot\n" );
++    {
++        struct process *last = NULL;
++        LIST_FOR_EACH_ENTRY( thread, &thread_list, struct thread, entry )
++            if (thread->process != last) dump_process_asyncs( last = thread->process );
++    }
++    LIST_FOR_EACH_ENTRY( thread, &thread_list, struct thread, entry )
++    {
++        if (thread->queue)
++        {
++            fprintf( stderr, "wine-ps5: queue tid=%04x ", thread->id );
++            dump_queue_state( thread->queue );
++        }
++        for (wait = thread->wait; wait; wait = wait->next)
++        {
++            fprintf( stderr, "wine-ps5: wait tid=%04x pid=%04x ms=%lld op=%d flags=%#x count=%d when=%lld\n",
++                     thread->id, thread->process->id, (long long)((monotonic_time - wait->start) / 10000),
++                     wait->select, wait->flags, wait->count, (long long)wait->when );
++            for (i = 0; i < wait->count; i++)
++            {
++                fprintf( stderr, "wine-ps5:   [%d] ", i );
++                wait->queues[i].obj->ops->dump( wait->queues[i].obj, 0 );
++            }
++        }
++    }
++    add_timeout_user( -2 * TICKS_PER_SEC, wait_watchdog, NULL );
++}
++
++static void start_wait_watchdog(void)
++{
++    static int started;
++
++    if (started) return;
++    started = 1;
++    if (getenv( "WINE_PS5_WAIT_WATCHDOG" )) add_timeout_user( -2 * TICKS_PER_SEC, wait_watchdog, NULL );
++}
++
+ static int wait_on( const union select_op *select_op, unsigned int count, struct object *objects[],
+                     int flags, abstime_t when )
+ {
+@@ -1070,8 +1120,10 @@ static int wait_on( const union select_op *select_op, unsigned int count, struct
+     wait->cookie  = 0;
+     wait->user    = NULL;
+     wait->when = when;
++    wait->start = monotonic_time;
+     wait->abandoned = 0;
+     current->wait = wait;
++    start_wait_watchdog();
+ 
+     for (i = 0, entry = wait->queues; i < count; i++, entry++)
+     {

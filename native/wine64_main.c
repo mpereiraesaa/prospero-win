@@ -39,6 +39,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,6 +68,11 @@ static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 /* A game closes itself this long after it started; 0 lets it run until it
  * is closed. Pinball presents its first frame about 31 s in (run 13). */
 #define PW_WINE64_SECONDS 0
+#endif
+#ifndef PW_WINE64_WAIT_WATCHDOG
+/* 1 turns on Wine's wait watchdog (patch 0680): a snapshot of what every
+ * thread waits on every two seconds, for stalls that logging hides. */
+#define PW_WINE64_WAIT_WATCHDOG 0
 #endif
 #ifndef PW_WINE64_SCRIPT
 /* 1 drives the launcher unattended for validation: it opens
@@ -178,10 +184,15 @@ _Static_assert(PW_WINE_AUDIO_GRAIN == PW_AUDIO_PS5_GRAIN && PW_WINE_AUDIO_RATE =
                "Wine's audio grain is the port's");
 static PwAudioPs5Ops audio_ops;
 static int audio_port = -1;
+/* Grains played, and those with any sound in them. */
+static volatile unsigned long audio_grains, audio_audible;
 
 static int wine_audio(void *context, const int16_t *frames)
 {
     (void)context;
+    audio_grains++;
+    for (size_t i = 0; i < 2u * PW_WINE_AUDIO_GRAIN; i++)
+        if (frames[i]) { audio_audible++; break; }
     return audio_ops.output(audio_port, frames) < 0 ? -1 : 0;
 }
 
@@ -473,6 +484,17 @@ static void hid_log(const char *line)
     PS5LOG_LOG("PW_WINE64 hid %s", line);
 }
 
+/* The process's CPU time, user and system, in milliseconds: a stall that
+ * waits shows no growth, one that spins grows by a core a second. */
+static unsigned long long cpu_ms(void)
+{
+    struct rusage usage;
+
+    if (getrusage(RUSAGE_SELF, &usage)) return 0;
+    return (unsigned long long)(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000u +
+           (unsigned long long)(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000u;
+}
+
 /* ---- launcher ----------------------------------------------------------- */
 
 /* Shown until a game is chosen; Wine is not loaded. Does not return. */
@@ -741,6 +763,9 @@ int main(int argc, char **argv)
                    game->input.preset[0] ? game->input.preset : "-",
                    game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse,
                    game->app.dll_overrides[0] ? game->app.dll_overrides : "-");
+        /* What Wine gives the game as NumberOfProcessors. */
+        PS5LOG_LOG("PW_WINE64 cpus online=%ld", sysconf(_SC_NPROCESSORS_ONLN));
+        if (PW_WINE64_WAIT_WATCHDOG) setenv("WINE_PS5_WAIT_WATCHDOG", "1", 1);
         /* [application] arguments follow the executable in Wine's argv. */
         int words = pw_wine_launch_split(game->app.arguments, argument_words,
                                          sizeof(argument_words), wine_argv + 2,
@@ -966,12 +991,13 @@ int main(int argc, char **argv)
             uint64_t v[16] = { 0 };
 
             PS5LOG_LOG("PW_WINE64 alive tick=%llu sink_calls=%lu frames_put=%llu shown=%llu "
-                       "rejected=%llu last=%ux%u inputs=%llu refused=%llu vk_shown=%llu vk_busy=%llu",
+                       "rejected=%llu last=%ux%u inputs=%llu refused=%llu vk_shown=%llu vk_busy=%llu "
+                       "cpu_ms=%llu audio=%lu audible=%lu",
                        (unsigned long long)tick, sink_calls, (unsigned long long)frames.sequence,
                        (unsigned long long)shown, (unsigned long long)frames.rejected,
                        frames.width, frames.height, (unsigned long long)posted,
                        (unsigned long long)refused, (unsigned long long)vulkan_frames.shown,
-                       (unsigned long long)vulkan_frames.busy);
+                       (unsigned long long)vulkan_frames.busy, cpu_ms(), audio_grains, audio_audible);
             if (start.virtual_stats && tick % 300 == 0) {
                 static uint64_t faults_logged;
 

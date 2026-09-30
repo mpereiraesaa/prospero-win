@@ -16,6 +16,9 @@
 #   PW_WINE64_SCRIPT       1 drives the launcher unattended (validation)
 #   PW_WINE64_SECONDS      close each game after this many seconds; 0 never
 #   PW_WINE64_SCRIPT_CYCLES games the unattended launcher opens (default 2)
+#   PW_WINE64_WAIT_WATCHDOG 1 turns on Wine's wait watchdog (patch 0680) in
+#                          every game: a snapshot of the server's waits every
+#                          two seconds, for diagnosing stalls (default 0)
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -28,9 +31,12 @@ output_suffix=${PW_OUTPUT_SUFFIX:-}
 wine64_script=${PW_WINE64_SCRIPT:-0}
 wine64_seconds=${PW_WINE64_SECONDS:-0}
 wine64_cycles=${PW_WINE64_SCRIPT_CYCLES:-2}
+wine64_watchdog=${PW_WINE64_WAIT_WATCHDOG:-0}
 
 [[ $native_mode == wine64 ]] || {
     echo "PW_NATIVE_MODE must be wine64: the direct Win32 runtime was removed" >&2; exit 2; }
+[[ $wine64_watchdog == 0 || $wine64_watchdog == 1 ]] || {
+    echo "PW_WINE64_WAIT_WATCHDOG must be 0 or 1" >&2; exit 2; }
 [[ $wine64_script == 0 || $wine64_script == 1 ]] && [[ $wine64_seconds =~ ^[0-9]+$ ]] &&
     [[ $wine64_cycles =~ ^[1-9][0-9]{0,3}$ ]] || {
     echo "PW_WINE64_SCRIPT must be 0 or 1, PW_WINE64_SECONDS a number and" \
@@ -103,7 +109,7 @@ common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -I"$root/include" -I"$root/src" -I"$root/native"
         -I"$root/native/ps5log"
         -DPW_WINE64_SCRIPT="$wine64_script" -DPW_WINE64_SECONDS="$wine64_seconds"
-        -DPW_WINE64_SCRIPT_CYCLES="$wine64_cycles")
+        -DPW_WINE64_SCRIPT_CYCLES="$wine64_cycles" -DPW_WINE64_WAIT_WATCHDOG="$wine64_watchdog")
 
 sources=(
     native/wine64_main.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c

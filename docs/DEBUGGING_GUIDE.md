@@ -69,6 +69,16 @@ Useful readings:
   reaches Wine and is lost inside it (the display driver, focus, coalescing).
 - One page in `fault_top` with tens of thousands of faults a second is a
   loop, not a workload.
+- `cpu_ms` tells a wait from a spin: during a stall, a spinning thread adds
+  about 1000 a second, a waiting process almost nothing.
+
+When a stall disappears as soon as you turn on Wine's channels (they make
+every thread slower and talk to the server more), build the app with
+`PW_WINE64_WAIT_WATCHDOG=1` instead. Every two seconds Wine's server then
+logs what each thread waits on, each message queue's state and every
+pending async I/O, a few lines at a time, so the timing barely changes. A
+thread the game needs that is in no server wait at all is blocked in
+host-side code.
 
 ## 3. Turn on Wine's channels for one game
 
@@ -157,6 +167,7 @@ What each looked like, and what it turned out to be. Newest first.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
+| Warcraft III's intro started 0.4–32 s after its decoder was ready (twice never); the app idle at 0.1 cores meanwhile; heavy logging made it go away | Not found yet ([#250](https://github.com/mpereiraesaa/prospero-win/issues/250)): new threads can wait seconds in host-side code before they run, and LAV Video starts many | Workaround in the recipe: LAV Video `NumThreads=1`, `HWAccel=0` (1.6 s on average instead of 9 s). Watch other games that start many threads while loading |
 | The stick and USB mouse didn't move the pointer; keys worked. `inputs` grew, nothing refused | win32u (Wine 11) holds a driver's mouse motion until a button or `MOUSEEVENTF_MOVE_NOCOALESCE` sends it; the PS5 driver never sent it. Before, the pointer only seemed to move because the driver answered `GetCursorPos` itself | Wine patch 0670: relative motion, sent with `MOUSEEVENTF_MOVE_NOCOALESCE` |
 | An RTS map didn't scroll at the screen's edges | The app sent absolute positions, and nothing while the pointer was held at an edge; the game's own `SetCursorPos` was overridden | Patch 0670: the app sends motion, Wine keeps the only pointer |
 | A white rectangle while the game loaded | win32u fills a new window surface with white; a Direct3D window is never painted | Patch 0650: new surfaces start black on the PS5 |

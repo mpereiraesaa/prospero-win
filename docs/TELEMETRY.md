@@ -24,8 +24,10 @@ Every record the title writes starts with `PW_WINE64`:
 | `winedebug` | the game's own `WINEDEBUG`, when its profile's `[debug]` section sets one |
 | `ntdll` / `load` / `environment` / `run` | the runtime found, `ntdll.prx` loaded (stage, module, segments), Wine's environment, `__wine_main` started |
 | `display` / `audio` | the present sink, input and XInput hooks, VideoOut; the audio sink and port |
-| `alive` | about once a second: Wine's output lines, frames delivered, shown and rejected with the last size, inputs posted and refused; then Wine's VM call counters (`mmap=`) |
+| `alive` | about once a second: Wine's output lines, frames delivered, shown and rejected with the last size, inputs posted and refused, the process's CPU time (`cpu_ms`, user and system: a stall that grows it by about 1000 a second spins, one that barely grows it waits), and the audio grains played (`audio`) and those with sound (`audible`); then Wine's VM call counters (`mmap=`) |
+| `cpus` | the processors the system reports, which Wine gives the game as `NumberOfProcessors` |
 | `fault_top` | every five seconds, when Wine's fault count grew: the pages that faulted most (Wine patch 0545), ranked, with the count, the 4 KiB page, the last faulting PC, the kind (0 read, 1 write, 8 execute), the page's and its host page's protection, and how it ended (1 resolved, 2 access violation, 3 other). One page at tens of thousands of faults a second is a loop, not a workload |
+| `wine-ps5: wait snapshot` (from `WINESERVER`) | only in builds with `PW_WINE64_WAIT_WATCHDOG=1` (Wine patch 0680), every two seconds: each pending async with its thread, state and fd (`async`), each thread's message queue with its wake bits and masks, pending messages and any `SendMessage` it waits for or handles (`queue`), and each thread's current wait with its objects (`wait`, then one line per object) |
 | `close requested` / `close timeout` | Options+Create (or the unattended deadline) sent Alt+F4; the game did not close in time |
 | `rumble` | an XInput game's motor levels and the pad's result |
 | `fault` | a fault before Wine's handlers: signal, address, RIP and the ntdll segment |
