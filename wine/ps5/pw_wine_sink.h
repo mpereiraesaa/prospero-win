@@ -28,7 +28,7 @@ enum { PW_WINE_INPUT_KEY=1,PW_WINE_INPUT_MOUSE_MOVE,PW_WINE_INPUT_MOUSE_BUTTON,
 typedef struct PwWineInput {
     uint32_t type;
     uint32_t code;      /* KEY: Windows virtual key; MOUSE_BUTTON: 0 left, 1 right, 2 middle */
-    int32_t x,y;        /* MOUSE_MOVE: absolute desktop position */
+    int32_t x,y;        /* MOUSE_MOVE: relative motion in desktop pixels */
     uint32_t down;      /* KEY, MOUSE_BUTTON: 1 pressed, 0 released */
 } PwWineInput;
 

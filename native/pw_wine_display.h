@@ -59,29 +59,21 @@ size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t 
  * packets. */
 int pw_wine_game_pad(const PwPadPs5 *pad, PwWinePad *out);
 
-/* A pointer a stick moves over Wine's desktop, in 1/65536 pixels. */
+/* A stick's pointer motion not yet sent, in 1/65536 pixels. Wine keeps
+ * the pointer's position: the title sends only motion, as a mouse does
+ * (patch 0670), so a game can move or clip the pointer itself and motion
+ * against an edge still reaches it. */
 typedef struct PwWinePointer {
     int64_t x, y;
-    uint32_t width, height;
 } PwWinePointer;
 
 enum { PW_WINE_POINTER_DEADZONE = 20 };   /* of 128, stick noise at rest */
 
-/* A pointer in the middle of a width x height desktop. */
-void pw_wine_pointer_init(PwWinePointer *pointer, uint32_t width, uint32_t height);
-/* The desktop the pointer moves over is now width x height (a frame of
- * another size): the pointer keeps its position, brought inside. With
- * WINE_PS5_VIEW=window, a menu that opens widens the frame from the same
- * top left, so the pointer stays on what it was over. */
-void pw_wine_pointer_resize(PwWinePointer *pointer, uint32_t width, uint32_t height);
 /* Move by a stick position (0..255 each axis, 0x80 centred) held for
  * elapsed_us, at up to speed pixels per second at full tilt, on a squared
- * curve past the dead zone, kept on the desktop. 1 and an absolute
- * MOUSE_MOVE in out when the pointer reached another pixel, else 0. */
+ * curve past the dead zone. 1 and a MOUSE_MOVE of the whole pixels moved
+ * in out when there are any (the fraction is kept for the next step),
+ * else 0. */
 int pw_wine_pointer_step(PwWinePointer *pointer, uint8_t stick_x, uint8_t stick_y,
                          uint32_t speed, uint32_t elapsed_us, PwWineInput *out);
-/* Move by a mouse's motion, dx and dy desktop pixels, kept on the desktop.
- * 1 and an absolute MOUSE_MOVE in out when the pointer reached another
- * pixel, else 0. */
-int pw_wine_pointer_move(PwWinePointer *pointer, int32_t dx, int32_t dy, PwWineInput *out);
 #endif

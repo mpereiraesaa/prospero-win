@@ -117,81 +117,53 @@ static void test_inputs(void)
 
 static void test_pointer(void)
 {
-    PwWinePointer pointer;
+    PwWinePointer pointer = { 0, 0 };
     PwWineInput move;
 
-    pw_wine_pointer_init(&pointer, 800, 600);
-    assert(pointer.x >> 16 == 400 && pointer.y >> 16 == 300);
     /* At rest and inside the dead zone nothing moves. */
     assert(!pw_wine_pointer_step(&pointer, 0x80, 0x80, 1200, 16000, &move));
     assert(!pw_wine_pointer_step(&pointer, 0x80 + PW_WINE_POINTER_DEADZONE, 0x80 - PW_WINE_POINTER_DEADZONE,
                                  1200, 1000000, &move));
-    /* Full tilt right for a second covers the speed; up moves y down to 0. */
+    assert(!pointer.x && !pointer.y);
+    /* Full tilt for a second is the speed's worth of motion, right or up. */
     assert(pw_wine_pointer_step(&pointer, 0xff, 0x80, 300, 1000000, &move) == 1);
-    assert(move.type == PW_WINE_INPUT_MOUSE_MOVE && move.x == 700 && move.y == 300);
+    assert(move.type == PW_WINE_INPUT_MOUSE_MOVE && move.x == 300 && move.y == 0 && !move.code && !move.down);
     assert(pw_wine_pointer_step(&pointer, 0x80, 0x00, 1200, 1000000, &move) == 1);
-    assert(move.x == 700 && move.y == 0);
-    /* Held against the edges it stays on the desktop. */
-    assert(pw_wine_pointer_step(&pointer, 0xff, 0xff, 20000, 1000000, &move) == 1);
-    assert(move.x == 799 && move.y == 599);
-    assert(!pw_wine_pointer_step(&pointer, 0xff, 0xff, 20000, 1000000, &move));
-    assert(pw_wine_pointer_step(&pointer, 0x00, 0x00, 20000, 1000000, &move) == 1 && !move.x && !move.y);
-    /* Half tilt is slower than half speed (squared curve), and small steps add up. */
-    pw_wine_pointer_init(&pointer, 800, 600);
+    assert(move.x == 0 && move.y == -1200);
+    /* Motion has no edge: held, it keeps coming, which is what scrolls a
+     * strategy game's map with the pointer against the screen's edge. */
+    for (int i = 0; i < 3; i++) {
+        assert(pw_wine_pointer_step(&pointer, 0xff, 0xff, 20000, 1000000, &move) == 1);
+        assert(move.x == 20000 && move.y == 20000);
+    }
+    /* Half tilt is slower than half speed (squared curve). */
     assert(pw_wine_pointer_step(&pointer, 0x80 + 74, 0x80, 1000, 1000000, &move) == 1);
-    assert(move.x > 400 + 200 && move.x < 400 + 300);
-    pw_wine_pointer_init(&pointer, 800, 600);
+    assert(move.x > 200 && move.x < 300 && move.y == 0);
+}
+
+static void test_pointer_fraction(void)
+{
+    PwWinePointer pointer = { 0, 0 };
+    PwWineInput move;
+    int32_t right = 0, left = 0;
     int moves = 0;
-    for (int i = 0; i < 100; i++) moves += pw_wine_pointer_step(&pointer, 0xff, 0x80, 60, 16000, &move);
-    assert(moves > 0 && pointer.x >> 16 >= 400 + 95 && pointer.x >> 16 <= 400 + 96);
-    pw_wine_pointer_init(&pointer, 0, 0);
-    assert(pointer.width == 1 && !pw_wine_pointer_step(&pointer, 0xff, 0xff, 1000, 1000, &move));
+
+    /* Steps smaller than a pixel add up: 60 px/s for 100 frames of 16 ms is
+     * 62914/65536 of a pixel a step: 95 whole pixels, sent a pixel at a time,
+     * with the fraction kept. */
+    for (int i = 0; i < 100; i++)
+        if (pw_wine_pointer_step(&pointer, 0xff, 0x80, 60, 16000, &move)) {
+            assert(move.x == 1 && move.y == 0);
+            right += move.x;
+            moves++;
+        }
+    assert(right == 95 && moves == 95 && pointer.x > 0 && pointer.x < 65536);
+    /* Left is the mirror image: the fraction rounds towards zero both ways. */
+    pointer = (PwWinePointer){ 0, 0 };
+    for (int i = 0; i < 100; i++)
+        if (pw_wine_pointer_step(&pointer, 0x01, 0x80, 60, 16000, &move)) left += move.x;
+    assert(left == -95 && pointer.x < 0 && pointer.x > -65536);
     assert(!pw_wine_pointer_step(NULL, 0xff, 0x80, 1, 1, &move) && !pw_wine_pointer_step(&pointer, 0, 0, 1, 1, NULL));
-    pw_wine_pointer_init(NULL, 1, 1);
-}
-
-static void test_pointer_move(void)
-{
-    PwWinePointer pointer;
-    PwWineInput move;
-
-    /* A mouse's motion in pixels, kept on the desktop; no event within a pixel. */
-    pw_wine_pointer_init(&pointer, 1920, 1080);
-    assert(pw_wine_pointer_move(&pointer, 10, -20, &move) == 1);
-    assert(move.type == PW_WINE_INPUT_MOUSE_MOVE && move.x == 970 && move.y == 520);
-    assert(!pw_wine_pointer_move(&pointer, 0, 0, &move));
-    assert(pw_wine_pointer_move(&pointer, -5000, 5000, &move) == 1 && move.x == 0 && move.y == 1079);
-    assert(!pw_wine_pointer_move(&pointer, -1, 1, &move));
-}
-
-static void test_pointer_resize(void)
-{
-    PwWinePointer pointer;
-    PwWineInput move;
-
-    /* A menu widens the frame: the pointer stays where it was, to the pixel
-     * and to the fraction of one. */
-    pw_wine_pointer_init(&pointer, 160, 200);
-    assert(pw_wine_pointer_step(&pointer, 0xff, 0xff, 50, 1000000, &move) == 1);
-    assert(move.x == 130 && move.y == 150);
-    int64_t x = pointer.x, y = pointer.y;
-    pw_wine_pointer_resize(&pointer, 320, 400);
-    assert(pointer.width == 320 && pointer.height == 400 && pointer.x == x && pointer.y == y);
-    /* It then reaches the new edges. */
-    assert(pw_wine_pointer_step(&pointer, 0xff, 0xff, 20000, 1000000, &move) == 1);
-    assert(move.x == 319 && move.y == 399);
-    /* The menu closes: the pointer is brought onto the smaller frame's last
-     * pixel, and one inside stays put. */
-    pw_wine_pointer_resize(&pointer, 160, 200);
-    assert(pointer.x >> 16 == 159 && pointer.y >> 16 == 199);
-    assert(!pw_wine_pointer_step(&pointer, 0xff, 0xff, 20000, 1000000, &move));
-    pw_wine_pointer_init(&pointer, 160, 200);
-    pw_wine_pointer_resize(&pointer, 100, 300);
-    assert(pointer.x >> 16 == 80 && pointer.y >> 16 == 100);
-    /* An empty frame is one pixel, at its origin. */
-    pw_wine_pointer_resize(&pointer, 0, 0);
-    assert(pointer.width == 1 && pointer.height == 1 && !pointer.x && !pointer.y);
-    pw_wine_pointer_resize(NULL, 1, 1);
 }
 
 static void test_pad(void)
@@ -259,8 +231,7 @@ int main(void)
     test_threads();
     test_inputs();
     test_pointer();
-    test_pointer_move();
-    test_pointer_resize();
+    test_pointer_fraction();
     test_pad();
     printf("wine display passed: frame box copy, newest frame, refusals, concurrent put/take, "
            "profile bindings to keys and mouse buttons, stick pointer, resized frames, "

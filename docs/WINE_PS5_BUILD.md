@@ -280,8 +280,18 @@ instead of starting explorer. The driver:
 - **Input.** `ProcessEvents` drains `pw_wine_next_input()` into hardware
   input:
   - keys;
-  - the absolute pointer, in screen pixels;
+  - the pointer's motion, as a relative move (patch 0670);
   - buttons.
+
+  The title sends the mouse's and the stick's motion, never a position, so
+  Wine's server keeps the only pointer, as it does with a real mouse. It
+  clips the pointer to `ClipCursor`'s rectangle, still reports motion
+  (`WM_INPUT`, `WM_MOUSEMOVE`) while the pointer is held against an edge,
+  which is how a strategy game scrolls its map, and lets `SetCursorPos` move
+  the same pointer, as mouse look expects. The driver reads the position back
+  to draw the cursor. Where a frame shows only part of the screen (one
+  window, or a smaller display mode), the pointer stops at what is shown.
+  The pointer starts in the middle of the first frame.
 
   `pw_wine_input_fd()` becomes each GUI thread's queue fd, so an idle
   thread is woken when input is posted. When no window is in the

@@ -128,15 +128,6 @@ int pw_wine_game_pad(const PwPadPs5 *pad, PwWinePad *out)
     return 1;
 }
 
-void pw_wine_pointer_init(PwWinePointer *pointer, uint32_t width, uint32_t height)
-{
-    if (!pointer) return;
-    pointer->width = width ? width : 1u;
-    pointer->height = height ? height : 1u;
-    pointer->x = (int64_t)(pointer->width / 2u) << 16;
-    pointer->y = (int64_t)(pointer->height / 2u) << 16;
-}
-
 /* Signed 1/65536-pixel travel of one axis. */
 static int64_t travel(uint8_t stick, uint32_t speed, uint32_t elapsed_us)
 {
@@ -151,48 +142,20 @@ static int64_t travel(uint8_t stick, uint32_t speed, uint32_t elapsed_us)
     return axis < 0 ? -v : v;
 }
 
-static int64_t clamp(int64_t value, uint32_t size)
-{
-    int64_t last = (int64_t)(size - 1u) << 16;
-    return value < 0 ? 0 : value > last ? last : value;
-}
-
-void pw_wine_pointer_resize(PwWinePointer *pointer, uint32_t width, uint32_t height)
-{
-    if (!pointer) return;
-    pointer->width = width ? width : 1u;
-    pointer->height = height ? height : 1u;
-    pointer->x = clamp(pointer->x, pointer->width);
-    pointer->y = clamp(pointer->y, pointer->height);
-}
-
-int pw_wine_pointer_move(PwWinePointer *pointer, int32_t dx, int32_t dy, PwWineInput *out)
-{
-    int64_t x, y;
-
-    if (!pointer || !out) return 0;
-    x = clamp(pointer->x + ((int64_t)dx * 65536), pointer->width);
-    y = clamp(pointer->y + ((int64_t)dy * 65536), pointer->height);
-    int moved = (x >> 16) != (pointer->x >> 16) || (y >> 16) != (pointer->y >> 16);
-    pointer->x = x;
-    pointer->y = y;
-    if (!moved) return 0;
-    *out = (PwWineInput){ PW_WINE_INPUT_MOUSE_MOVE, 0, (int32_t)(x >> 16), (int32_t)(y >> 16), 0 };
-    return 1;
-}
-
 int pw_wine_pointer_step(PwWinePointer *pointer, uint8_t stick_x, uint8_t stick_y,
                          uint32_t speed, uint32_t elapsed_us, PwWineInput *out)
 {
-    int64_t x, y;
+    int64_t dx, dy;
 
     if (!pointer || !out) return 0;
-    x = clamp(pointer->x + travel(stick_x, speed, elapsed_us), pointer->width);
-    y = clamp(pointer->y + travel(stick_y, speed, elapsed_us), pointer->height);
-    int moved = (x >> 16) != (pointer->x >> 16) || (y >> 16) != (pointer->y >> 16);
-    pointer->x = x;
-    pointer->y = y;
-    if (!moved) return 0;
-    *out = (PwWineInput){ PW_WINE_INPUT_MOUSE_MOVE, 0, (int32_t)(x >> 16), (int32_t)(y >> 16), 0 };
+    pointer->x += travel(stick_x, speed, elapsed_us);
+    pointer->y += travel(stick_y, speed, elapsed_us);
+    /* whole pixels, towards zero, so both directions keep their fraction */
+    dx = pointer->x / 65536;
+    dy = pointer->y / 65536;
+    if (!dx && !dy) return 0;
+    pointer->x -= dx * 65536;
+    pointer->y -= dy * 65536;
+    *out = (PwWineInput){ PW_WINE_INPUT_MOUSE_MOVE, 0, (int32_t)dx, (int32_t)dy, 0 };
     return 1;
 }
