@@ -110,6 +110,10 @@ static int valid_windows_path(const char *path)
  * order (n, b, n,b, empty) and ";" between entries. No spaces or paths. */
 static int valid_dll_overrides(const char *text)
 {
+    size_t length = strlen(text);
+
+    if (!length || text[length - 1u] == ';')
+        return 0;
     for (size_t index = 0; text[index]; ++index) {
         unsigned char value = (unsigned char)text[index];
         if (!((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
@@ -146,9 +150,13 @@ static int opengl32_override(const char *text)
             const char *name_end = memchr(name, ',', (size_t)(names_end - name));
             if (!name_end)
                 name_end = names_end;
-            if (equal_ascii((const uint8_t *)name, (size_t)(name_end - name), "opengl32")) {
+            size_t name_length = (size_t)(name_end - name);
+            int is_opengl32 = equal_ascii((const uint8_t *)name, name_length, "opengl32") ||
+                              equal_ascii((const uint8_t *)name, name_length, "opengl32.dll");
+            if (is_opengl32) {
                 value_end = entry_end;
-                if ((size_t)(value_end - (equals + 1)) != 1u || equals[1] != 'b')
+                if ((size_t)(value_end - (equals + 1)) != 1u ||
+                    (equals[1] != 'b' && equals[1] != 'B'))
                     return -1;
                 builtin = 1;
             }

@@ -686,7 +686,7 @@ int main(int argc, char **argv)
         { "USER", "prospero" },
         { "WINE_PS5_TRACE_STARTUP", "1" },  /* patch 0560: name startup steps */
         { "WINE_PS5_VIEW", view },          /* patch 0430: the game's windows, or the desktop */
-        { NULL, NULL }, { NULL, NULL },     /* WINE_PS5_DESKTOP, WINEDLLOVERRIDES: as the profile sets */
+        { NULL, NULL }, { NULL, NULL }, { NULL, NULL }, /* profile-specific environment */
     };
     /* wine, the executable, the profile's argument words, NULL */
     static const char *wine_argv[2 + PW_WINE_LAUNCH_WORDS + 1] = { "wine" };
@@ -759,6 +759,8 @@ int main(int argc, char **argv)
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINEDLLOVERRIDES", effective_dll_overrides };
         else if (overrides_status != PW_OK)
             PS5LOG_LOG("PW_WINE64 DLL overrides refused: %s", game->app.id);
+        if (game->app.graphics == PW_APP_GRAPHICS_OPENGL)
+            extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_OPENGL", "1" };
         /* [debug] winedebug: this game's channels in place of the title's. */
         if (game->winedebug[0]) {
             extra[0].value = game->winedebug;

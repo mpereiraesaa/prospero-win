@@ -140,6 +140,18 @@ unvalidated.
      platform->native_display = 0;
  }
  
+@@ -1139,5 +1163,10 @@
+     /* If we can't get basic information, there is no point continuing */
+     if (!funcs->p_eglGetConfigAttrib( egl->display, config, EGL_SURFACE_TYPE, &surface_type )) return FALSE;
+     if (egl->type == EGL_PLATFORM_SURFACELESS_MESA) surface_type |= EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
++#ifdef WINE_PS5_OPENGL
++    /* The SDK exposes a default display but no native window surface. WGL
++     * presents its framebuffer through the PS5 driver's existing path. */
++    if (!egl->type) surface_type |= EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
++#endif
+-
++
+     memset( fmt, 0, sizeof(*fmt) );
 @@ -1427,7 +1457,10 @@
       *    > purposes except eglCreateContext.
       */
@@ -305,3 +317,11 @@ unvalidated.
  
  static UINT read_drm_device_prop( const char *name, const char *prop )
  {
+@@ -3387,4 +3491,7 @@
+ {
+     struct egl_platform *egl;
+
++    /* DXVK and GDI profiles must not initialize the PS5 EGL/AGC stack. */
++    if (!getenv( "WINE_PS5_OPENGL" )) return TRUE;
++
+     if (!__wine_get_opengl_driver( WINE_OPENGL_DRIVER_VERSION )) return FALSE;

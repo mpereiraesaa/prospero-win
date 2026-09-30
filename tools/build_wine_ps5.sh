@@ -234,7 +234,7 @@ done
 # The PS5 OpenGL SDK is optional. When supplied, Wine's generic EGL/WGL
 # frontend binds directly to its static EGL symbols and the win32u PRX links
 # the SDK into the runtime.
-opengl_cflags="-g -O2"
+opengl_cflags=${CFLAGS:--g -O2}
 if [ -n "$ps5opengl_sdk" ]; then opengl_cflags="$opengl_cflags -DWINE_PS5_OPENGL"; fi
 
 # Reconfigure whenever the patches or the arguments change.
@@ -353,6 +353,7 @@ link_prx() {
         # win32u: its allocator and system imports belong to the existing Wine
         # PRX/module contracts, and the SDK payload libc adds raw syscalls.
         # shellcheck disable=SC2086
+        # Upstream Core33 links this gate entry to pull its AGC submit path.
         (cd "$build" && "$sdk/bin/prospero-clang++" -shared -nodefaultlibs \
             -Wl,-Bsymbolic -Wl,-T,"$pie" -Wl,-T,"$root/wine/ps5/prx_eh_frame.ld" \
             -Wl,--eh-frame-hdr -Wl,-soname,"$name.prx" -Wl,-z,defs \

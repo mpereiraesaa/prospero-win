@@ -95,6 +95,53 @@ int main(void)
         "prefix=legacy-gl\nruntime=wine-wow64\n"
         "architecture=pe32\ngraphics=opengl\n"
         "dll_overrides=opengl32=n\n", &profile) == PW_ERR_MALFORMED);
+    assert(parse_text(
+        "[application]\n"
+        "id=legacy-gl\nname=OpenGL game\n"
+        "executable=C:\\Games\\LegacyGL\\game.exe\n"
+        "working_directory=C:\\Games\\LegacyGL\n"
+        "prefix=legacy-gl\nruntime=wine-wow64\n"
+        "architecture=pe32\ngraphics=opengl\n"
+        "dll_overrides=OPENGL32=B\n", &profile) == PW_OK);
+    assert(pw_app_profile_effective_dll_overrides(&profile, effective_overrides,
+                                                   sizeof(effective_overrides)) == PW_OK);
+    assert(strcmp(effective_overrides, "OPENGL32=B") == 0);
+    assert(parse_text(
+        "[application]\n"
+        "id=legacy-gl\nname=OpenGL game\n"
+        "executable=C:\\Games\\LegacyGL\\game.exe\n"
+        "working_directory=C:\\Games\\LegacyGL\n"
+        "prefix=legacy-gl\nruntime=wine-wow64\n"
+        "architecture=pe32\ngraphics=opengl\n"
+        "dll_overrides=opengl32,d3d9=n\n", &profile) == PW_ERR_MALFORMED);
+    assert(parse_text(
+        "[application]\n"
+        "id=legacy-gl\nname=OpenGL game\n"
+        "executable=C:\\Games\\LegacyGL\\game.exe\n"
+        "working_directory=C:\\Games\\LegacyGL\n"
+        "prefix=legacy-gl\nruntime=wine-wow64\n"
+        "architecture=pe32\ngraphics=opengl\n"
+        "dll_overrides=opengl32.dll=n\n", &profile) == PW_ERR_MALFORMED);
+    assert(parse_text(
+        "[application]\n"
+        "id=legacy-gl\nname=OpenGL game\n"
+        "executable=C:\\Games\\LegacyGL\\game.exe\n"
+        "working_directory=C:\\Games\\LegacyGL\n"
+        "prefix=legacy-gl\nruntime=wine-wow64\n"
+        "architecture=pe32\ngraphics=opengl\n"
+        "dll_overrides=d3d9=n;\n", &profile) == PW_ERR_MALFORMED);
+    assert(parse_text(
+        "[application]\n"
+        "id=legacy-gl\nname=OpenGL game\n"
+        "executable=C:\\Games\\LegacyGL\\game.exe\n"
+        "working_directory=C:\\Games\\LegacyGL\n"
+        "prefix=legacy-gl\nruntime=wine-wow64\n"
+        "architecture=pe32\ngraphics=opengl\n", &profile) == PW_OK);
+    {
+        char too_small[4];
+        assert(pw_app_profile_effective_dll_overrides(&profile, too_small,
+                                                       sizeof(too_small)) == PW_ERR_LIMIT);
+    }
 
     assert(parse_text(
         "[application]\nid=pinball\nname=Pinball\n"
@@ -109,6 +156,19 @@ int main(void)
     "working_directory=C:\\\nprefix=default\nruntime=wine\narchitecture=pe64\ngraphics=dxvk\n" line
     assert(parse_text(OVERRIDES("dll_overrides = d3d11,dxgi=n;d3d9=n,b\n"), &profile) == PW_OK);
     assert(strcmp(profile.dll_overrides, "d3d11,dxgi=n;d3d9=n,b") == 0);
+    assert(parse_text(OVERRIDES("dll_overrides=opengl32=n\n"), &profile) == PW_OK);
+    assert(pw_app_profile_effective_dll_overrides(&profile, effective_overrides,
+                                                   sizeof(effective_overrides)) == PW_OK);
+    assert(strcmp(effective_overrides, "opengl32=n") == 0);
+    assert(parse_text(
+        "[application]\nid=legacy-gdi\nname=GDI\n"
+        "executable=C:\\gdi.exe\nworking_directory=C:\\Games\n"
+        "prefix=default\nruntime=wine\narchitecture=pe32\ngraphics=gdi\n"
+        "dll_overrides=opengl32=n\n", &profile) == PW_OK);
+    assert(pw_app_profile_effective_dll_overrides(&profile, effective_overrides,
+                                                   sizeof(effective_overrides)) == PW_OK);
+    assert(strcmp(effective_overrides, "opengl32=n") == 0);
+    assert(parse_text(OVERRIDES("dll_overrides=d3d9=n;\n"), &profile) == PW_ERR_MALFORMED);
     assert(parse_text(OVERRIDES("dll_overrides=*d3d8.dll=\n"), &profile) == PW_OK);
     assert(parse_text(OVERRIDES("dll_overrides=d3d11 dxgi=n\n"), &profile) == PW_ERR_MALFORMED);
     assert(parse_text(OVERRIDES("dll_overrides=C:\\x.dll=n\n"), &profile) == PW_ERR_MALFORMED);
