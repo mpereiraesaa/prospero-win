@@ -353,7 +353,8 @@ link_prx() {
         # win32u: its allocator and system imports belong to the existing Wine
         # PRX/module contracts, and the SDK payload libc adds raw syscalls.
         # shellcheck disable=SC2086
-        # Upstream Core33 links this gate entry to pull its AGC submit path.
+        # Match the upstream Core33 link options: force its weak AGC Gate2
+        # entry point into the archive so the draw submit path is available.
         (cd "$build" && "$sdk/bin/prospero-clang++" -shared -nodefaultlibs \
             -Wl,-Bsymbolic -Wl,-T,"$pie" -Wl,-T,"$root/wine/ps5/prx_eh_frame.ld" \
             -Wl,--eh-frame-hdr -Wl,-soname,"$name.prx" -Wl,-z,defs \

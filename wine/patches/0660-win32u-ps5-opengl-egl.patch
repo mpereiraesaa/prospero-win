@@ -152,19 +152,7 @@ unvalidated.
 -
 +
      memset( fmt, 0, sizeof(*fmt) );
-@@ -1427,7 +1457,10 @@
-      *    > purposes except eglCreateContext.
-      */
-     funcs->p_eglBindAPI( EGL_OPENGL_API );
--    *context = funcs->p_eglCreateContext( egl->display, EGL_NO_CONFIG_KHR, share, attribs ? egl_attribs : NULL );
-+    /* A legacy wglCreateContext request has no profile attributes. Preserve
-+     * EGL's compatibility-profile default on PS5 for fixed-function games. */
-+    *context = funcs->p_eglCreateContext( egl->display, EGL_NO_CONFIG_KHR, share,
-+                                          attribs ? egl_attribs : NULL );
- 
-     if ((err = funcs->p_eglGetError()) != EGL_SUCCESS || !*context)
-     {
-@@ -1490,6 +1523,38 @@
+@@ -1490,6 +1520,38 @@
      struct opengl_funcs *funcs = &display_funcs;
      const char *extensions;
  
@@ -203,7 +191,7 @@ unvalidated.
      if (!(funcs->egl_handle = dlopen( SONAME_LIBEGL, RTLD_NOW | RTLD_GLOBAL )))
      {
          ERR( "Failed to load %s: %s\n", SONAME_LIBEGL, dlerror() );
-@@ -1505,7 +1570,9 @@
+@@ -1505,7 +1567,9 @@
      LOAD_FUNCPTR( eglGetProcAddress );
      LOAD_FUNCPTR( eglQueryString );
  #undef LOAD_FUNCPTR
@@ -213,7 +201,7 @@ unvalidated.
      if (!(extensions = funcs->p_eglQueryString( EGL_NO_DISPLAY, EGL_EXTENSIONS )))
      {
          ERR( "Failed to find client extensions\n" );
-@@ -1513,6 +1580,9 @@
+@@ -1513,6 +1577,9 @@
      }
      TRACE( "EGL client extensions:\n" );
      dump_extensions( extensions );
@@ -223,7 +211,7 @@ unvalidated.
  
  #define CHECK_EXTENSION( ext )                                  \
      if (!has_extension( extensions, #ext ))                     \
-@@ -1520,25 +1590,53 @@
+@@ -1520,25 +1587,53 @@
          ERR( "Failed to find required extension %s\n", #ext );  \
          goto failed;                                            \
      }
@@ -277,7 +265,7 @@ unvalidated.
      return FALSE;
  }
  
-@@ -1568,7 +1666,9 @@
+@@ -1568,7 +1663,9 @@
          return FALSE;                                                                              \
      }
      CHECK_EXTENSION( EGL_KHR_create_context );
@@ -287,7 +275,7 @@ unvalidated.
      CHECK_EXTENSION( EGL_KHR_no_config_context );
  #undef CHECK_EXTENSION
  
-@@ -1638,7 +1738,11 @@
+@@ -1638,7 +1735,11 @@
  
  static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_driver_funcs *driver_funcs )
  {
@@ -299,7 +287,7 @@ unvalidated.
  
      driver_funcs->p_init_egl_platform( &display_egl );
      if (!display_egl.type) display_egl.display = funcs->p_eglGetDisplay( EGL_DEFAULT_DISPLAY );
-@@ -1647,7 +1751,7 @@
+@@ -1647,7 +1748,7 @@
      init_egl_devices( funcs );
  }
  
@@ -308,7 +296,7 @@ unvalidated.
  
  static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
  {
-@@ -1659,7 +1763,7 @@
+@@ -1659,7 +1760,7 @@
  {
  }
  
@@ -317,7 +305,7 @@ unvalidated.
  
  static UINT read_drm_device_prop( const char *name, const char *prop )
  {
-@@ -3387,4 +3491,7 @@
+@@ -3387,4 +3488,7 @@
  {
      struct egl_platform *egl;
 
