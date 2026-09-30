@@ -344,6 +344,12 @@ link_prx() {
         opengl_stubs=$prx/opengl-stubs
         mkdir -p "$opengl_stubs"
         cp "$sdk"/target/lib/*.so "$opengl_stubs/"
+        # A title has libkernel and libSceLibcInternal, not the WebKit
+        # process's libkernel_web and libScePosixForWebKit: symbols bound to
+        # those resolve to NULL in the title (pthread_getspecific in
+        # win32u's first call). Leave them out so everything binds to the
+        # title's own libraries, and a symbol only they have stays unresolved.
+        rm -f "$opengl_stubs/libkernel_web.so" "$opengl_stubs/libScePosixForWebKit.so"
         for import in "$ps5opengl_sdk"/lib/*.so; do
             [ -e "$import" ] || continue
             [ -e "$opengl_stubs/$(basename "$import")" ] || cp "$import" "$opengl_stubs/"
@@ -363,7 +369,7 @@ link_prx() {
             -Wl,--start-group -l"$ps5opengl_lib" -Wl,--end-group \
             -Wl,--start-group "$sdk/target/lib/libunwind.a" \
             "$sdk/target/lib/libc++abi.a" "$sdk/target/lib/libc++.a" -Wl,--end-group \
-            -lSceAgc -lSceAgcDriver -lSceVideoOut -lkernel_web -lSceSystemService \
+            -lSceAgc -lSceAgcDriver -lSceVideoOut -lkernel -lSceSystemService \
             -Wl,--as-needed "$opengl_stubs"/*.so) > "$log" 2>&1 &&
         stubs_dir=$opengl_stubs
     else
@@ -445,6 +451,13 @@ if [ "$prx_status" = 0 ]; then
 #include <stdio.h>
 #include <syslog.h>
 #include <unistd.h>
+
+int mkstemp(char *template)
+{
+    (void)template;
+    errno = ENOSYS;
+    return -1;
+}
 
 int mkstemps(char *template, int suffix_length)
 {

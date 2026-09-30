@@ -15,9 +15,14 @@ attributes for a legacy WGL context request, so the SDK's compatibility-profile
 default supports fixed-function applications; this patch leaves that existing
 behavior unchanged. Individual Windows games remain unvalidated.
 ---
+ dlls/win32u/driver.c |   7 +++
+ dlls/win32u/opengl.c | 150 +++++++++++++++++++++++++++++++++++++++++++++++++--
+ dlls/win32u/ps5drv.c |  29 ++++++++++
+ 3 files changed, 183 insertions(+), 3 deletions(-)
+
 --- a/dlls/win32u/driver.c
 +++ b/dlls/win32u/driver.c
-@@ -1280,7 +1280,14 @@
+@@ -1280,7 +1280,14 @@ static UINT loaderdrv_VulkanInit( UINT version, void *vulkan_handle, const struc
  
  static UINT loaderdrv_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs )
  {
@@ -32,61 +37,9 @@ behavior unchanged. Individual Windows games remain unvalidated.
  }
  
  static const struct user_driver_funcs lazy_load_driver =
---- a/dlls/win32u/ps5drv.c
-+++ b/dlls/win32u/ps5drv.c
-@@ -57,6 +57,9 @@
- #include "wine/vulkan.h"
- #include "wine/vulkan_driver.h"
- #endif
-+#ifdef WINE_PS5_OPENGL
-+#include "wine/opengl_driver.h"
-+#endif
- 
- #ifdef WINE_PS5_USER_DRIVER
- 
-@@ -776,6 +779,29 @@
- 
- #endif  /* SONAME_LIBVULKAN */
- 
-+#ifdef WINE_PS5_OPENGL
-+
-+static UINT ps5_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
-+                            const struct opengl_driver_funcs **driver_funcs )
-+{
-+    if (version != WINE_OPENGL_DRIVER_VERSION)
-+    {
-+        ERR( "OpenGL driver version mismatch, win32u wants %u but driver has %u\n",
-+             version, WINE_OPENGL_DRIVER_VERSION );
-+        return STATUS_INVALID_PARAMETER;
-+    }
-+    if (!opengl_funcs->p_eglGetProcAddress)
-+    {
-+        WARN( "the PS5 EGL frontend is unavailable\n" );
-+        return STATUS_NOT_SUPPORTED;
-+    }
-+    /* win32u's EGL frontend is linked to the PS5 static EGL implementation;
-+     * it owns WGL pixel formats, pbuffer surfaces and context translation. */
-+    return STATUS_SUCCESS;
-+}
-+
-+#endif  /* WINE_PS5_OPENGL */
-+
- static const struct user_driver_funcs ps5_user_driver =
- {
-     .pUpdateDisplayDevices = ps5_UpdateDisplayDevices,
-@@ -792,6 +818,9 @@
- #ifdef SONAME_LIBVULKAN
-     .pVulkanInit = ps5_VulkanInit,
- #endif
-+#ifdef WINE_PS5_OPENGL
-+    .pOpenGLInit = ps5_OpenGLInit,
-+#endif
- };
- 
- /***********************************************************************
 --- a/dlls/win32u/opengl.c
 +++ b/dlls/win32u/opengl.c
-@@ -84,6 +84,30 @@
+@@ -84,6 +84,30 @@ static BOOLEAN enabled_extensions[GL_EXTENSION_COUNT];
  static struct wgl_pixel_format *pixel_formats;
  static UINT formats_count, onscreen_count;
  
@@ -117,7 +70,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  static DWORD get_ascii_config_key( HKEY defkey, HKEY appkey, const char *name,
                                     char *buffer, DWORD size )
  {
-@@ -1052,7 +1076,7 @@
+@@ -1052,7 +1076,7 @@ static struct opengl_drawable *framebuffer_surface_create( int format, struct cl
      return &surface->base;
  }
  
@@ -126,7 +79,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
  static const struct opengl_drawable_funcs egldrv_pbuffer_funcs;
  
-@@ -1063,7 +1087,13 @@
+@@ -1063,7 +1087,13 @@ static EGLConfig egl_config_for_format( const struct egl_platform *egl, int form
  
  static void egldrv_init_egl_platform( struct egl_platform *platform )
  {
@@ -140,7 +93,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      platform->native_display = 0;
  }
  
-@@ -1139,5 +1163,10 @@
+@@ -1139,6 +1169,11 @@ static BOOL describe_egl_config( EGLConfig config, struct wgl_pixel_format *fmt,
      /* If we can't get basic information, there is no point continuing */
      if (!funcs->p_eglGetConfigAttrib( egl->display, config, EGL_SURFACE_TYPE, &surface_type )) return FALSE;
      if (egl->type == EGL_PLATFORM_SURFACELESS_MESA) surface_type |= EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
@@ -149,10 +102,43 @@ behavior unchanged. Individual Windows games remain unvalidated.
 +     * presents its framebuffer through the PS5 driver's existing path. */
 +    if (!egl->type) surface_type |= EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
 +#endif
--
-+
+ 
      memset( fmt, 0, sizeof(*fmt) );
-@@ -1490,6 +1520,38 @@
+     pfd->nSize = sizeof(*pfd);
+@@ -1419,6 +1454,32 @@ static BOOL egldrv_context_create( int format, void *share, const int *attribs,
+     }
+     *attribs_end = EGL_NONE;
+ 
++#ifdef WINE_PS5_OPENGL
++    {
++        /* EGL_KHR_create_context ignores the profile mask below version 3.2,
++         * as desktop Mesa does, but the PS5 driver fails such a request with
++         * EGL_BAD_MATCH. Drop the mask so that the internal context, which
++         * asks for a core profile without a version, gets the default one. */
++        EGLint major = 1, minor = 0, *attr;
++
++        for (attr = egl_attribs; attr != attribs_end; attr += 2)
++        {
++            if (attr[0] == EGL_CONTEXT_MAJOR_VERSION_KHR) major = attr[1];
++            if (attr[0] == EGL_CONTEXT_MINOR_VERSION_KHR) minor = attr[1];
++        }
++        if (major < 3 || (major == 3 && minor < 2))
++        {
++            for (attr = egl_attribs; attr != attribs_end; attr += 2)
++                if (attr[0] == EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR) break;
++            if (attr != attribs_end)
++            {
++                memmove( attr, attr + 2, (char *)(attribs_end + 1) - (char *)(attr + 2) );
++                attribs_end -= 2;
++            }
++        }
++    }
++#endif
++
+     /* For now only OpenGL is supported. It's enough to set the API only for
+      * context creation, since:
+      * 1. the default API is EGL_OPENGL_ES_API
+@@ -1490,6 +1551,38 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
      struct opengl_funcs *funcs = &display_funcs;
      const char *extensions;
  
@@ -191,7 +177,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      if (!(funcs->egl_handle = dlopen( SONAME_LIBEGL, RTLD_NOW | RTLD_GLOBAL )))
      {
          ERR( "Failed to load %s: %s\n", SONAME_LIBEGL, dlerror() );
-@@ -1505,7 +1567,9 @@
+@@ -1505,7 +1598,9 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
      LOAD_FUNCPTR( eglGetProcAddress );
      LOAD_FUNCPTR( eglQueryString );
  #undef LOAD_FUNCPTR
@@ -201,7 +187,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      if (!(extensions = funcs->p_eglQueryString( EGL_NO_DISPLAY, EGL_EXTENSIONS )))
      {
          ERR( "Failed to find client extensions\n" );
-@@ -1513,6 +1577,9 @@
+@@ -1513,6 +1608,9 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
      }
      TRACE( "EGL client extensions:\n" );
      dump_extensions( extensions );
@@ -211,7 +197,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
  #define CHECK_EXTENSION( ext )                                  \
      if (!has_extension( extensions, #ext ))                     \
-@@ -1520,25 +1587,53 @@
+@@ -1520,25 +1618,53 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
          ERR( "Failed to find required extension %s\n", #ext );  \
          goto failed;                                            \
      }
@@ -265,7 +251,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      return FALSE;
  }
  
-@@ -1568,7 +1663,9 @@
+@@ -1568,7 +1694,9 @@ static BOOL init_egl_platform( struct egl_platform *egl, const struct opengl_fun
          return FALSE;                                                                              \
      }
      CHECK_EXTENSION( EGL_KHR_create_context );
@@ -275,7 +261,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      CHECK_EXTENSION( EGL_KHR_no_config_context );
  #undef CHECK_EXTENSION
  
-@@ -1638,7 +1735,11 @@
+@@ -1638,7 +1766,11 @@ done:
  
  static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_driver_funcs *driver_funcs )
  {
@@ -287,7 +273,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
      driver_funcs->p_init_egl_platform( &display_egl );
      if (!display_egl.type) display_egl.display = funcs->p_eglGetDisplay( EGL_DEFAULT_DISPLAY );
-@@ -1647,7 +1748,7 @@
+@@ -1647,7 +1779,7 @@ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_
      init_egl_devices( funcs );
  }
  
@@ -296,7 +282,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
  static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
  {
-@@ -1659,7 +1760,7 @@
+@@ -1659,7 +1791,7 @@ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_
  {
  }
  
@@ -305,13 +291,82 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
  static UINT read_drm_device_prop( const char *name, const char *prop )
  {
-@@ -3387,4 +3488,9 @@
+@@ -1700,7 +1832,14 @@ static void init_device_info( struct egl_platform *egl, const struct opengl_func
+ 
+     TRACE( "Initializing device %u (%p)\n", egl->index, egl->device);
+ 
++#ifdef WINE_PS5_OPENGL
++    /* The PS5 OpenGL SDK has no EGL_EXT_device_query: the display's device
++     * has no extension string, rather than a call through a NULL pointer
++     * inside whichever syscall first builds the display cache. */
++    extensions = funcs->p_eglQueryDeviceStringEXT ? funcs->p_eglQueryDeviceStringEXT( egl->device, EGL_EXTENSIONS ) : NULL;
++#else
+     extensions = funcs->p_eglQueryDeviceStringEXT( egl->device, EGL_EXTENSIONS );
++#endif
+     /* Assume that all devices without EGL_MESA_device_software are accelerated. */
+     egl->accelerated = !has_extension( extensions, "EGL_MESA_device_software" );
+     TRACE( "  - accelerated: %u\n", egl->accelerated );
+@@ -3387,6 +3526,11 @@ BOOL get_opengl_gpus( struct list *gpus )
  {
      struct egl_platform *egl;
-
+ 
 +#ifdef WINE_PS5_OPENGL
 +    /* DXVK and GDI profiles must not initialize the PS5 EGL/AGC stack. */
 +    if (!getenv( "WINE_PS5_OPENGL" )) return TRUE;
 +#endif
 +
      if (!__wine_get_opengl_driver( WINE_OPENGL_DRIVER_VERSION )) return FALSE;
+ 
+     LIST_FOR_EACH_ENTRY( egl, &devices_egl, struct egl_platform, entry )
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -57,6 +57,9 @@
+ #include "wine/vulkan.h"
+ #include "wine/vulkan_driver.h"
+ #endif
++#ifdef WINE_PS5_OPENGL
++#include "wine/opengl_driver.h"
++#endif
+ 
+ #ifdef WINE_PS5_USER_DRIVER
+ 
+@@ -776,6 +779,29 @@ static UINT ps5_VulkanInit( UINT version, void *vulkan_handle, const struct vulk
+ 
+ #endif  /* SONAME_LIBVULKAN */
+ 
++#ifdef WINE_PS5_OPENGL
++
++static UINT ps5_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
++                            const struct opengl_driver_funcs **driver_funcs )
++{
++    if (version != WINE_OPENGL_DRIVER_VERSION)
++    {
++        ERR( "OpenGL driver version mismatch, win32u wants %u but driver has %u\n",
++             version, WINE_OPENGL_DRIVER_VERSION );
++        return STATUS_INVALID_PARAMETER;
++    }
++    if (!opengl_funcs->p_eglGetProcAddress)
++    {
++        WARN( "the PS5 EGL frontend is unavailable\n" );
++        return STATUS_NOT_SUPPORTED;
++    }
++    /* win32u's EGL frontend is linked to the PS5 static EGL implementation;
++     * it owns WGL pixel formats, pbuffer surfaces and context translation. */
++    return STATUS_SUCCESS;
++}
++
++#endif  /* WINE_PS5_OPENGL */
++
+ static const struct user_driver_funcs ps5_user_driver =
+ {
+     .pUpdateDisplayDevices = ps5_UpdateDisplayDevices,
+@@ -792,6 +818,9 @@ static const struct user_driver_funcs ps5_user_driver =
+ #ifdef SONAME_LIBVULKAN
+     .pVulkanInit = ps5_VulkanInit,
+ #endif
++#ifdef WINE_PS5_OPENGL
++    .pOpenGLInit = ps5_OpenGLInit,
++#endif
+ };
+ 
+ /***********************************************************************
