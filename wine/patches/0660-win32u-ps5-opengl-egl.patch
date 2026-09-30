@@ -305,11 +305,13 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
  static UINT read_drm_device_prop( const char *name, const char *prop )
  {
-@@ -3387,4 +3488,7 @@
+@@ -3387,4 +3488,9 @@
  {
      struct egl_platform *egl;
 
++#ifdef WINE_PS5_OPENGL
 +    /* DXVK and GDI profiles must not initialize the PS5 EGL/AGC stack. */
 +    if (!getenv( "WINE_PS5_OPENGL" )) return TRUE;
++#endif
 +
      if (!__wine_get_opengl_driver( WINE_OPENGL_DRIVER_VERSION )) return FALSE;

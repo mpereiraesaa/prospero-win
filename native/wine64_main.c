@@ -677,7 +677,8 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
-    static PwWineStartEnv extra[] = {
+    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 3 };
+    static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
          * starts it from start.exe in a new process, which a title cannot */
@@ -688,6 +689,9 @@ int main(int argc, char **argv)
         { "WINE_PS5_VIEW", view },          /* patch 0430: the game's windows, or the desktop */
         { NULL, NULL }, { NULL, NULL }, { NULL, NULL }, /* profile-specific environment */
     };
+    _Static_assert(sizeof(extra) / sizeof(extra[0]) ==
+                   WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY,
+                   "profile environment capacity changed");
     /* wine, the executable, the profile's argument words, NULL */
     static const char *wine_argv[2 + PW_WINE_LAUNCH_WORDS + 1] = { "wine" };
     static char argument_words[PW_APP_ARGUMENTS_CAPACITY];
@@ -699,7 +703,7 @@ int main(int argc, char **argv)
         .ntdll_path = ntdll_path,
         .ntdll_dir = ntdll_dir,
         .prefix = prefix,
-        .extra_env = extra, .extra_env_count = sizeof(extra) / sizeof(extra[0]) - 3,
+        .extra_env = extra, .extra_env_count = WINE64_FIXED_ENV_COUNT,
         .argc = 2, .argv = wine_argv, .stack_bytes = 16u << 20,
     };
     static PwWineStart start;
