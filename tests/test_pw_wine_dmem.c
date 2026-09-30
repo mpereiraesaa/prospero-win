@@ -120,10 +120,13 @@ static PwWineDmem dmem;
 static PwWineDmemRun runs[RUNS];
 
 static uintptr_t at(unsigned page) { return (uintptr_t)space + (uintptr_t)page * PAGE; }
-/* The model's space straddles 4 GiB at this page, inside the first region,
- * so the below-4-GiB counters see runs on both sides and across it. */
+/* Where it can, the model's space straddles 4 GiB at this page, inside the
+ * first region, so the below-4-GiB counters see runs on both sides and
+ * across it. ASan keeps that range for itself; there the space goes
+ * anywhere and the counters are checked on one side only. */
 #define FOUR_GIB ((uintptr_t)1 << 32)
 enum { LOW_PAGES = 100 };
+static int straddles;
 static unsigned allocated_pages(void)
 {
     unsigned count = 0;
@@ -335,7 +338,12 @@ int main(void)
 
     space = mmap((void *)(FOUR_GIB - (uintptr_t)LOW_PAGES * PAGE), (size_t)(PAGES + 1) * PAGE, PROT_NONE,
                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    assert(space == (uint8_t *)(FOUR_GIB - (uintptr_t)LOW_PAGES * PAGE));
+    straddles = space == (uint8_t *)(FOUR_GIB - (uintptr_t)LOW_PAGES * PAGE);
+    if (!straddles) {
+        if (space != MAP_FAILED) munmap(space, (size_t)(PAGES + 1) * PAGE);
+        space = mmap(NULL, (size_t)(PAGES + 1) * PAGE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    }
+    assert(space != MAP_FAILED && !((uintptr_t)space % 4096));
     /* Host pages are 4 KiB; the model's 16 KiB pages need that alignment. */
     space = (uint8_t *)(((uintptr_t)space + PAGE - 1) & ~(uintptr_t)(PAGE - 1));
     phys_fd = memfd_create("pw_wine_dmem", 0);
@@ -347,10 +355,12 @@ int main(void)
     test_random();
     pw_wine_dmem_stats(&dmem, &stats);
     /* memory was backed on both sides of 4 GiB */
-    assert(stats.peak_low_backed_bytes > 0 && stats.peak_low_backed_bytes < stats.peak_backed_bytes);
+    assert(!straddles ||
+           (stats.peak_low_backed_bytes > 0 && stats.peak_low_backed_bytes < stats.peak_backed_bytes));
     printf("wine dmem passed: regions, commit, protect, replace, split and merged runs, "
            "caller mappings, kernel failures, a full table, 20000 random operations and the "
-           "below-4-GiB split; peak %u runs, %llu KiB, %llu KiB below 4 GiB\n",
+           "below-4-GiB split%s; peak %u runs, %llu KiB, %llu KiB below 4 GiB\n",
+           straddles ? "" : " (one side only)",
            stats.peak_runs, (unsigned long long)(stats.peak_backed_bytes >> 10),
            (unsigned long long)(stats.peak_low_backed_bytes >> 10));
     return 0;
