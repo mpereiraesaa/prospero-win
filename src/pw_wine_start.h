@@ -15,10 +15,12 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "../wine/ps5/pw_wine_prx.h"
+#include "pw_wine_launch.h"
 
 enum {
     PW_WINE_START_MAX_ENV = 16,
-    PW_WINE_START_MAX_ARGS = 16,
+    /* wine, the executable and every word a profile's arguments may split into */
+    PW_WINE_START_MAX_ARGS = 2 + PW_WINE_LAUNCH_WORDS,
     /* Stages, reported so a failed start names where it stopped. */
     PW_WINE_START_LOAD = 1, PW_WINE_START_MODULE_INFO, PW_WINE_START_DESCRIPTOR,
     PW_WINE_START_ENTRY, PW_WINE_START_MODULE_START, PW_WINE_START_ADOPT,

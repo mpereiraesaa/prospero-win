@@ -192,6 +192,10 @@ int main(void)
            start.stage == PW_WINE_START_ENVIRONMENT);
     config.argc = 1;
     assert(pw_wine_start_run(&start, &config, &ops) == PW_ERR_PRECONDITION);
+    /* A profile's longest argument list fits; one word more is refused. */
+    _Static_assert(PW_WINE_START_MAX_ARGS == 2 + PW_WINE_LAUNCH_WORDS, "argument limits agree");
+    config.argc = PW_WINE_START_MAX_ARGS + 1;
+    assert(pw_wine_start_run(&start, &config, &ops) == PW_ERR_PRECONDITION);
 
     printf("wine start passed: load, zeroed size word, descriptor, module_start once, adopt, "
            "environment, thread entry and staged failures\n");
