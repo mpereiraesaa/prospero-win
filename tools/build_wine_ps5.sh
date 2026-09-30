@@ -72,8 +72,9 @@ TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver dlls/winevu
  dlls/opengl32/opengl32.so dlls/ws2_32/ws2_32.so dlls/crypt32/crypt32.so"
 # The PE modules the patches change: every xinput built from xinput1_3's
 # source reads the title's controller (patch 0470); xinput9_1_0 forwards to
-# xinput1_4.
-PE_MODULES="xinput1_1 xinput1_2 xinput1_3 xinput1_4 xinputuap"
+# xinput1_4. quartz: its renderers wait for a state change without the filter
+# lock (patch 0700).
+PE_MODULES="xinput1_1 xinput1_2 xinput1_3 xinput1_4 xinputuap quartz"
 # Everything optional but FreeType (built below) is off: the console has none
 # of these libraries, and a configure-time probe against the payload SDK must
 # not pick up host headers.

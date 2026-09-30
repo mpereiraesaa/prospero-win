@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Wed, 30 Sep 2026 16:00:00 +0200
+Subject: [PATCH] strmbase, quartz: Wait for a renderer's state change without
+ the filter lock.
+
+IBaseFilter::GetState() holds the filter lock while the renderer waits for
+its state event. The filter graph polls GetState(filter, 10) while a Run()
+waits for the renderers to finish pausing, so the lock is held nearly all
+the time, and a streaming thread that needs it to deliver the first sample
+(a decoder querying the sink pin) is woken each time it is released only to
+find it taken again. With the PS5's ~1 ms thread wake-up that starvation
+lasted 0.2-32 s before Warcraft III's intro started (prospero-win#250); with
+Linux futexes the woken thread usually wins, so it rarely shows. The base
+renderer and the DirectSound renderer now wait with the lock released.
+---
+ dlls/quartz/dsoundrender.c |  7 ++++++-
+ libs/strmbase/renderer.c   | 13 +++++++++++--
+ 2 files changed, 17 insertions(+), 3 deletions(-)
+
+--- a/dlls/quartz/dsoundrender.c
++++ b/dlls/quartz/dsoundrender.c
+@@ -743,8 +743,13 @@ static HRESULT dsound_render_cleanup_stream(struct strmbase_filter *iface)
+ static HRESULT dsound_render_wait_state(struct strmbase_filter *iface, DWORD timeout)
+ {
+     struct dsound_render *filter = impl_from_strmbase_filter(iface);
++    DWORD ret;
+ 
+-    if (WaitForSingleObject(filter->state_event, timeout) == WAIT_TIMEOUT)
++    /* As renderer_wait_state(): wait without the filter lock GetState() holds. */
++    LeaveCriticalSection(&filter->filter.filter_cs);
++    ret = WaitForSingleObject(filter->state_event, timeout);
++    EnterCriticalSection(&filter->filter.filter_cs);
++    if (ret == WAIT_TIMEOUT)
+         return VFW_S_STATE_INTERMEDIATE;
+     return S_OK;
+ }
+--- a/libs/strmbase/renderer.c
++++ b/libs/strmbase/renderer.c
+@@ -292,8 +292,17 @@ static HRESULT renderer_cleanup_stream(struct strmbase_filter *iface)
+ static HRESULT renderer_wait_state(struct strmbase_filter *iface, DWORD timeout)
+ {
+     struct strmbase_renderer *filter = impl_from_strmbase_filter(iface);
+-
+-    if (WaitForSingleObject(filter->state_event, timeout) == WAIT_TIMEOUT)
++    DWORD ret;
++
++    /* GetState() calls this with the filter lock held. Wait without it: the
++     * streaming thread may need it to finish pausing (a decoder asking the
++     * sink pin about its connection before the first sample), and a caller
++     * polling GetState() with a timeout would otherwise hold it nearly all
++     * the time, so a slow-to-wake streaming thread never gets it. */
++    LeaveCriticalSection(&filter->filter.filter_cs);
++    ret = WaitForSingleObject(filter->state_event, timeout);
++    EnterCriticalSection(&filter->filter.filter_cs);
++    if (ret == WAIT_TIMEOUT)
+         return VFW_S_STATE_INTERMEDIATE;
+     return S_OK;
+ }
