@@ -766,10 +766,10 @@ int main(int argc, char **argv)
         if (game->app.graphics == PW_APP_GRAPHICS_OPENGL)
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_OPENGL", "1" };
         /* [display] show_fps: the backend's own counter, top left. Mesa draws
-         * its HUD only where the PS5 OpenGL SDK's EGL calls it. */
+         * text only where the PS5 OpenGL SDK's EGL calls its HUD. */
         if (game->display.show_fps)
             extra[config.extra_env_count++] = game->app.graphics == PW_APP_GRAPHICS_OPENGL
-                ? (PwWineStartEnv){ "GALLIUM_HUD", "fps" } : (PwWineStartEnv){ "DXVK_HUD", "fps" };
+                ? (PwWineStartEnv){ "GALLIUM_HUD", "simple,fps" } : (PwWineStartEnv){ "DXVK_HUD", "fps" };
         /* [debug] winedebug: this game's channels in place of the title's. */
         if (game->winedebug[0]) {
             extra[0].value = game->winedebug;
