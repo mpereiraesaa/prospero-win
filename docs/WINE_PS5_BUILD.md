@@ -470,9 +470,9 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   SDK's stubs. `wine/ps5/pw_vulkan_libc.c` supplies the few libc functions
   it names that a title lacks (`popen`, `pclose`, `mkstemp`, `__assert`).
   Without the SDK the module is skipped. `winevulkan.prx` and
-  `opengl32.prx` are built either way. The console has no OpenGL, but
-  `wined3d`, which Wine's `d3d10.dll` imports even over DXVK, needs
-  `opengl32` to initialise, and it does so with no driver. ps5vk is
+  `opengl32.prx` are built either way. Without the optional OpenGL SDK below,
+  `wined3d`, which Wine's `d3d10.dll` imports even over DXVK, needs `opengl32`
+  to initialise, and it does so with no driver. ps5vk is
   GPL-3.0-or-later, so a title that ships ps5vk's `libvulkan.prx` ships a
   GPL work.
 - **RADV.** `tools/build-radv.sh release` in PS5_Vulkan builds RADV's
@@ -527,6 +527,23 @@ back buffer back (`GetRenderTargetData`/`LockRect`, or a staging copy and
 | Vulkan probe, x64 and x86 | Instance, physical device, win32 surface, device and swapchain all succeed, and teardown is clean |
 | DXVK 2.6.2 D3D11, D3D10, D3D9, D3D8 pixel controls, x64 and x86 | Both frames read back with the expected centre pixel (`844c1cff`, then `1c4c84ff`) and no mismatches; every call returns `S_OK`; ps5vk logs a completed flip for each frame (`PS5VK_VIDEO_PRESENTED`, tokens 1 and 2) and no refusal |
 | ps5vk's `vkmap` probe, x86 | Two host-visible buffers map at 32-bit addresses (`0x818e0000`, `0x81900000`) through ps5vk's low CPU alias, and a 1,024-byte GPU copy between them has no mismatches |
+
+## OpenGL
+
+The optional [PS5 OpenGL SDK](https://github.com/blackbearreloaded/ps5-opengl)
+provides an EGL/WGL backend for Windows games that need OpenGL instead of
+Direct3D/DXVK. Build Wine with `tools/build_wine_ps5.sh --ps5-opengl-sdk DIR`,
+where `DIR` is the installed SDK prefix. The build links the SDK's static EGL
+archive into `win32u.prx` and resolves its EGL entry points there; without this
+option, the ordinary build remains unchanged.
+
+To select the backend for one game, set `graphics = opengl` in that game's
+application profile. This selects Wine's builtin `opengl32` and enables the
+PS5 EGL driver for that launch. DXVK and GDI profiles leave EGL initialization
+off. The SDK includes compatibility and Core contexts; the legacy WGL context
+request uses its compatibility default for fixed-function games. The SDK is
+GPL-3.0-or-later, so distributed builds must preserve its source and license
+notices.
 
 All of these ran on one ps5vk SDK (`libps5vk.a` SHA-256 `98f8a17c…`),
 whose changes are merged in ps5vk (through PR #607). Along the way ps5vk

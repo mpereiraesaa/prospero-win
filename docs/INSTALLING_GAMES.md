@@ -91,8 +91,10 @@ add a `prospero` block for the PS5 (below), and run it the same way. A few
 things differ from Lutris:
 
 - **Direct3D goes through DXVK.** `wine: {dxvk: true}` installs DXVK 2.6.2
-  into the prefix. Scripts that use OpenGL instead (`-opengl` and the like)
-  need changing: there's no OpenGL on the PS5 yet.
+  into the prefix. Games that use OpenGL instead (`-opengl` and the like) can
+  use the optional PS5 WGL backend when Wine was built with the PS5 OpenGL SDK
+  and the game's profile sets `graphics = opengl` (see the [OpenGL build
+  notes](WINE_PS5_BUILD.md#opengl)).
 - **32-bit games** (`arch: win32`) still get a 64-bit prefix. The PS5's Wine
   is WoW64 only, and it runs 32-bit programs inside a 64-bit prefix.
 - **Installers that show a web page** (a license, for example) need
