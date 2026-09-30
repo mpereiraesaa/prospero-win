@@ -309,6 +309,7 @@ int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *pr
     memset(&parsed, 0, sizeof(parsed));
     pw_game_input_init(&parsed.input);
     parsed.input.mouse_speed = 0;       /* unset until a line sets it */
+    parsed.display.show_fps = 1;        /* on unless the profile says false */
     if ((status = parse_sections(bytes, length, &parsed, NULL, &application_end)) != PW_OK)
         return status;
     if ((status = pw_app_profile_parse(bytes, application_end, &parsed.app)) != PW_OK)

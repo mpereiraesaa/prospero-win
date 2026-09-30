@@ -51,9 +51,9 @@ static void test_profile(void)
 
     assert(parse(APP "[input]\nmode = xinput\n[display]\nscaling = stretch\n", &p) == PW_OK);
     assert(p.input.mode == PW_GAME_INPUT_XINPUT && p.display.scaling == PW_GAME_SCALING_STRETCH);
-    assert(p.display.view == PW_GAME_VIEW_WINDOW && !p.display.show_fps);
+    assert(p.display.view == PW_GAME_VIEW_WINDOW && p.display.show_fps == 1);
     assert(parse(APP "[display]\nview = desktop\n", &p) == PW_OK && p.display.view == PW_GAME_VIEW_DESKTOP);
-    /* show_fps: the backend's frame-rate counter, off unless asked for */
+    /* show_fps: the backend's frame-rate counter, on unless turned off */
     assert(parse(APP "[display]\nshow_fps = true\n", &p) == PW_OK && p.display.show_fps == 1);
     assert(parse(APP "[display]\nshow_fps = True\nview = desktop\n", &p) == PW_OK && p.display.show_fps == 1);
     assert(parse(APP "[display]\nshow_fps = false\n", &p) == PW_OK && p.display.show_fps == 0);

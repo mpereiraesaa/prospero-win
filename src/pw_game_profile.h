@@ -9,7 +9,7 @@
  *   desktop = 800x600      ; Wine's desktop size (default: the driver's)
  *   scaling = fit          ; fit (keep aspect, fill the screen), integer, stretch
  *   view = window          ; window: show the game's windows; desktop: all of it
- *   show_fps = true        ; a frame-rate counter in the top left (default: false):
+ *   show_fps = true        ; a frame-rate counter in the top left (default: true):
  *                          ; DXVK's HUD, or Mesa's for graphics = opengl
  *
  *   [input]
