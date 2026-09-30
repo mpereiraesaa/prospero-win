@@ -302,3 +302,29 @@ int pw_launcher_render(const PwLauncherScene *scene,const PwPresentTarget *targe
     taskbar(&canvas,scene->status);
     return PW_OK;
 }
+
+PwLauncherAction pw_launcher_key_action(uint32_t vk)
+{
+    switch(vk) {
+    case 0x25:return PW_LAUNCHER_ACTION_LEFT;     /* VK_LEFT */
+    case 0x26:return PW_LAUNCHER_ACTION_UP;       /* VK_UP */
+    case 0x27:return PW_LAUNCHER_ACTION_RIGHT;    /* VK_RIGHT */
+    case 0x28:return PW_LAUNCHER_ACTION_DOWN;     /* VK_DOWN */
+    case 0x0d:case 0x20:return PW_LAUNCHER_ACTION_CHOOSE;  /* VK_RETURN, VK_SPACE */
+    default:return PW_LAUNCHER_ACTION_NONE;
+    }
+}
+
+int pw_launcher_navigate(PwLauncherScene *scene,PwLauncherAction action,uint32_t choosable)
+{
+    if(!scene || !scene->count || scene->selected>=scene->count)return 0;
+    switch(action) {
+    case PW_LAUNCHER_ACTION_RIGHT:if(scene->selected+1<scene->count)scene->selected++;break;
+    case PW_LAUNCHER_ACTION_LEFT:if(scene->selected)scene->selected--;break;
+    case PW_LAUNCHER_ACTION_DOWN:if(scene->selected+3<scene->count)scene->selected+=3;break;
+    case PW_LAUNCHER_ACTION_UP:if(scene->selected>=3)scene->selected-=3;break;
+    case PW_LAUNCHER_ACTION_CHOOSE:return scene->selected<choosable;
+    default:break;
+    }
+    return 0;
+}

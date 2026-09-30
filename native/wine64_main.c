@@ -467,6 +467,12 @@ static void open_library(void)
                (unsigned)library.count, (unsigned)catalog_count, library_root);
 }
 
+/* The USB keyboard and mouse's log lines. */
+static void hid_log(const char *line)
+{
+    PS5LOG_LOG("PW_WINE64 hid %s", line);
+}
+
 /* ---- launcher ----------------------------------------------------------- */
 
 /* Shown until a game is chosen; Wine is not loaded. Does not return. */
@@ -482,12 +488,23 @@ static void run_launcher(void)
         launch.refused ? "THAT GAME IS NOT IN THE LIBRARY" :
         !catalog_count ? "ADD PROFILES TO /DATA/PROSPERO-WIN/PROFILES" :
         launch.cycle ? "WELCOME BACK" : "CHOOSE A GAME" };
+    static PwHidPs5 hid;
     int video_status = pw_videoout_ps5_open(&video), pad_status = pw_pad_ps5_platform_ops(&pad_ops);
-    int dirty = 1, chosen = -1;
+    int hid_status, dirty = 1, chosen = -1;
 
     if (pad_status == PW_OK)
         pad_status = pw_pad_ps5_open(&pad, &pad_ops, pad_open_map,
                                      sizeof(pad_open_map) / sizeof(pad_open_map[0]));
+    /* A USB keyboard works the launcher too, the pad's user's or else the
+     * foreground user's, as in a game. */
+    {
+        int32_t user = pad_status == PW_OK ? pad.user_id : -1;
+        if (user < 0 && pw_pad_ps5_platform_ops(&pad_ops) == PW_OK) {
+            (void)pad_ops.user_initialize(NULL);
+            (void)pad_ops.foreground_user(&user);
+        }
+        hid_status = pw_hid_ps5_open(&hid, pw_hid_ps5_system_ops(hid_log), user);
+    }
     /* The games, then the refused profiles, listed by file as not available. */
     for (size_t i = 0; i < catalog_count; i++)
         items[scene.count++] = (PwLauncherItem){ catalog[i].name, catalog[i].detail, 1 };
@@ -495,19 +512,37 @@ static void run_launcher(void)
         if (library.entries[i].status != PW_OK)
             items[scene.count++] = (PwLauncherItem){ library.entries[i].file, "profile refused", 0 };
     if (scene.count) scene.selected = 0;
-    PS5LOG_LOG("PW_WINE64 launcher video=%s pad=%s frame=%d apps=%u cycle=%u refused=%u script=%d",
-               pw_result_name(video_status), pw_result_name(pad_status), frame != MAP_FAILED,
+    PS5LOG_LOG("PW_WINE64 launcher video=%s pad=%s hid=%s frame=%d apps=%u cycle=%u refused=%u script=%d",
+               pw_result_name(video_status), pw_result_name(pad_status), pw_result_name(hid_status),
+               frame != MAP_FAILED,
                (unsigned)catalog_count, (unsigned)launch.cycle, launch.refused, PW_WINE64_SCRIPT);
     for (uint64_t tick = 1; chosen < 0; tick++) {
+        uint32_t before = scene.selected;
         if (pad_status == PW_OK && pw_pad_ps5_read(&pad) == PW_OK) {
-            uint32_t pressed = scene.count ? pad.core.pressed_edges : 0, before = scene.selected;
-            if ((pressed & PAD_RIGHT) && scene.selected + 1 < scene.count) scene.selected++;
-            if ((pressed & PAD_LEFT) && scene.selected) scene.selected--;
-            if ((pressed & PAD_DOWN) && scene.selected + 3 < scene.count) scene.selected += 3;
-            if ((pressed & PAD_UP) && scene.selected >= 3) scene.selected -= 3;
-            if ((pressed & PAD_CROSS) && scene.selected < catalog_count) chosen = (int)scene.selected;
-            dirty |= scene.selected != before;
+            static const struct { uint32_t button; PwLauncherAction action; } pad_actions[] = {
+                { PAD_RIGHT, PW_LAUNCHER_ACTION_RIGHT }, { PAD_LEFT, PW_LAUNCHER_ACTION_LEFT },
+                { PAD_DOWN, PW_LAUNCHER_ACTION_DOWN }, { PAD_UP, PW_LAUNCHER_ACTION_UP },
+                { PAD_CROSS, PW_LAUNCHER_ACTION_CHOOSE },
+            };
+            for (size_t i = 0; i < sizeof(pad_actions) / sizeof(pad_actions[0]); i++)
+                if ((pad.core.pressed_edges & pad_actions[i].button) &&
+                    pw_launcher_navigate(&scene, pad_actions[i].action, (uint32_t)catalog_count))
+                    chosen = (int)scene.selected;
         }
+        /* Key presses; a keyboard plugged in later is found every few seconds. */
+        if (hid.ops.load_module) {
+            PwHidPs5Poll poll;
+
+            if (hid_status != PW_OK && tick % (5 * PW_WINE64_TICKS_PER_S) == 0)
+                hid_status = pw_hid_ps5_retry(&hid);
+            pw_hid_ps5_poll(&hid, &poll);
+            for (size_t i = 0; i < poll.count && chosen < 0; i++)
+                if (poll.events[i].kind == PW_HID_EVENT_KEY && poll.events[i].down &&
+                    pw_launcher_navigate(&scene, pw_launcher_key_action(poll.events[i].code),
+                                         (uint32_t)catalog_count))
+                    chosen = (int)scene.selected;
+        }
+        dirty |= scene.selected != before;
         if (PW_WINE64_SCRIPT && tick == 3 * PW_WINE64_TICKS_PER_S) {
             if (launch.cycle >= PW_WINE64_SCRIPT_CYCLES) {
                 PS5LOG_LOG("PW_WINE64 launcher script done cycles=%u", (unsigned)launch.cycle);
@@ -578,11 +613,6 @@ static void install_early_fault_report(PwWineStart *start)
 }
 
 /* ---- PS5 bindings for the start sequence ------------------------------ */
-
-static void hid_log(const char *line)
-{
-    PS5LOG_LOG("PW_WINE64 hid %s", line);
-}
 
 static int set_env(const char *name, const char *value)
 {

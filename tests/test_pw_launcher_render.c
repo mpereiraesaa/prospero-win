@@ -28,8 +28,49 @@ static uint32_t render(const PwLauncherScene *scene)
     return hash();
 }
 
+static void test_navigation(void)
+{
+    const PwLauncherItem items[8]={{"a",0,1},{"b",0,1},{"c",0,1},{"d",0,1},{"e",0,1},{"f",0,1},{"g",0,1},{"h",0,0}};
+    PwLauncherScene scene={items,8,0,NULL};
+
+    /* Keys: the arrows move, Enter and Space choose, others do nothing. */
+    assert(pw_launcher_key_action(0x25)==PW_LAUNCHER_ACTION_LEFT);
+    assert(pw_launcher_key_action(0x26)==PW_LAUNCHER_ACTION_UP);
+    assert(pw_launcher_key_action(0x27)==PW_LAUNCHER_ACTION_RIGHT);
+    assert(pw_launcher_key_action(0x28)==PW_LAUNCHER_ACTION_DOWN);
+    assert(pw_launcher_key_action(0x0d)==PW_LAUNCHER_ACTION_CHOOSE);
+    assert(pw_launcher_key_action(0x20)==PW_LAUNCHER_ACTION_CHOOSE);
+    assert(pw_launcher_key_action('A')==PW_LAUNCHER_ACTION_NONE);
+    assert(pw_launcher_key_action(0)==PW_LAUNCHER_ACTION_NONE);
+    /* The grid is three wide: left and up stop at the first tile, right and
+     * down at the last. */
+    assert(!pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_LEFT,7) && scene.selected==0);
+    assert(!pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_UP,7) && scene.selected==0);
+    pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_RIGHT,7);
+    assert(scene.selected==1);
+    pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_DOWN,7);
+    assert(scene.selected==4);
+    pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_DOWN,7);
+    assert(scene.selected==7);
+    pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_DOWN,7);
+    assert(scene.selected==7);             /* no tile three further on */
+    pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_RIGHT,7);
+    assert(scene.selected==7);
+    /* Tile 7 is a refused profile: choosing it does nothing. */
+    assert(!pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_CHOOSE,7));
+    pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_UP,7);
+    assert(scene.selected==4);
+    assert(pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_CHOOSE,7)==1 && scene.selected==4);
+    assert(!pw_launcher_navigate(&scene,PW_LAUNCHER_ACTION_NONE,7) && scene.selected==4);
+    /* No tiles, no selection, or none of it: nothing happens. */
+    PwLauncherScene empty={items,0,PW_LAUNCHER_RENDER_NONE,NULL};
+    assert(!pw_launcher_navigate(&empty,PW_LAUNCHER_ACTION_CHOOSE,0) && empty.selected==PW_LAUNCHER_RENDER_NONE);
+    assert(!pw_launcher_navigate(NULL,PW_LAUNCHER_ACTION_CHOOSE,1));
+}
+
 int main(void)
 {
+    test_navigation();
     const PwLauncherItem items[]={
         {"Space Cadet Pinball","pe32  gdi  prospero-win-direct",1},
         {"Paint","pe32  gdi  wine-wow64",0},

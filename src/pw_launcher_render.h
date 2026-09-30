@@ -23,6 +23,20 @@ typedef struct PwLauncherScene {
     const char *status;          /* optional taskbar status text */
 } PwLauncherScene;
 
+/* What a pad button or a key does in the launcher. */
+typedef enum PwLauncherAction {
+    PW_LAUNCHER_ACTION_NONE, PW_LAUNCHER_ACTION_LEFT, PW_LAUNCHER_ACTION_RIGHT,
+    PW_LAUNCHER_ACTION_UP, PW_LAUNCHER_ACTION_DOWN, PW_LAUNCHER_ACTION_CHOOSE
+} PwLauncherAction;
+
+/* A USB keyboard's key (a Windows virtual key) in the launcher: the arrow
+ * keys move, Enter and Space choose. */
+PwLauncherAction pw_launcher_key_action(uint32_t vk);
+/* Moves the selection over the three-wide grid of tiles. 1 when action
+ * chooses the selected tile and it is one of the first choosable (the
+ * games; refused profiles follow them), else 0. */
+int pw_launcher_navigate(PwLauncherScene *scene, PwLauncherAction action, uint32_t choosable);
+
 /* Draws the whole screen into target (exactly 1920x1080, BGRX, any valid
  * stride).  The page shown is the one containing the selection. */
 int pw_launcher_render(const PwLauncherScene *scene,const PwPresentTarget *target);
