@@ -6,17 +6,26 @@ Subject: [PATCH] server: A wait watchdog for the PS5 (diagnostic, off by
 
 Heavy WINEDEBUG channels hid the stall they were meant to explain
 (prospero-win#250). With WINE_PS5_WAIT_WATCHDOG set, every two seconds
-the server writes a snapshot instead: each process's pending asyncs
-with their fd, each thread's message queue (wake bits and masks,
-pending messages, a SendMessage it waits for or has not answered), and
-each thread's current wait with its objects' dumps. Unset, nothing
-changes.
+the server, which runs in the game's process, writes a snapshot instead:
+- every thread: its suspend counts, whether it waits, and its last
+  request and how long ago;
+- for a thread silent outside any wait for over a second: its i386
+  registers and stack from the WoW64 CPU area, and every critical
+  section among its stack's pointers (found by DebugInfo pointing back),
+  with its name, lock count and owner. Memory is read only after write()
+  to a pipe accepts it;
+- each process's pending asyncs with their fd, each thread's message
+  queue (wake bits and masks, pending messages, SendMessage state), and
+  each thread's current wait with its objects.
+Unset, nothing changes.
 ---
- server/async.c  | 20 ++++++++++++++++++++
- server/fd.c     | 13 +++++++++++++
- server/queue.c  | 39 +++++++++++++++++++++++++++++++++++++++
- server/thread.c | 52 ++++++++++++++++++++++++++++++++++++++++++++++++++++
- 4 files changed, 124 insertions(+)
+ server/async.c   |  20 ++++++++++
+ server/fd.c      |  13 +++++++
+ server/queue.c   |  39 ++++++++++++++++++++
+ server/request.c |   2 +
+ server/thread.c  | 109 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ server/thread.h  |   2 +
+ 6 files changed, 185 insertions(+)
 
 --- a/server/async.c
 +++ b/server/async.c
@@ -117,6 +126,17 @@ changes.
  static void msg_queue_destroy( struct object *obj )
  {
      struct msg_queue *queue = (struct msg_queue *)obj;
+--- a/server/request.c
++++ b/server/request.c
+@@ -277,6 +277,8 @@ static void call_req_handler( struct thread *thread )
+     enum request req = thread->req.request_header.req;
+ 
+     current = thread;
++    current->ps5_last_req = req;
++    current->ps5_last_req_time = monotonic_time;
+     current->reply_size = 0;
+     clear_error();
+     memset( &reply, 0, sizeof(reply) );
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -74,6 +74,7 @@ struct thread_wait
@@ -127,7 +147,7 @@ changes.
      struct timeout_user    *user;
      int                     status;     /* status to return (unless STATUS_PENDING) */
      struct wait_queue_entry queues[1];
-@@ -1054,6 +1055,55 @@ static unsigned int end_wait( struct thread *thread, unsigned int status )
+@@ -1054,6 +1055,112 @@ static unsigned int end_wait( struct thread *thread, unsigned int status )
  }
  
  /* build the thread wait structure */
@@ -137,6 +157,14 @@ changes.
 +extern void dump_queue_state( struct msg_queue *queue );
 +extern void dump_process_asyncs( struct process *process );
 +
++/* Copy bytes of this process's memory if they can be read: write() reports
++ * EFAULT for an unreadable source instead of faulting. */
++static int ps5_peek( int probe[2], unsigned int address, void *out, size_t size )
++{
++    if (write( probe[1], (const void *)(ULONG_PTR)address, size ) != (ssize_t)size) return 0;
++    return read( probe[0], out, size ) == (ssize_t)size;
++}
++
 +static void wait_watchdog( void *arg )
 +{
 +    struct thread *thread;
@@ -144,6 +172,55 @@ changes.
 +    int i;
 +
 +    fprintf( stderr, "wine-ps5: wait snapshot\n" );
++    LIST_FOR_EACH_ENTRY( thread, &thread_list, struct thread, entry )
++    {
++        fprintf( stderr, "wine-ps5: thread tid=%04x suspend=%d/%d state=%d waiting=%d last_req=%d age_ms=%lld\n",
++                 thread->id, thread->suspend, thread->process->suspend, thread->state, thread->wait != NULL,
++                 thread->ps5_last_req, (long long)((monotonic_time - thread->ps5_last_req_time) / 10000) );
++        /* Silent outside any wait for over a second: where its i386 code is,
++         * from the WoW64 CPU area (TEB64 TlsSlots[WOW64_TLS_CPURESERVED]).
++         * The server runs in the game's process, so it can read it. */
++        if (!thread->wait && thread->teb && monotonic_time - thread->ps5_last_req_time > TICKS_PER_SEC)
++        {
++            const unsigned char *cpu = *(unsigned char * const *)(ULONG_PTR)(thread->teb + 0x1480 + 8);
++            if (cpu && *(const unsigned short *)(cpu + 2) == 0x14c /* IMAGE_FILE_MACHINE_I386 */)
++            {
++                const unsigned char *context = cpu + 4;
++                unsigned int eip = *(const unsigned int *)(context + 0xb8), esp = *(const unsigned int *)(context + 0xc4);
++                fprintf( stderr, "wine-ps5: guest tid=%04x eip=%08x esp=%08x:", thread->id, eip, esp );
++                if (esp) for (i = 0; i < 32; i++) fprintf( stderr, " %08x", ((const unsigned int *)(ULONG_PTR)esp)[i] );
++                fprintf( stderr, "\n" );
++                /* Critical sections among the stack's pointers: a pointer whose
++                 * DebugInfo points back at it. Memory is read only after write()
++                 * to a pipe accepts it, so a bad pointer is skipped, not a crash. */
++                if (esp)
++                {
++                    static int probe[2] = { -1, -1 };
++                    unsigned int seen[16], nseen = 0, k;
++                    if (probe[0] == -1 && pipe( probe )) probe[0] = probe[1] = -1;
++                    for (i = 0; i < 128 && probe[1] != -1; i++)
++                    {
++                        unsigned int word, cs[6], debug[8], dup = 0;
++                        char name[48];
++                        if (!ps5_peek( probe, esp + 4 * i, &word, sizeof(word) )) break;
++                        if (word < 0x10000 || word >= 0x7fff0000 || (word & 3)) continue;
++                        for (k = 0; k < nseen; k++) dup |= seen[k] == word;
++                        if (dup) continue;
++                        if (!ps5_peek( probe, word, cs, sizeof(cs) )) continue;
++                        if (cs[0] < 0x10000 || cs[0] >= 0x7fff0000 || cs[0] == 0xffffffff) continue;
++                        if (!ps5_peek( probe, cs[0], debug, sizeof(debug) ) || debug[1] != word) continue;
++                        if (nseen < 16) seen[nseen++] = word;
++                        name[0] = 0;
++                        /* Wine keeps the section's name in DebugInfo->Spare[0], dword 6 in i386 */
++                        if (debug[6] && ps5_peek( probe, debug[6], name, sizeof(name) - 1 )) name[sizeof(name) - 1] = 0;
++                        else name[0] = 0;
++                        fprintf( stderr, "wine-ps5: guest tid=%04x cs=%08x name=%.40s lock=%d recursion=%d owner=%04x sem=%08x\n",
++                                 thread->id, word, name[0] ? name : "-", (int)cs[1], (int)cs[2], cs[3], cs[4] );
++                    }
++                }
++            }
++        }
++    }
 +    {
 +        struct process *last = NULL;
 +        LIST_FOR_EACH_ENTRY( thread, &thread_list, struct thread, entry )
@@ -183,7 +260,7 @@ changes.
  static int wait_on( const union select_op *select_op, unsigned int count, struct object *objects[],
                      int flags, abstime_t when )
  {
-@@ -1070,8 +1120,10 @@ static int wait_on( const union select_op *select_op, unsigned int count, struct
+@@ -1070,8 +1177,10 @@ static int wait_on( const union select_op *select_op, unsigned int count, struct
      wait->cookie  = 0;
      wait->user    = NULL;
      wait->when = when;
@@ -194,3 +271,14 @@ changes.
  
      for (i = 0, entry = wait->queues; i < count; i++, entry++)
      {
+--- a/server/thread.h
++++ b/server/thread.h
+@@ -88,6 +88,8 @@ struct thread
+     int                    base_priority; /* base priority level (relative to process base priority class) */
+     int                    disable_boost; /* disable thread priority boost */
+     int                    suspend;       /* suspend count */
++    int                    ps5_last_req;  /* WINE_PS5_WAIT_WATCHDOG: last request */
++    timeout_t              ps5_last_req_time;
+     bool                   is_system;     /* system thread (kernel mode only) */
+     bool                   dbg_hidden;    /* hidden from debugger */
+     bool                   bypass_proc_suspend; /* will still run if the process is suspended */

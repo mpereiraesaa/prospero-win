@@ -1,0 +1,232 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Wed, 30 Sep 2026 15:00:00 +0200
+Subject: [PATCH] ntdll: Log slow host operations on the PS5 (diagnostic, off
+ by default).
+
+With WINE_PS5_WAIT_WATCHDOG set, ntdll logs only what could explain a
+stall (prospero-win#250):
+- a server request answered after 200 ms, an uninterrupted-section lock
+  taken after 100 ms, a thread stack allocated or a new thread started
+  after 100 ms;
+- a thread polling with NtDelayExecution (20 calls, or over half a second
+  asked, in two seconds) or sleeping 200 ms at once, with its i386
+  registers and stack;
+- an NtAlertThreadByThreadId whose kevent fails, and an alert kqueue fd
+  number that shows up for a second thread.
+Silent otherwise.
+---
+ dlls/ntdll/unix/server.c       | 41 ++++++++++++++++++++++++++++-
+ dlls/ntdll/unix/sync.c         | 58 +++++++++++++++++++++++++++++++++++++++++-
+ dlls/ntdll/unix/thread.c       |  9 ++++++-
+ dlls/ntdll/unix/unix_private.h |  6 +++++
+ 4 files changed, 111 insertions(+), 3 deletions(-)
+
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -292,14 +292,44 @@ static inline unsigned int wait_reply( int reply_fd, struct __server_request_inf
+ /***********************************************************************
+  *           server_call_unlocked
+  */
++/* WINE_PS5_WAIT_WATCHDOG: log host operations slow enough to explain a
++ * stall (prospero-win#250): a server request answered after 200 ms, a lock
++ * taken after 100 ms, a thread that started 100 ms after it was created.
++ * Silent otherwise. */
++int ps5_slow_log(void)
++{
++    static int enabled = -1;
++
++    if (enabled == -1)
++    {
++        enabled = getenv( "WINE_PS5_WAIT_WATCHDOG" ) != NULL;
++        if (enabled) fprintf( stderr, "wine-ps5: slow-log on, server_call_unlocked=%p\n",
++                              (void *)server_call_unlocked );
++    }
++    return enabled;
++}
++
++ULONGLONG ps5_now_us(void)
++{
++    struct timespec ts;
++
++    clock_gettime( CLOCK_MONOTONIC, &ts );
++    return (ULONGLONG)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
++}
++
+ unsigned int server_call_unlocked( void *req_ptr )
+ {
+     struct thread_data *data = get_thread_data();
+     struct __server_request_info * const req = req_ptr;
+     unsigned int ret;
++    ULONGLONG start = ps5_slow_log() ? ps5_now_us() : 0;
+ 
+     if ((ret = send_request( data->request_fd, req ))) return ret;
+-    return wait_reply( data->reply_fd, req );
++    ret = wait_reply( data->reply_fd, req );
++    if (start && ps5_now_us() - start > 200000)
++        fprintf( stderr, "wine-ps5: slow request=%d ms=%llu tid=%04x\n", (int)req->u.req.request_header.req,
++                 (ps5_now_us() - start) / 1000, (int)data->tid );
++    return ret;
+ }
+ 
+ 
+@@ -336,8 +366,15 @@ NTSTATUS unixcall_wine_server_call( void *args )
+  */
+ void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset )
+ {
++    ULONGLONG start;
++
+     pthread_sigmask( SIG_BLOCK, &server_block_set, sigset );
++    if (!ps5_slow_log()) { mutex_lock( mutex ); return; }
++    start = ps5_now_us();
+     mutex_lock( mutex );
++    if (ps5_now_us() - start > 100000)
++        fprintf( stderr, "wine-ps5: slow lock=%p ms=%llu tid=%04x caller=%p\n", (void *)mutex,
++                 (ps5_now_us() - start) / 1000, (int)get_thread_data()->tid, __builtin_return_address( 0 ) );
+ }
+ 
+ 
+@@ -1885,6 +1922,8 @@ void server_init_thread( struct thread_data *data )
+ 
+     data->pthread_id = pthread_self();
+     pthread_setspecific( thread_data_key, data );
++    if (data->ps5_spawn_us && ps5_now_us() - data->ps5_spawn_us > 100000)
++        fprintf( stderr, "wine-ps5: slow thread start ms=%llu\n", (ps5_now_us() - data->ps5_spawn_us) / 1000 );
+ 
+     reply_pipe = init_thread_pipe( data );
+ #ifdef WINE_INPROCESS_SERVER
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -2416,6 +2416,47 @@ NTSTATUS WINAPI NtYieldExecution(void)
+ /******************************************************************
+  *		NtDelayExecution (NTDLL.@)
+  */
++/* WINE_PS5_WAIT_WATCHDOG: report where a thread's i386 code sleeps when it
++ * polls (20 calls in two seconds), asks for more than half a second of sleep
++ * in two seconds, or sleeps 200 ms or more at once. */
++static void ps5_log_sleeper( struct thread_data *data, const char *why, ULONGLONG ms, const LARGE_INTEGER *timeout )
++{
++    I386_CONTEXT *context;
++    char line[420];
++    int at, i;
++
++    at = snprintf( line, sizeof(line), "wine-ps5: sleeper %s tid=%04x calls=%u ms=%llu timeout=%lld", why,
++                   (int)data->tid, data->ps5_sleeps, ms, timeout ? (long long)timeout->QuadPart : 0 );
++    if ((context = get_cpu_area( data, IMAGE_FILE_MACHINE_I386 )) && context->Esp)
++    {
++        const DWORD *stack = ULongToPtr( context->Esp );
++        at += snprintf( line + at, sizeof(line) - at, " eip=%08x esp=%08x:", (int)context->Eip, (int)context->Esp );
++        for (i = 0; i < 24 && at < (int)sizeof(line) - 10; i++)
++            at += snprintf( line + at, sizeof(line) - at, " %08x", (int)stack[i] );
++    }
++    fprintf( stderr, "%s\n", line );
++}
++
++static void ps5_report_sleeper( const LARGE_INTEGER *timeout )
++{
++    struct thread_data *data = get_thread_data();
++    ULONGLONG now = ps5_now_us();
++    LONGLONG requested = 0;
++
++    if (timeout && timeout->QuadPart < 0) requested = -timeout->QuadPart / 10;   /* us */
++    else if (!timeout || timeout->QuadPart == TIMEOUT_INFINITE) requested = 1000000000;
++    data->ps5_sleeps++;
++    data->ps5_sleep_asked += requested;
++    if (requested >= 200000) ps5_log_sleeper( data, "long", requested / 1000, timeout );
++    if (!data->ps5_sleep_since) data->ps5_sleep_since = now;
++    if (now - data->ps5_sleep_since < 2000000) return;
++    if (data->ps5_sleeps >= 20 || data->ps5_sleep_asked >= 500000)
++        ps5_log_sleeper( data, "poll", (now - data->ps5_sleep_since) / 1000, timeout );
++    data->ps5_sleeps = 0;
++    data->ps5_sleep_asked = 0;
++    data->ps5_sleep_since = now;
++}
++
+ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeout )
+ {
+     unsigned int status = STATUS_SUCCESS;
+@@ -2430,6 +2471,7 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
+         return status;
+     }
+ 
++    if (ps5_slow_log()) ps5_report_sleeper( timeout );
+     if (!timeout || timeout->QuadPart == TIMEOUT_INFINITE)  /* sleep forever */
+     {
+         for (;;) select( 0, NULL, NULL, NULL, NULL );
+@@ -3480,6 +3522,19 @@ static union tid_alert_entry *get_tid_alert_entry( HANDLE tid )
+ 
+         if (InterlockedCompareExchange( (LONG *)&entry->kq, kq, 0 ))
+             close( kq );
++        else if (ps5_slow_log())
++        {
++            /* WINE_PS5_WAIT_WATCHDOG: a kqueue fd number another thread's entry
++             * already holds means that thread's kqueue was closed under it. */
++            static HANDLE owner[4096];
++            if (kq < 4096)
++            {
++                if (owner[kq] && owner[kq] != tid)
++                    fprintf( stderr, "wine-ps5: alert kq fd %d reused: was tid %04x, now tid %04x\n",
++                             kq, HandleToULong(owner[kq]), HandleToULong(tid) );
++                owner[kq] = tid;
++            }
++        }
+     }
+ #else
+     if (!entry->event)
+@@ -3546,7 +3601,8 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+             .udata = NULL
+         };
+ 
+-        kevent( entry->kq, &signal_event, 1, NULL, 0, NULL );
++        if (kevent( entry->kq, &signal_event, 1, NULL, 0, NULL ) == -1 && ps5_slow_log())
++            fprintf( stderr, "wine-ps5: alert tid %04x kq %d failed: errno %d\n", HandleToULong(tid), entry->kq, errno );
+         return STATUS_SUCCESS;
+     }
+ #else
+--- a/dlls/ntdll/unix/thread.c
++++ b/dlls/ntdll/unix/thread.c
+@@ -1336,6 +1336,7 @@ static NTSTATUS spawn_thread( struct thread_data *data )
+     pthread_attr_setguardsize( &attr, 0 );
+     pthread_attr_setscope( &attr, PTHREAD_SCOPE_SYSTEM ); /* force creating a kernel thread */
+     InterlockedIncrement( &nb_threads );
++    data->ps5_spawn_us = ps5_slow_log() ? ps5_now_us() : 0;
+     if (pthread_create( &pthread_id, &attr, (void * (*)(void *))server_init_thread, data ))
+     {
+         InterlockedDecrement( &nb_threads );
+@@ -1459,7 +1460,13 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
+     teb = data->teb;
+     set_thread_id( data );
+ 
+-    if ((status = init_thread_stack( teb, get_zero_bits_limit( zero_bits ), stack_reserve, stack_commit )))
++    {
++        ULONGLONG t0 = ps5_slow_log() ? ps5_now_us() : 0;
++        status = init_thread_stack( teb, get_zero_bits_limit( zero_bits ), stack_reserve, stack_commit );
++        if (t0 && ps5_now_us() - t0 > 100000)
++            fprintf( stderr, "wine-ps5: slow thread stack ms=%llu\n", (ps5_now_us() - t0) / 1000 );
++    }
++    if (status)
+         goto done;
+ 
+     teb->SkipThreadAttach = !!(flags & THREAD_CREATE_FLAGS_SKIP_THREAD_ATTACH);
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -115,6 +115,10 @@ struct thread_data
+     void        *start;             /* thread entry point */
+     void        *param;             /* thread entry point parameter */
+     struct list  entry;             /* entry in TEB list */
++    ULONGLONG    ps5_spawn_us;      /* WINE_PS5_WAIT_WATCHDOG: when spawn_thread created it */
++    ULONGLONG    ps5_sleep_since;   /* WINE_PS5_WAIT_WATCHDOG: NtDelayExecution calls since */
++    unsigned int ps5_sleeps;
++    LONGLONG     ps5_sleep_asked;   /* microseconds of sleep asked since then */
+     char         debug_info[0x800]; /* debug_info structure */
+     char         signal_stack[];    /* signal stack */
+     /* char kernel_stack[] */
+@@ -242,6 +246,8 @@ extern void start_server( BOOL debug );
+ 
+ extern unsigned int server_call_unlocked( void *req_ptr );
+ extern void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset );
++extern int ps5_slow_log(void);
++extern ULONGLONG ps5_now_us(void);
+ extern void server_leave_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset );
+ extern unsigned int server_select( const union select_op *select_op, data_size_t size, UINT flags,
+                                    timeout_t abs_timeout, struct context_data *context, struct user_apc *user_apc );

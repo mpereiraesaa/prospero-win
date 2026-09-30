@@ -14,6 +14,8 @@
 #include "pw_wine_heap.h"
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 #include <sys/mman.h>
 
 extern int sceKernelReserveVirtualRange(void **address, size_t bytes, int flags, size_t alignment);
@@ -34,27 +36,62 @@ enum {
     RUNS = 32768,
 };
 
+/* WINE_PS5_WAIT_WATCHDOG: a direct-memory call slower than 50 ms is
+ * logged (prospero-win#250). */
+static uint64_t slow_start(void)
+{
+    static int enabled = -1;
+    struct timespec ts;
+
+    if (enabled == -1) enabled = getenv("WINE_PS5_WAIT_WATCHDOG") != NULL;
+    if (!enabled) return 0;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+}
+static void slow_end(uint64_t start, const char *what, size_t bytes)
+{
+    struct timespec ts;
+    uint64_t now;
+
+    if (!start) return;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    now = (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+    if (now - start > 50000)
+        fprintf(stderr, "wine-ps5: slow dmem %s bytes=%zu ms=%llu\n", what, bytes,
+                (unsigned long long)((now - start) / 1000u));
+}
+
 /* CPU read-write, unless the kernel wants the GPU bits too. */
 static int map_protection = CPU_READ_WRITE;
 
 static int reserve(void *context, uintptr_t address, size_t bytes)
 {
     void *at = (void *)address;
+    uint64_t t0 = slow_start();
+    int rc;
     (void)context;
-    return sceKernelReserveVirtualRange(&at, bytes, KERNEL_FIXED | KERNEL_NO_OVERWRITE, PAGE) ||
-           at != (void *)address;
+    rc = sceKernelReserveVirtualRange(&at, bytes, KERNEL_FIXED | KERNEL_NO_OVERWRITE, PAGE) ||
+         at != (void *)address;
+    slow_end(t0, "reserve", bytes);
+    return rc;
 }
 static int allocate(void *context, size_t bytes, int64_t *offset)
 {
+    uint64_t t0 = slow_start();
+    int rc;
     (void)context;
-    return sceKernelAllocateMainDirectMemory(bytes, PAGE, MEMORY_TYPE, offset) != 0;
+    rc = sceKernelAllocateMainDirectMemory(bytes, PAGE, MEMORY_TYPE, offset) != 0;
+    slow_end(t0, "allocate", bytes);
+    return rc;
 }
 static int map(void *context, uintptr_t address, size_t bytes, int64_t offset)
 {
     void *at = (void *)address;
+    uint64_t t0 = slow_start();
     int rc;
     (void)context;
     rc = sceKernelMapDirectMemory(&at, bytes, map_protection, KERNEL_FIXED, offset, PAGE);
+    slow_end(t0, "map", bytes);
     if (rc && map_protection == CPU_READ_WRITE) {
         /* Refused CPU-only: the GPU bits, and keep them if they work. */
         at = (void *)address;
@@ -65,18 +102,30 @@ static int map(void *context, uintptr_t address, size_t bytes, int64_t offset)
 }
 static int protect(void *context, uintptr_t address, size_t bytes, unsigned protection)
 {
+    uint64_t t0 = slow_start();
+    int rc;
     (void)context;
-    return sceKernelMprotect((const void *)address, bytes, (int)protection) != 0;
+    rc = sceKernelMprotect((const void *)address, bytes, (int)protection) != 0;
+    slow_end(t0, "protect", bytes);
+    return rc;
 }
 static int unmap(void *context, uintptr_t address, size_t bytes)
 {
+    uint64_t t0 = slow_start();
+    int rc;
     (void)context;
-    return sceKernelMunmap((void *)address, bytes) != 0;
+    rc = sceKernelMunmap((void *)address, bytes) != 0;
+    slow_end(t0, "unmap", bytes);
+    return rc;
 }
 static int release(void *context, int64_t offset, size_t bytes)
 {
+    uint64_t t0 = slow_start();
+    int rc;
     (void)context;
-    return sceKernelReleaseDirectMemory(offset, bytes) != 0;
+    rc = sceKernelReleaseDirectMemory(offset, bytes) != 0;
+    slow_end(t0, "release", bytes);
+    return rc;
 }
 
 static const PwWineDmemOps ops = { NULL, PAGE, reserve, allocate, map, protect, unmap, release };

@@ -78,7 +78,11 @@ every thread slower and talk to the server more), build the app with
 logs what each thread waits on, each message queue's state and every
 pending async I/O, a few lines at a time, so the timing barely changes. A
 thread the game needs that is in no server wait at all is blocked in
-host-side code.
+host-side code; the snapshot then shows its i386 stack and, if it waits
+on a critical section, which one and which thread owns it (that is how
+[#250](https://github.com/mpereiraesaa/prospero-win/issues/250) was
+found). Resolve the stack's addresses with the module bases in the
+`+loaddll` lines and the export or COFF symbols of the PE files.
 
 ## 3. Turn on Wine's channels for one game
 
