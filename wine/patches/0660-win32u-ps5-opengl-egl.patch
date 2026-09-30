@@ -205,7 +205,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
          pthread_mutex_lock( &gamma_lock );
          if (get_float_gamma_ramp( ramp_data, &gamma_serial ))
-@@ -901,7 +1021,7 @@ static void blit_framebuffer_surface( struct opengl_drawable *drawable )
+@@ -901,11 +1021,11 @@ static void blit_framebuffer_surface( struct opengl_drawable *drawable )
          funcs->p_glWaitSync( gamma_sync, 0, GL_TIMEOUT_IGNORED );
          pthread_mutex_unlock( &gamma_lock );
  
@@ -214,7 +214,11 @@ behavior unchanged. Individual Windows games remain unvalidated.
          funcs->p_glDrawArrays( GL_TRIANGLE_STRIP, 0, 4 );
      }
  
-@@ -1052,7 +1172,7 @@ static struct opengl_drawable *framebuffer_surface_create( int format, struct cl
+     if (drawable->srgb) funcs->p_glDisable( GL_FRAMEBUFFER_SRGB );
+ }
+ 
+ static void framebuffer_surface_flush( struct opengl_drawable *drawable, UINT flags )
+@@ -1052,7 +1189,7 @@ static struct opengl_drawable *framebuffer_surface_create( int format, struct cl
      return &surface->base;
  }
  
@@ -223,7 +227,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
  static const struct opengl_drawable_funcs egldrv_pbuffer_funcs;
  
-@@ -1063,7 +1183,13 @@ static EGLConfig egl_config_for_format( const struct egl_platform *egl, int form
+@@ -1063,7 +1200,13 @@ static EGLConfig egl_config_for_format( const struct egl_platform *egl, int form
  
  static void egldrv_init_egl_platform( struct egl_platform *platform )
  {
@@ -237,7 +241,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      platform->native_display = 0;
  }
  
-@@ -1139,6 +1265,11 @@ static BOOL describe_egl_config( EGLConfig config, struct wgl_pixel_format *fmt,
+@@ -1139,6 +1282,11 @@ static BOOL describe_egl_config( EGLConfig config, struct wgl_pixel_format *fmt,
      /* If we can't get basic information, there is no point continuing */
      if (!funcs->p_eglGetConfigAttrib( egl->display, config, EGL_SURFACE_TYPE, &surface_type )) return FALSE;
      if (egl->type == EGL_PLATFORM_SURFACELESS_MESA) surface_type |= EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
@@ -249,7 +253,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
      memset( fmt, 0, sizeof(*fmt) );
      pfd->nSize = sizeof(*pfd);
-@@ -1275,7 +1406,18 @@ static void egldrv_init_extensions( struct opengl_funcs *funcs, BOOLEAN extensio
+@@ -1275,7 +1423,18 @@ static void egldrv_init_extensions( struct opengl_funcs *funcs, BOOLEAN extensio
  
  static BOOL egldrv_surface_create( struct client_surface *client, int format, struct opengl_drawable **drawable )
  {
@@ -268,7 +272,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      return !!*drawable;
  }
  
-@@ -1419,6 +1561,32 @@ static BOOL egldrv_context_create( int format, void *share, const int *attribs,
+@@ -1419,6 +1578,32 @@ static BOOL egldrv_context_create( int format, void *share, const int *attribs,
      }
      *attribs_end = EGL_NONE;
  
@@ -301,7 +305,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      /* For now only OpenGL is supported. It's enough to set the API only for
       * context creation, since:
       * 1. the default API is EGL_OPENGL_ES_API
-@@ -1490,6 +1658,40 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
+@@ -1490,6 +1675,40 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
      struct opengl_funcs *funcs = &display_funcs;
      const char *extensions;
  
@@ -342,7 +346,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      if (!(funcs->egl_handle = dlopen( SONAME_LIBEGL, RTLD_NOW | RTLD_GLOBAL )))
      {
          ERR( "Failed to load %s: %s\n", SONAME_LIBEGL, dlerror() );
-@@ -1505,7 +1707,9 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
+@@ -1505,7 +1724,9 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
      LOAD_FUNCPTR( eglGetProcAddress );
      LOAD_FUNCPTR( eglQueryString );
  #undef LOAD_FUNCPTR
@@ -352,7 +356,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      if (!(extensions = funcs->p_eglQueryString( EGL_NO_DISPLAY, EGL_EXTENSIONS )))
      {
          ERR( "Failed to find client extensions\n" );
-@@ -1513,6 +1717,9 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
+@@ -1513,6 +1734,9 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
      }
      TRACE( "EGL client extensions:\n" );
      dump_extensions( extensions );
@@ -362,7 +366,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
  #define CHECK_EXTENSION( ext )                                  \
      if (!has_extension( extensions, #ext ))                     \
-@@ -1520,25 +1727,53 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
+@@ -1520,25 +1744,53 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
          ERR( "Failed to find required extension %s\n", #ext );  \
          goto failed;                                            \
      }
@@ -416,7 +420,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      return FALSE;
  }
  
-@@ -1568,7 +1803,9 @@ static BOOL init_egl_platform( struct egl_platform *egl, const struct opengl_fun
+@@ -1568,7 +1820,9 @@ static BOOL init_egl_platform( struct egl_platform *egl, const struct opengl_fun
          return FALSE;                                                                              \
      }
      CHECK_EXTENSION( EGL_KHR_create_context );
@@ -426,7 +430,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      CHECK_EXTENSION( EGL_KHR_no_config_context );
  #undef CHECK_EXTENSION
  
-@@ -1638,7 +1875,11 @@ done:
+@@ -1638,7 +1892,11 @@ done:
  
  static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_driver_funcs *driver_funcs )
  {
@@ -438,7 +442,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
      driver_funcs->p_init_egl_platform( &display_egl );
      if (!display_egl.type) display_egl.display = funcs->p_eglGetDisplay( EGL_DEFAULT_DISPLAY );
-@@ -1647,7 +1888,7 @@ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_
+@@ -1647,7 +1905,7 @@ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_
      init_egl_devices( funcs );
  }
  
@@ -447,7 +451,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
  static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
  {
-@@ -1659,7 +1900,7 @@ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_
+@@ -1659,7 +1917,7 @@ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_
  {
  }
  
@@ -456,7 +460,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
  
  static UINT read_drm_device_prop( const char *name, const char *prop )
  {
-@@ -1700,7 +1941,14 @@ static void init_device_info( struct egl_platform *egl, const struct opengl_func
+@@ -1700,7 +1958,14 @@ static void init_device_info( struct egl_platform *egl, const struct opengl_func
  
      TRACE( "Initializing device %u (%p)\n", egl->index, egl->device);
  
@@ -471,7 +475,7 @@ behavior unchanged. Individual Windows games remain unvalidated.
      /* Assume that all devices without EGL_MESA_device_software are accelerated. */
      egl->accelerated = !has_extension( extensions, "EGL_MESA_device_software" );
      TRACE( "  - accelerated: %u\n", egl->accelerated );
-@@ -3387,6 +3635,11 @@ BOOL get_opengl_gpus( struct list *gpus )
+@@ -3387,6 +3652,11 @@ BOOL get_opengl_gpus( struct list *gpus )
  {
      struct egl_platform *egl;
  
