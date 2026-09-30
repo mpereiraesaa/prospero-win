@@ -599,6 +599,31 @@ static int flags_stack_form(PwX86State *s, const uint8_t *src, size_t n)
     return PW_OK;
 }
 
+/* PUSHAD (60) and POPAD (61), which 64-bit mode does not have. PUSHAD
+ * stores EAX, ECX, EDX, EBX, the ESP it started with, EBP, ESI and EDI,
+ * from the highest address down; POPAD loads them back in reverse and skips
+ * the saved ESP. The 16-bit forms (66 prefix) are refused. Half-Life's
+ * engine brackets its CPUID feature check with them. */
+static int all_registers_form(PwX86State *s, const uint8_t *src, size_t n)
+{
+    uint32_t values[8];   /* lowest address first: EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX */
+
+    if (!n || (src[0] != 0x60 && src[0] != 0x61)) return PW_ERR_UNSUPPORTED;
+    if (src[0] == 0x60) {
+        const uint32_t esp = s->gpr[4];
+        for (unsigned i = 0; i < 8; i++) values[7 - i] = s->gpr[i];   /* gpr[4] is that ESP */
+        memcpy((void *)(uintptr_t)(esp - 32), values, sizeof(values));
+        s->gpr[4] = esp - 32;
+    } else {
+        memcpy(values, (const void *)(uintptr_t)s->gpr[4], sizeof(values));
+        for (unsigned i = 0; i < 8; i++)
+            if (i != 4) s->gpr[i] = values[7 - i];
+        s->gpr[4] += 32;
+    }
+    s->eip += 1;
+    return PW_OK;
+}
+
 /* PUSH and POP of ES, CS, SS and DS (06 07 0E 16 17 1E 1F), which 64-bit
  * mode does not have, so the host cannot run them. A push stores the
  * selector the guest sees (selector_of), zero-extended to 32 bits, or 16
@@ -658,7 +683,7 @@ int pw_x86_hostexec_step(PwX86HostExec *h, PwX86State *s, const uint8_t *src, si
     status = pw_x86_hostexec_plan(s, src, n, &plan);
     if (status == PW_ERR_UNSUPPORTED &&
         (stack_memory_form(s, src, n) == PW_OK || flags_stack_form(s, src, n) == PW_OK ||
-         segment_stack_form(s, src, n) == PW_OK)) {
+         segment_stack_form(s, src, n) == PW_OK || all_registers_form(s, src, n) == PW_OK)) {
         h->executed++;
         return PW_OK;
     }

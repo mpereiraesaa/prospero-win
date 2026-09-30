@@ -265,6 +265,36 @@ static void test_segment_stores(void)
     assert(pw_x86_hostexec_plan(&s, (const uint8_t[]){0x8e, 0xd8}, 2, &plan) == PW_ERR_UNSUPPORTED);
 }
 
+/* 60/61: pushad stores EAX..EDI with the ESP it started from, the lowest
+ * address holding EDI; popad restores all but ESP. Half-Life's engine runs
+ * its CPUID check between the two. */
+static void test_all_registers(void)
+{
+    static const uint32_t start[8] = { 0x11111111, 0x22222222, 0x33333333, 0x44444444,
+                                       0, 0x66666666, 0x77777777, 0x88888888 };
+    uint32_t stored[8], esp;
+    PwX86State s;
+
+    reset_state(&s);
+    esp = s.gpr[4];
+    for (unsigned i = 0; i < 8; i++) if (i != 4) s.gpr[i] = start[i];
+    assert(run(&s, (const uint8_t[]){0x60}, 1) == PW_OK);
+    assert(s.gpr[4] == esp - 32 && s.eip == 0x1001);
+    memcpy(stored, guest + 0x8000 - 32, sizeof(stored));
+    assert(stored[0] == start[7] && stored[1] == start[6] && stored[2] == start[5]);  /* EDI ESI EBP */
+    assert(stored[3] == esp);                                                         /* ESP */
+    assert(stored[4] == start[3] && stored[5] == start[2] && stored[6] == start[1] && stored[7] == start[0]);
+    /* the code between clobbers everything; the saved ESP slot is ignored */
+    for (unsigned i = 0; i < 8; i++) if (i != 4) s.gpr[i] = 0xdeadbeef;
+    memcpy(guest + 0x8000 - 32 + 12, &(uint32_t){0x12345678}, 4);
+    assert(run(&s, (const uint8_t[]){0x61}, 1) == PW_OK);
+    assert(s.gpr[4] == esp && s.eip == 0x1002);
+    for (unsigned i = 0; i < 8; i++) if (i != 4) assert(s.gpr[i] == start[i]);
+    /* the 16-bit forms stay refused */
+    assert(run(&s, (const uint8_t[]){0x66, 0x60}, 2) == PW_ERR_UNSUPPORTED);
+    assert(run(&s, (const uint8_t[]){0x66, 0x61}, 2) == PW_ERR_UNSUPPORTED);
+}
+
 static void test_segment_stack(void)
 {
     /* PUSH ES, CS, SS, DS: the selector, zero-extended, 4 bytes lower. */
@@ -438,10 +468,11 @@ int main(void)
     test_guest_mxcsr();
     test_segment_stores();
     test_segment_stack();
+    test_all_registers();
     test_cpuid();
     test_refusals_and_cache();
     assert(pw_x86_hostexec_destroy(&hx) == PW_OK);
-    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR, segment stores, segment push and pop, CPUID; %llu stubs\n",
+    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR, segment stores, segment push and pop, PUSHAD and POPAD, CPUID; %llu stubs\n",
            (unsigned long long)hx.compiled);
     return 0;
 }
