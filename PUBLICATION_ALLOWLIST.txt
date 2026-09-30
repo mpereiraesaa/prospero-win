@@ -202,6 +202,7 @@ wine/patches/0670-win32u-ps5-relative-mouse.patch
 wine/patches/0680-server-ps5-wait-watchdog.patch
 wine/patches/0690-ntdll-ps5-slow-operation-log.patch
 wine/patches/0700-strmbase-renderer-state-wait-without-filter-lock.patch
+wine/patches/0710-ntdll-ps5-guest-access-violations-from-the-wow64-cpu.patch
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c

@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Wed, 30 Sep 2026 17:30:00 +0200
+Subject: [PATCH] ntdll: Let the PS5's WoW64 CPU raise the access violations
+ Wine cannot resolve in its code.
+
+wowprospero runs translated code on its own stack, outside the thread's
+kernel stack. When an i386 access in it faulted on memory Wine could not
+resolve (a real access violation, not a guard page or write watch), Wine
+did not see it as a fault inside the Unix call, tried to dispatch it on
+that stack, refused ("Exception frame is not in stack limits") and the
+process died: the game's own exception handlers never ran, and the log
+had no i386 EIP. __wine_ps5_set_segv_unresolved_hook gives the backend
+that fault first; wowprospero resumes it at the access's refused-access
+path, which leaves translated code with the exact EIP and address and
+raises the guest's own EXCEPTION_ACCESS_VIOLATION.
+
+A fault inside a syscall now names its module and offset (dladdr), or
+for a call through a NULL pointer its caller, in an ERR. Such a syscall
+fails with STATUS_ACCESS_VIOLATION, which user32 once took for a class
+atom in GetClassInfoExA, so the crash surfaced far from its cause.
+---
+ dlls/ntdll/unix/signal_x86_64.c | 40 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -29,6 +29,7 @@
+ #include <assert.h>
+ #include <pthread.h>
+ #include <signal.h>
++#include <dlfcn.h>
+ #include <stdlib.h>
+ #include <stdarg.h>
+ #include <stdio.h>
+@@ -2164,6 +2165,25 @@ static BOOL handle_syscall_fault( struct thread_data *data, ucontext_t *sigconte
+                  context->R8, context->R9, context->R10, context->R11 );
+     TRACE_(seh)( " r12=%016lx r13=%016lx r14=%016lx r15=%016lx\n",
+                  context->R12, context->R13, context->R14, context->R15 );
++#ifdef __PROSPERO__
++    {
++        /* Name where the syscall faulted (or, for a call through a NULL
++         * pointer, its caller). The syscall then fails with the exception
++         * code, which a caller reading a smaller return type can take for
++         * success: user32 took STATUS_ACCESS_VIOLATION for a class atom. */
++        void *where = context->Rip ? (void *)context->Rip : context->Rsp ? *(void **)context->Rsp : NULL;
++        Dl_info info;
++
++        if (where && dladdr( where, &info ) && info.dli_fname)
++            ERR_(seh)( "syscall fault %#x %s %s+%#lx, address %p\n", (int)rec->ExceptionCode,
++                       context->Rip ? "at" : "calling NULL from", info.dli_fname,
++                       (unsigned long)((char *)where - (char *)info.dli_fbase),
++                       rec->NumberParameters > 1 ? (void *)rec->ExceptionInformation[1] : NULL );
++        else
++            ERR_(seh)( "syscall fault %#x %s %p\n", (int)rec->ExceptionCode,
++                       context->Rip ? "at" : "calling NULL from", where );
++    }
++#endif
+ 
+     if (data->jmp_buf)
+     {
+@@ -2345,6 +2365,18 @@ DECLSPEC_EXPORT void __wine_ps5_set_segv_hook( int (*hook)( siginfo_t *siginfo,
+ {
+     segv_hook = hook;
+ }
++
++/* The same backend's chance at an access violation Wine could not resolve.
++ * Translated code runs on the backend's own stack, outside the thread's
++ * kernel stack, so Wine would neither see it as a fault inside the Unix
++ * call nor be able to dispatch it on that stack; the backend instead
++ * resumes it where it raises the guest's own exception. */
++static int (*segv_unresolved_hook)( siginfo_t *siginfo, void *sigcontext );
++
++DECLSPEC_EXPORT void __wine_ps5_set_segv_unresolved_hook( int (*hook)( siginfo_t *siginfo, void *sigcontext ) )
++{
++    segv_unresolved_hook = hook;
++}
+ #endif
+ 
+ /**********************************************************************
+@@ -2437,6 +2469,14 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+         rec.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
+         break;
+     }
++#ifdef __PROSPERO__
++    if (segv_unresolved_hook && rec.ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
++        TRAP_sig(sigcontext) == TRAP_x86_PAGEFLT && segv_unresolved_hook( siginfo, _sigcontext ))
++    {
++        leave_handler( data, sigcontext );
++        return;
++    }
++#endif
+     if (handle_syscall_fault( data, sigcontext, &rec, &context.c )) return;
+     setup_raise_exception( data, sigcontext, &rec, &context );
+ }

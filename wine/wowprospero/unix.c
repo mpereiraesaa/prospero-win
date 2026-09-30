@@ -469,8 +469,33 @@ static int redirect_fault( siginfo_t *info, void *context )
 }
 
 #ifdef __PROSPERO__
-/* On the PS5, Wine's own handler calls redirect_fault first (patch 0610). */
+/* An access violation Wine could not resolve, at a marked access in our code
+ * (a real guest fault, not a guard page or write watch): resume it at the
+ * access's refused-access path, which leaves translated code with the exact
+ * EIP and address for BTCpuSimulate to raise as the guest's own exception.
+ * Wine cannot dispatch it itself: translated code runs on our stack, outside
+ * the thread's kernel stack (patch 0710). */
+static int redirect_unresolved( siginfo_t *info, void *context )
+{
+    uintptr_t *rip = context_rip( context ), target = 0;
+
+    (void)info;
+    for (unsigned int i = 0; i < MAX_ARENAS && !target; i++)
+    {
+        uintptr_t high = __atomic_load_n( &arenas[i].high, __ATOMIC_ACQUIRE );
+        uintptr_t low = __atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE );
+        if (low && high && *rip >= low && *rip < high)
+            target = pw_x86_engine_fault_redirect( arenas[i].engine, *rip );
+    }
+    if (!target) return 0;
+    *rip = target;
+    return 1;
+}
+
+/* On the PS5, Wine's own handler calls redirect_fault first (patch 0610), and
+ * redirect_unresolved for what it could not resolve (patch 0710). */
 extern void __wine_ps5_set_segv_hook( int (*hook)( siginfo_t *info, void *context ) );
+extern void __wine_ps5_set_segv_unresolved_hook( int (*hook)( siginfo_t *info, void *context ) );
 #else
 static void segv_handler( int signal, siginfo_t *info, void *context )
 {
@@ -749,6 +774,7 @@ static NTSTATUS process_init( void *args )
         {
 #ifdef __PROSPERO__
             __wine_ps5_set_segv_hook( redirect_fault );
+            __wine_ps5_set_segv_unresolved_hook( redirect_unresolved );
             fault_markers = 1;
 #else
             struct sigaction action;

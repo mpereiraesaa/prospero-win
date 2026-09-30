@@ -188,8 +188,20 @@ static void raise_guest_exception( I386_CONTEXT *ctx, DWORD code, UINT address, 
     /* The first exceptions a process raises into the guest, for the log: a
      * storm of faults usually starts from one of them. */
     if (InterlockedIncrement( &logged ) <= 16)
+    {
+        MEMORY_BASIC_INFORMATION info;
+        const UINT *stack = ULongToPtr( ctx->Esp );
+
         ERR( "guest exception %#lx at eip %#lx esp %#lx address %#x write %u\n",
              code, ctx->Eip, ctx->Esp, address, write );
+        /* The top of the i386 stack, for the callers' return addresses. */
+        if (!NtQueryVirtualMemory( GetCurrentProcess(), stack, MemoryBasicInformation, &info, sizeof(info), NULL ) &&
+            info.State == MEM_COMMIT && !(info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) &&
+            (const char *)info.BaseAddress + info.RegionSize >= (const char *)(stack + 16))
+            ERR( "guest stack %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
+                 stack[0], stack[1], stack[2], stack[3], stack[4], stack[5], stack[6], stack[7],
+                 stack[8], stack[9], stack[10], stack[11], stack[12], stack[13], stack[14], stack[15] );
+    }
 
     rec.ExceptionCode = code;
     rec.ExceptionAddress = ULongToPtr( ctx->Eip );
