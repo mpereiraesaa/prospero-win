@@ -110,10 +110,6 @@ static int valid_windows_path(const char *path)
  * order (n, b, n,b, empty) and ";" between entries. No spaces or paths. */
 static int valid_dll_overrides(const char *text)
 {
-    size_t length = strlen(text);
-
-    if (!length || text[length - 1u] == ';')
-        return 0;
     for (size_t index = 0; text[index]; ++index) {
         unsigned char value = (unsigned char)text[index];
         if (!((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
@@ -171,7 +167,7 @@ int pw_app_profile_effective_dll_overrides(const PwAppProfile *profile,
                                            char *text, size_t capacity)
 {
     static const char suffix[] = "opengl32=b";
-    size_t base_length, suffix_length;
+    size_t base_length, append_length, suffix_length;
     int has_opengl32;
 
     if (!profile || !text || capacity == 0u)
@@ -192,13 +188,18 @@ int pw_app_profile_effective_dll_overrides(const PwAppProfile *profile,
         memcpy(text, profile->dll_overrides, base_length + 1u);
         return PW_OK;
     }
+    /* A profile checker may accept a trailing separator; reuse it instead of
+     * emitting an empty entry when appending Wine's builtin opengl32 rule. */
+    append_length = base_length;
+    if (append_length && profile->dll_overrides[append_length - 1u] == ';')
+        --append_length;
     suffix_length = sizeof(suffix) - 1u;
-    if (base_length + (base_length != 0u) + suffix_length >= capacity)
+    if (append_length + (append_length != 0u) + suffix_length >= capacity)
         return PW_ERR_LIMIT;
-    memcpy(text, profile->dll_overrides, base_length);
-    if (base_length)
-        text[base_length++] = ';';
-    memcpy(text + base_length, suffix, suffix_length + 1u);
+    memcpy(text, profile->dll_overrides, append_length);
+    if (append_length)
+        text[append_length++] = ';';
+    memcpy(text + append_length, suffix, suffix_length + 1u);
     return PW_OK;
 }
 

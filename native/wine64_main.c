@@ -699,7 +699,7 @@ int main(int argc, char **argv)
         .ntdll_path = ntdll_path,
         .ntdll_dir = ntdll_dir,
         .prefix = prefix,
-        .extra_env = extra, .extra_env_count = sizeof(extra) / sizeof(extra[0]) - 2,
+        .extra_env = extra, .extra_env_count = sizeof(extra) / sizeof(extra[0]) - 3,
         .argc = 2, .argv = wine_argv, .stack_bytes = 16u << 20,
     };
     static PwWineStart start;
