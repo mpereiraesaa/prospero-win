@@ -30,6 +30,7 @@
 #include "pw_hid_ps5.h"
 #include "pw_videoout_ps5.h"
 #include "pw_wine_library.h"
+#include "pw_wine_prefix.h"
 #include "../src/pw_present.h"
 #include "../src/pw_spinner.h"
 #include "pw_wine_display.h"
@@ -784,6 +785,14 @@ int main(int argc, char **argv)
                    effective_dll_overrides[0] ? effective_dll_overrides : "-");
         /* What Wine gives the game as NumberOfProcessors. */
         PS5LOG_LOG("PW_WINE64 cpus online=%ld", sysconf(_SC_NPROCESSORS_ONLN));
+        {
+            /* The temp folders the prefix names, which a prefix made on the
+             * PC may lack on the console (src/pw_prefix_temp.h). */
+            static PwPrefixTemp temp;
+            int folders = pw_wine_prefix_temp_create(prefix, &temp);
+            PS5LOG_LOG("PW_WINE64 prefix temp folders=%d last=%s", folders,
+                       temp.count ? temp.folders[temp.count - 1] : "-");
+        }
         if (PW_WINE64_WAIT_WATCHDOG) setenv("WINE_PS5_WAIT_WATCHDOG", "1", 1);
         /* [application] arguments follow the executable in Wine's argv. */
         int words = pw_wine_launch_split(game->app.arguments, argument_words,

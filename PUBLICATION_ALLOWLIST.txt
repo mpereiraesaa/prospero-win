@@ -244,6 +244,11 @@ src/pw_wine_launch.c
 src/pw_wine_launch.h
 src/pw_game_profile.c
 src/pw_game_profile.h
+src/pw_prefix_temp.c
+src/pw_prefix_temp.h
+native/pw_wine_prefix.c
+native/pw_wine_prefix.h
+tests/test_pw_prefix_temp.c
 tests/test_pw_wine_start.c
 tests/test_pw_wine_launch.c
 tests/test_pw_game_profile.c
