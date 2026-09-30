@@ -118,6 +118,9 @@ prospero:
   input: {preset: warcraft3}
 ```
 
+`display` also takes `view` and `show_fps: true`, a frame-rate counter in the
+top-left corner.
+
 The profile's `[application]` section comes from the script's `game` section:
 the executable, its arguments and its working folder.
 

@@ -9,6 +9,8 @@
  *   desktop = 800x600      ; Wine's desktop size (default: the driver's)
  *   scaling = fit          ; fit (keep aspect, fill the screen), integer, stretch
  *   view = window          ; window: show the game's windows; desktop: all of it
+ *   show_fps = true        ; a frame-rate counter in the top left (default: false):
+ *                          ; DXVK's HUD, or Mesa's for graphics = opengl
  *
  *   [input]
  *   preset = pinball       ; an input file shared between profiles
@@ -66,6 +68,7 @@ typedef struct PwGameDisplay {
     uint32_t width, height;     /* 0x0: the driver's default */
     PwGameScaling scaling;
     PwGameView view;            /* window by default: a small game fills the TV */
+    int show_fps;               /* the graphics backend's frame-rate counter */
 } PwGameDisplay;
 
 typedef struct PwGameProfile {

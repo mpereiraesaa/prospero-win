@@ -68,7 +68,7 @@ WINE_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "w
 DOWNLOADS = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "prospero-win"
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 REG_TYPES = {"REG_SZ", "REG_DWORD", "REG_BINARY"}
-PROSPERO_DISPLAY = ("desktop", "scaling", "view")
+PROSPERO_DISPLAY = ("desktop", "scaling", "view", "show_fps")
 PROSPERO_INPUT = ("preset", "mode", "mouse", "mouse_speed")
 
 
@@ -456,7 +456,9 @@ class Installer:
             if unknown:
                 raise InstallError(f"prospero.{section}: unknown keys {sorted(unknown)}")
             if values:
-                lines += ["", f"[{section}]"] + [f"{key} = {value}" for key, value in values]
+                # YAML's true/false arrive as Python booleans
+                lines += ["", f"[{section}]"] + [
+                    f"{key} = {str(value).lower() if isinstance(value, bool) else value}" for key, value in values]
         return "\n".join(lines) + "\n"
 
     # --- the whole install -----------------------------------------------------

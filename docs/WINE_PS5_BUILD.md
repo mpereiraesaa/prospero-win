@@ -647,6 +647,12 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   - `[display] view = window` (the default) sets `WINE_PS5_VIEW=window`: Wine's
     driver (patch 0430) presents only the game's visible windows, so a small
     game fills the screen; `view = desktop` shows the whole Wine desktop;
+  - `[display] show_fps = true` shows a frame-rate counter in the top-left
+    corner, drawn by the game's own graphics backend. A DXVK game gets
+    DXVK's counter (`DXVK_HUD=fps`). A `graphics = opengl` game gets Mesa's
+    (`GALLIUM_HUD=fps`), which appears once the PS5 OpenGL SDK draws Mesa's
+    HUD; SDK 0.6.0 doesn't yet. It's off unless set, and takes `true` or
+    `false`;
   - `[input]` binds each DualSense button to a key or a mouse button, and a
     stick moves the pointer. `preset = <name>` shares a mapping from
     `<root>/input/<name>.input`.

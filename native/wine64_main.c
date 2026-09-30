@@ -677,7 +677,7 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
-    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 3 };
+    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 4 };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -687,7 +687,7 @@ int main(int argc, char **argv)
         { "USER", "prospero" },
         { "WINE_PS5_TRACE_STARTUP", "1" },  /* patch 0560: name startup steps */
         { "WINE_PS5_VIEW", view },          /* patch 0430: the game's windows, or the desktop */
-        { NULL, NULL }, { NULL, NULL }, { NULL, NULL }, /* profile-specific environment */
+        { NULL, NULL }, { NULL, NULL }, { NULL, NULL }, { NULL, NULL }, /* profile-specific environment */
     };
     _Static_assert(sizeof(extra) / sizeof(extra[0]) ==
                    WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY,
@@ -765,15 +765,20 @@ int main(int argc, char **argv)
             PS5LOG_LOG("PW_WINE64 DLL overrides refused: %s", game->app.id);
         if (game->app.graphics == PW_APP_GRAPHICS_OPENGL)
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_OPENGL", "1" };
+        /* [display] show_fps: the backend's own counter, top left. Mesa draws
+         * its HUD only where the PS5 OpenGL SDK's EGL calls it. */
+        if (game->display.show_fps)
+            extra[config.extra_env_count++] = game->app.graphics == PW_APP_GRAPHICS_OPENGL
+                ? (PwWineStartEnv){ "GALLIUM_HUD", "fps" } : (PwWineStartEnv){ "DXVK_HUD", "fps" };
         /* [debug] winedebug: this game's channels in place of the title's. */
         if (game->winedebug[0]) {
             extra[0].value = game->winedebug;
             PS5LOG_LOG("PW_WINE64 winedebug=%s", game->winedebug);
         }
-        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s input=%s "
+        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s show_fps=%d input=%s "
                    "preset=%s mode=%s mouse=%d dll_overrides=%s", game->app.id, prefix,
                    desktop[0] ? desktop : "default",
-                   scaling, view, pw_result_name(input_status),
+                   scaling, view, game->display.show_fps, pw_result_name(input_status),
                    game->input.preset[0] ? game->input.preset : "-",
                    game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse,
                    effective_dll_overrides[0] ? effective_dll_overrides : "-");

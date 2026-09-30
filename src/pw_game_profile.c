@@ -183,6 +183,14 @@ static int display_field(PwGameDisplay *display, uint32_t *seen, const uint8_t *
         *seen |= 2u;
         return PW_OK;
     }
+    if (is(key, key_length, "show_fps")) {
+        if (*seen & 8u) return PW_ERR_MALFORMED;
+        if (is(v, n, "true")) display->show_fps = 1;
+        else if (is(v, n, "false")) display->show_fps = 0;
+        else return PW_ERR_UNSUPPORTED;
+        *seen |= 8u;
+        return PW_OK;
+    }
     return PW_ERR_UNSUPPORTED;
 }
 

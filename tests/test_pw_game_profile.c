@@ -51,8 +51,12 @@ static void test_profile(void)
 
     assert(parse(APP "[input]\nmode = xinput\n[display]\nscaling = stretch\n", &p) == PW_OK);
     assert(p.input.mode == PW_GAME_INPUT_XINPUT && p.display.scaling == PW_GAME_SCALING_STRETCH);
-    assert(p.display.view == PW_GAME_VIEW_WINDOW);
+    assert(p.display.view == PW_GAME_VIEW_WINDOW && !p.display.show_fps);
     assert(parse(APP "[display]\nview = desktop\n", &p) == PW_OK && p.display.view == PW_GAME_VIEW_DESKTOP);
+    /* show_fps: the backend's frame-rate counter, off unless asked for */
+    assert(parse(APP "[display]\nshow_fps = true\n", &p) == PW_OK && p.display.show_fps == 1);
+    assert(parse(APP "[display]\nshow_fps = True\nview = desktop\n", &p) == PW_OK && p.display.show_fps == 1);
+    assert(parse(APP "[display]\nshow_fps = false\n", &p) == PW_OK && p.display.show_fps == 0);
     assert(parse(APP "[display]\nview = Window\n", &p) == PW_OK && p.display.view == PW_GAME_VIEW_WINDOW);
     assert(parse(APP "[display]\ndesktop = 320x200\n[input]\nmouse = left_stick\n", &p) == PW_OK);
     assert(p.display.width == 320 && p.input.mouse == PW_GAME_STICK_LEFT);
@@ -73,6 +77,9 @@ static void test_refusals(void)
         APP "[display]\n[display]\n",                          /* duplicate section */
         APP "[input]\n[input]\n",
         APP "[sound]\n",                                       /* unknown section */
+        APP "[display]\nshow_fps = yes\n",                     /* only true or false */
+        APP "[display]\nshow_fps =\n",
+        APP "[display]\nshow_fps = true\nshow_fps = false\n",   /* twice */
         APP "[debug]\nwinedebug = +seh\n[debug]\n",            /* duplicate section */
         APP "[debug]\nwinedebug =\n",                         /* empty */
         APP "[debug]\nwinedebug = +seh;rm\n",                  /* not a channel list */
