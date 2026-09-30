@@ -10,10 +10,10 @@ directly and uses EGL_DEFAULT_DISPLAY with Wine's offscreen framebuffer
 surfaces. The regular PS5 user driver remains responsible for presenting
 those surfaces through its existing GDI path.
 
-The SDK provides Core and compatibility contexts. A legacy WGL context
-request has no attributes, so pass EGL's compatibility-profile default through
-to support fixed-function applications. Individual Windows games remain
-unvalidated.
+The SDK provides Core and compatibility contexts. Wine already passes no
+attributes for a legacy WGL context request, so the SDK's compatibility-profile
+default supports fixed-function applications; this patch leaves that existing
+behavior unchanged. Individual Windows games remain unvalidated.
 ---
 --- a/dlls/win32u/driver.c
 +++ b/dlls/win32u/driver.c
