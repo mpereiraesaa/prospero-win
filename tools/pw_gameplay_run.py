@@ -22,7 +22,9 @@ waits for it, and puts everything back:
   ended.
 
 The original profiles.lst and appended files are restored, and the key
-script and timing trigger removed, even when the run fails or times out.
+script and timing trigger removed, even when the run fails, times out or is
+stopped with SIGTERM or SIGHUP; a stale trigger an interrupted run left
+behind is removed too.
 
 Usage:
     pw_gameplay_run.py SLUG --host IP [--port N] [--remote /data/prospero-win]
@@ -35,6 +37,7 @@ import argparse
 import ftplib
 import os
 import re
+import signal
 import sys
 import time
 from pathlib import Path
@@ -52,6 +55,9 @@ KEY_NAMES = {
     **{f"f{number}": 0x6F + number for number in range(1, 13)},
 }
 SESSIONS = 8  # native/pw_diagnostics.h: PW_DIAGNOSTICS_SESSIONS
+# The run's own trigger files: never kept after a run, even one that found a
+# stale copy left by an interrupted run.
+TRIGGERS = ("pw_script_keys", "pw_wow_timing")
 TITLE_WINEDEBUG = "err+all,+loaddll,+process"  # native/wine64_main.c: PW_WINE64_DEBUG
 # Below this, a Vulkan game is still loading: its loading screen draws a
 # frame now and then.
@@ -204,6 +210,11 @@ class Run:
             changed = with_fps_channel(changed)
         if changed != profile:
             self.replace(f"profiles/{slug}.profile", changed)
+        for trigger in TRIGGERS:
+            if self.read(trigger) is not None:
+                log(f"removing a stale {trigger} (an interrupted run left it)")
+                self.saved[trigger] = None
+                self.remove(trigger)
         self.replace("pw_script_keys", key_script(self.args.keys))
         if self.args.timing:
             self.replace("pw_wow_timing", b"timing\n")
@@ -293,5 +304,12 @@ def main(argv: list[str] | None = None, remote=None) -> int:
     return 0
 
 
+def exit_on_signal(number, frame) -> None:
+    """SIGTERM or SIGHUP ends the run like Ctrl-C, through the restore."""
+    raise SystemExit(128 + number)
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, exit_on_signal)
+    signal.signal(signal.SIGHUP, exit_on_signal)
     sys.exit(main())

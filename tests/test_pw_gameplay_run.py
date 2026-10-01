@@ -32,8 +32,8 @@ class Console:
     """The library root as the tool sees it over FTP; the title's run happens
     when the tool first polls for it."""
 
-    def __init__(self, root: Path, finish: bool = True):
-        self.root, self.finish, self.polls, self.during = root, finish, 0, {}
+    def __init__(self, root: Path, finish: bool = True, stop: bool = False):
+        self.root, self.finish, self.stop, self.polls, self.during = root, finish, stop, 0, {}
 
     def _path(self, path: str) -> Path:
         return self.root / path.lstrip("/").removeprefix("data/prospero-win/")
@@ -47,6 +47,8 @@ class Console:
                              "prefix/drive_c/Games/cs/listenserver.cfg"):
                     entry = self.root / name
                     self.during[name] = entry.read_bytes() if entry.exists() else None
+                if self.stop:  # SIGTERM while the game runs (exit_on_signal)
+                    raise SystemExit(143)
                 if self.finish:
                     (self.root / "logs/session-3.log").write_text("PW_REPORT/1 build=abc profile=launcher\n"
                                                                   "REC seq=1 t=1 PW_WINE64 session_end reason=launcher\n")
@@ -172,6 +174,39 @@ with tempfile.TemporaryDirectory() as directory:
     assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
     assert not (root / "pw_script_keys").exists()
 
+# Stale triggers from an interrupted run are removed, not kept for the next
+# run (a leftover pw_wow_timing slowed every game down).
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    (root / "pw_wow_timing").write_text("timing\n")
+    (root / "pw_script_keys").write_text("0 0x0d\n")
+    console = Console(root)
+    code, output = main(console, "--key", "1:esc")
+    assert code == 0, output
+    assert "removing a stale pw_wow_timing (an interrupted run left it)" in output
+    assert "removing a stale pw_script_keys" in output
+    assert console.during["pw_wow_timing"] is None and console.during["pw_script_keys"] == b"1 0x1b\n"
+    assert not (root / "pw_wow_timing").exists() and not (root / "pw_script_keys").exists()
+
+# SIGTERM or SIGHUP mid-run: the run is put back as after Ctrl-C.
+try:
+    run.exit_on_signal(15, None)
+    raise AssertionError("no exit")
+except SystemExit as stop:
+    assert stop.code == 143
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    try:
+        main(Console(root, stop=True), "--key", "1:enter", "--timing", "--fps")
+        raise AssertionError("no exit")
+    except SystemExit as stop:
+        assert stop.code == 143
+    assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
+    assert (root / "profiles/counter-strike-16.profile").read_text() == "[application]\nid = cs16\nname = CS\n"
+    assert not (root / "pw_script_keys").exists() and not (root / "pw_wow_timing").exists()
+
 # A missing game or config file stops before anything is changed for good.
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory) / "console"
@@ -185,4 +220,4 @@ with tempfile.TemporaryDirectory() as directory:
         assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
         assert not (root / "pw_script_keys").exists()
 
-print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, restore on success/timeout/refusal, session by profile id, summary")
+print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, restore on success/timeout/refusal/signal, stale triggers, session by profile id, summary")
