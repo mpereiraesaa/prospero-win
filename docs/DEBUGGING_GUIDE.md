@@ -259,7 +259,10 @@ reports it and puts the console back as it was.
   profile starts at its menu;
 - `--append PATH=LINE` adds a line to a file under the library folder, such as
   a game's config;
-- `--timing` turns on the [timing report](#8-when-a-game-is-slow-time-it-first).
+- `--timing` turns on the [timing report](#8-when-a-game-is-slow-time-it-first);
+- `--fps` turns on Wine's `fps` channel in the game's profile, for a game
+  that draws with Vulkan through DXVK. OpenGL games log their frame rate
+  without it (`PW_GL`).
 
 Then start the script build on the console. When the game's session ends,
 the tool copies its saved log to `--save` and summarizes it, and it always
@@ -291,7 +294,9 @@ pw_gameplay_run: ended: close-timeout
 ```
 
 The first three frame-rate samples cover loading and are left out of the
-average. `ended` is how the session finished; `close-timeout` means the
+average. With `--fps`, Wine reports a Vulkan game's frame rate about every
+1.5 seconds; samples before the first one at 20 fps or more are the loading
+screen, and are left out. `ended` is how the session finished; `close-timeout` means the
 script build asked the game to close and closed it when it didn't.
 
 ### Things to know

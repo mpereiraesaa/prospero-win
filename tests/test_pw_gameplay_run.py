@@ -101,6 +101,21 @@ profile = b"[application]\nid = cs16\narguments = -game cstrike\nname = CS\n"
 assert run.with_arguments(profile, "-game cstrike +map de_dust2") == \
     b"[application]\nid = cs16\narguments = -game cstrike +map de_dust2\nname = CS\n"
 assert run.with_arguments(b"[application]\r\nid = x\r\n", "+map a") == b"[application]\r\narguments = +map a\nid = x\r\n"
+# --fps: Wine's fps channel joins the profile's own channels, or the title's.
+assert run.with_fps_channel(b"[application]\nid = x\n") == \
+    b"[application]\nid = x\n[debug]\nwinedebug = err+all,+loaddll,+process,+fps\n"
+assert run.with_fps_channel(b"[debug]\r\nwinedebug = +seh ; one run\r\n") == b"[debug]\r\nwinedebug = +seh,+fps ; one run\r\n"
+assert run.with_fps_channel(b"[debug]\nwinedebug = -all,+fps\n") == b"[debug]\nwinedebug = -all,+fps\n"
+
+# A Vulkan game's samples: those before the first at 20 fps or more are loading.
+VULKAN = "\n".join(f"REC seq={i} t={i}.0 WINE 0024:trace:fps:win32u_vkQueuePresentKHR 0x7f00 @ approx {v}fps, total 1.00fps"
+                   for i, v in enumerate(["0.10", "0.70", "59.90", "48.00", "60.01"]))
+summary = run.summarize(VULKAN)
+assert "fps (Vulkan, 5 samples): 0.1 0.7 59.9 48.0 60.0" in summary
+assert "fps after loading: average 56.0, minimum 48.0, at 59 or more 2/3" in summary
+assert "fps after loading: none (never 20 or more)" in run.summarize(VULKAN.split("\n", 1)[0])
+assert "fps: no PW_GL or Wine fps records (it never presented, or ran without --fps)" in run.summarize("")
+
 for bad in ("noequals", "/abs=x", "a/../b=x"):
     try:
         run.parse_append(bad)
@@ -137,6 +152,17 @@ with tempfile.TemporaryDirectory() as directory:
     assert "timing: tid=0024 run=40.0%" in output and "tid=0030" not in output
     assert "ended: close-timeout" in output
 
+# --fps with --arguments: both reach the profile for the run, which is put back.
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    console = Console(root)
+    code, output = main(console, "--fps", "--arguments", "+map c1a0")
+    assert code == 0, output
+    assert console.during["profiles/counter-strike-16.profile"] == \
+        b"[application]\narguments = +map c1a0\nid = cs16\nname = CS\n[debug]\nwinedebug = err+all,+loaddll,+process,+fps\n"
+    assert (root / "profiles/counter-strike-16.profile").read_text() == "[application]\nid = cs16\nname = CS\n"
+
 # No run: the tool gives up after --wait and still restores the console.
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory) / "console"
@@ -159,4 +185,4 @@ with tempfile.TemporaryDirectory() as directory:
         assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
         assert not (root / "pw_script_keys").exists()
 
-print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, restore on success/timeout/refusal, session by profile id, summary")
+print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, restore on success/timeout/refusal, session by profile id, summary")

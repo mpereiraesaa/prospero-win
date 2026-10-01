@@ -13,18 +13,20 @@ waits for it, and puts everything back:
   that starts at its menu can start a map instead);
 - pw_script_keys holds the key presses (--key MS:KEY, any number);
 - --append adds lines to files under the library root, such as a game's
-  config (Counter-Strike's bot_quota), and --timing turns on the WoW64
-  timing report (pw_wow_timing);
+  config (Counter-Strike's bot_quota), --timing turns on the WoW64
+  timing report (pw_wow_timing), and --fps turns on Wine's fps channel in
+  the game's profile, for a game that presents with Vulkan (DXVK);
 - when the run's saved session (logs/session-N.log, with profile=SLUG)
-  ends, it is copied to --save and summarized: frame rate (PW_GL), the
-  keys sent, timing lines and how the session ended.
+  ends, it is copied to --save and summarized: frame rate (PW_GL, or
+  Wine's fps channel), the keys sent, timing lines and how the session
+  ended.
 
 The original profiles.lst and appended files are restored, and the key
 script and timing trigger removed, even when the run fails or times out.
 
 Usage:
     pw_gameplay_run.py SLUG --host IP [--port N] [--remote /data/prospero-win]
-        [--key MS:KEY ...] [--arguments ARGS] [--append PATH=LINE ...] [--timing]
+        [--key MS:KEY ...] [--arguments ARGS] [--append PATH=LINE ...] [--timing] [--fps]
         [--wait SECONDS] [--save DIR] [--keep]
 """
 from __future__ import annotations
@@ -50,6 +52,10 @@ KEY_NAMES = {
     **{f"f{number}": 0x6F + number for number in range(1, 13)},
 }
 SESSIONS = 8  # native/pw_diagnostics.h: PW_DIAGNOSTICS_SESSIONS
+TITLE_WINEDEBUG = "err+all,+loaddll,+process"  # native/wine64_main.c: PW_WINE64_DEBUG
+# Below this, a Vulkan game is still loading: its loading screen draws a
+# frame now and then.
+VULKAN_PLAYING_FPS = 20.0
 
 
 def log(message: str) -> None:
@@ -102,6 +108,18 @@ def with_arguments(profile: bytes, arguments: str) -> bytes:
     return replaced
 
 
+def with_fps_channel(profile: bytes) -> bytes:
+    """The profile with Wine's fps channel on: added to its [debug] winedebug,
+    or a [debug] section with the title's channels and +fps. A second
+    winedebug line would make the profile malformed."""
+    match = re.search(rb"(?m)^[ \t]*winedebug[ \t]*=[ \t]*([^\s;]+)", profile)
+    if match:
+        if b"+fps" in match[1].split(b","):
+            return profile
+        return profile[:match.end(1)] + b",+fps" + profile[match.end(1):]
+    return appended(profile, ["[debug]", f"winedebug = {TITLE_WINEDEBUG},+fps"])
+
+
 def session_header(text: str) -> dict[str, str]:
     first = text.split("\n", 1)[0]
     if not first.startswith("PW_REPORT/1 "):
@@ -112,6 +130,8 @@ def session_header(text: str) -> dict[str, str]:
 def summarize(text: str) -> list[str]:
     """The run's frame rate, keys, timing and ending, from a saved session."""
     fps = [float(value) for value in re.findall(r"PW_GL frames=\d+ fps=([0-9.]+)", text)]
+    # win32u's vkQueuePresentKHR, about every 1.5 s with WINEDEBUG +fps.
+    vulkan = [float(value) for value in re.findall(r":trace:fps:\S+ \S+ @ approx ([0-9.]+)fps", text)]
     keys = re.findall(r"PW_WINE64 script key=(0x[0-9a-f]+) status=(\S+)", text)
     # Busy guest threads only: the game's, not those that only wait.
     timing = [line.split("timing: ", 1)[1] for line in text.splitlines()
@@ -125,8 +145,17 @@ def summarize(text: str) -> list[str]:
         lines.append("fps: " + " ".join(f"{value:.1f}" for value in fps))
         lines.append(f"fps after loading: average {sum(steady) / len(steady):.1f}, "
                      f"minimum {min(steady):.1f}, at 59 or more {sum(v >= 59 for v in steady)}/{len(steady)}")
+    elif vulkan:
+        playing = next((i for i, value in enumerate(vulkan) if value >= VULKAN_PLAYING_FPS), len(vulkan))
+        steady = vulkan[playing:]
+        lines.append(f"fps (Vulkan, {len(vulkan)} samples): " + " ".join(f"{value:.1f}" for value in vulkan))
+        if steady:
+            lines.append(f"fps after loading: average {sum(steady) / len(steady):.1f}, "
+                         f"minimum {min(steady):.1f}, at 59 or more {sum(v >= 59 for v in steady)}/{len(steady)}")
+        else:
+            lines.append(f"fps after loading: none (never {VULKAN_PLAYING_FPS:.0f} or more)")
     else:
-        lines.append("fps: no PW_GL records (not an OpenGL game, or it never presented)")
+        lines.append("fps: no PW_GL or Wine fps records (it never presented, or ran without --fps)")
     lines += [f"timing: {line}" for line in timing[-3:]]
     lines.append(f"ended: {ending[-1] if ending else 'no session_end (the run is still going or crashed)'}")
     return lines
@@ -168,8 +197,13 @@ class Run:
         match = re.search(rb"(?m)^\s*id\s*=\s*(\S+)", profile)
         self.profile_id = match[1].decode() if match else slug
         self.replace("profiles/profiles.lst", f"{slug}.profile\n".encode())
+        changed = profile
         if self.args.arguments is not None:
-            self.replace(f"profiles/{slug}.profile", with_arguments(profile, self.args.arguments))
+            changed = with_arguments(changed, self.args.arguments)
+        if self.args.fps:
+            changed = with_fps_channel(changed)
+        if changed != profile:
+            self.replace(f"profiles/{slug}.profile", changed)
         self.replace("pw_script_keys", key_script(self.args.keys))
         if self.args.timing:
             self.replace("pw_wow_timing", b"timing\n")
@@ -225,6 +259,8 @@ def main(argv: list[str] | None = None, remote=None) -> int:
     parser.add_argument("--append", action="append", default=[], type=parse_append,
                         help="PATH=LINE, a line added to a file under the library root for the run")
     parser.add_argument("--timing", action="store_true", help="turn on the WoW64 timing report for the run")
+    parser.add_argument("--fps", action="store_true",
+                        help="turn on Wine's fps channel in the profile, to report a Vulkan (DXVK) game's frame rate")
     parser.add_argument("--wait", type=int, default=600, help="seconds to wait for the run (default 600)")
     parser.add_argument("--poll", type=float, default=5.0, help=argparse.SUPPRESS)
     parser.add_argument("--save", help="directory to copy the run's saved session log into")
