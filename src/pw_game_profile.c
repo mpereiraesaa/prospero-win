@@ -199,6 +199,14 @@ static int display_field(PwGameDisplay *display, uint32_t *seen, const uint8_t *
         *seen |= 16u;
         return PW_OK;
     }
+    if (is(key, key_length, "opengl_thread")) {
+        if (*seen & 32u) return PW_ERR_MALFORMED;
+        if (is(v, n, "true")) display->opengl_thread = 1;
+        else if (is(v, n, "false")) display->opengl_thread = 0;
+        else return PW_ERR_UNSUPPORTED;
+        *seen |= 32u;
+        return PW_OK;
+    }
     return PW_ERR_UNSUPPORTED;
 }
 

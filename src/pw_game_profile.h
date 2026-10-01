@@ -13,6 +13,8 @@
  *                          ; DXVK's HUD, or Mesa's for graphics = opengl
  *   refresh = 120          ; output refresh rate for graphics = opengl: 60 or 120
  *                          ; (default 60); a display without 120 Hz stays at 60
+ *   opengl_thread = true   ; graphics = opengl: run OpenGL on its own CPU thread
+ *                          ; (Mesa's glthread), beside the game (default: false)
  *
  *   [input]
  *   preset = pinball       ; an input file shared between profiles
@@ -74,6 +76,7 @@ typedef struct PwGameDisplay {
     PwGameView view;            /* window by default: a small game fills the TV */
     int show_fps;               /* the graphics backend's frame-rate counter */
     uint32_t refresh;           /* Hz an OpenGL game asks the display for: 60 or 120 */
+    int opengl_thread;          /* OpenGL calls run on Mesa's glthread worker */
 } PwGameDisplay;
 
 typedef struct PwGameProfile {

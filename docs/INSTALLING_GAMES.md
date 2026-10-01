@@ -129,7 +129,9 @@ game even if Lutris requested a native `opengl32` override, and requires an
 SDK-linked title. `display` also takes `view`, and
 `show_fps: false` hides the frame-rate counter a game shows in the top-left
 corner by default. `refresh: 120` lets an OpenGL game present at 120 Hz on a
-display that supports it (the default is 60).
+display that supports it (the default is 60). `opengl_thread: true` runs an
+OpenGL game's graphics work on its own CPU core, beside the game, which helps
+busy scenes in games such as Half-Life and Counter-Strike (off by default).
 
 The profile's `[application]` section comes from the script's `game` section:
 the executable, its arguments and its working folder.

@@ -705,7 +705,7 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
-    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 6 };
+    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 7 };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -803,6 +803,10 @@ int main(int argc, char **argv)
          * param.json; a display without 120 Hz keeps presenting at 60. */
         if (game->app.graphics == PW_APP_GRAPHICS_OPENGL && game->display.refresh == 120)
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_GL_REFRESH", "120" };
+        /* [display] opengl_thread: Mesa's glthread runs the game's OpenGL
+         * calls on a worker thread, so the driver's work overlaps the game's. */
+        if (game->app.graphics == PW_APP_GRAPHICS_OPENGL && game->display.opengl_thread)
+            extra[config.extra_env_count++] = (PwWineStartEnv){ "PS5_GLTHREAD", "1" };
         /* xinput mode: SDL2 games (Half-Life) look for controllers through
          * raw input first, which Wine on the PS5 has none of, and then skip
          * XInput; this hint makes them read controller 0 through XInput. */
@@ -813,10 +817,11 @@ int main(int argc, char **argv)
             extra[0].value = game->winedebug;
             PS5LOG_LOG("PW_WINE64 winedebug=%s", game->winedebug);
         }
-        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s show_fps=%d refresh=%u input=%s "
+        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s show_fps=%d refresh=%u gl_thread=%d input=%s "
                    "preset=%s mode=%s mouse=%d dll_overrides=%s", game->app.id, prefix,
                    desktop[0] ? desktop : "default",
-                   scaling, view, game->display.show_fps, (unsigned)game->display.refresh, pw_result_name(input_status),
+                   scaling, view, game->display.show_fps, (unsigned)game->display.refresh,
+                   game->display.opengl_thread, pw_result_name(input_status),
                    game->input.preset[0] ? game->input.preset : "-",
                    game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse,
                    effective_dll_overrides[0] ? effective_dll_overrides : "-");

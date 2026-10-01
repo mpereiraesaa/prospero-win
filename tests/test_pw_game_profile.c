@@ -61,6 +61,11 @@ static void test_profile(void)
     assert(parse(APP "[display]\nshow_fps = false\n", &p) == PW_OK && p.display.refresh == 60);
     assert(parse(APP "[display]\nrefresh = 120\n", &p) == PW_OK && p.display.refresh == 120);
     assert(parse(APP "[display]\nrefresh = 60\nshow_fps = true\n", &p) == PW_OK && p.display.refresh == 60);
+    /* opengl_thread: off unless the profile asks for it */
+    assert(parse(APP "[display]\nshow_fps = false\n", &p) == PW_OK && p.display.opengl_thread == 0);
+    assert(parse(APP "[display]\nopengl_thread = true\n", &p) == PW_OK && p.display.opengl_thread == 1);
+    assert(parse(APP "[display]\nopengl_thread = false\nrefresh = 120\n", &p) == PW_OK &&
+           p.display.opengl_thread == 0 && p.display.refresh == 120);
     assert(parse(APP "[display]\nview = Window\n", &p) == PW_OK && p.display.view == PW_GAME_VIEW_WINDOW);
     assert(parse(APP "[display]\ndesktop = 320x200\n[input]\nmouse = left_stick\n", &p) == PW_OK);
     assert(p.display.width == 320 && p.input.mouse == PW_GAME_STICK_LEFT);
@@ -87,6 +92,8 @@ static void test_refusals(void)
         APP "[display]\nrefresh = 90\n",                      /* 60 or 120 only */
         APP "[display]\nrefresh =\n",
         APP "[display]\nrefresh = 120\nrefresh = 60\n",         /* twice */
+        APP "[display]\nopengl_thread = yes\n",                /* true or false only */
+        APP "[display]\nopengl_thread = true\nopengl_thread = false\n", /* twice */
         APP "[debug]\nwinedebug = +seh\n[debug]\n",            /* duplicate section */
         APP "[debug]\nwinedebug =\n",                         /* empty */
         APP "[debug]\nwinedebug = +seh;rm\n",                  /* not a channel list */
