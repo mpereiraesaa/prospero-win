@@ -629,6 +629,14 @@ sampled mode, `delta(sample_cpu_ns) * delta(calls) / delta(samples)` estimates
 the total; it is not an exact time. Repeat workloads and report sample counts
 and uncertainty; a short run with few samples cannot certify a speedup.
 
+Each thread also reports `clock_read_ns`, the startup median of 32
+back-to-back clock intervals. It estimates the clock-read cost included in
+each measured interval. A corrected estimate subtracts
+`delta(samples) * clock_read_ns` from `delta(sample_cpu_ns)` before scaling.
+Report both raw and corrected results; calibration is approximate, can vary
+under load, and a nonpositive corrected interval is unusable. It does not
+remove the CPU overhead of instrumentation from the running game.
+
 This clock excludes compilation, cache reset, dispatcher work and time when
 the thread is descheduled. It includes generated entry/exit code and the FP
 invocation wrapper, plus any signal-handler CPU work interrupting an invocation.
