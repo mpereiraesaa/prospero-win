@@ -148,6 +148,37 @@ def main() -> int:
                      "[display]", "desktop = 1920x1080", "scaling = fit", "show_fps = true", "[input]", "preset = mouse"):
             assert line in profile.splitlines(), (line, profile)
 
+        # A PS5 backend choice overrides Lutris's DXVK setting for this game.
+        opengl_script = root / "opengl.yml"
+        opengl_script.write_text(SCRIPT.replace("  display:", "  graphics: opengl\n  display:", 1)
+                                 .replace("overrides: {ddraw.dll: n}",
+                                          "overrides: {ddraw.dll: n, opengl32.dll: n}"))
+        assert pw_install.main([str(opengl_script), "--library", str(library), "--wine", str(wine),
+                                "--slug", "opengl-game", "--file", f"setup={setup}"]) == 0
+        opengl_prefix = library / "prefixes" / "opengl-game"
+        opengl_profile = (library / "profiles" / "opengl-game.profile").read_text()
+        assert "graphics = opengl" in opengl_profile.splitlines()
+        assert "d3d8=n" not in opengl_profile
+        assert "opengl32=b" in opengl_profile
+        assert "opengl32=n" not in opengl_profile
+        assert not (opengl_prefix / "drive_c/windows/syswow64/d3d8.dll").exists()
+        assert '"d3d8"="native"' not in (opengl_prefix / "user.reg").read_text()
+
+        dxvk_script = root / "forced-dxvk.yml"
+        dxvk_script.write_text(SCRIPT.replace("  display:", "  graphics: dxvk\n  display:", 1)
+                               .replace("dxvk: true", "dxvk: false"))
+        assert pw_install.main([str(dxvk_script), "--library", str(library), "--wine", str(wine),
+                                "--slug", "forced-dxvk", "--file", f"setup={setup}"]) == 0
+        forced_prefix = library / "prefixes" / "forced-dxvk"
+        assert "graphics = dxvk" in (library / "profiles" / "forced-dxvk.profile").read_text()
+        assert (forced_prefix / "drive_c/windows/syswow64/d3d8.dll").read_bytes() == b"x32/d3d8"
+
+        invalid_script = root / "invalid-graphics.yml"
+        invalid_script.write_text(SCRIPT.replace("  display:", "  graphics: metal\n  display:", 1))
+        assert pw_install.main([str(invalid_script), "--library", str(library), "--wine", str(wine),
+                                "--slug", "invalid-graphics", "--file", f"setup={setup}"]) == 1
+        assert not (library / "prefixes" / "invalid-graphics").exists()
+
         # An installed game is never overwritten.
         assert pw_install.main(common + ["--file", f"setup={setup}"]) == 1
 

@@ -93,9 +93,10 @@ things differ from Lutris:
 - **Direct3D goes through DXVK.** `wine: {dxvk: true}` installs DXVK 2.6.2
   into the prefix. Games that use OpenGL instead (`-opengl` and the like) can
   select the experimental PS5 WGL backend when Wine was built with the PS5
-  OpenGL SDK and the game's profile sets `graphics = opengl` (see the [OpenGL
-  build notes](WINE_PS5_BUILD.md#opengl)). Legacy fixed-function game
-  compatibility is not yet verified.
+  OpenGL SDK.
+  Set `prospero: {graphics: opengl}` in the installer; this choice skips DXVK
+  installation even if the Lutris `wine` section has `dxvk: true` (see the
+  [OpenGL build notes](WINE_PS5_BUILD.md#opengl)).
 - **32-bit games** (`arch: win32`) still get a 64-bit prefix. The PS5's Wine
   is WoW64 only, and it runs 32-bit programs inside a 64-bit prefix.
 - **Installers that show a web page** (a license, for example) need
@@ -117,12 +118,17 @@ settings in a `prospero` block. They become the profile's `[display]` and
 ```yaml
 prospero:
   name: Warcraft III          # the name in the launcher
+  graphics: dxvk              # gdi, dxvk, opengl, or auto for this game
   display: {desktop: 1920x1080, scaling: fit}
   input: {preset: warcraft3}
 ```
 
-`display` also takes `view`, and `show_fps: false` to hide the frame-rate
-counter a game shows in the top-left corner by default.
+`graphics` takes precedence over Lutris's `wine.dxvk` setting. `dxvk` installs
+the pinned DXVK release; `opengl` selects Wine's builtin OpenGL driver for the
+game even if Lutris requested a native `opengl32` override, and requires an
+SDK-linked title. `display` also takes `view`, and
+`show_fps: false` hides the frame-rate counter a game shows in the top-left
+corner by default.
 
 The profile's `[application]` section comes from the script's `game` section:
 the executable, its arguments and its working folder.

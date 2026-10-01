@@ -398,8 +398,16 @@ class Installer:
         self.variables[f"INPUT_{body['id']}"] = self.variables["INPUT"] = str(choice)
 
     # --- DXVK and the profile ------------------------------------------------
+    def graphics_mode(self) -> str:
+        prospero = self.document.get("prospero") or self.script.get("prospero") or {}
+        mode = prospero.get("graphics", "dxvk" if self.dxvk else "gdi")
+        if mode not in ("auto", "gdi", "dxvk", "opengl"):
+            raise InstallError(f"prospero.graphics: unsupported backend {mode!r}")
+        return mode
+
     def install_dxvk(self) -> list[str]:
-        if not self.dxvk:
+        mode = self.graphics_mode()
+        if mode != "dxvk" and not (mode == "auto" and self.dxvk):
             return []
         if self.dxvk_version not in DXVK_RELEASES:
             raise InstallError(f"dxvk_version {self.dxvk_version} is not pinned (known: {sorted(DXVK_RELEASES)})")
@@ -437,6 +445,8 @@ class Installer:
         name = prospero.get("name") or self.document.get("name") or self.slug
         overrides = {dll: "n" for dll in dxvk_dlls}
         overrides.update(self.overrides)
+        if self.graphics_mode() == "opengl":
+            overrides["opengl32"] = "b"
         by_mode: dict[str, list[str]] = {}
         for dll, mode in overrides.items():
             by_mode.setdefault(mode, []).append(dll)
@@ -449,7 +459,7 @@ class Installer:
         if by_mode:
             lines.append("dll_overrides = " + ";".join(f"{','.join(dlls)}={mode}" for mode, dlls in by_mode.items()))
         lines += [f"prefix = {self.slug}", "runtime = wine-wow64", f"architecture = {pe_architecture(exe)}",
-                  f"graphics = {'dxvk' if dxvk_dlls else prospero.get('graphics', 'gdi')}"]
+                  f"graphics = {self.graphics_mode()}"]
         for section, keys in (("display", PROSPERO_DISPLAY), ("input", PROSPERO_INPUT)):
             values = [(key, prospero[section][key]) for key in keys if key in (prospero.get(section) or {})]
             unknown = set(prospero.get(section) or {}) - set(keys)
@@ -463,6 +473,7 @@ class Installer:
 
     # --- the whole install -----------------------------------------------------
     def install(self) -> Path:
+        self.graphics_mode()  # Reject an invalid backend before creating a prefix.
         if self.gamedir.exists():
             raise InstallError(f"{self.gamedir} exists: remove it to reinstall {self.slug}")
         self.resolve_files()
