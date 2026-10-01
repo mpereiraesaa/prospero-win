@@ -107,8 +107,12 @@ rm -rf -- "$build" "$dist"
 mkdir -p "$build/obj" "$build/import-stubs" "$dist/sce_sys" "$dist/sce_module"
 
 cc=(env PS5_PAYLOAD_SDK="$sdk" sh "$foundation/tooling/prospero-clang18")
-build_id=$(git -C "$root" rev-parse HEAD)
-git -C "$root" diff --quiet || build_id="$build_id-dirty"
+# A source archive has no Git metadata; its builds report "unknown".
+if build_id=$(git -C "$root" rev-parse HEAD 2>/dev/null); then
+    git -C "$root" diff --quiet || build_id="$build_id-dirty"
+else
+    build_id=unknown
+fi
 common=(-DPW_BUILD_ID=\""$build_id"\" -O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -I"$root/include" -I"$root/src" -I"$root/native"
         -I"$root/native/ps5log"

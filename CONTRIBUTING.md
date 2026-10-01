@@ -32,7 +32,7 @@ larger feature into dependent PRs rather than mixing unrelated changes.
 
 ## Choose where to contribute
 
-- **Game testing:** use the game report issue form. See [telemetry setup](docs/TELEMETRY.md) for the current live log collection process. Saved player reports are not available in the current runtime.
+- **Game testing:** use the game report issue form. Attach the run's saved log from `/data/prospero-win/logs` on the console ([how to get it](docs/GETTING_STARTED.md#getting-a-log)), or a live log; [telemetry](docs/TELEMETRY.md) describes the records.
   Review logs before attaching them to an issue. Do not commit raw logs.
 - **Profiles, controller presets, recipes:** send changes to
   [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles).

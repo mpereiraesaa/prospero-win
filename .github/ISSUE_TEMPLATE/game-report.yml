@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        You do not need a compiler or SDK to report a game. Tell us what you played and where testing stopped. Attach a reviewed live log, if available, by dragging it into the attachment field. See docs/GETTING_STARTED.md for the current PC log listener setup. Do not upload game files, keys or a whole Wine prefix.
+        You do not need a compiler or SDK to report a game. Tell us what you played and where testing stopped. Attach a reviewed log by dragging it into the attachment field: the console saves one per run in /data/prospero-win/logs (see "Getting a log" in docs/GETTING_STARTED.md), or use a live log from your PC. Do not upload game files, keys or a whole Wine prefix.
   - type: input
     id: game
     attributes:

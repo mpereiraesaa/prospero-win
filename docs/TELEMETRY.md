@@ -1,8 +1,8 @@
 # Telemetry contract
 
 The title emits structured `ps5log/1` records over TCP, configured by the
-private `dev.conf` the build copies into the package. Console filesystem and
-USB logging are not evidence paths. Telemetry is part of the ownership
+private `dev.conf` the build copies into the package, and saves the same
+records on the console (see [Saved sessions](#saved-sessions)). Telemetry is part of the ownership
 contract: it identifies the run, records progress and classifies how it
 ended, without depending on a screenshot. Wine's own debug channels
 (`WINEDEBUG`) reach the same stream through ntdll's output sink (patch 0560),
@@ -34,8 +34,30 @@ Every record the title writes starts with `PW_WINE64`:
 | `wowprospero timing` (from `WINESERVER`) | only when `/data/prospero-win/pw_wow_timing` exists: every 5 to 10 seconds, each busy guest thread's split between translated code (`run`), Unix calls (`unix`) and system calls (`sys`), and the Unix calls that took over a millisecond, which are waits (see the [debugging guide](DEBUGGING_GUIDE.md#8-when-a-game-is-slow-time-it-first)) |
 | `close requested` / `close timeout` | Options+Create (or the unattended deadline) sent Alt+F4; the game did not close in time |
 | `rumble` | an XInput game's motor levels and the pad's result |
-| `fault` | a fault before Wine's handlers: signal, address, RIP and the ntdll segment |
+| `fault` | a fault before Wine's handlers, in hex: signal, address, RIP, and the ntdll segment holding RIP with the offset in it (`ntdll_segment=`, `offset=`, when RIP is inside ntdll). Written from the signal handler to the saved session and the live stream, as a raw line |
+| `marker by=player` | the player pressed Create in a game (without Options), to mark a moment worth looking at in the log |
+| `session_end` | the run's last record: why the session ended (`wine-exit`, `launcher`, a failed restart) |
 | `exit` / `done` | Wine ended the process; the start sequence's final status and stage |
+
+## Saved sessions
+
+The title also writes every record to `<library root>/logs/session-N.log`
+(`/data/prospero-win/logs` when the `/data` grant succeeds). Each launcher or
+game run is a session; the eight newest are kept, and `next.txt` holds the
+number the next session takes. A file starts with
+`PW_REPORT/1 build=<commit> profile=<game or launcher> cycle=<n> pid=<pid> time=<epoch>`
+and then has one line per record, `REC seq=<n> t=<monotonic seconds> <record>`.
+A session keeps two chunks of at most a megabyte: when the current one is
+full, it becomes `session-N.previous.log` (replacing the older chunk) and a new
+one starts with the same `PW_REPORT/1` line. The title writes buffered records
+every 100 ms and before every restart, so a crash loses at most that much.
+
+Records longer than a `ps5log` record (1024 bytes) are cut and end in
+`[truncated]`, in both the saved file and the live stream.
+
+When the live channel drops, a background thread reconnects every five
+seconds; the title's own loop never waits for the network. Records made
+during a reconnect are saved but not sent.
 
 ## Acceptance rules
 

@@ -652,11 +652,23 @@ static void run_launcher(void)
 /* Until Wine installs its own handlers, a fault inside ntdll would end the
  * process silently; report where it happened relative to ntdll's segments.
  * RIP is read at the measured ucontext offset (224). */
+static PwWineStart *fault_start;
+
 static void early_fault(int sig, siginfo_t *info, void *opaque)
 {
-    uint64_t rip = 0;
+    uint64_t rip = 0, offset = 0;
+    int segment = -1;
+
     memcpy(&rip, (const uint8_t *)opaque + 224, sizeof(rip));
-    pw_diagnostics_emergency(sig, (uintptr_t)(info ? info->si_addr : NULL), rip);
+    for (uint32_t i = 0; fault_start && i < fault_start->segment_count; i++) {
+        uint64_t base = (uint64_t)(uintptr_t)fault_start->segments[i].address;
+        if (rip >= base && rip < base + fault_start->segments[i].size) {
+            segment = (int)i;
+            offset = rip - base;
+            break;
+        }
+    }
+    pw_diagnostics_emergency(sig, (uintptr_t)(info ? info->si_addr : NULL), rip, segment, offset);
     _exit(3);
 }
 
@@ -664,7 +676,7 @@ static void install_early_fault_report(PwWineStart *start)
 {
     struct sigaction action;
 
-    (void)start;
+    fault_start = start;
     memset(&action, 0, sizeof(action));
     action.sa_sigaction = early_fault;
     action.sa_flags = SA_SIGINFO;

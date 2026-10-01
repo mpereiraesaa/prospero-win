@@ -101,7 +101,22 @@ Saves and settings stay in the game's prefix on the PS5.
 
 ### Getting a log
 
-The app sends its log over the network to your PC as plain text lines. Put a
+The app saves a log of each run on the console, so you don't need anything
+running on your PC. The launcher's status line says whether saving works, and
+pressing Options there shows where the files are. Copy them with any FTP client
+from `/data/prospero-win/logs/`:
+
+- `session-0.log` to `session-7.log` are the last eight runs (launcher and
+  games each count as a run). `next.txt` holds the number of the next one, so
+  the newest is the one just before it.
+- A long run keeps its newest megabyte in `session-N.log` and the megabyte
+  before that in `session-N.previous.log`; older lines are dropped.
+
+Each file starts with a `PW_REPORT/1` line naming the build, the game and the
+run, so you can tell which file belongs to which game.
+
+You can also watch the log live on your PC. The app sends it over the network
+as plain text lines. Put a
 `dev.conf` in `/data/homebrew/` on the PS5 (or next to the app's `eboot.bin`;
 the repository has [`dev.conf.example`](../dev.conf.example)) with your PC's
 address:
@@ -118,7 +133,9 @@ Then, on the PC, before starting the app:
 nc -lk 9300 > prospero-win.log
 ```
 
-Each game run appears as one session, from `HELLO` to `BYE`.
+Each game run appears as one session, from `HELLO` to `BYE`. When the PC
+isn't listening, the app keeps saving on the console and reconnects in the
+background every five seconds, without pausing the game.
 [Telemetry](TELEMETRY.md) lists what the records mean. To see Wine's own
 messages for one game, add a `[debug]` section to its profile, for example
 `winedebug = err+all,+loaddll`.
