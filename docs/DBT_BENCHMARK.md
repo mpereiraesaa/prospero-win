@@ -580,3 +580,12 @@ normal output sink, and a timer installation failure disables sampling with
 a diagnostic. The pinned SDK exports `setitimer`, but console signal delivery
 is not yet validated; do not treat a console report with zero samples as a
 performance result.
+
+`wowprospero native` supplements translated-block records with a bounded,
+atomic process-wide histogram of PCs sampled outside translated arenas.
+These counts are cumulative, and `native_summary` reports overflow. Linux
+reports the current module/symbol when `dladdr` resolves the address; console
+addresses can be resolved against the exact linked ELF. Module attribution
+may change after an unload, so retain exact artifacts and loader records.
+No raw guest code is dumped. Use these records to distinguish translation
+or cache-reset work from execution of translated instructions.

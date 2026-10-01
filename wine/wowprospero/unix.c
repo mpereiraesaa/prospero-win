@@ -523,6 +523,35 @@ static void segv_handler( int signal, siginfo_t *info, void *context )
 static const char *profile_path;
 static uint64_t profile_ticks, profile_unattributed;
 #include <sys/time.h>
+#ifndef __PROSPERO__
+#include <dlfcn.h>
+#endif
+/* Native PCs are process-wide and cumulative. Keys never move or disappear;
+ * atomic publication/counts allow signals on different threads to sample
+ * without a lock, TLS, or access to another thread's cache. */
+enum { PROFILE_NATIVE_SLOTS = 4096 };
+static struct profile_native { uintptr_t pc; uint64_t samples; } profile_native[PROFILE_NATIVE_SLOTS];
+static uint64_t profile_native_overflow, profile_native_last_dump;
+static void profile_native_sample(uintptr_t pc)
+{
+    unsigned bucket = (unsigned)((pc >> 4) * 2654435761u) & (PROFILE_NATIVE_SLOTS - 1);
+    if(!pc) return;
+    for(unsigned i = 0; i < PROFILE_NATIVE_SLOTS; i++) {
+        uintptr_t key = __atomic_load_n(&profile_native[bucket].pc, __ATOMIC_ACQUIRE);
+        if(!key) {
+            uintptr_t empty = 0;
+            if(__atomic_compare_exchange_n(&profile_native[bucket].pc, &empty, pc, 0,
+                                           __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) key = pc;
+            else key = empty;
+        }
+        if(key == pc) {
+            __atomic_fetch_add(&profile_native[bucket].samples, 1, __ATOMIC_RELAXED);
+            return;
+        }
+        bucket = (bucket + 1) & (PROFILE_NATIVE_SLOTS - 1);
+    }
+    __atomic_fetch_add(&profile_native_overflow, 1, __ATOMIC_RELAXED);
+}
 static void profile_handler(int signal, siginfo_t *info, void *context)
 {
     const uintptr_t rip = *context_rip(context);
@@ -543,6 +572,7 @@ static void profile_handler(int signal, siginfo_t *info, void *context)
         }
     }
     __atomic_fetch_add(&profile_unattributed, 1, __ATOMIC_RELAXED);
+    profile_native_sample(rip);
 }
 
 static void profile_start(void)
@@ -587,6 +617,45 @@ static int compare_hotspots(const void *a, const void *b)
 {
     const PwX86Hotspot *x = a, *y = b;
     return x->samples < y->samples ? 1 : x->samples > y->samples ? -1 : 0;
+}
+
+static int compare_native_samples(const void *a, const void *b)
+{
+    const struct profile_native *x = a, *y = b;
+    return x->samples < y->samples ? 1 : x->samples > y->samples ? -1 : 0;
+}
+
+static void profile_native_dump(uint64_t now, FILE *out)
+{
+    uint64_t last = __atomic_load_n(&profile_native_last_dump, __ATOMIC_RELAXED);
+    struct profile_native *rows;
+    if(now - last < 5000 || !__atomic_compare_exchange_n(&profile_native_last_dump, &last, now, 0,
+                                                         __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
+    rows = malloc(sizeof(profile_native));
+    if(!rows) return;
+    for(unsigned i = 0; i < PROFILE_NATIVE_SLOTS; i++) {
+        rows[i].pc = __atomic_load_n(&profile_native[i].pc, __ATOMIC_ACQUIRE);
+        rows[i].samples = __atomic_load_n(&profile_native[i].samples, __ATOMIC_RELAXED);
+    }
+    qsort(rows, PROFILE_NATIVE_SLOTS, sizeof(*rows), compare_native_samples);
+    fprintf(out, "wowprospero native_summary: cumulative=1 overflow=%llu\n",
+            (unsigned long long)__atomic_load_n(&profile_native_overflow, __ATOMIC_RELAXED));
+    for(unsigned i = 0; i < 12 && rows[i].samples; i++) {
+        const char *module = "?", *symbol = "?";
+        uintptr_t offset = rows[i].pc;
+#ifndef __PROSPERO__
+        Dl_info info;
+        if(dladdr((void *)rows[i].pc, &info)) {
+            if(info.dli_fname) module = info.dli_fname;
+            if(info.dli_sname) symbol = info.dli_sname;
+            offset -= (uintptr_t)(info.dli_saddr ? info.dli_saddr : info.dli_fbase);
+        }
+#endif
+        fprintf(out, "wowprospero native: pc=%#lx samples=%llu module=%s symbol=%s offset=%#lx\n",
+                (unsigned long)rows[i].pc, (unsigned long long)rows[i].samples,
+                module, symbol, (unsigned long)offset);
+    }
+    free(rows);
 }
 
 static void profile_maybe_dump(void)
@@ -646,6 +715,7 @@ static void profile_maybe_dump(void)
                 tid, row->guest_pc, (unsigned long long)row->samples, (unsigned long long)row->entry,
                 (unsigned long long)row->body, (unsigned long long)row->exit, (unsigned long long)row->emitted);
     }
+    profile_native_dump(ms, out);
     if(out != stderr) fclose(out);
     free(snapshot);
 }
