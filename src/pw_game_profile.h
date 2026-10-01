@@ -11,6 +11,8 @@
  *   view = window          ; window: show the game's windows; desktop: all of it
  *   show_fps = true        ; a frame-rate counter in the top left (default: true):
  *                          ; DXVK's HUD, or Mesa's for graphics = opengl
+ *   refresh = 120          ; output refresh rate for graphics = opengl: 60 or 120
+ *                          ; (default 60); a display without 120 Hz stays at 60
  *
  *   [input]
  *   preset = pinball       ; an input file shared between profiles
@@ -69,6 +71,7 @@ typedef struct PwGameDisplay {
     PwGameScaling scaling;
     PwGameView view;            /* window by default: a small game fills the TV */
     int show_fps;               /* the graphics backend's frame-rate counter */
+    uint32_t refresh;           /* Hz an OpenGL game asks the display for: 60 or 120 */
 } PwGameDisplay;
 
 typedef struct PwGameProfile {

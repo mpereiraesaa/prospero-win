@@ -191,6 +191,14 @@ static int display_field(PwGameDisplay *display, uint32_t *seen, const uint8_t *
         *seen |= 8u;
         return PW_OK;
     }
+    if (is(key, key_length, "refresh")) {
+        if (*seen & 16u) return PW_ERR_MALFORMED;
+        if (is(v, n, "60")) display->refresh = 60;
+        else if (is(v, n, "120")) display->refresh = 120;
+        else return PW_ERR_UNSUPPORTED;
+        *seen |= 16u;
+        return PW_OK;
+    }
     return PW_ERR_UNSUPPORTED;
 }
 
@@ -310,6 +318,7 @@ int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *pr
     pw_game_input_init(&parsed.input);
     parsed.input.mouse_speed = 0;       /* unset until a line sets it */
     parsed.display.show_fps = 1;        /* on unless the profile says false */
+    parsed.display.refresh = 60;
     if ((status = parse_sections(bytes, length, &parsed, NULL, &application_end)) != PW_OK)
         return status;
     if ((status = pw_app_profile_parse(bytes, application_end, &parsed.app)) != PW_OK)

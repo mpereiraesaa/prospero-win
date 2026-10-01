@@ -57,6 +57,10 @@ static void test_profile(void)
     assert(parse(APP "[display]\nshow_fps = true\n", &p) == PW_OK && p.display.show_fps == 1);
     assert(parse(APP "[display]\nshow_fps = True\nview = desktop\n", &p) == PW_OK && p.display.show_fps == 1);
     assert(parse(APP "[display]\nshow_fps = false\n", &p) == PW_OK && p.display.show_fps == 0);
+    /* refresh: 60 unless the profile asks for 120 */
+    assert(parse(APP "[display]\nshow_fps = false\n", &p) == PW_OK && p.display.refresh == 60);
+    assert(parse(APP "[display]\nrefresh = 120\n", &p) == PW_OK && p.display.refresh == 120);
+    assert(parse(APP "[display]\nrefresh = 60\nshow_fps = true\n", &p) == PW_OK && p.display.refresh == 60);
     assert(parse(APP "[display]\nview = Window\n", &p) == PW_OK && p.display.view == PW_GAME_VIEW_WINDOW);
     assert(parse(APP "[display]\ndesktop = 320x200\n[input]\nmouse = left_stick\n", &p) == PW_OK);
     assert(p.display.width == 320 && p.input.mouse == PW_GAME_STICK_LEFT);
@@ -80,6 +84,9 @@ static void test_refusals(void)
         APP "[display]\nshow_fps = yes\n",                     /* only true or false */
         APP "[display]\nshow_fps =\n",
         APP "[display]\nshow_fps = true\nshow_fps = false\n",   /* twice */
+        APP "[display]\nrefresh = 90\n",                      /* 60 or 120 only */
+        APP "[display]\nrefresh =\n",
+        APP "[display]\nrefresh = 120\nrefresh = 60\n",         /* twice */
         APP "[debug]\nwinedebug = +seh\n[debug]\n",            /* duplicate section */
         APP "[debug]\nwinedebug =\n",                         /* empty */
         APP "[debug]\nwinedebug = +seh;rm\n",                  /* not a channel list */

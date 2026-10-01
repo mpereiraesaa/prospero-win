@@ -128,7 +128,8 @@ the pinned DXVK release; `opengl` selects Wine's builtin OpenGL driver for the
 game even if Lutris requested a native `opengl32` override, and requires an
 SDK-linked title. `display` also takes `view`, and
 `show_fps: false` hides the frame-rate counter a game shows in the top-left
-corner by default.
+corner by default. `refresh: 120` lets an OpenGL game present at 120 Hz on a
+display that supports it (the default is 60).
 
 The profile's `[application]` section comes from the script's `game` section:
 the executable, its arguments and its working folder.

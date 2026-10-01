@@ -714,6 +714,12 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     HUD in the compatibility SDK candidate from PR #2. The published SDK
     0.6.0 does not include that HUD. It's on by default; `show_fps = false`
     turns it off;
+  - `[display] refresh = 120` asks the display for 120 Hz when the game uses
+    `graphics = opengl` (Wine patch 0722). It needs an OpenGL SDK built with
+    runtime display modes (`PS5_DYNAMIC_SCANOUT=1`); the title declares the
+    capability in `sce_sys/param.json` (`attribute3` bits `0x80040`), without
+    which the console refuses it. A display without 120 Hz keeps presenting
+    at 60. The default is 60;
   - `[input]` binds each DualSense button to a key or a mouse button, and a
     stick moves the pointer. `preset = <name>` shares a mapping from
     `<root>/input/<name>.input`.
