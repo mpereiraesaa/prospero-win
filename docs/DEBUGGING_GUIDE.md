@@ -17,6 +17,7 @@ symptom with a surprising cause, add it: a line in
 5. Keep console runs short, unattended and self-restoring.
 6. Change one thing at a time.
 7. Write down what was measured.
+8. When a game is slow, find out where its time goes before changing anything.
 
 ## 1. Reproduce on the PC first
 
@@ -164,12 +165,59 @@ Four good launches once looked like a fix and weren't.
 
 "The PS5 can't do X" is a claim to measure before you write it down.
 
+## 8. When a game is slow, time it first
+
+A game that runs well on the PC but slowly on the PS5 can be slow in three
+places: in its own code (run by the translator), in a host library it calls
+through Wine (OpenGL, Vulkan, audio), or in Wine itself. The translator can
+tell you which, without a profiler and at almost no cost.
+
+- **On the PC,** set `PW_WOW_TIMING=1` for the run.
+- **On the PS5,** where a game gets no environment variables, create an
+  empty file named `pw_wow_timing` in the library folder
+  (`/data/prospero-win/`) before starting the game, and delete it
+  afterwards.
+
+Every 5 to 10 seconds, each thread that calls out to the host often logs a
+line (on the PS5 it reaches ps5log as a `WINESERVER` line):
+
+```
+wowprospero timing: tid=0024 run=16.5% unix=82.0% (310336/s 2.64us) sys=1.4% (1783/s 8.09us) other=0.0% (0) resets=0 flushes=0
+```
+
+- `run` is the share of the thread's wall time spent in translated code and
+  the translator.
+- `unix` is the time spent in Unix calls: graphics and audio libraries,
+  reached through Wine. It's followed by how many calls there were per
+  second and what each cost on average.
+- `sys` is the same for system calls (Wine's server, waits, window
+  management, `SwapBuffers`); a thread that mostly waits shows `sys` near
+  100%.
+- `resets` and `flushes` count how often the translations were discarded
+  (the code cache filled up, or code was unloaded). Both should stay near
+  zero while a game runs.
+
+Compare the same scene on the PC and on the PS5. A game that is slow only
+on the PS5 shows which part grew. Half-Life is an example. On the PC it ran
+at about 75 fps with `run=67% unix=24% (1870000/s 0.13us)`. On the PS5 it
+ran at 12 fps with the line above: the same 25,000 OpenGL calls per frame
+cost 20 times more there. A small test program that times single OpenGL
+calls then showed that the cost of crossing from Wine to the library was
+the same on both; small `glBegin`/`glEnd` draws were the slow part, inside
+the PS5's OpenGL driver.
+
+Avoid sampling profilers based on `SIGPROF` on the PS5. Its threading
+library delays a signal that arrives while a thread holds one of its locks,
+and the delayed sample then lands in libkernel's `getcontext` instead of
+where the thread was.
+
 ## Symptoms we've seen
 
 What each looked like, and what it turned out to be. Newest first.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
+| Half-Life (OpenGL) ran at 12 fps on the PS5 and about 75 fps on the PC; OpenArena reached 60 | `PW_WOW_TIMING`: 82% of the game's main thread in OpenGL calls, 2.64 µs each against 0.13 µs on the PC. Each small `glBegin`/`glEnd` draw costs about 58 µs in the PS5's OpenGL driver against 6 µs on the PC, and Half-Life issues thousands per frame | Open in the OpenGL driver: merge consecutive immediate-mode draws, and don't flush the CPU caches on every draw |
 | Warcraft III's intro started 0.2–32 s late, or never; the app idle; logging or a key press made it go away | Lock starvation in Wine's DirectShow ([#250](https://github.com/mpereiraesaa/prospero-win/issues/250)): `GetState()` held the renderer's lock while polled every 10 ms, and the PS5's ~1 ms thread wake-up always lost the race for it. Code that re-takes a lock right after releasing it can starve waiters here, not on Linux | Patch 0700: renderers wait without the lock (intro 0.19 s late, 6/6) |
 | The stick and USB mouse didn't move the pointer; keys worked. `inputs` grew, nothing refused | win32u (Wine 11) holds a driver's mouse motion until a button or `MOUSEEVENTF_MOVE_NOCOALESCE` sends it; the PS5 driver never sent it. Before, the pointer only seemed to move because the driver answered `GetCursorPos` itself | Wine patch 0670: relative motion, sent with `MOUSEEVENTF_MOVE_NOCOALESCE` |
 | An RTS map didn't scroll at the screen's edges | The app sent absolute positions, and nothing while the pointer was held at an edge; the game's own `SetCursorPos` was overridden | Patch 0670: the app sends motion, Wine keeps the only pointer |

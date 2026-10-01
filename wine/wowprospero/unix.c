@@ -19,6 +19,9 @@
 #if defined(__linux__)
 #include <ucontext.h>
 #endif
+#include <sys/stat.h>
+#include <time.h>
+#include <x86intrin.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -66,6 +69,11 @@ struct pw_thread
     uint64_t readable_queries, readable_hits;
     PwX86CacheEntry *entries;  /* the budget's count (thread_budget.h) */
     void *call_stack;          /* guard, then CALL_STACK bytes, or NULL */
+    /* PW_WOW_TIMING: TSC cycles spent inside run(), and outside it by the
+     * reason the previous run returned for, since t_window. */
+    uint64_t t_mark, t_window, t_inside, t_unix, t_sys, t_other;
+    uint64_t wall_window;
+    uint32_t n_unix, n_sys, n_other, n_resets, n_flushes, last_reason;
 };
 
 C_ASSERT( sizeof(((I386_CONTEXT *)0)->ExtendedRegisters) == PW_GUEST_FXSAVE_BYTES );
@@ -513,7 +521,6 @@ static void segv_handler( int signal, siginfo_t *info, void *context )
  * everything else by module and symbol. A host-only diagnostic. */
 #include <dlfcn.h>
 #include <sys/time.h>
-#include <time.h>
 
 enum { PROFILE_SAMPLES = 1 << 20, PROFILE_THREADS = 64, PROFILE_TOP = 40, PROFILE_DUMP = 12 };
 static uint64_t *profile_rips;
@@ -794,6 +801,88 @@ static NTSTATUS process_init( void *args )
     return STATUS_SUCCESS;
 }
 
+/* PW_WOW_TIMING=1 (in a title, which passes Wine no such variable: the
+ * trigger file below) times every thread with the TSC, without signals.
+ * Every few seconds each thread that crossed to the host often logs how its
+ * wall time split between run() (translated code and the translator) and the
+ * time outside it after a Unix call (OpenGL, Vulkan, audio...) or a system
+ * call, with the rate and mean cost of each, and how often the translations
+ * were discarded. */
+#ifdef __PROSPERO__
+#define PW_WOW_TIMING_TRIGGER "/data/prospero-win/pw_wow_timing"
+#endif
+static int timing_enabled = -1;
+
+static uint64_t timing_now_ns(void)
+{
+    struct timespec now;
+
+    clock_gettime( CLOCK_MONOTONIC, &now );
+    return now.tv_sec * 1000000000ull + now.tv_nsec;
+}
+
+static void timing_init(void)
+{
+    timing_enabled = getenv( "PW_WOW_TIMING" ) != NULL;
+#ifdef PW_WOW_TIMING_TRIGGER
+    {
+        struct stat st;  /* access() is refused to a title */
+
+        if (!stat( PW_WOW_TIMING_TRIGGER, &st )) timing_enabled = 1;
+    }
+#endif
+}
+
+static void timing_report( struct pw_thread *thread, uint64_t tsc )
+{
+    uint64_t wall = timing_now_ns();
+    double cycles = (double)(tsc - thread->t_window);
+    double seconds = (wall - thread->wall_window) / 1e9;
+    double per_us = cycles / seconds / 1e6;
+
+    if (thread->n_unix + thread->n_sys > 1000)
+        fprintf( stderr, "wowprospero timing: tid=%04x run=%.1f%% unix=%.1f%% (%.0f/s %.2fus) "
+                 "sys=%.1f%% (%.0f/s %.2fus) other=%.1f%% (%u) resets=%u flushes=%u\n",
+                 (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+                 100.0 * thread->t_inside / cycles,
+                 100.0 * thread->t_unix / cycles, thread->n_unix / seconds,
+                 thread->n_unix ? thread->t_unix / per_us / thread->n_unix : 0.0,
+                 100.0 * thread->t_sys / cycles, thread->n_sys / seconds,
+                 thread->n_sys ? thread->t_sys / per_us / thread->n_sys : 0.0,
+                 100.0 * thread->t_other / cycles, thread->n_other, thread->n_resets, thread->n_flushes );
+    thread->t_window = tsc;
+    thread->wall_window = wall;
+    thread->t_inside = thread->t_unix = thread->t_sys = thread->t_other = 0;
+    thread->n_unix = thread->n_sys = thread->n_other = thread->n_resets = thread->n_flushes = 0;
+}
+
+/* At run()'s start: the time since the previous run returned. */
+static void timing_enter( struct pw_thread *thread )
+{
+    uint64_t tsc = __rdtsc(), outside = tsc - thread->t_mark;
+
+    if (!thread->t_window)
+    {
+        thread->t_window = tsc;
+        thread->wall_window = timing_now_ns();
+    }
+    else if (thread->last_reason == PW_WOW_UNIXCALL) { thread->t_unix += outside; thread->n_unix++; }
+    else if (thread->last_reason == PW_WOW_SYSCALL) { thread->t_sys += outside; thread->n_sys++; }
+    else { thread->t_other += outside; thread->n_other++; }
+    thread->t_mark = tsc;
+}
+
+/* At run()'s return; a report about every 2^34 cycles (5 to 10 s). */
+static void timing_leave( struct pw_thread *thread, uint32_t reason )
+{
+    uint64_t tsc = __rdtsc();
+
+    thread->t_inside += tsc - thread->t_mark;
+    thread->t_mark = tsc;
+    thread->last_reason = reason;
+    if (tsc - thread->t_window > (1ull << 34)) timing_report( thread, tsc );
+}
+
 static NTSTATUS run( void *args )
 {
     struct pw_wow_run_params *params = args;
@@ -811,9 +900,12 @@ static NTSTATUS run( void *args )
         return STATUS_SUCCESS;
     }
     state = &thread->state;
+    if (timing_enabled < 0) timing_init();
+    if (timing_enabled) timing_enter( thread );
     generation = __atomic_load_n( &code_generation, __ATOMIC_ACQUIRE );
     if (thread->generation != generation)
     {
+        thread->n_flushes++;
         thread->generation = generation;
         pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
         pw_x86_hostexec_reset( &thread->hostexec );
@@ -856,6 +948,7 @@ static NTSTATUS run( void *args )
         }
         if (status == PW_ERR_LIMIT)
         {
+            thread->n_resets++;
             pw_x86_engine_fp_sync( &thread->engine, state );
             pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
             continue;
@@ -873,6 +966,7 @@ static NTSTATUS run( void *args )
     store_state( state, ctx );
     sync_fp_out( thread, ctx );
     profile_maybe_dump();
+    if (timing_enabled) timing_leave( thread, params->reason );
     return STATUS_SUCCESS;
 }
 
