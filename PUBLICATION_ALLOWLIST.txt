@@ -300,3 +300,5 @@ COMPATIBILITY.md
 .github/ISSUE_TEMPLATE/bug-report.yml
 .github/ISSUE_TEMPLATE/config.yml
 .github/PULL_REQUEST_TEMPLATE.md
+tools/check_setup.py
+.github/rulesets/main.json

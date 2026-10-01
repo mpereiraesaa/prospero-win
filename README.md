@@ -74,7 +74,11 @@ takes you back to the launcher. [Architecture](docs/ARCHITECTURE.md) and
 
 ## Building from source
 
+Host contributions need x86_64 Linux, a C compiler, Clang, Make, Python 3
+and PyYAML. No console or SDK is needed for these checks.
+
 ```sh
+python3 tools/check_setup.py
 make -j2 all            # host tests, the publication audit, whitespace
 tools/build_native.sh   # the PS5 app (needs the pinned PS5 payload SDK)
 tools/build_wine_ps5.sh # Wine's PS5 modules

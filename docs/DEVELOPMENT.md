@@ -1,5 +1,58 @@
 # Development workflow
 
+## Host setup
+
+Host checks target x86_64 Linux. Ubuntu 24.04 is a suitable starting point;
+a Linux VM or WSL2 can run host checks. Playing installer windows in WSL2
+also requires working WSLg, and has not been validated as a player setup.
+
+For portable code and documentation:
+
+```sh
+sudo apt-get update
+sudo apt-get install build-essential clang git python3 python3-yaml
+python3 tools/check_setup.py
+make -j2 all
+make -j2 sanitize
+```
+
+The checks build their own synthetic inputs. You do not need Wine, the PS5
+SDK, a game or a console. Some optional Wine cross-checks skip when their
+inputs are absent; `make wine-check` is the strict release check.
+CI performs the host and sanitizer checks on every PR.
+
+For Wine/console development, add:
+
+```sh
+sudo apt-get install bison flex pkg-config gcc-mingw-w64 g++-mingw-w64 \
+    libx11-dev libxext-dev libfreetype-dev libfontconfig-dev libvulkan-dev \
+    libgnutls28-dev libasound2-dev libpulse-dev zlib1g-dev zip unzip
+python3 tools/check_setup.py --wine
+tools/build_wine_runtime.sh --jobs 4
+```
+
+The runtime script obtains the pinned upstream Wine checkout. The native
+builder obtains its pinned payload foundation. The Wine PRX converter
+requires a separate foundation with module exports; use the documented
+`PS5_PRX_FOUNDATION` revision in [Wine build notes](WINE_PS5_BUILD.md#prx-modules).
+Graphics backends also need their own SDK/build inputs. Inspect every
+configure warning: a build without X11/FreeType is not an installer kit.
+
+## A focused review
+
+Use your fork for public contributions. Make a branch for the change and
+open a PR against `main`; [CONTRIBUTING.md](../CONTRIBUTING.md) lists the steps
+and evidence. The maintainer should require the `host-contracts` CI status
+and a review before merging. A repository ruleset is configured separately
+on GitHub; merely checking in a workflow does not enforce it. The reviewed
+configuration is `.github/rulesets/main.json`: one approving review, resolved
+threads, required up-to-date `host-contracts`, and no branch deletion or force
+push. Repository admins can bypass through a PR for solo-maintainer recovery;
+that exception is deliberate and auditable. Apply it through GitHub settings
+or the rulesets API and verify the active result. The current private/free
+repository requires a plan upgrade or public visibility before GitHub allows
+this ruleset.
+
 ## Stable tree
 
 `main` is reviewable, not a scratch area. Portable, host-tested code lives in
