@@ -117,6 +117,49 @@ static void test_guest_error_reporting(void)
     assert(result.reason==PW_WOW_ERROR);
 }
 
+static void test_dispatch_profile(void)
+{
+    const uint8_t loop[]={0x40,0xeb,0xfd};
+    Source source={0x1000,loop,sizeof(loop)};
+    PwVmBackend vm;PwX86Engine engine;PwX86CacheEntry entries[8];
+    PwX86State state={.eip=0x1000};PwX86StepReport step;
+    assert(pw_x86_engine_set_dispatch_profile(NULL,1)==PW_ERR_PRECONDITION);
+    assert(pw_vm_posix_backend(&vm)==PW_OK);
+    assert(pw_x86_engine_init(&engine,&vm,entries,8,16384,1,source_view,&source)==PW_OK);
+    assert(pw_x86_engine_set_chaining(&engine,1)==PW_OK);
+    assert(pw_x86_engine_set_quantum(&engine,1)==PW_OK);
+    assert(pw_x86_engine_set_indirect(&engine,1)==PW_OK);
+    assert(pw_x86_engine_set_counters(&engine,0)==PW_OK);
+    assert(pw_x86_engine_set_global_resident(&engine,0xfb)==PW_OK);
+    assert(pw_x86_engine_set_flat_memory(&engine,0x1000,0x20000)==PW_OK);
+    assert(pw_x86_engine_set_reencode(&engine,1)==PW_OK);
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
+    assert(engine.chain_targets[0x1000].host_code &&
+           engine.chain_targets[0x1000].guest_pc==0x1000);
+    assert(!engine.dispatch_chain_matches && !engine.dispatch_chain_empty &&
+           !engine.dispatch_chain_collisions); /* Default off. */
+    assert(pw_x86_engine_set_dispatch_profile(&engine,1)==PW_OK);
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
+    assert(engine.dispatch_chain_matches==1);
+    /* Real compiled targets sharing low 16 bits replace each other. */
+    source.base=state.eip=0x11000;
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
+    assert(engine.chain_targets[0x1000].guest_pc==0x11000);
+    source.base=state.eip=0x1000;
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && step.cache_hit);
+    assert(engine.dispatch_chain_collisions==2);
+    assert(state.gpr[0]==4); /* Profiling preserves the executed loop. */
+    assert(pw_x86_engine_reset(&engine,2)==PW_OK);
+    state.eip=0x1000;
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
+    assert(engine.dispatch_chain_empty==1 && engine.dispatch_chain_collisions==2 &&
+           engine.dispatch_chain_matches==1); /* Cumulative over reset. */
+    assert(pw_x86_engine_set_dispatch_profile(&engine,0)==PW_OK);
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
+    assert(engine.dispatch_chain_matches==1 && state.gpr[0]==6);
+    assert(pw_x86_engine_destroy(&engine)==PW_OK);
+}
+
 int main(void)
 {
     const uint8_t loop[]={0x40,0xeb,0xfd}; /* inc eax; jmp to block start */
@@ -205,5 +248,6 @@ int main(void)
     test_empty_chain_reset();
     test_guest_error_reporting();
     test_execution_clock_batch();
+    test_dispatch_profile();
     return 0;
 }

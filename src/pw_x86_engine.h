@@ -44,6 +44,10 @@ typedef struct PwX86Engine {
     void *execution_clock_opaque;
     uint64_t execution_ns, execution_calls, execution_samples, execution_clock_errors;
     uint32_t execution_stride, execution_random;
+    /* Optional cumulative chain-table residency at C dispatcher arrival.
+     * These are not counts of dynamic exits or their actual miss reasons. */
+    unsigned dispatch_profile;
+    uint64_t dispatch_chain_matches, dispatch_chain_empty, dispatch_chain_collisions;
     uint64_t protection_calls,protection_bytes;
     uint64_t attempted_links, successful_links;
     uint64_t linked_transitions, dispatcher_transitions;
@@ -121,6 +125,7 @@ int pw_x86_engine_set_lazy_flags(PwX86Engine *, unsigned);
  * and every reset clears. It needs chaining: the lookup spends the chain
  * budget, which is one without it. */
 int pw_x86_engine_set_indirect(PwX86Engine *, unsigned);
+int pw_x86_engine_set_dispatch_profile(PwX86Engine *, unsigned);
 /* Hold the guest GPRs in mask (at most seven) in the same host registers in
  * every block translated from now on (PwX86TranslateOptions.global_resident);
  * 0 returns to the per-block allocator. It needs residency enabled. */

@@ -245,6 +245,12 @@ static uint64_t execution_clock( void *opaque )
 
 static void execution_report( struct pw_thread *thread )
 {
+    if (thread->engine.dispatch_profile)
+        fprintf( stderr, "wowprospero dispatch: tid=%04x cumulative=1 table_matches=%llu table_empty=%llu table_collisions=%llu\n",
+                 (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+                 (unsigned long long)thread->engine.dispatch_chain_matches,
+                 (unsigned long long)thread->engine.dispatch_chain_empty,
+                 (unsigned long long)thread->engine.dispatch_chain_collisions );
     if (!thread->engine.execution_clock) return;
     fprintf( stderr, "wowprospero execution: tid=%04x cumulative=1 sample_cpu_ns=%llu calls=%llu samples=%llu stride=%u clock_batch_read_ns=%llu clock_resolution_ns=%llu clock_errors=%llu\n",
              (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
@@ -389,7 +395,13 @@ static struct pw_thread *get_thread(void)
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
     {
+        int dispatch = getenv( "PW_WOW_DISPATCH_PROFILE" ) != NULL;
         int enabled = getenv( "PW_WOW_EXEC_TIMING" ) != NULL;
+#ifdef PW_WOW_TIMING_TRIGGER
+        struct stat dispatch_st;
+        if (!stat( "/data/prospero-win/pw_wow_dispatch_profile", &dispatch_st )) dispatch = 1;
+#endif
+        pw_x86_engine_set_dispatch_profile( &thread->engine, dispatch );
 #ifdef __PROSPERO__
         struct stat st;
         if (!stat( "/data/prospero-win/pw_wow_exec_timing", &st )) enabled = 1;
@@ -873,13 +885,15 @@ static uint64_t timing_now_ns(void)
 
 static void timing_init(void)
 {
-    timing_enabled = getenv( "PW_WOW_TIMING" ) != NULL || getenv( "PW_WOW_EXEC_TIMING" ) != NULL;
+    timing_enabled = getenv( "PW_WOW_TIMING" ) != NULL || getenv( "PW_WOW_EXEC_TIMING" ) != NULL ||
+                     getenv( "PW_WOW_DISPATCH_PROFILE" ) != NULL;
 #ifdef PW_WOW_TIMING_TRIGGER
     {
         struct stat st;  /* access() is refused to a title */
 
         if (!stat( PW_WOW_TIMING_TRIGGER, &st )) timing_enabled = 1;
         if (!stat( "/data/prospero-win/pw_wow_exec_timing", &st )) timing_enabled = 1;
+        if (!stat( "/data/prospero-win/pw_wow_dispatch_profile", &st )) timing_enabled = 1;
     }
 #endif
 }

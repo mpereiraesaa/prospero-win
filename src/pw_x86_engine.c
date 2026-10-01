@@ -593,6 +593,12 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
 {
     if(!engine || !state || !report || !engine->initialized)return PW_ERR_PRECONDITION;
     memset(report,0,sizeof(*report));report->guest_pc=state->eip;
+    if(engine->dispatch_profile && engine->chain_targets) {
+        const PwX86IndirectTarget *target=&engine->chain_targets[state->eip & 0xffffu];
+        if(!target->host_code) engine->dispatch_chain_empty++;
+        else if(target->guest_pc==state->eip) engine->dispatch_chain_matches++;
+        else engine->dispatch_chain_collisions++;
+    }
 
     /* Dynamic unlinked chain resolution: if previous step exited via an unlinked slot, link it now */
     if(engine->chaining_enabled && state->last_exit_slot) {
@@ -775,6 +781,13 @@ int pw_x86_execution_clock_batch(PwX86ExecutionClock clock, void *opaque, uint64
     }
     *mean_ns=means[4];
     return PW_OK; /* A valid fast/quantized clock can have a zero batch mean. */
+}
+
+int pw_x86_engine_set_dispatch_profile(PwX86Engine *engine, unsigned enabled)
+{
+    if(!engine || !engine->initialized)return PW_ERR_PRECONDITION;
+    engine->dispatch_profile=!!enabled;
+    return PW_OK;
 }
 
 int pw_x86_engine_set_execution_clock(PwX86Engine *engine, PwX86ExecutionClock clock, void *opaque, uint32_t stride)

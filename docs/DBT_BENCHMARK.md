@@ -805,3 +805,23 @@ DLL/config were restored after each run. This is exit after an assertion
 acknowledgement, not unattended clean shutdown; the assertion's cause and
 console startup/shutdown validation remain outstanding. Normal/sanitizer
 test suites and all three differential modes pass (zero mismatches).
+
+### Dispatcher chain-table residency
+
+`PW_WOW_DISPATCH_PROFILE=1` enables cumulative counts of the re-encoded
+chain table's state when a PC arrives at the C dispatcher. On PS5, create
+`/data/prospero-win/pw_wow_dispatch_profile` before starting the game.
+`wowprospero dispatch` reports `table_matches`, `table_empty` and
+`table_collisions`; the last means the indexed slot holds another guest PC.
+Counts persist across cache resets, and collection defaults off. The flag
+also enables periodic timing reports without requiring an execution CPU clock.
+
+This distinguishes repeated dispatcher arrivals whose target is resident
+from arrivals that encounter an absent or colliding target. It does not
+instrument generated exits and does not count exact indirect lookup misses:
+arrivals also follow native calls, safepoints and emitted blocks. A collision
+at arrival is evidence of table aliasing, not proof that a collision caused
+that return. Compare these counts with the FP-wrapper/native samples before
+changing the chain table hash or size. Tests execute two compiled PCs sharing
+the low 16 bits, verify replacement and cache-hit execution, and check reset
+and disabled collection. Console reports remain unvalidated.
