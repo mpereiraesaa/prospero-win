@@ -229,6 +229,11 @@ static inline void copy_fxsave( void *dst, const void *src )
         _mm_storeu_si128( d + i, _mm_loadu_si128( s + i ) );
 }
 
+/* In cpu->Flags: the guest's x87 and SSE state is in the context's FXSAVE
+ * image only, not in this thread's hardware state (see BTCpuSimulate). Wine's
+ * wow64 saves and restores the flags around a user callback, as this needs. */
+#define PW_FP_IN_CONTEXT 0x8000
+
 void WINAPI BTCpuSimulate(void)
 {
     WOW64_CPURESERVED *cpu = get_cpu();
@@ -253,14 +258,29 @@ void WINAPI BTCpuSimulate(void)
         params.unix_bop = PtrToUlong( bop_page + 16 );
         params.reason = 0;
         /* The guest's x87 and SSE state is this thread's hardware state
-         * while the guest is out, as with wow64cpu, so what NtContinue and
-         * SetThreadContext restore reaches it and GetThreadContext reads
-         * it; the Unix side runs on the FXSAVE image in between. */
-        __asm__ volatile( "fxsave %0" : "=m" (fp) );
-        copy_fxsave( ctx->ExtendedRegisters, &fp );
+         * while the guest is out for a system call, as with wow64cpu: Wine
+         * keeps a wow64 thread's 32-bit FP context there (frame->xsave), so
+         * what NtContinue and SetThreadContext restore reaches it and
+         * GetThreadContext and exception dispatch read it. A Unix call
+         * (OpenGL, Vulkan, sockets) never reaches a thread context, so for
+         * one the state stays in the context's image instead: saving and
+         * restoring the hardware around each of them cost an OpenGL game
+         * about a sixth of its time, as it makes a Unix call per GL call.
+         * The Unix side runs on the FXSAVE image in between. */
+        if (!(cpu->Flags & PW_FP_IN_CONTEXT))
+        {
+            __asm__ volatile( "fxsave %0" : "=m" (fp) );
+            copy_fxsave( ctx->ExtendedRegisters, &fp );
+        }
         status = WINE_UNIX_CALL( pw_wow_run, &params );
-        copy_fxsave( &fp, ctx->ExtendedRegisters );
-        __asm__ volatile( "fxrstor %0" : : "m" (fp) );
+        if (!status && params.reason == PW_WOW_UNIXCALL)
+            cpu->Flags |= PW_FP_IN_CONTEXT;
+        else
+        {
+            copy_fxsave( &fp, ctx->ExtendedRegisters );
+            __asm__ volatile( "fxrstor %0" : : "m" (fp) );
+            cpu->Flags &= ~PW_FP_IN_CONTEXT;
+        }
         if (status)
         {
             /* A host fault inside translated code: Wine unwound the Unix

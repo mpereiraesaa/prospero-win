@@ -227,6 +227,39 @@ int pw_x86_engine_call_stack_fault(const PwX86Engine *engine, uintptr_t address,
     return 1;
 }
 
+static uint8_t *fp_image(PwX86Engine *engine)
+{
+    return (uint8_t *)(((uintptr_t)engine->fxsave_image + 15) & ~(uintptr_t)15);
+}
+
+void pw_x86_engine_fp_sync(PwX86Engine *engine, PwX86State *state)
+{
+    if (!engine || !state || !engine->fp_image_live) return;
+    pw_guest_fp_from_fxsave(&state->fp, fp_image(engine));
+    engine->fp_image_live = 0;
+}
+
+void pw_x86_engine_fp_load(PwX86Engine *engine, PwX86State *state, const uint8_t image[512])
+{
+    if (!engine || !state || !image) return;
+    if (!engine->native_fp) {
+        pw_guest_fp_from_fxsave(&state->fp, image);
+        return;
+    }
+    /* What a conversion keeps beyond the image: the pending-exception bits
+     * stay in state->fp, and the state is initialised. */
+    memcpy(fp_image(engine), image, 512);
+    state->fp.initialized = 1;
+    engine->fp_image_live = 1;
+}
+
+void pw_x86_engine_fp_store(PwX86Engine *engine, const PwX86State *state, uint8_t image[512])
+{
+    if (!engine || !state || !image) return;
+    if (engine->fp_image_live) memcpy(image, fp_image(engine), 512);
+    else pw_guest_fp_to_fxsave(&state->fp, image);
+}
+
 int pw_x86_engine_set_native_fp(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
@@ -595,12 +628,19 @@ dispatch:;
     void *code_entry=(uint8_t *)engine->code.exec_base+entry->code_offset+entry->canonical_entry_offset;
     int invoked;
     if(engine->native_fp && pw_x86_reencoded(&entry->entry_contract)) {
-        /* The guest's x87, MMX and SSE state in the host FPU for the chain. */
-        uint8_t *image=(uint8_t *)(((uintptr_t)engine->fxsave_image+15)&~(uintptr_t)15);
-        pw_guest_fp_to_fxsave(&state->fp,image);
+        /* The guest's x87, MMX and SSE state in the host FPU for the chain;
+         * it stays in the image afterwards (pw_x86_engine_fp_sync). */
+        uint8_t *image=fp_image(engine);
+        if(!engine->fp_image_live) {
+            pw_guest_fp_to_fxsave(&state->fp,image);
+            engine->fp_image_live=1;
+        }
         invoked=pw_x86_run_block_fp(state,code_entry,image);
-        pw_guest_fp_from_fxsave(&state->fp,image);
-    } else invoked=invoke(code_entry,state);
+    } else {
+        /* Emitter blocks work on state->fp. */
+        pw_x86_engine_fp_sync(engine,state);
+        invoked=invoke(code_entry,state);
+    }
 
     /* The block a failed step entered, for the fault report. Taken only on
      * failure: copying it before every dispatch cost a kilobyte per step. */

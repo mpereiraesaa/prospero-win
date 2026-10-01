@@ -140,11 +140,13 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
             /* As wowprospero does: the one instruction on the host. */
             const uint8_t *at = (const uint8_t *)(uintptr_t)r.state.eip;
             pw_x86_commit_canonical_flags(&r.state);
+            pw_x86_engine_fp_sync(&engine, &r.state);
             if ((r.status = pw_x86_hostexec_step(&hostexec, &r.state, at, 15)) == PW_OK) continue;
         }
         if (r.status != PW_OK) break;
     }
     current = NULL;
+    pw_x86_engine_fp_sync(&engine, &r.state);
     memcpy(r.data, guest + DATA, sizeof(r.data));
     r.reencoded = engine.reencoded_blocks;
     r.chain_slots = 0;

@@ -377,12 +377,12 @@ static void load_state( PwX86State *state, const I386_CONTEXT *ctx, UINT teb32 )
  * reads the guest's. In between, the image is the guest's. */
 static void sync_fp_in( struct pw_thread *thread, const I386_CONTEXT *ctx )
 {
-    pw_guest_fp_from_fxsave( &thread->state.fp, ctx->ExtendedRegisters );
+    pw_x86_engine_fp_load( &thread->engine, &thread->state, (const uint8_t *)ctx->ExtendedRegisters );
 }
 
 static void sync_fp_out( struct pw_thread *thread, I386_CONTEXT *ctx )
 {
-    pw_guest_fp_to_fxsave( &thread->state.fp, ctx->ExtendedRegisters );
+    pw_x86_engine_fp_store( &thread->engine, &thread->state, (uint8_t *)ctx->ExtendedRegisters );
 }
 
 static void store_state( const PwX86State *state, I386_CONTEXT *ctx )
@@ -833,6 +833,7 @@ static NTSTATUS run( void *args )
             size_t bytes;
 
             pw_x86_commit_canonical_flags( state );
+            pw_x86_engine_fp_sync( &thread->engine, state );
             if (source_view( NULL, state->eip, &source, &bytes ) == PW_OK &&
                 pw_x86_hostexec_step( &thread->hostexec, state, source, bytes ) == PW_OK)
                 continue;
@@ -848,12 +849,14 @@ static NTSTATUS run( void *args )
             /* The block stopped before an instruction the translator does not
              * cover; run exactly that instruction on the host. */
             pw_x86_commit_canonical_flags( state );
+            pw_x86_engine_fp_sync( &thread->engine, state );
             if (source_view( NULL, state->eip, &source, &bytes ) == PW_OK &&
                 pw_x86_hostexec_step( &thread->hostexec, state, source, bytes ) == PW_OK)
                 continue;
         }
         if (status == PW_ERR_LIMIT)
         {
+            pw_x86_engine_fp_sync( &thread->engine, state );
             pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
             continue;
         }
