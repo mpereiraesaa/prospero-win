@@ -142,6 +142,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_build_wine_ps5.py
 	python3 tests/test_pw_install.py
 	python3 tests/test_pw_prefix.py
+	python3 tests/test_pw_gameplay_run.py
 	python3 tests/test_gen_prx_descriptor.py
 	python3 tests/test_test_reachability.py
 	python3 tests/test_status_vocabulary.py

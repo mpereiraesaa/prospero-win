@@ -126,7 +126,8 @@ audit catch most mistakes in the app itself. They don't run the app's
   (`tools/build_native.sh`): the launcher opens the games in the library's
   order by itself. `PW_WINE64_SECONDS=<n>` closes each game after n seconds,
   `PW_WINE64_SCRIPT_CYCLES=<n>` sets how many it opens. Stop as soon as the
-  log says the game finished.
+  log says the game finished. To get past a game's menus into gameplay, see
+  [Automated gameplay runs](#9-automated-gameplay-runs).
 - **Always restore,** even when the run fails or is interrupted: put back the
   files you replaced and any profile you added, and check them.
 - **Compare hashes with the FTP server's decryption off.** Some PS5 FTP
@@ -215,6 +216,100 @@ Avoid sampling profilers based on `SIGPROF` on the PS5. Its threading
 library delays a signal that arrives while a thread holds one of its locks,
 and the delayed sample then lands in libkernel's `getcontext` instead of
 where the thread was.
+
+## 9. Automated gameplay runs
+
+Most games stop at a menu: a message of the day, a team choice, "press any
+key". A script build of the app can press those keys itself, so a run reaches
+real gameplay with nobody at the TV, and the same run can be repeated after
+every change. `tools/pw_gameplay_run.py` sets such a run up, waits for it,
+reports it and puts the console back as it was.
+
+### The pieces
+
+- **A script build.** `tools/build_native.sh` with `PW_WINE64_SCRIPT=1`: the
+  launcher opens the library's first game by itself. `PW_WINE64_SECONDS=<n>`
+  closes the game after n seconds, counted from its start, so leave room for
+  loading (a map load can take 20 seconds). Keep `PW_WINE64_SCRIPT_CYCLES=1`
+  for one game per run:
+
+  ```sh
+  PW_WINE64_SCRIPT=1 PW_WINE64_SECONDS=100 PW_WINE64_SCRIPT_CYCLES=1 tools/build_native.sh
+  ```
+
+  Install it in place of the app's `eboot.bin` for the run, and put the
+  regular one back afterwards.
+- **A key script.** A script build presses the keys listed in
+  `pw_script_keys` in the library folder, one
+  `<milliseconds after the game starts> <Windows virtual-key code>` per line,
+  each as a press and a release, through the same path as a USB keyboard.
+- **The saved log.** Every run is saved on the console in
+  `/data/prospero-win/logs` (see [Getting a log](GETTING_STARTED.md#getting-a-log)),
+  so the result can be read afterwards without a PC listening.
+
+### Running one
+
+`pw_gameplay_run.py` takes the game's profile name and the console's address
+(`--host` or `PS5_HOST`), and for the run:
+
+- lists only that game in `profiles.lst`, so the script build opens it;
+- writes the key script from `--key MS:KEY` options (`enter`, `esc`, `space`,
+  `tab`, arrows, `f1`–`f12`, digits, letters, or a code such as `0x0d`);
+- `--arguments` replaces the game's launch arguments, for a game whose
+  profile starts at its menu;
+- `--append PATH=LINE` adds a line to a file under the library folder, such as
+  a game's config;
+- `--timing` turns on the [timing report](#8-when-a-game-is-slow-time-it-first).
+
+Then start the script build on the console. When the game's session ends,
+the tool copies its saved log to `--save` and summarizes it, and it always
+puts back `profiles.lst`, the profile and the files it appended to, and
+removes the key script and the timing trigger.
+
+Counter-Strike 1.6 with nine bots, joining the counter-terrorists:
+
+```sh
+PS5_HOST=<PS5 IP> python3 tools/pw_gameplay_run.py counter-strike-16 \
+  --arguments '-steam -game cstrike -noipx -window -w 1920 -h 1080 -gl +maxplayers 10 +map de_dust2' \
+  --append 'prefix/drive_c/Games/CounterStrike16/cstrike/listenserver.cfg=bot_join_after_player 0' \
+  --append 'prefix/drive_c/Games/CounterStrike16/cstrike/listenserver.cfg=bot_quota 9' \
+  --key 25000:enter --key 25700:2 --key 26400:2 \
+  --key 35000:enter --key 35700:2 --key 36400:2 \
+  --timing --save runs/
+```
+
+ENTER closes the message of the day, the first 2 picks the team and the
+second 2 the model. The second round of presses is there in case the map took
+longer to load; in game they only switch weapons. On the console this printed:
+
+```
+pw_gameplay_run: keys sent: 6 (0xd:0/0, 0x32:0/0, 0x32:0/0, 0xd:0/0, 0x32:0/0, 0x32:0/0)
+pw_gameplay_run: fps: 2.5 22.1 57.4 49.9 53.9 59.9 60.0 59.9 59.9 60.0 59.9 59.9
+pw_gameplay_run: fps after loading: average 58.1, minimum 49.9, at 59 or more 7/9
+pw_gameplay_run: timing: tid=0024 run=24.3% unix=66.0% (26514/s 24.90us) sys=9.6% ...
+pw_gameplay_run: ended: close-timeout
+```
+
+The first three frame-rate samples cover loading and are left out of the
+average. `ended` is how the session finished; `close-timeout` means the
+script build asked the game to close and closed it when it didn't.
+
+### Things to know
+
+- **Find the keys on the PC first.** Play the game in Wine on the PC and note
+  the keys and the seconds it takes to reach each menu; then add a few
+  seconds, since loading is slower on the console.
+- **Press the keys twice** a few seconds apart when a menu's timing varies,
+  and pick keys that are harmless if the menu is already gone.
+- **A helper program can't press the keys.** Wine on the console runs one
+  process and can't start a second, so a launcher `.exe` that starts the game
+  and sends keys fails; the script build has to do it.
+- **Some settings only work from a config file.** Counter-Strike takes
+  `bot_quota` only once a map's game code has loaded, so on the command line
+  it does nothing; `listenserver.cfg` runs at the right time.
+- **Compare like with like.** A run that starts a map and joins a team draws
+  a different scene from one that sits at the menu or watches as a spectator;
+  keep the same keys and arguments when you compare two builds.
 
 ## Symptoms we've seen
 
