@@ -182,7 +182,7 @@ Every 5 to 10 seconds, each thread that calls out to the host often logs a
 line (on the PS5 it reaches ps5log as a `WINESERVER` line):
 
 ```
-wowprospero timing: tid=0024 run=16.5% unix=82.0% (310336/s 2.64us) sys=1.4% (1783/s 8.09us) other=0.0% (0) resets=0 flushes=0
+wowprospero timing: tid=0024 run=16.5% unix=82.0% (310336/s 2.64us) sys=1.4% (1783/s 8.09us) other=0.0% (0) unix_over_1ms=0.0% (0) resets=0 flushes=0
 ```
 
 - `run` is the share of the thread's wall time spent in translated code and
@@ -193,6 +193,9 @@ wowprospero timing: tid=0024 run=16.5% unix=82.0% (310336/s 2.64us) sys=1.4% (17
 - `sys` is the same for system calls (Wine's server, waits, window
   management, `SwapBuffers`); a thread that mostly waits shows `sys` near
   100%.
+- `unix_over_1ms` is the part of `unix` spent in calls that took over a
+  millisecond. Those calls wait rather than work, usually for the display:
+  a game held at 60 fps shows here how much of each frame it has to spare.
 - `resets` and `flushes` count how often the translations were discarded
   (the code cache filled up, or code was unloaded). Both should stay near
   zero while a game runs.
@@ -204,7 +207,9 @@ ran at 12 fps with the line above: the same 25,000 OpenGL calls per frame
 cost 20 times more there. A small test program that times single OpenGL
 calls then showed that the cost of crossing from Wine to the library was
 the same on both; small `glBegin`/`glEnd` draws were the slow part, inside
-the PS5's OpenGL driver.
+the PS5's OpenGL driver. OpenGL games also log their frame rate, as
+`PW_GL frames=<n> fps=<rate>` every five seconds, so a run needs no one at
+the TV to read the counter.
 
 Avoid sampling profilers based on `SIGPROF` on the PS5. Its threading
 library delays a signal that arrives while a thread holds one of its locks,
@@ -217,7 +222,7 @@ What each looked like, and what it turned out to be. Newest first.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Half-Life (OpenGL) ran at 12 fps on the PS5 and about 75 fps on the PC; OpenArena reached 60 | `PW_WOW_TIMING`: 82% of the game's main thread in OpenGL calls, 2.64 µs each against 0.13 µs on the PC. Each small `glBegin`/`glEnd` draw costs about 58 µs in the PS5's OpenGL driver against 6 µs on the PC, and Half-Life issues thousands per frame | Open in the OpenGL driver: merge consecutive immediate-mode draws, and don't flush the CPU caches on every draw |
+| Half-Life (OpenGL) ran at 12 fps on the PS5 and about 75 fps on the PC; OpenArena reached 60 | `PW_WOW_TIMING`: 82% of the game's main thread in OpenGL calls, 2.64 µs each against 0.13 µs on the PC. Each small `glBegin`/`glEnd` draw costs about 58 µs in the PS5's OpenGL driver against 6 µs on the PC, and Half-Life issues thousands per frame | The driver fetched `sceAgcGetRegisterDefaults()`, about 9 µs a call, on every draw: now once. `opengl32` replays per-vertex calls in one crossing (patch 0720). Mesa draws a run of `glBegin`/`glEnd` blocks as one triangle list, and no longer flushes on `glActiveTexture`. Half-Life holds 60 fps with about a third of each frame to spare |
 | Warcraft III's intro started 0.2–32 s late, or never; the app idle; logging or a key press made it go away | Lock starvation in Wine's DirectShow ([#250](https://github.com/mpereiraesaa/prospero-win/issues/250)): `GetState()` held the renderer's lock while polled every 10 ms, and the PS5's ~1 ms thread wake-up always lost the race for it. Code that re-takes a lock right after releasing it can starve waiters here, not on Linux | Patch 0700: renderers wait without the lock (intro 0.19 s late, 6/6) |
 | The stick and USB mouse didn't move the pointer; keys worked. `inputs` grew, nothing refused | win32u (Wine 11) holds a driver's mouse motion until a button or `MOUSEEVENTF_MOVE_NOCOALESCE` sends it; the PS5 driver never sent it. Before, the pointer only seemed to move because the driver answered `GetCursorPos` itself | Wine patch 0670: relative motion, sent with `MOUSEEVENTF_MOVE_NOCOALESCE` |
 | An RTS map didn't scroll at the screen's edges | The app sent absolute positions, and nothing while the pointer was held at an edge; the game's own `SetCursorPos` was overridden | Patch 0670: the app sends motion, Wine keeps the only pointer |

@@ -575,6 +575,28 @@ with VideoOut and pad input ready. These bounded runs restored the prior
 title files and profiles afterward. The SDK is GPL-3.0-or-later, so
 distributed builds must preserve its source and license notices.
 
+### Immediate-mode games
+
+Older OpenGL games draw with `glBegin`, one call per vertex attribute, and
+`glEnd`: Half-Life makes about 25,000 OpenGL calls and over a thousand
+`glBegin`/`glEnd` blocks a frame. Two things keep that fast on the console:
+
+- **Fewer crossings (patch 0720).** Every OpenGL call goes from the game's
+  side of Wine to the Unix side, which costs about 0.4 µs under WoW64.
+  `opengl32` records the calls that only feed vertices and current
+  attributes (`glBegin`, `glEnd`, `glVertex*`, `glTexCoord2f`, `glColor*`,
+  `glNormal3f`, `glMultiTexCoord2f`) in a per-thread buffer and replays them
+  in order with one crossing, before any other call. Its PE and Unix halves
+  must come from the same build, so the build makes `opengl32.dll` too.
+- **Fewer draws, in the SDK.** Mesa draws a run of `glBegin`/`glEnd`
+  primitives as one triangle list, and no longer splits that run when a game
+  switches the active texture unit around each polygon.
+
+On the console, these took Half-Life's `c1a0` from 12 fps to the display's
+60, with about a third of each frame left waiting for the next refresh.
+OpenGL games log their frame rate every five seconds (patch 0721):
+`PW_GL frames=300 fps=60.0`.
+
 The Vulkan controls above ran on one ps5vk SDK (`libps5vk.a` SHA-256
 `98f8a17c…`),
 whose changes are merged in ps5vk (through PR #607). Along the way ps5vk
