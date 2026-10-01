@@ -15,6 +15,7 @@
  * 490f6d5dcbb2a5047345b8af88d114bbcaad69a8.
  */
 
+#include <emmintrin.h>
 #include <stdarg.h>
 
 #include "ntstatus.h"
@@ -214,6 +215,20 @@ static void raise_guest_exception( I386_CONTEXT *ctx, DWORD code, UINT address, 
     Wow64RaiseException( -1, &rec );
 }
 
+/* The FXSAVE image between the thread's hardware state and the context, on
+ * every entry and exit of translated code: that is, on every system and
+ * Unix call the guest makes. ntdll's memcpy copies a byte at a time, which
+ * made these two copies a fifth of the CPU time of an OpenGL game; the
+ * context's image is not 16-byte aligned, so unaligned SSE moves. */
+static inline void copy_fxsave( void *dst, const void *src )
+{
+    __m128i *d = dst;
+    const __m128i *s = src;
+
+    for (unsigned int i = 0; i < sizeof(XSAVE_FORMAT) / sizeof(__m128i); i++)
+        _mm_storeu_si128( d + i, _mm_loadu_si128( s + i ) );
+}
+
 void WINAPI BTCpuSimulate(void)
 {
     WOW64_CPURESERVED *cpu = get_cpu();
@@ -242,9 +257,9 @@ void WINAPI BTCpuSimulate(void)
          * SetThreadContext restore reaches it and GetThreadContext reads
          * it; the Unix side runs on the FXSAVE image in between. */
         __asm__ volatile( "fxsave %0" : "=m" (fp) );
-        memcpy( ctx->ExtendedRegisters, &fp, sizeof(fp) );
+        copy_fxsave( ctx->ExtendedRegisters, &fp );
         status = WINE_UNIX_CALL( pw_wow_run, &params );
-        memcpy( &fp, ctx->ExtendedRegisters, sizeof(fp) );
+        copy_fxsave( &fp, ctx->ExtendedRegisters );
         __asm__ volatile( "fxrstor %0" : : "m" (fp) );
         if (status)
         {
