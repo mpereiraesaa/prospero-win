@@ -20,6 +20,17 @@ typedef struct PwX86StepReport {
     unsigned cache_hit;
 } PwX86StepReport;
 
+/* Bounded, owner-thread sample counts. No pointers survive cache resets. */
+enum { PW_X86_HOTSPOT_SLOTS = 4096 };
+typedef struct PwX86Hotspot {
+    uint32_t guest_pc;
+    uint64_t samples, entry, body, exit, emitted;
+} PwX86Hotspot;
+typedef struct PwX86HotspotProfile {
+    PwX86Hotspot slots[PW_X86_HOTSPOT_SLOTS];
+    uint64_t samples, outside, stubs, overflow;
+} PwX86HotspotProfile;
+
 typedef struct PwX86Engine {
     const PwVmBackend *backend;
     PwVmRegion code;
@@ -157,6 +168,10 @@ int pw_x86_engine_call_stack_fault(const PwX86Engine *, uintptr_t address, uintp
  * exit code. Requires fault markers and the owner thread's stable cache;
  * returns NULL for stubs, gaps, outside addresses and stale generations. */
 const PwX86CacheEntry *pw_x86_engine_host_block(const PwX86Engine *, uintptr_t rip);
+/* Sample only from the owner thread while its cache is stable. Reporting
+ * must block the sampling signal; sampling allocates nothing and calls no
+ * platform functions. Overflow is explicit and never replaces older rows. */
+void pw_x86_engine_sample(const PwX86Engine *, uintptr_t rip, PwX86HotspotProfile *);
 uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *, uintptr_t rip);
 /* Leave the statistics counters out of blocks translated from now on (they
  * are on by default): a step then reports no retired instructions, and the

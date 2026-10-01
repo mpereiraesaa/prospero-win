@@ -317,6 +317,34 @@ const PwX86CacheEntry *pw_x86_engine_host_block(const PwX86Engine *engine, uintp
     return NULL;
 }
 
+void pw_x86_engine_sample(const PwX86Engine *engine, uintptr_t rip, PwX86HotspotProfile *profile)
+{
+    const uintptr_t base = (uintptr_t)engine->code.exec_base;
+    const PwX86CacheEntry *entry;
+    unsigned bucket;
+
+    profile->samples++;
+    if(rip < base || rip - base >= engine->code.bytes) { profile->outside++; return; }
+    entry = pw_x86_engine_host_block(engine, rip);
+    if(!entry) { profile->stubs++; return; }
+    bucket = (entry->guest_pc * 2654435761u) & (PW_X86_HOTSPOT_SLOTS - 1);
+    for(unsigned probe = 0; probe < PW_X86_HOTSPOT_SLOTS; probe++) {
+        PwX86Hotspot *row = &profile->slots[bucket];
+        if(!row->samples || row->guest_pc == entry->guest_pc) {
+            const size_t offset = rip - base - entry->code_offset;
+            row->guest_pc = entry->guest_pc;
+            row->samples++;
+            if(!pw_x86_reencoded(&entry->entry_contract) || !entry->exit_offset) row->emitted++;
+            else if(offset < entry->chain_entry_offset) row->entry++;
+            else if(offset < entry->exit_offset) row->body++;
+            else row->exit++;
+            return;
+        }
+        bucket = (bucket + 1) & (PW_X86_HOTSPOT_SLOTS - 1);
+    }
+    profile->overflow++;
+}
+
 uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *engine, uintptr_t rip)
 {
     const PwX86CacheEntry *e = pw_x86_engine_host_block(engine, rip);

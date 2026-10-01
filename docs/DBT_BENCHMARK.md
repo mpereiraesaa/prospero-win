@@ -543,3 +543,40 @@ faster core. Getting 1383 on a 3.46 GHz Zen 2 core puts the console within
 the same ratio range.
 
 [b]: https://box86.org/2022/03/box86-box64-vs-qemu-vs-fex-vs-rosetta2/
+
+## Thread-owned hotspot sampling
+
+On Linux, set `PW_WOW_PROFILE=1` to log each thread's top 20 translated
+blocks every five seconds. A filename instead writes `<filename>.<thread-id>`
+for each thread, replacing its previous window. `PW_WOW_TIMING=1` supplies
+the separate run/Unix/system-call timing split. The default fault-marker
+mode supplies the arena block map; sampling with fault markers disabled is
+refused explicitly.
+
+`wowprospero profile` reports the window duration, translated-arena samples,
+stub samples and histogram overflow. `wowprospero hotspot` names the guest
+PC and samples in re-encoded entry, body and exit code, or older emitted
+code. The process CPU timer fires every millisecond; these counts are
+statistical samples, not instruction counts or exact per-block timings.
+Per-thread histograms ignore signals outside translated arenas; cumulative
+`profile_process` tick and unattributed counts retain the process denominator.
+The per-thread `outside=0` does not imply
+that the process spent no time in native code. Compare identical workloads
+and use the timing split alongside these records.
+
+Each thread owns a bounded 4096-slot histogram. The signal handler resolves
+the interrupted PC immediately, before an arena reset can reuse its address.
+It uses no compiler TLS access, allocation, formatting or source-byte reads.
+Reporting snapshots and clears that thread's histogram with SIGPROF blocked;
+it does not scan another thread's cache. Overflow is reported without evicting
+rows, and makes the top-block list incomplete. Logs contain addresses and
+counts only; the former binary block dumps are no longer produced.
+
+The sample-aggregation code is portable and host-tested, including collisions,
+full capacity, arena boundaries and cache resets. On the console, create
+`/data/prospero-win/pw_wow_profile` before launching a fresh game process;
+remove it to disable sampling for subsequent processes. Records use Wine's
+normal output sink, and a timer installation failure disables sampling with
+a diagnostic. The pinned SDK exports `setitimer`, but console signal delivery
+is not yet validated; do not treat a console report with zero samples as a
+performance result.

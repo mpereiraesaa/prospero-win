@@ -95,6 +95,8 @@ static Run run(const uint8_t *code, size_t bytes, unsigned markers)
     r.reencoded = engine.reencoded_blocks;
     r.redirected = redirected;
     if (engine.fault_markers) {
+        PwX86HotspotProfile profile;
+        memset(&profile, 0, sizeof(profile));
         uintptr_t base = (uintptr_t)engine.code.exec_base;
         assert(!pw_x86_engine_host_block(&engine, base - 1));
         assert(!pw_x86_engine_host_block(&engine, base + engine.code.bytes));
@@ -102,9 +104,24 @@ static Run run(const uint8_t *code, size_t bytes, unsigned markers)
             const PwX86CacheEntry *e = &entries[i];
             if (!e->used || e->generation != engine.cache.generation) continue;
             assert(pw_x86_engine_host_block(&engine, base + e->code_offset) == e);
+            pw_x86_engine_sample(&engine, base + e->code_offset, &profile);
+            pw_x86_engine_sample(&engine, base + e->code_offset + e->code_bytes - 1, &profile);
             assert(pw_x86_engine_host_block(&engine, base + e->code_offset + e->code_bytes - 1) == e);
         }
+        {
+            uint64_t counted = 0;
+            for (unsigned i = 0; i < PW_X86_HOTSPOT_SLOTS; i++) {
+                const PwX86Hotspot *row = &profile.slots[i];
+                counted += row->samples;
+                assert(row->samples == row->entry + row->body + row->exit + row->emitted);
+            }
+            assert(counted == profile.samples && counted && !profile.overflow && !profile.stubs);
+            pw_x86_engine_sample(&engine, base - 1, &profile);
+            assert(profile.outside == 1);
+        }
         assert(pw_x86_engine_reset(&engine, engine.cache.generation + 1) == PW_OK);
+        pw_x86_engine_sample(&engine, base, &profile);
+        assert(profile.stubs == 1);
         assert(!pw_x86_engine_host_block(&engine, base));
     }
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
@@ -279,6 +296,37 @@ static void test_engine_lookup(void)
     assert(!pw_x86_reencode_return_stub(NULL, sizeof(stub), &options));
 }
 
+static void test_profile_capacity(void)
+{
+    PwX86Engine engine;
+    PwX86CacheEntry entry;
+    PwX86HotspotProfile profile;
+    uint32_t map = 1;
+    memset(&engine, 0, sizeof(engine));
+    memset(&entry, 0, sizeof(entry));
+    memset(&profile, 0, sizeof(profile));
+    engine.code.exec_base = (void *)(uintptr_t)0x10000;
+    engine.code.bytes = 1;
+    engine.block_map = &map;
+    engine.cache.entries = &entry;
+    engine.cache.capacity = engine.cache.generation = 1;
+    entry.used = entry.generation = entry.code_bytes = 1;
+    entry.guest_pc = 0x2000;
+    pw_x86_engine_sample(&engine, 0x10000, &profile);
+    entry.guest_pc += PW_X86_HOTSPOT_SLOTS; /* Same hash bucket. */
+    pw_x86_engine_sample(&engine, 0x10000, &profile);
+    assert(profile.samples == 2 && !profile.overflow);
+    assert(profile.slots[0].samples == 1 && profile.slots[1].samples == 1);
+    for(unsigned i = 0; i < PW_X86_HOTSPOT_SLOTS; i++) {
+        profile.slots[i].guest_pc = i;
+        profile.slots[i].samples = 1;
+    }
+    pw_x86_engine_sample(&engine, 0x10000, &profile);
+    assert(profile.samples == 3 && profile.overflow == 1);
+    for(unsigned i = 0; i < PW_X86_HOTSPOT_SLOTS; i++)
+        assert(profile.slots[i].guest_pc == i && profile.slots[i].samples == 1);
+}
+
 static void test_fault_table(void)
 {
     /* Three rows: sites 0x10, 0x30 and 0x2345 with their paths. */
@@ -335,6 +383,7 @@ int main(void)
     }
     test_memory_forms();
     test_engine_lookup();
+    test_profile_capacity();
     test_fault_table();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
            "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
