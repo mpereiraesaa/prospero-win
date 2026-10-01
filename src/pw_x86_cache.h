@@ -32,6 +32,8 @@ typedef struct PwX86CacheEntry {
     size_t fault_table_offset;  /* PwX86Block.fault_table_offset */
     size_t exit_offset;         /* PwX86Block.exit_offset */
     uint32_t arena_next;        /* the next block in the arena, as index + 1 */
+    uint32_t reset_next;       /* one-based touched-slot list */
+    unsigned reset_tracked;   /* list membership, cleared by reset */
     unsigned used;
 } PwX86CacheEntry;
 
@@ -41,6 +43,7 @@ typedef struct PwX86Cache {
     size_t arena_bytes,cursor;
     uint64_t hits,misses,publishes,resets,lookup_probes;
     uint32_t max_probe;
+    uint32_t reset_head;
 } PwX86Cache;
 
 /* Generated code storage and RW/RX transitions remain owner-managed. Entries
@@ -52,5 +55,8 @@ int pw_x86_cache_lookup(PwX86Cache *,uint32_t,const PwX86CacheEntry **);
 int pw_x86_cache_lookup_mut(PwX86Cache *,uint32_t,PwX86CacheEntry **);
 int pw_x86_cache_publish(PwX86Cache *,uint32_t,const PwX86Block *,size_t,
                          const PwX86CacheEntry **);
+/* Register a slot before changing metadata outside publish(), including
+ * pending-link buckets that do not yet contain a published block. */
+void pw_x86_cache_touch(PwX86Cache *, uint32_t index);
 int pw_x86_cache_reset(PwX86Cache *,uint32_t);
 #endif

@@ -53,10 +53,17 @@ static uint32_t target_bucket(const PwX86Cache *cache,uint32_t target_pc)
     return hash%cache->capacity;
 }
 
+static uint32_t *pending_bucket(PwX86Cache *cache,uint32_t pc)
+{
+    uint32_t bucket=target_bucket(cache,pc);
+    pw_x86_cache_touch(cache,bucket);
+    return &cache->entries[bucket].pending_head;
+}
+
 static void wait_for_target(PwX86Cache *cache,PwX86CacheEntry *entry,unsigned side)
 {
     if(entry->link_slots[side].is_linked)return;
-    uint32_t *head=&cache->entries[target_bucket(cache,entry->link_slots[side].target_pc)].pending_head;
+    uint32_t *head=pending_bucket(cache,entry->link_slots[side].target_pc);
     entry->pending_next[side]=*head;
     *head=(uint32_t)(entry-cache->entries)*2+side+1;
 }
@@ -540,7 +547,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         if(best.exit.kind == PW_X86_EXIT_CONDITIONAL) wait_for_target(&engine->cache, e_mut, 1);
     }
     if(engine->chaining_enabled) {
-        uint32_t *link = &engine->cache.entries[target_bucket(&engine->cache, pc)].pending_head;
+        uint32_t *link = pending_bucket(&engine->cache,pc);
         while(*link) {
             unsigned side = (*link - 1) & 1;
             PwX86CacheEntry *cand = &engine->cache.entries[(*link - 1) >> 1];
@@ -730,7 +737,8 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
         return PW_ERR_VM;
 
     /* Count unlinks before cache entries are zeroed */
-    for(uint32_t i=0; i<engine->cache.capacity; i++) {
+    for(uint32_t next=engine->cache.reset_head; next; next=engine->cache.entries[next-1].reset_next) {
+        uint32_t i=next-1;
         if(engine->cache.entries[i].used) {
             if(engine->cache.entries[i].link_slots[0].is_linked) engine->unlinks++;
             if(engine->cache.entries[i].link_slots[1].is_linked) engine->unlinks++;

@@ -602,3 +602,12 @@ and poisoning of discarded instructions are preserved. Tests check that old
 code becomes traps, unused arena bytes remain untouched and execution after
 reset recompiles correctly. This removes reset overhead; the separate
 steady-workload HL2 translated-time target still requires measurement.
+
+Cache metadata now tracks the slots changed since the previous reset. Reset
+clears those slots and counts their linked exits, rather than scanning and
+clearing the entire reserved table. Pending-link buckets are tracked even
+when they contain no compiled block; publishing into a tracked bucket preserves
+its list membership. Every touched entry is physically zeroed, preserving
+lookup and generation behavior. Tests cover unpublished pending buckets,
+duplicate registration and reuse after reset. This targets loading flushes;
+it does not establish a gain in steady translated-code execution.
