@@ -757,6 +757,12 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   cycle is two sandbox escapes, the game and the launcher).
   `-DPW_WINE64_SECONDS=<s>` closes each game after that long; the default, 0,
   lets a game run until it is closed.
+  A script build also presses keys in the game when
+  `/data/prospero-win/pw_script_keys` exists: one
+  `<milliseconds after the game starts> <Windows virtual-key code>` per line,
+  each sent as a press and a release. For example, `30000 0x0d` presses
+  ENTER 30 seconds in, which lets an unattended run get past a game's menus
+  and into gameplay.
 
 In a game, the title works as follows:
 

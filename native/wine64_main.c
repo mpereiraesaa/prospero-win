@@ -85,6 +85,33 @@ static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 #define PW_WINE64_SCRIPT_CYCLES 2
 #endif
 
+#if PW_WINE64_SCRIPT
+/* Unattended runs may also press keys in the game, from <root>/pw_script_keys:
+ * one "<milliseconds after the game starts> <virtual-key code>" per line, for
+ * instance "45000 0x0d" for ENTER. Each is posted as a press and release. */
+#define PW_WINE64_SCRIPT_KEYS_MAX 64
+static struct { uint64_t at_ns; uint32_t vk; } script_keys[PW_WINE64_SCRIPT_KEYS_MAX];
+static size_t script_key_count, script_key_next;
+
+static void script_keys_load(const char *root)
+{
+    char path[512];
+    FILE *file;
+    unsigned long ms, vk;
+
+    script_key_count = script_key_next = 0;
+    snprintf(path, sizeof(path), "%s/pw_script_keys", root);
+    if (!(file = fopen(path, "r"))) return;
+    while (script_key_count < PW_WINE64_SCRIPT_KEYS_MAX && fscanf(file, "%lu %li", &ms, (long *)&vk) == 2) {
+        script_keys[script_key_count].at_ns = (uint64_t)ms * 1000000u;
+        script_keys[script_key_count].vk = (uint32_t)vk;
+        script_key_count++;
+    }
+    fclose(file);
+    PS5LOG_LOG("PW_WINE64 script keys=%u", (unsigned)script_key_count);
+}
+#endif
+
 /* The games, from <root>/profiles (native/pw_wine_library.h); nothing is
  * built in. catalog holds the valid ones for pw_wine_launch. */
 static PwWineLibrary library;
@@ -916,6 +943,10 @@ int main(int argc, char **argv)
         status = pw_wine_start_run(&start, &config, &ops);
         PS5LOG_LOG("PW_WINE64 run status=%d", status);
     }
+#if PW_WINE64_SCRIPT
+    const uint64_t script_start_ns = now_ns();
+    script_keys_load(library_root);
+#endif
     for (uint64_t tick = 1; status == PW_OK; tick++) {
         uint64_t now = now_ns();
         PwPresentView view;
@@ -945,6 +976,17 @@ int main(int argc, char **argv)
                 else refused++;
             }
         }
+#if PW_WINE64_SCRIPT
+        while (post_input && script_key_next < script_key_count &&
+               now - script_start_ns >= script_keys[script_key_next].at_ns) {
+            PwWineInput press = { PW_WINE_INPUT_KEY, script_keys[script_key_next].vk, 0, 0, 1 };
+            PwWineInput release = press;
+            release.down = 0;
+            int pressed = post_input(&press), released = post_input(&release);
+            PS5LOG_LOG("PW_WINE64 script key=%#x status=%d/%d", (unsigned)press.code, pressed, released);
+            script_key_next++;
+        }
+#endif
         if (pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK) {
             size_t count = pw_wine_game_inputs(&game_input, pad.core.pressed_edges,
                                                pad.core.released_edges, events,
