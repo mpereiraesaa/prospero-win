@@ -192,6 +192,48 @@ static void test_presets(void)
     assert(pw_game_button_mask(PW_GAME_BUTTON_COUNT) == 0);
 }
 
+/* Nothing bound and no mode set: xinput, so the DualSense reaches games
+ * that read a gamepad while the keyboard and mouse still work. */
+static void test_default_mode(void)
+{
+    PwGameInput input;
+    PwGameProfile p;
+
+    pw_game_input_init(&input);
+    pw_game_input_default_mode(&input);
+    assert(input.mode == PW_GAME_INPUT_XINPUT);
+
+    assert(parse(APP "[display]\ndesktop = 800x600\n", &p) == PW_OK);
+    pw_game_input_init(&input);
+    pw_game_input_overlay(&input, &p.input);
+    pw_game_input_default_mode(&input);
+    assert(input.mode == PW_GAME_INPUT_XINPUT);
+
+    /* A binding, a pointer stick or an explicit mode keeps keyboard mode. */
+    assert(parse(APP "[input]\ncross = space\n", &p) == PW_OK);
+    pw_game_input_init(&input);
+    pw_game_input_overlay(&input, &p.input);
+    pw_game_input_default_mode(&input);
+    assert(input.mode == PW_GAME_INPUT_KEYBOARD);
+    assert(parse(APP "[input]\nmouse = left_stick\n", &p) == PW_OK);
+    pw_game_input_init(&input);
+    pw_game_input_overlay(&input, &p.input);
+    pw_game_input_default_mode(&input);
+    assert(input.mode == PW_GAME_INPUT_KEYBOARD);
+    assert(parse(APP "[input]\nmode = keyboard\n", &p) == PW_OK);
+    pw_game_input_init(&input);
+    pw_game_input_overlay(&input, &p.input);
+    pw_game_input_default_mode(&input);
+    assert(input.mode == PW_GAME_INPUT_KEYBOARD);
+
+    /* A preset's bindings count too. */
+    pw_game_input_init(&input);
+    assert(preset("[input]\nl1 = z\n", &input) == PW_OK);
+    pw_game_input_default_mode(&input);
+    assert(input.mode == PW_GAME_INPUT_KEYBOARD);
+    pw_game_input_default_mode(NULL);
+}
+
 /* The forms the published profiles use (the prospero-win-profiles
  * repository): a preset gives Pinball its keys, Minesweeper shares the
  * mouse preset, the 7-Zip benchmark passes an arguments line, and the
@@ -247,6 +289,7 @@ int main(void)
     test_profile();
     test_refusals();
     test_presets();
+    test_default_mode();
     printf("game profile passed: application plus display and input, every binding kind, "
            "refusals, shared presets overridden by the profile\n");
     return 0;

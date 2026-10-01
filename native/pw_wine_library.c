@@ -216,5 +216,6 @@ int pw_wine_library_input(const PwGameProfile *profile, const char *root, PwGame
             status = pw_game_input_parse(text, (size_t)length, input);
     }
     pw_game_input_overlay(input, &profile->input);
+    pw_game_input_default_mode(input);
     return status;
 }

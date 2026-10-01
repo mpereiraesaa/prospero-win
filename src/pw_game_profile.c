@@ -354,6 +354,14 @@ void pw_game_input_overlay(PwGameInput *base, const PwGameInput *overrides)
         if (overrides->bindings[i].kind != PW_GAME_BIND_UNSET) base->bindings[i] = overrides->bindings[i];
 }
 
+void pw_game_input_default_mode(PwGameInput *input)
+{
+    if (!input || (input->set & SET_MODE) || input->mouse != PW_GAME_STICK_NONE) return;
+    for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++)
+        if (input->bindings[i].kind != PW_GAME_BIND_UNSET) return;
+    input->mode = PW_GAME_INPUT_XINPUT;
+}
+
 uint32_t pw_game_button_mask(size_t index)
 {
     return index < PW_GAME_BUTTON_COUNT ? buttons[index].mask : 0u;

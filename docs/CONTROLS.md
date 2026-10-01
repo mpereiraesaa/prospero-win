@@ -85,8 +85,15 @@ Rumble works: the game's vibration drives the DualSense's motors. The
 `gamepad.input` preset is exactly this. You can still add button lines in an
 XInput preset to send keys as well.
 
-XInput is built and tested on the PC, but no XInput game has been confirmed
-on the console yet. Reports are welcome.
+A profile that binds no button, moves no pointer and sets no `mode` gets
+`mode = xinput` on its own: a game with gamepad support reads the DualSense,
+and the keyboard and mouse keep working. Games built on SDL2 (Half-Life's
+25th-anniversary build, for one) look for controllers through raw input
+first, which Wine on the PS5 doesn't have, and then skip XInput; in xinput
+mode the app sets `SDL_JOYSTICK_RAWINPUT=0` for them, and they find the
+DualSense as an XInput controller. On the console, XInput reports both
+sticks over their full range, the triggers and the buttons, and Half-Life's
+SDL2 opens it as a game controller.
 
 ### DirectInput
 

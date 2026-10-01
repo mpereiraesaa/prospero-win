@@ -16,7 +16,9 @@
  *
  *   [input]
  *   preset = pinball       ; an input file shared between profiles
- *   mode = keyboard        ; keyboard (buttons send keys/mouse) or xinput
+ *   mode = keyboard        ; keyboard (buttons send keys/mouse) or xinput (also
+ *                          ; the game's XInput controller); default: xinput
+ *                          ; when nothing is bound, keyboard otherwise
  *   mouse = right_stick    ; a stick moves the pointer: left_stick, right_stick, none
  *   mouse_speed = 1200     ; pointer pixels per second at full tilt
  *   cross = space          ; <button> = <key> | mouse_left | mouse_right |
@@ -92,6 +94,10 @@ void pw_game_input_init(PwGameInput *input);
 int pw_game_input_parse(const uint8_t *bytes, size_t length, PwGameInput *input);
 /* Apply what overrides sets on top of base (a preset under a profile). */
 void pw_game_input_overlay(PwGameInput *base, const PwGameInput *overrides);
+/* After the overlays: an input that sets no mode, binds no button and moves
+ * no pointer is in xinput mode, so a game with gamepad support reads the
+ * DualSense while the keyboard and mouse keep working. */
+void pw_game_input_default_mode(PwGameInput *input);
 /* The DualSense bit of button index i (PW_GAME_BUTTON order), 0 if none. */
 uint32_t pw_game_button_mask(size_t index);
 #endif

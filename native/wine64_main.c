@@ -678,7 +678,7 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
-    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 5 };
+    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 6 };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -776,6 +776,11 @@ int main(int argc, char **argv)
          * param.json; a display without 120 Hz keeps presenting at 60. */
         if (game->app.graphics == PW_APP_GRAPHICS_OPENGL && game->display.refresh == 120)
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_GL_REFRESH", "120" };
+        /* xinput mode: SDL2 games (Half-Life) look for controllers through
+         * raw input first, which Wine on the PS5 has none of, and then skip
+         * XInput; this hint makes them read controller 0 through XInput. */
+        if (game_input.mode == PW_GAME_INPUT_XINPUT)
+            extra[config.extra_env_count++] = (PwWineStartEnv){ "SDL_JOYSTICK_RAWINPUT", "0" };
         /* [debug] winedebug: this game's channels in place of the title's. */
         if (game->winedebug[0]) {
             extra[0].value = game->winedebug;
