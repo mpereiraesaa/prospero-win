@@ -53,6 +53,12 @@ rebuilding it. `tools/build_wine_ps5.sh` needs the host WoW64 Wine build from
 `tools/build_wine_runtime.sh`; its environment is described in
 [WINE_PS5_BUILD.md](WINE_PS5_BUILD.md#build).
 
+The runtime title uses the pinned foundation's high-address native layout:
+its executable segments begin at 4 GiB, leaving `0x00400000` available for
+Windows games that cannot be relocated. The native converter is built under
+a filename tied to its pinned source commit, so an existing foundation
+checkout cannot silently reuse a converter with the old segment addresses.
+
 The Wine runtime is staged beside the title under `win/wine` and the library
 (profiles, input presets, prefixes) under `/data/prospero-win`; see
 [WINE_PS5_BUILD.md](WINE_PS5_BUILD.md#starting-wine-in-the-title). A

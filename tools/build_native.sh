@@ -22,7 +22,7 @@
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-pin=37dd53602bdead63936f718004555ba10154be48
+pin=9c0b994a048521af6fb84c73ded364504fe250e9
 url=https://github.com/mpereiraesaa/ps5-native-app-boilerplate.git
 foundation=${PS5_NATIVE_FOUNDATION:-$root/.deps/ps5-native-app-boilerplate}
 dev_conf=${PS5LOG_DEV_CONF:-$root/dev.conf}
@@ -46,7 +46,7 @@ wine64_watchdog=${PW_WINE64_WAIT_WATCHDOG:-0}
     exit 2
 }
 
-if [[ ! -d $foundation/.git ]]; then
+if [[ ! -e $foundation/.git ]]; then
     mkdir -p -- "$(dirname -- "$foundation")"
     git clone --filter=blob:none "$url" "$foundation"
 fi
@@ -60,7 +60,9 @@ fi
 
 sdk="$foundation/.deps/native/ps5-payload-sdk"
 native="$foundation/tooling/native"
-tool="$foundation/build/host/ps5-native-tool"
+tool="$foundation/build/host/ps5-native-tool-$pin"
+# Keep the low PE32 address range free for fixed-base games such as OpenArena.
+layout="$native/ps5-pie-high.ld"
 
 # The pinned foundation is often a checkout shared with the laboratory's
 # other projects. Rebuilding its dependencies mutates that tree and reaches
@@ -68,7 +70,7 @@ tool="$foundation/build/host/ps5-native-tool"
 if [[ ${PW_FOUNDATION_READY:-0} == 1 ]]; then
     for artifact in "$sdk/bin/prospero-lld" "$sdk/target/lib/libkernel.so" \
                     "$foundation/runtime/libc.prx" \
-                    "$native/ps5-pie.ld" "$native/app_crt.cpp"; do
+                    "$layout" "$native/app_crt.cpp"; do
         [[ -e $artifact ]] || {
             echo "PW_FOUNDATION_READY=1 but $artifact is missing" >&2
             exit 2
@@ -146,7 +148,7 @@ objects+=("$build/obj/ps5log.o" "$build/obj/ps5log_ps5_net.o")
 "$sdk/bin/prospero-lld" --shared -soname libSceAgcDriver.prx \
     -o "$build/import-stubs/libSceAgcDriver.so" "$build/obj/agc-driver-import.o"
 
-"$sdk/bin/prospero-lld" -T "$native/ps5-pie.ld" --eh-frame-hdr -e _start \
+"$sdk/bin/prospero-lld" -T "$layout" --eh-frame-hdr -e _start \
     -o "$build/llvm-pie.elf" "$build/obj/app_crt.o" "${objects[@]}" \
     --as-needed "$sdk"/target/lib/*.so "$build/import-stubs/libSceAgc.so" \
     "$build/import-stubs/libSceAgcDriver.so"
