@@ -295,6 +295,51 @@ static void test_all_registers(void)
     assert(run(&s, (const uint8_t[]){0x66, 0x61}, 2) == PW_ERR_UNSUPPORTED);
 }
 
+/* JECXZ, LOOP, LOOPE and LOOPNE: ECX counts down, the flags stay. */
+static void test_ecx_branches(void)
+{
+    PwX86State s;
+
+    reset_state(&s);
+    s.gpr[1] = 0;
+    s.eflags = 0x202;
+    assert(run(&s, (const uint8_t[]){0xe3, 0x10}, 2) == PW_OK);              /* jecxz taken */
+    assert(s.eip == 0x1000 + 2 + 0x10 && s.gpr[1] == 0 && s.eflags == 0x202);
+    reset_state(&s);
+    s.gpr[1] = 5;
+    assert(run(&s, (const uint8_t[]){0xe3, 0x10}, 2) == PW_OK);              /* not taken */
+    assert(s.eip == 0x1002 && s.gpr[1] == 5);
+    reset_state(&s);
+    s.gpr[1] = 2;
+    assert(run(&s, (const uint8_t[]){0xe2, 0xfe}, 2) == PW_OK);              /* loop back to itself */
+    assert(s.gpr[1] == 1 && s.eip == 0x1000);
+    assert(run(&s, (const uint8_t[]){0xe2, 0xfe}, 2) == PW_OK);              /* ECX reaches 0: falls through */
+    assert(s.gpr[1] == 0 && s.eip == 0x1002);
+    reset_state(&s);
+    s.gpr[1] = 0;
+    assert(run(&s, (const uint8_t[]){0xe2, 0x10}, 2) == PW_OK);              /* 0 wraps, then jumps */
+    assert(s.gpr[1] == 0xffffffffu && s.eip == 0x1012);
+    reset_state(&s);
+    s.gpr[1] = 3;
+    s.eflags = 0x242;                                                          /* ZF set */
+    assert(run(&s, (const uint8_t[]){0xe1, 0x08}, 2) == PW_OK);              /* loope taken */
+    assert(s.gpr[1] == 2 && s.eip == 0x100a && s.eflags == 0x242);
+    reset_state(&s);
+    s.gpr[1] = 3;
+    s.eflags = 0x242;
+    assert(run(&s, (const uint8_t[]){0xe0, 0x08}, 2) == PW_OK);              /* loopne not taken */
+    assert(s.gpr[1] == 2 && s.eip == 0x1002);
+    reset_state(&s);
+    s.gpr[1] = 0x12340001;
+    assert(run(&s, (const uint8_t[]){0x67, 0xe2, 0x04}, 3) == PW_OK);        /* loop on CX */
+    assert(s.gpr[1] == 0x12340000 && s.eip == 0x1003);
+    reset_state(&s);
+    s.gpr[1] = 0x12340000;
+    assert(run(&s, (const uint8_t[]){0x67, 0xe3, 0x04}, 3) == PW_OK);        /* jcxz taken on CX */
+    assert(s.eip == 0x1007);
+    assert(run(&s, (const uint8_t[]){0xe3}, 1) == PW_ERR_UNSUPPORTED);       /* truncated */
+}
+
 static void test_segment_stack(void)
 {
     /* PUSH ES, CS, SS, DS: the selector, zero-extended, 4 bytes lower. */
@@ -469,10 +514,11 @@ int main(void)
     test_segment_stores();
     test_segment_stack();
     test_all_registers();
+    test_ecx_branches();
     test_cpuid();
     test_refusals_and_cache();
     assert(pw_x86_hostexec_destroy(&hx) == PW_OK);
-    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR, segment stores, segment push and pop, PUSHAD and POPAD, CPUID; %llu stubs\n",
+    printf("host-exec fallback passed: integer, x87, SSE, FS and SIB forms, the guest's MXCSR, segment stores, segment push and pop, PUSHAD and POPAD, JECXZ and LOOP, CPUID; %llu stubs\n",
            (unsigned long long)hx.compiled);
     return 0;
 }

@@ -624,6 +624,35 @@ static int all_registers_form(PwX86State *s, const uint8_t *src, size_t n)
     return PW_OK;
 }
 
+/* The branches on ECX: JECXZ (E3), LOOP (E2), LOOPE (E1) and LOOPNE (E0),
+ * rel8, which the translator does not handle and the host cannot run in
+ * place (they jump). LOOP* decrement ECX first; none of them changes the
+ * flags; LOOPE and LOOPNE also need ZF set or clear, read from the
+ * committed EFLAGS. With a 67 prefix they use CX (JCXZ). Counter-Strike
+ * 1.6's vgui2.dll uses JECXZ. */
+static int ecx_branch_form(PwX86State *s, const uint8_t *src, size_t n)
+{
+    unsigned at = 0, word = 0, take;
+    uint32_t count;
+
+    if (n && src[0] == 0x67) { word = 1; at = 1; }
+    if (at + 2 > n || src[at] < 0xe0 || src[at] > 0xe3) return PW_ERR_UNSUPPORTED;
+    count = word ? s->gpr[1] & 0xffffu : s->gpr[1];
+    if (src[at] != 0xe3) {
+        count = word ? (count - 1) & 0xffffu : count - 1;
+        s->gpr[1] = word ? (s->gpr[1] & 0xffff0000u) | count : count;
+    }
+    switch (src[at]) {
+    case 0xe3: take = count == 0; break;
+    case 0xe2: take = count != 0; break;
+    case 0xe1: take = count != 0 && (s->eflags & 0x40u); break;
+    default:   take = count != 0 && !(s->eflags & 0x40u); break;
+    }
+    s->eip += at + 2;
+    if (take) s->eip += (uint32_t)(int32_t)(int8_t)src[at + 1];
+    return PW_OK;
+}
+
 /* PUSH and POP of ES, CS, SS and DS (06 07 0E 16 17 1E 1F), which 64-bit
  * mode does not have, so the host cannot run them. A push stores the
  * selector the guest sees (selector_of), zero-extended to 32 bits, or 16
@@ -683,7 +712,8 @@ int pw_x86_hostexec_step(PwX86HostExec *h, PwX86State *s, const uint8_t *src, si
     status = pw_x86_hostexec_plan(s, src, n, &plan);
     if (status == PW_ERR_UNSUPPORTED &&
         (stack_memory_form(s, src, n) == PW_OK || flags_stack_form(s, src, n) == PW_OK ||
-         segment_stack_form(s, src, n) == PW_OK || all_registers_form(s, src, n) == PW_OK)) {
+         segment_stack_form(s, src, n) == PW_OK || all_registers_form(s, src, n) == PW_OK ||
+         ecx_branch_form(s, src, n) == PW_OK)) {
         h->executed++;
         return PW_OK;
     }
