@@ -647,3 +647,33 @@ avoid counting frame-pacing spin loops, repeat short demos and exclude loading.
 The clock is optional and defaults off; it is not used in the signal handler.
 Unavailable clocks disable timing explicitly, and nonzero `clock_errors` make
 a measurement invalid. Console clock operation still needs hardware validation.
+
+### HL2 host check (2026-10-02)
+
+A short `d1_trainstation_01` timedemo was run twice per build, interleaved
+baseline/candidate/baseline/candidate. Both used the same Wine, game prefix,
+DXVK, demo and sampled execution clock (stride 64, with calibration). The
+baseline precedes both reset optimizations and has the same timing code
+applied privately; the candidate includes bounded poisoning and touched-slot
+metadata reset. Each completed timedemo measured only 158 frames after the
+engine's warmup, so these results are too short to certify a performance gain.
+
+| Build | First run | Second run | Median frame time |
+|---|---|---|---|
+| Before reset optimizations | 1.789 s, 88.31 FPS | 1.734 s, 91.12 FPS | 11.15 ms |
+| With reset optimizations | 1.869 s, 84.53 FPS | 1.755 s, 90.03 FPS | 11.47 ms |
+
+The candidate's median frame time was 2.9% longer. This does not reproduce
+an earlier improvement from a single pair of runs and does not establish a
+steady-gameplay speedup. Median launch-to-result time fell from 146.1 s to
+49.8 s, consistent with the reset changes targeting loading. Launch time
+includes Wine startup, map loading, demo warmup and the measured frames;
+it is not translated-code execution time.
+
+All four timedemos completed with no DBT fault diagnostics and no execution
+clock errors. The harness stopped its own Wine prefix after obtaining each
+result; these runs do not establish clean game shutdown. Execution counters
+include loading, and their periodic reports do not isolate the short measured
+frame interval. A longer fixed workload with explicit timing boundaries,
+console measurements and Counter-Strike/Warcraft III regression runs remain
+required before claiming the HL2 translated-time target.
