@@ -615,17 +615,25 @@ it does not establish a gain in steady translated-code execution.
 ## Execution CPU timing
 
 `PW_WOW_EXEC_TIMING=1` enables an optional owner-thread CPU clock around each
-generated-code invocation. On PS5, use the separate
+sampled generated-code invocation. On PS5, use the separate
 `/data/prospero-win/pw_wow_exec_timing` trigger. This also enables periodic
-timing reports. `wowprospero execution` records cumulative `cpu_ns`, invocation
-`calls` and `clock_errors`; totals survive cache resets and are reported again
+timing reports. `wowprospero execution` records cumulative `sample_cpu_ns`,
+invocation `calls`, measured `samples`, `stride` and `clock_errors`; totals
+survive cache resets and are reported again
 at thread termination. Subtract two records from the same thread and process
-to measure a fixed workload. Do not sum cumulative windows.
+to measure a fixed workload. Do not sum cumulative windows. The default
+stride is 64: a pseudorandom sequence selects roughly one invocation in 64,
+avoiding a fixed periodic sampling pattern. `PW_WOW_EXEC_STRIDE=1` measures
+every invocation; it can substantially slow dispatch-heavy workloads. For
+sampled mode, `delta(sample_cpu_ns) * delta(calls) / delta(samples)` estimates
+the total; it is not an exact time. Repeat workloads and report sample counts
+and uncertainty; a short run with few samples cannot certify a speedup.
 
 This clock excludes compilation, cache reset, dispatcher work and time when
 the thread is descheduled. It includes generated entry/exit code and the FP
 invocation wrapper, plus any signal-handler CPU work interrupting an invocation.
-Two thread-clock reads per invocation add overhead; compare identical builds
+Two thread-clock reads per sample add overhead, including a clock-read cost
+in the measured interval; compare identical builds
 with timing enabled, and check FPS with timing disabled too. Use a timedemo to
 avoid counting frame-pacing spin loops, repeat short demos and exclude loading.
 The clock is optional and defaults off; it is not used in the signal handler.

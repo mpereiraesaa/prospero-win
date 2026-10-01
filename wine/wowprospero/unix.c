@@ -243,10 +243,12 @@ static uint64_t execution_clock( void *opaque )
 static void execution_report( struct pw_thread *thread )
 {
     if (!thread->engine.execution_clock) return;
-    fprintf( stderr, "wowprospero execution: tid=%04x cumulative=1 cpu_ns=%llu calls=%llu clock_errors=%llu\n",
+    fprintf( stderr, "wowprospero execution: tid=%04x cumulative=1 sample_cpu_ns=%llu calls=%llu samples=%llu stride=%u clock_errors=%llu\n",
              (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
              (unsigned long long)thread->engine.execution_ns,
              (unsigned long long)thread->engine.execution_calls,
+             (unsigned long long)thread->engine.execution_samples,
+             thread->engine.execution_stride,
              (unsigned long long)thread->engine.execution_clock_errors );
 }
 
@@ -371,8 +373,11 @@ static struct pw_thread *get_thread(void)
 #endif
         if (enabled)
         {
+            const char *option = getenv( "PW_WOW_EXEC_STRIDE" );
+            unsigned long stride = option ? strtoul( option, NULL, 10 ) : 64;
+            if (!stride || stride > UINT32_MAX) stride = 64;
             if (execution_clock( NULL ))
-                pw_x86_engine_set_execution_clock( &thread->engine, execution_clock, NULL );
+                pw_x86_engine_set_execution_clock( &thread->engine, execution_clock, NULL, (uint32_t)stride );
             else fprintf( stderr, "wowprospero execution: unavailable thread CPU clock; timing disabled\n" );
         }
     }

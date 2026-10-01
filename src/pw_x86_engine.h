@@ -42,7 +42,8 @@ typedef struct PwX86Engine {
     uint64_t dispatches,retired_instructions,compiles;
     PwX86ExecutionClock execution_clock;
     void *execution_clock_opaque;
-    uint64_t execution_ns, execution_calls, execution_clock_errors;
+    uint64_t execution_ns, execution_calls, execution_samples, execution_clock_errors;
+    uint32_t execution_stride, execution_random;
     uint64_t protection_calls,protection_bytes;
     uint64_t attempted_links, successful_links;
     uint64_t linked_transitions, dispatcher_transitions;
@@ -186,8 +187,10 @@ int pw_x86_engine_set_counters(PwX86Engine *, unsigned enabled);
 int pw_x86_engine_step(PwX86Engine *,PwX86State *,PwX86StepReport *);
 /* Time generated-code invocation (including its FP wrapper), excluding
  * compilation, resets and dispatcher work. Totals survive cache resets.
- * NULL disables clock reads. Set only from the engine's owner thread. */
-int pw_x86_engine_set_execution_clock(PwX86Engine *, PwX86ExecutionClock, void *opaque);
+ * stride=1 times every invocation; larger strides sample approximately 1/N
+ * invocations. execution_ns sums samples only. NULL disables clock reads.
+ * Set only from the engine's owner thread. */
+int pw_x86_engine_set_execution_clock(PwX86Engine *, PwX86ExecutionClock, void *opaque, uint32_t stride);
 int pw_x86_engine_reset(PwX86Engine *,uint32_t);
 int pw_x86_engine_destroy(PwX86Engine *);
 #endif

@@ -28,7 +28,8 @@ int main(void)
     PwX86CacheEntry entries[8];PwX86State state={.eip=0x1000};PwX86StepReport step;
     assert(pw_vm_posix_backend(&vm)==PW_OK);
     assert(pw_x86_engine_init(&engine,&vm,entries,8,4096,1,source_view,&source)==PW_OK);
-    assert(pw_x86_engine_set_execution_clock(&engine,execution_clock,&clock_now)==PW_OK);
+    assert(pw_x86_engine_set_execution_clock(&engine,execution_clock,&clock_now,0)==PW_ERR_PRECONDITION);
+    assert(pw_x86_engine_set_execution_clock(&engine,execution_clock,&clock_now,1)==PW_OK);
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
     assert(step.instructions==2 && step.retired==2 && !step.cache_hit);
     assert(state.eip==0x1000 && state.gpr[0]==1 && engine.cache.publishes==1);
@@ -79,7 +80,7 @@ int main(void)
     assert(pw_guest_x87_peek(&state.fp,1,value)==PW_OK);
     assert(engine.retired_instructions==2);
     assert(engine.execution_ns==40 && engine.execution_calls==5 && engine.execution_clock_errors==1);
-    assert(pw_x86_engine_set_execution_clock(&engine,NULL,NULL)==PW_OK);
+    assert(pw_x86_engine_set_execution_clock(&engine,NULL,NULL,0)==PW_OK);
     unsigned reads=clock_reads;
 
     const uint8_t x87_stack_trap[]={0xd9,0xe8,0xd9,0xe8,0xd9,0xe8,0xd9,0xe8,
@@ -94,6 +95,16 @@ int main(void)
            state.fp.x87_tag==0 && ((state.fp.x87_status>>11)&7)==0);
     assert(engine.retired_instructions==8);
     assert(clock_reads==reads && engine.execution_calls==5);
+    clock_failed=0;
+    assert(pw_x86_engine_set_execution_clock(&engine,execution_clock,&clock_now,64)==PW_OK);
+    source=(Source){0x1000,loop,sizeof(loop)};
+    assert(pw_x86_engine_reset(&engine,6)==PW_OK);
+    state=(PwX86State){.eip=0x1000};
+    for(unsigned i=0;i<1000;i++)assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
+    assert(state.gpr[0]==1000 && engine.execution_calls==1005);
+    assert(engine.execution_samples>5 && engine.execution_samples<50);
+    assert(clock_reads==2*engine.execution_samples);
+    assert(engine.execution_ns==10*(engine.execution_samples-1)); /* Failed clock sample excluded. */
     assert(pw_x86_engine_destroy(&engine)==PW_OK);
     return 0;
 }
