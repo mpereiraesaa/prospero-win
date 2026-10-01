@@ -475,7 +475,15 @@ behavior unchanged. Individual Windows games remain unvalidated.
      /* Assume that all devices without EGL_MESA_device_software are accelerated. */
      egl->accelerated = !has_extension( extensions, "EGL_MESA_device_software" );
      TRACE( "  - accelerated: %u\n", egl->accelerated );
-@@ -3387,6 +3652,11 @@ BOOL get_opengl_gpus( struct list *gpus )
+@@ -3375,2 +3640,7 @@ const struct opengl_funcs *__wine_get_opengl_driver( UINT version )
++#ifdef WINE_PS5_OPENGL
++    /* DXVK and GDI profiles must not initialize the PS5 EGL/AGC stack. */
++    if (!getenv( "WINE_PS5_OPENGL" )) return NULL;
++#endif
++
+     if (version != WINE_OPENGL_DRIVER_VERSION)
+     {
+@@ -3387,6 +3657,11 @@ BOOL get_opengl_gpus( struct list *gpus )
  {
      struct egl_platform *egl;
  
