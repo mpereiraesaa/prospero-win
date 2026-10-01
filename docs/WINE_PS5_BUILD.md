@@ -551,11 +551,17 @@ remains unchanged.
 To select the backend for one game, set `graphics = opengl` in that game's
 application profile. This selects Wine's builtin `opengl32` and enables the
 PS5 EGL driver for that launch. DXVK and GDI profiles leave EGL initialization
-off. Upstream describes the SDK as experimental OpenGL 4.6 Core and does not
-claim desktop compatibility-profile support. Its current EGL source maps a
-default context request to Mesa's compatibility API, but fixed-function WGL
-games have not yet been validated on the console. Treat `graphics = opengl` as
-experimental until a real legacy game renders successfully. The SDK is
+off. The published SDK 0.6.0 describes experimental OpenGL 4.6 Core support.
+[SDK PR #2](https://github.com/blackbearreloaded/ps5-opengl/pull/2) adds the
+compatibility features used by legacy WGL games; it has not yet been merged
+upstream. An SDK build from that PR rendered Half-Life's `c1a0` map with
+scripted movement and audio on the PS5. Official OpenArena 0.8.8 loaded at
+its fixed `0x00400000` base with the high-address title build, initialized
+`GL_RENDERER: PS5 AGC`, loaded `aggressor`, and ran a bot match. The latter
+run has structured GPU telemetry and game logs; Remote Play did not decode
+a frame, including after the baseline title was restored, so that run has
+no visual capture. Half-Life currently runs at about 5–9 FPS in busy views;
+the SDK's measured per-draw cost is the main bottleneck. The SDK is
 GPL-3.0-or-later, so distributed builds must preserve its source and license
 notices.
 
@@ -672,7 +678,8 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     drawn by the game's own graphics backend. A DXVK game gets
     DXVK's counter (`DXVK_HUD=fps`). A `graphics = opengl` game gets Mesa's
     (`GALLIUM_HUD=fps`), which appears once the PS5 OpenGL SDK draws Mesa's
-    HUD; SDK 0.6.0 doesn't yet. It's on by default; `show_fps = false`
+    HUD in the compatibility SDK candidate from PR #2. The published SDK
+    0.6.0 does not include that HUD. It's on by default; `show_fps = false`
     turns it off;
   - `[input]` binds each DualSense button to a key or a mouse button, and a
     stick moves the pointer. `preset = <name>` shares a mapping from
