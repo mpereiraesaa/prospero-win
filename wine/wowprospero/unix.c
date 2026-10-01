@@ -71,9 +71,10 @@ struct pw_thread
     void *call_stack;          /* guard, then CALL_STACK bytes, or NULL */
     /* PW_WOW_TIMING: TSC cycles spent inside run(), and outside it by the
      * reason the previous run returned for, since t_window. */
-    uint64_t t_mark, t_window, t_inside, t_unix, t_sys, t_other;
+    uint64_t t_mark, t_window, t_inside, t_unix, t_sys, t_other, t_unix_long;
     uint64_t wall_window;
-    uint32_t n_unix, n_sys, n_other, n_resets, n_flushes, last_reason;
+    double tsc_per_us;       /* measured at the last report */
+    uint32_t n_unix, n_sys, n_other, n_unix_long, n_resets, n_flushes, last_reason;
 };
 
 C_ASSERT( sizeof(((I386_CONTEXT *)0)->ExtendedRegisters) == PW_GUEST_FXSAVE_BYTES );
@@ -842,17 +843,20 @@ static void timing_report( struct pw_thread *thread, uint64_t tsc )
 
     if (thread->n_unix + thread->n_sys > 1000)
         fprintf( stderr, "wowprospero timing: tid=%04x run=%.1f%% unix=%.1f%% (%.0f/s %.2fus) "
-                 "sys=%.1f%% (%.0f/s %.2fus) other=%.1f%% (%u) resets=%u flushes=%u\n",
+                 "sys=%.1f%% (%.0f/s %.2fus) other=%.1f%% (%u) unix_over_1ms=%.1f%% (%u) resets=%u flushes=%u\n",
                  (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
                  100.0 * thread->t_inside / cycles,
                  100.0 * thread->t_unix / cycles, thread->n_unix / seconds,
                  thread->n_unix ? thread->t_unix / per_us / thread->n_unix : 0.0,
                  100.0 * thread->t_sys / cycles, thread->n_sys / seconds,
                  thread->n_sys ? thread->t_sys / per_us / thread->n_sys : 0.0,
-                 100.0 * thread->t_other / cycles, thread->n_other, thread->n_resets, thread->n_flushes );
+                 100.0 * thread->t_other / cycles, thread->n_other,
+                 100.0 * thread->t_unix_long / cycles, thread->n_unix_long, thread->n_resets, thread->n_flushes );
     thread->t_window = tsc;
     thread->wall_window = wall;
-    thread->t_inside = thread->t_unix = thread->t_sys = thread->t_other = 0;
+    thread->t_inside = thread->t_unix = thread->t_sys = thread->t_other = thread->t_unix_long = 0;
+    thread->n_unix_long = 0;
+    thread->tsc_per_us = per_us;
     thread->n_unix = thread->n_sys = thread->n_other = thread->n_resets = thread->n_flushes = 0;
 }
 
@@ -866,7 +870,17 @@ static void timing_enter( struct pw_thread *thread )
         thread->t_window = tsc;
         thread->wall_window = timing_now_ns();
     }
-    else if (thread->last_reason == PW_WOW_UNIXCALL) { thread->t_unix += outside; thread->n_unix++; }
+    else if (thread->last_reason == PW_WOW_UNIXCALL)
+    {
+        /* A call that blocks (a wait for the display, say) rather than works. */
+        thread->t_unix += outside;
+        thread->n_unix++;
+        if (thread->tsc_per_us && outside > 1000 * thread->tsc_per_us)
+        {
+            thread->t_unix_long += outside;
+            thread->n_unix_long++;
+        }
+    }
     else if (thread->last_reason == PW_WOW_SYSCALL) { thread->t_sys += outside; thread->n_sys++; }
     else { thread->t_other += outside; thread->n_other++; }
     thread->t_mark = tsc;
