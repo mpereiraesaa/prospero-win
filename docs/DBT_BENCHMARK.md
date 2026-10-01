@@ -589,3 +589,16 @@ addresses can be resolved against the exact linked ELF. Module attribution
 may change after an unload, so retain exact artifacts and loader records.
 No raw guest code is dumped. Use these records to distinguish translation
 or cache-reset work from execution of translated instructions.
+
+## Reset poisoning extent
+
+The engine now poisons only the published code extent when discarding its
+cache, and clears the corresponding block-map prefix. Previously every reset
+wrote `0xcc` across the entire reserved arena (128 MiB for the first WoW64
+thread), even when a loader flush had discarded only a few blocks. Native-PC
+sampling during HL2 with DXVK identified these writes as the dominant startup
+cost. Generation changes, cache metadata clearing, indirect-target clearing
+and poisoning of discarded instructions are preserved. Tests check that old
+code becomes traps, unused arena bytes remain untouched and execution after
+reset recompiles correctly. This removes reset overhead; the separate
+steady-workload HL2 translated-time target still requires measurement.

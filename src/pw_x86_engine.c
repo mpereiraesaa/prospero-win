@@ -724,6 +724,7 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
 {
     if(!engine || !engine->initialized)return PW_ERR_PRECONDITION;
     unsigned was_sealed=engine->sealed;
+    const size_t discarded_bytes=engine->cache.cursor;
     if((engine->sealed || engine->failed) &&
        protection(engine,0,engine->code.bytes,PW_PROT_READ|PW_PROT_WRITE)!=PW_OK)
         return PW_ERR_VM;
@@ -743,14 +744,18 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
             engine->failed=1;
         return status;
     }
-    memset(engine->code.write_base,0xcc,engine->code.bytes);
+    /* Trap the discarded code, including its alignment padding. Unused arena
+     * pages have never held published entry points and need no reset writes.
+     * Poisoning the whole reserved arena made short flushes write 128 MiB. */
+    if(discarded_bytes) memset(engine->code.write_base,0xcc,discarded_bytes);
     /* Every indirect target pointed into the code just discarded. */
     if(engine->indirect_targets)
         memset(engine->indirect_targets,0,PW_X86_ENGINE_INDIRECT_SLOTS*sizeof(PwX86IndirectTarget));
     if(engine->chain_targets)
         memset(engine->chain_targets,0,PW_X86_REENCODE_CHAIN_SLOTS*sizeof(PwX86IndirectTarget));
     if(engine->block_map)
-        memset(engine->block_map,0,(engine->code.bytes/PW_X86_ENGINE_FAULT_GRANULE+1)*sizeof(uint32_t));
+        memset(engine->block_map,0,
+               ((discarded_bytes+PW_X86_ENGINE_FAULT_GRANULE-1)/PW_X86_ENGINE_FAULT_GRANULE)*sizeof(uint32_t));
     engine->last_published=0;
     engine->dispatches=0;engine->retired_instructions=0;engine->failed=0;
     return emit_return_stub(engine);

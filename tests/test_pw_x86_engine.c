@@ -29,7 +29,17 @@ int main(void)
     assert(engine.dispatches==2 && engine.retired_instructions==4);
     assert(engine.compiles==1 && engine.protection_calls==2);
 
-    assert(pw_x86_engine_reset(&engine,2)==PW_OK);
+    {
+        size_t used=engine.cache.cursor;
+        uint8_t *code=engine.code.write_base;
+        assert(used && used<engine.code.bytes);
+        assert(vm.protect(vm.context,&engine.code,0,engine.code.bytes,PW_PROT_READ|PW_PROT_WRITE)==PW_OK);
+        code[used]=0x5a;
+        code[engine.code.bytes-1]=0xa5;
+        assert(pw_x86_engine_reset(&engine,2)==PW_OK);
+        for(size_t i=0;i<used;i++)assert(code[i]==0xcc);
+        assert(code[used]==0x5a && code[engine.code.bytes-1]==0xa5);
+    }
     state.eip=0x1000;
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && !step.cache_hit);
     assert(engine.cache.generation==2 && engine.cache.publishes==2 && engine.cache.resets==1);
