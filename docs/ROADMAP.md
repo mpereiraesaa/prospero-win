@@ -5,7 +5,9 @@
   drivers and patches rather than game by game.
 - **Other firmwares.** Everything so far was tested on 12.02. Reports from
   other firmwares tell us what depends on the firmware.
-- **OpenGL games**, through the PS5's own OpenGL, alongside DXVK.
+- **More OpenGL games.** Game profiles can select the PS5 OpenGL backend
+  alongside DXVK. Broaden compatibility and reduce draw overhead in the SDK;
+  its legacy WGL support is awaiting upstream review.
 - **DirectInput controllers.** Today the DualSense reaches games as a
   keyboard and mouse, or as an Xbox controller through XInput.
 - **Speed.** The x86 translator reaches 85–93% of native speed on the

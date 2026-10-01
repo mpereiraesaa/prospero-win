@@ -557,15 +557,26 @@ compatibility features used by legacy WGL games; it has not yet been merged
 upstream. An SDK build from that PR rendered Half-Life's `c1a0` map with
 scripted movement and audio on the PS5. Official OpenArena 0.8.8 loaded at
 its fixed `0x00400000` base with the high-address title build, initialized
-`GL_RENDERER: PS5 AGC`, loaded `aggressor`, and ran a bot match. The latter
-run has structured GPU telemetry and game logs; Remote Play did not decode
-a frame, including after the baseline title was restored, so that run has
-no visual capture. Half-Life currently runs at about 5–9 FPS in busy views;
-the SDK's measured per-draw cost is the main bottleneck. The SDK is
-GPL-3.0-or-later, so distributed builds must preserve its source and license
-notices.
+`GL_RENDERER: PS5 AGC`, loaded `aggressor`, and ran a bot match.
 
-All of these ran on one ps5vk SDK (`libps5vk.a` SHA-256 `98f8a17c…`),
+On 2026-10-01, one Wine runtime linked against the compatibility SDK and
+RADV ran both backends under their own profiles. OpenArena's profile selected
+`graphics = opengl`; its match produced 98 GPU-present intervals with no
+present failure, input rejection or rejected draw, and its game log recorded
+bots fighting (`ps5log/1` run `20261001T065158237Z`). Warcraft III's
+`graphics = dxvk` run reached its intro or menu on the TV, confirmed by the
+owner, with Vulkan presentation and audio (`20261001T064255256Z`). The
+combined build used `win32u.prx` SHA-256 `48c3a0a6…` and `libvulkan.prx`
+SHA-256 `89a3f17b…`. Wine's EGL driver is gated before initialization when
+`WINE_PS5_OPENGL` is absent; this prevents DirectDraw from probing EGL while
+Vulkan owns VideoOut. The normal
+non-scripted launcher built from the same source also opened its game list
+with VideoOut and pad input ready. These bounded runs restored the prior
+title files and profiles afterward. The SDK is GPL-3.0-or-later, so
+distributed builds must preserve its source and license notices.
+
+The Vulkan controls above ran on one ps5vk SDK (`libps5vk.a` SHA-256
+`98f8a17c…`),
 whose changes are merged in ps5vk (through PR #607). Along the way ps5vk
 gained DXVK's mutable BGRA8 back buffer, its barriers, clear-only render
 passes, transfer-only submissions, the D3D9 presenter's `R,G,B,ONE` view and
