@@ -94,6 +94,19 @@ static Run run(const uint8_t *code, size_t bytes, unsigned markers)
     current = NULL;
     r.reencoded = engine.reencoded_blocks;
     r.redirected = redirected;
+    if (engine.fault_markers) {
+        uintptr_t base = (uintptr_t)engine.code.exec_base;
+        assert(!pw_x86_engine_host_block(&engine, base - 1));
+        assert(!pw_x86_engine_host_block(&engine, base + engine.code.bytes));
+        for (unsigned i = 0; i < engine.cache.capacity; i++) {
+            const PwX86CacheEntry *e = &entries[i];
+            if (!e->used || e->generation != engine.cache.generation) continue;
+            assert(pw_x86_engine_host_block(&engine, base + e->code_offset) == e);
+            assert(pw_x86_engine_host_block(&engine, base + e->code_offset + e->code_bytes - 1) == e);
+        }
+        assert(pw_x86_engine_reset(&engine, engine.cache.generation + 1) == PW_OK);
+        assert(!pw_x86_engine_host_block(&engine, base));
+    }
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
     return r;
 }

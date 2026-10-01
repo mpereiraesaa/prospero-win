@@ -300,26 +300,33 @@ static void map_block(PwX86Engine *engine, const PwX86CacheEntry *entry)
         if(!engine->block_map[g]) engine->block_map[g]=index;
 }
 
-uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *engine, uintptr_t rip)
+const PwX86CacheEntry *pw_x86_engine_host_block(const PwX86Engine *engine, uintptr_t rip)
 {
     const uintptr_t low = (uintptr_t)engine->code.exec_base;
     uint32_t index;
 
-    if(!engine->block_map || rip < low || rip >= low + engine->code.bytes) return 0;
+    if(!engine->block_map || rip < low || rip - low >= engine->code.bytes) return NULL;
     index = engine->block_map[(rip - low) / PW_X86_ENGINE_FAULT_GRANULE];
     while(index && index <= engine->cache.capacity) {
         const PwX86CacheEntry *e = &engine->cache.entries[index - 1];
         const uintptr_t start = low + e->code_offset;
-        if(rip < start) return 0;
-        if(rip < start + e->code_bytes) {
-            size_t path;
-            if(!e->fault_table_offset) return 0;
-            path = pw_x86_fault_table_path((const uint8_t *)start, e->fault_table_offset, rip - start);
-            return path ? start + path : 0;
-        }
+        if(!e->used || e->generation != engine->cache.generation || rip < start) return NULL;
+        if(rip - start < e->code_bytes) return e;
         index = e->arena_next;
     }
-    return 0;
+    return NULL;
+}
+
+uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *engine, uintptr_t rip)
+{
+    const PwX86CacheEntry *e = pw_x86_engine_host_block(engine, rip);
+    uintptr_t start;
+    size_t path;
+
+    if(!e || !e->fault_table_offset) return 0;
+    start = (uintptr_t)engine->code.exec_base + e->code_offset;
+    path = pw_x86_fault_table_path((const uint8_t *)start, e->fault_table_offset, rip - start);
+    return path ? start + path : 0;
 }
 
 int pw_x86_engine_set_counters(PwX86Engine *engine, unsigned enabled)

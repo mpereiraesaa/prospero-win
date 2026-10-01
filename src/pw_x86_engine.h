@@ -153,6 +153,10 @@ int pw_x86_engine_call_stack_fault(const PwX86Engine *, uintptr_t address, uintp
 /* Where to resume a host fault at rip: the refused-access path of the
  * marked access that faulted, or 0 when rip is not one (not ours). Safe in
  * a signal handler: it reads only the engine and its code. */
+/* Resolve a sampled host PC using the arena's block map, including entry and
+ * exit code. Requires fault markers and the owner thread's stable cache;
+ * returns NULL for stubs, gaps, outside addresses and stale generations. */
+const PwX86CacheEntry *pw_x86_engine_host_block(const PwX86Engine *, uintptr_t rip);
 uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *, uintptr_t rip);
 /* Leave the statistics counters out of blocks translated from now on (they
  * are on by default): a step then reports no retired instructions, and the
