@@ -1,0 +1,56 @@
+name: Game compatibility report
+description: Share a working game, a failure, or a result from another firmware.
+title: "[Game] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        You do not need a compiler or SDK to report a game. Tell us what you played and where testing stopped. Attach the report ZIP or a reviewed log by dragging it into the attachment field. Do not upload game files, keys or a whole Wine prefix.
+  - type: input
+    id: game
+    attributes:
+      label: Game and edition/version
+      placeholder: Warcraft III Reign of Chaos 1.27a, retail installer
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: prospero-win release or source commit
+      description: Use the version in your diagnostic report. Write unknown if unavailable.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: PS5 firmware and homebrew loader
+    validations:
+      required: true
+  - type: input
+    id: profile
+    attributes:
+      label: Profile name/revision and changes
+      description: Include graphics backend (GDI, DXVK/RADV or OpenGL), resolution and controller preset.
+    validations:
+      required: true
+  - type: textarea
+    id: coverage
+    attributes:
+      label: What you tested
+      description: Include map/level, steps, play duration, controls, picture and sound, save then reload, and return to launcher. Mark anything untested.
+    validations:
+      required: true
+  - type: textarea
+    id: failure
+    attributes:
+      label: Failure or remaining limitations
+      description: Say what you expected, what happened, and how to reproduce it. A menu-only result is useful too.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic attachment
+      description: Drag a reviewed report ZIP or log here. If unavailable, explain why. Screenshots/video can supplement the log.
+    validations:
+      required: true

@@ -1,0 +1,34 @@
+name: Runtime or installation bug
+description: Report a launcher, installation, graphics, sound, input or logging problem.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report a particular game's tested gameplay with the game report form. For other problems, complete the fields below. Never attach game binaries, a whole prefix, keys or unreviewed personal information.
+  - type: input
+    id: version
+    attributes:
+      label: Release/source commit and firmware
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the loader, game/profile if relevant, and the action immediately before the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: attachment
+    attributes:
+      label: Diagnostic report or installation error
+      description: Drag a reviewed ZIP/log here, or paste the error. Say if logging was unavailable.
+    validations:
+      required: true

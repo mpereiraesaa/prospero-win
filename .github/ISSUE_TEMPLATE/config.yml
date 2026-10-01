@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Game profiles and installer recipes
+    url: https://github.com/mpereiraesaa/prospero-win-profiles/issues
+    about: Submit profile, controller preset and installer recipe improvements here.
