@@ -717,13 +717,14 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   - `[display] refresh = 120` asks the display for 120 Hz when the game uses
     `graphics = opengl` (Wine patch 0722). It needs an OpenGL SDK built with
     runtime display modes (`PS5_DYNAMIC_SCANOUT=1`), and a title that
-    declares the capability in `sce_sys/param.json` (`attribute3` bits
-    `0x80040`); without them the console refuses 120 Hz. The published title
-    does not declare it yet: with the declaration, the console starts such a
-    title with a 120 Hz signal, and on FW 12.02 its frames were no longer
-    held to the display's refresh even after the output was set back to
-    60 Hz, so a 60 Hz game ran unpaced. A display without 120 Hz keeps
-    presenting at 60. The default is 60;
+    declares 120 Hz output in `sce_sys/param.json`: `attribute3` bit `0x40`,
+    which this title sets; without it the console refuses 120 Hz. Measured
+    on FW 12.02: the title still starts at 60 Hz, and a game left at 60 stays
+    held to the display's refresh. Don't add bit `0x80000` as well (the SDK's
+    `native-display-metadata.py` sets both): with it, frames were no longer
+    paced at 60 Hz, which looks like variable refresh. A display without
+    120 Hz keeps presenting at 60. The default is 60. Half-Life at 1080p ran
+    at 93–98 fps with `refresh = 120`;
   - `[input]` binds each DualSense button to a key or a mouse button, and a
     stick moves the pointer. `preset = <name>` shares a mapping from
     `<root>/input/<name>.input`.
