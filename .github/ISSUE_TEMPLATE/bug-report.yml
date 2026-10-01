@@ -28,7 +28,7 @@ body:
   - type: textarea
     id: attachment
     attributes:
-      label: Diagnostic report or installation error
-      description: Drag a reviewed ZIP/log here, or paste the error. Say if logging was unavailable.
+      label: Live log or installation error
+      description: Drag a reviewed log here, or paste the error. Say if logging was unavailable.
     validations:
       required: true

@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        You do not need a compiler or SDK to report a game. Tell us what you played and where testing stopped. Attach the report ZIP or a reviewed log by dragging it into the attachment field. Do not upload game files, keys or a whole Wine prefix.
+        You do not need a compiler or SDK to report a game. Tell us what you played and where testing stopped. Attach a reviewed live log, if available, by dragging it into the attachment field. See docs/GETTING_STARTED.md for the current PC log listener setup. Do not upload game files, keys or a whole Wine prefix.
   - type: input
     id: game
     attributes:
@@ -17,13 +17,13 @@ body:
     id: runtime
     attributes:
       label: prospero-win release or source commit
-      description: Use the version in your diagnostic report. Write unknown if unavailable.
+      description: Use the installed version or source commit. Write unknown if unavailable.
     validations:
       required: true
   - type: input
     id: environment
     attributes:
-      label: PS5 firmware and homebrew loader
+      label: PS5 firmware and homebrew loader (test environment)
     validations:
       required: true
   - type: input
@@ -51,6 +51,6 @@ body:
     id: diagnostics
     attributes:
       label: Diagnostic attachment
-      description: Drag a reviewed report ZIP or log here. If unavailable, explain why. Screenshots/video can supplement the log.
+      description: Drag a reviewed log here. If unavailable, explain why. Screenshots/video can supplement the log.
     validations:
       required: true

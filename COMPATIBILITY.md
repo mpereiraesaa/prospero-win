@@ -1,5 +1,7 @@
 # Game compatibility
 
+The homebrew is firmware agnostic and uses no firmware-specific offsets.
+Firmware below identifies the reported test environment, not an app requirement.
 These are reported console results, not promises that a whole game works.
 All reports below come from one PS5 on firmware **12.02**. Other firmware,
 long sessions, multiplayer and complete campaigns remain unverified.
