@@ -209,6 +209,7 @@ wine/patches/0720-opengl32-batch-immediate-mode-calls.patch
 wine/patches/0721-win32u-ps5-log-opengl-frame-rate.patch
 wine/patches/0722-win32u-ps5-opengl-refresh-rate.patch
 wine/patches/0723-win32u-ps5-opengl-cursor.patch
+wine/patches/0730-server-ps5-anonymous-mappings-in-shared-memory.patch
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
