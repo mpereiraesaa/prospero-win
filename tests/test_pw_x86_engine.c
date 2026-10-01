@@ -3,10 +3,20 @@
 #include "../src/pw_vm_posix.h"
 #include <assert.h>
 
+static uint64_t clock_now;
+static unsigned clock_reads, clock_failed;
+static uint64_t execution_clock(void *opaque)
+{
+    assert(opaque==&clock_now);
+    clock_reads++;
+    clock_now+=10;
+    return clock_failed?0:clock_now;
+}
 typedef struct Source { uint32_t base;const uint8_t *data;size_t bytes; } Source;
 static int source_view(void *opaque,uint32_t pc,const uint8_t **data,size_t *bytes)
 {
     Source *s=opaque;
+    clock_now+=1000; /* Simulated translation work must not count as execution. */
     if(pc<s->base || (uint64_t)pc>=s->base+s->bytes)return PW_ERR_NOT_FOUND;
     size_t offset=pc-s->base;*data=s->data+offset;*bytes=s->bytes-offset;return PW_OK;
 }
@@ -18,16 +28,19 @@ int main(void)
     PwX86CacheEntry entries[8];PwX86State state={.eip=0x1000};PwX86StepReport step;
     assert(pw_vm_posix_backend(&vm)==PW_OK);
     assert(pw_x86_engine_init(&engine,&vm,entries,8,4096,1,source_view,&source)==PW_OK);
+    assert(pw_x86_engine_set_execution_clock(&engine,execution_clock,&clock_now)==PW_OK);
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
     assert(step.instructions==2 && step.retired==2 && !step.cache_hit);
     assert(state.eip==0x1000 && state.gpr[0]==1 && engine.cache.publishes==1);
     assert(engine.compiles==1 && engine.protection_calls==2 &&
            engine.protection_bytes==8192);
+    assert(engine.execution_ns==10 && engine.execution_calls==1 && clock_reads==2);
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
     assert(step.instructions==2 && step.retired==2 && step.cache_hit);
     assert(state.eip==0x1000 && state.gpr[0]==2 && engine.cache.hits==1);
     assert(engine.dispatches==2 && engine.retired_instructions==4);
     assert(engine.compiles==1 && engine.protection_calls==2);
+    assert(engine.execution_ns==20 && engine.execution_calls==2 && clock_reads==4);
 
     {
         size_t used=engine.cache.cursor;
@@ -43,6 +56,7 @@ int main(void)
     state.eip=0x1000;
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && !step.cache_hit);
     assert(engine.cache.generation==2 && engine.cache.publishes==2 && engine.cache.resets==1);
+    assert(engine.execution_ns==30 && engine.execution_calls==3);
 
     const uint8_t fault[]={0xbc,0,0,0,0,0x50}; /* mov esp,0; push esp */
     source=(Source){0x2000,fault,sizeof(fault)};
@@ -50,6 +64,8 @@ int main(void)
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_ERR_VM);
     assert(step.instructions==2 && step.retired==1 && state.eip==0x2005);
     assert(engine.retired_instructions==1);
+    assert(engine.execution_ns==40 && engine.execution_calls==4); /* Faulting invocation included. */
+    clock_failed=1;
 
     const uint8_t x87_trap[]={0xd9,0xe8,0xd9,0xee,0xde,0xf9};
     source=(Source){0x3000,x87_trap,sizeof(x87_trap)};
@@ -62,6 +78,9 @@ int main(void)
     uint8_t value[10];assert(pw_guest_x87_peek(&state.fp,0,value)==PW_OK);
     assert(pw_guest_x87_peek(&state.fp,1,value)==PW_OK);
     assert(engine.retired_instructions==2);
+    assert(engine.execution_ns==40 && engine.execution_calls==5 && engine.execution_clock_errors==1);
+    assert(pw_x86_engine_set_execution_clock(&engine,NULL,NULL)==PW_OK);
+    unsigned reads=clock_reads;
 
     const uint8_t x87_stack_trap[]={0xd9,0xe8,0xd9,0xe8,0xd9,0xe8,0xd9,0xe8,
         0xd9,0xe8,0xd9,0xe8,0xd9,0xe8,0xd9,0xe8,0xd9,0xe8};
@@ -74,6 +93,7 @@ int main(void)
            state.fp.x87_pending==1 && (state.fp.x87_status&0x02c1)==0x02c1 &&
            state.fp.x87_tag==0 && ((state.fp.x87_status>>11)&7)==0);
     assert(engine.retired_instructions==8);
+    assert(clock_reads==reads && engine.execution_calls==5);
     assert(pw_x86_engine_destroy(&engine)==PW_OK);
     return 0;
 }

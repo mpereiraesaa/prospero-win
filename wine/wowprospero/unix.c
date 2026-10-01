@@ -232,6 +232,24 @@ static int setup_thread( void *context, const PwWowThreadBudget *budget )
     return -1;
 }
 
+static uint64_t execution_clock( void *opaque )
+{
+    struct timespec now;
+    (void)opaque;
+    if (clock_gettime( CLOCK_THREAD_CPUTIME_ID, &now )) return 0;
+    return now.tv_sec * 1000000000ull + now.tv_nsec;
+}
+
+static void execution_report( struct pw_thread *thread )
+{
+    if (!thread->engine.execution_clock) return;
+    fprintf( stderr, "wowprospero execution: tid=%04x cumulative=1 cpu_ns=%llu calls=%llu clock_errors=%llu\n",
+             (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+             (unsigned long long)thread->engine.execution_ns,
+             (unsigned long long)thread->engine.execution_calls,
+             (unsigned long long)thread->engine.execution_clock_errors );
+}
+
 static struct pw_thread *get_thread(void)
 {
     struct pw_thread *thread = self;
@@ -345,6 +363,19 @@ static struct pw_thread *get_thread(void)
     thread->cache_epoch = (uint32_t)code_generation;
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
+    {
+        int enabled = getenv( "PW_WOW_EXEC_TIMING" ) != NULL;
+#ifdef __PROSPERO__
+        struct stat st;
+        if (!stat( "/data/prospero-win/pw_wow_exec_timing", &st )) enabled = 1;
+#endif
+        if (enabled)
+        {
+            if (execution_clock( NULL ))
+                pw_x86_engine_set_execution_clock( &thread->engine, execution_clock, NULL );
+            else fprintf( stderr, "wowprospero execution: unavailable thread CPU clock; timing disabled\n" );
+        }
+    }
     profile_add_thread( thread );
     return self = thread;
 }
@@ -811,12 +842,13 @@ static uint64_t timing_now_ns(void)
 
 static void timing_init(void)
 {
-    timing_enabled = getenv( "PW_WOW_TIMING" ) != NULL;
+    timing_enabled = getenv( "PW_WOW_TIMING" ) != NULL || getenv( "PW_WOW_EXEC_TIMING" ) != NULL;
 #ifdef PW_WOW_TIMING_TRIGGER
     {
         struct stat st;  /* access() is refused to a title */
 
         if (!stat( PW_WOW_TIMING_TRIGGER, &st )) timing_enabled = 1;
+        if (!stat( "/data/prospero-win/pw_wow_exec_timing", &st )) timing_enabled = 1;
     }
 #endif
 }
@@ -827,6 +859,8 @@ static void timing_report( struct pw_thread *thread, uint64_t tsc )
     double cycles = (double)(tsc - thread->t_window);
     double seconds = (wall - thread->wall_window) / 1e9;
     double per_us = cycles / seconds / 1e6;
+
+    execution_report( thread );
 
     if (thread->n_unix + thread->n_sys > 1000)
         fprintf( stderr, "wowprospero timing: tid=%04x run=%.1f%% unix=%.1f%% (%.0f/s %.2fus) "
@@ -1017,6 +1051,7 @@ static NTSTATUS thread_term( void *args )
     struct pw_thread *thread = self;
 
     if (!thread) return STATUS_SUCCESS;
+    execution_report( thread );
     self = NULL;
     if (thread->engine.fault_markers) register_arena( thread, 0 );
     free(thread->profile);

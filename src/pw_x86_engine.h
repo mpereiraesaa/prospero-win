@@ -12,6 +12,8 @@ enum { PW_X86_ENGINE_MAX_SOURCE=15*32, PW_X86_ENGINE_MAX_CODE=16384,
  * remains alive and unchanged for the engine generation. */
 typedef int (*PwX86SourceView)(void *opaque,uint32_t guest_pc,
                                const uint8_t **source,size_t *bytes);
+/* Optional owner-thread CPU clock in nanoseconds; zero means unavailable. */
+typedef uint64_t (*PwX86ExecutionClock)(void *opaque);
 
 typedef struct PwX86StepReport {
     uint32_t guest_pc;
@@ -38,6 +40,9 @@ typedef struct PwX86Engine {
     PwX86SourceView source_view;
     void *source_opaque;
     uint64_t dispatches,retired_instructions,compiles;
+    PwX86ExecutionClock execution_clock;
+    void *execution_clock_opaque;
+    uint64_t execution_ns, execution_calls, execution_clock_errors;
     uint64_t protection_calls,protection_bytes;
     uint64_t attempted_links, successful_links;
     uint64_t linked_transitions, dispatcher_transitions;
@@ -179,6 +184,10 @@ uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *, uintptr_t rip);
  * slots and every guest-visible effect are unchanged. */
 int pw_x86_engine_set_counters(PwX86Engine *, unsigned enabled);
 int pw_x86_engine_step(PwX86Engine *,PwX86State *,PwX86StepReport *);
+/* Time generated-code invocation (including its FP wrapper), excluding
+ * compilation, resets and dispatcher work. Totals survive cache resets.
+ * NULL disables clock reads. Set only from the engine's owner thread. */
+int pw_x86_engine_set_execution_clock(PwX86Engine *, PwX86ExecutionClock, void *opaque);
 int pw_x86_engine_reset(PwX86Engine *,uint32_t);
 int pw_x86_engine_destroy(PwX86Engine *);
 #endif

@@ -669,6 +669,7 @@ dispatch:;
     state->call_stack_top = engine->call_stack_top;
     void *code_entry=(uint8_t *)engine->code.exec_base+entry->code_offset+entry->canonical_entry_offset;
     int invoked;
+    uint64_t execution_begin=0;
     if(engine->native_fp && pw_x86_reencoded(&entry->entry_contract)) {
         /* The guest's x87, MMX and SSE state in the host FPU for the chain;
          * it stays in the image afterwards (pw_x86_engine_fp_sync). */
@@ -677,11 +678,21 @@ dispatch:;
             pw_guest_fp_to_fxsave(&state->fp,image);
             engine->fp_image_live=1;
         }
+        if(engine->execution_clock)
+            execution_begin=engine->execution_clock(engine->execution_clock_opaque);
         invoked=pw_x86_run_block_fp(state,code_entry,image);
     } else {
         /* Emitter blocks work on state->fp. */
         pw_x86_engine_fp_sync(engine,state);
+        if(engine->execution_clock)
+            execution_begin=engine->execution_clock(engine->execution_clock_opaque);
         invoked=invoke(code_entry,state);
+    }
+    if(engine->execution_clock) {
+        uint64_t end=engine->execution_clock(engine->execution_clock_opaque);
+        engine->execution_calls++;
+        if(!execution_begin || !end || end<execution_begin)engine->execution_clock_errors++;
+        else engine->execution_ns+=end-execution_begin;
     }
 
     /* The block a failed step entered, for the fault report. Taken only on
@@ -725,6 +736,14 @@ dispatch:;
     }
     engine->retired_instructions+=report->retired;
     return invoked==PW_ERR_X87_TRAP?PW_ERR_X87_TRAP:invoked?PW_ERR_VM:PW_OK;
+}
+
+int pw_x86_engine_set_execution_clock(PwX86Engine *engine, PwX86ExecutionClock clock, void *opaque)
+{
+    if(!engine || !engine->initialized)return PW_ERR_PRECONDITION;
+    engine->execution_clock=clock;
+    engine->execution_clock_opaque=opaque;
+    return PW_OK;
 }
 
 int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)

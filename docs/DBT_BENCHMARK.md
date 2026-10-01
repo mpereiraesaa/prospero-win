@@ -611,3 +611,23 @@ its list membership. Every touched entry is physically zeroed, preserving
 lookup and generation behavior. Tests cover unpublished pending buckets,
 duplicate registration and reuse after reset. This targets loading flushes;
 it does not establish a gain in steady translated-code execution.
+
+## Execution CPU timing
+
+`PW_WOW_EXEC_TIMING=1` enables an optional owner-thread CPU clock around each
+generated-code invocation. On PS5, use the separate
+`/data/prospero-win/pw_wow_exec_timing` trigger. This also enables periodic
+timing reports. `wowprospero execution` records cumulative `cpu_ns`, invocation
+`calls` and `clock_errors`; totals survive cache resets and are reported again
+at thread termination. Subtract two records from the same thread and process
+to measure a fixed workload. Do not sum cumulative windows.
+
+This clock excludes compilation, cache reset, dispatcher work and time when
+the thread is descheduled. It includes generated entry/exit code and the FP
+invocation wrapper, plus any signal-handler CPU work interrupting an invocation.
+Two thread-clock reads per invocation add overhead; compare identical builds
+with timing enabled, and check FPS with timing disabled too. Use a timedemo to
+avoid counting frame-pacing spin loops, repeat short demos and exclude loading.
+The clock is optional and defaults off; it is not used in the signal handler.
+Unavailable clocks disable timing explicitly, and nonzero `clock_errors` make
+a measurement invalid. Console clock operation still needs hardware validation.
