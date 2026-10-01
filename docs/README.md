@@ -2,6 +2,9 @@
 
 ## Playing
 
+- [Game compatibility](../COMPATIBILITY.md): tested versions, gameplay scope
+  and known gaps, with links to the public profiles.
+
 - [Getting started](GETTING_STARTED.md): what you need on the PS5, installing
   the app, your first game, getting a log.
 - [Installing games](INSTALLING_GAMES.md): installing a game on your PC with

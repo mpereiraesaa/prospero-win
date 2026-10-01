@@ -295,3 +295,4 @@ tests/test_publish_release.py
 .github/release-notes.md
 wine/ps5/pw_ws2_32_libc.c
 wine/patches/0545-ntdll-keep-the-pages-that-fault-most-often.patch
+COMPATIBILITY.md

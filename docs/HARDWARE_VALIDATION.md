@@ -13,6 +13,14 @@ inputs.
 - Structured evidence: `ps5log/1` over TCP, correlated with exact artifact
   hashes and optional private Remote Play observation.
 
+## Current compatibility
+
+[COMPATIBILITY.md](../COMPATIBILITY.md) records the current reported game
+coverage. The sections below are dated bring-up history; their unresolved
+gaps describe those artifacts and are not a current compatibility list.
+Later play reports supersede the early Pinball no-redraw observation.
+Graceful close and save/load still need explicit results per release.
+
 ## Earlier results
 
 Before the title ran Wine, a direct Win32 runtime (our own PE loader and a
@@ -24,7 +32,7 @@ it validated is the one Wine's WoW64 layer now uses.
 
 ## Title self-restart with arguments
 
-The planned launcher runs one game per title process: choosing a game
+The launcher runs one game per title process: choosing a game
 restarts the title with the game's profile as arguments, and closing it
 restarts the title into the launcher, so every game starts Wine in a clean
 process. A probe build (since removed) measured it.
@@ -63,7 +71,7 @@ and restored the baseline eboot afterwards:
 4. The same open and close happened a second time in a fresh process, and
    the launcher ended the script at `cycle=2`.
 
-Two gaps remain:
+Two gaps remained in that early build:
 
 - **Graceful close.** Alt+F4 did not close Pinball, so the return to the
   launcher took the forced path, which discards Wine's state without an
@@ -110,7 +118,8 @@ baseline restored after each:
   observed on the TV and in a Remote Play capture, as did a D3D11
   swapchain resized from 1080p to 4K in one process.
 
-No Direct3D game has been run yet. Details and the fixes this took are in
+These controls preceded the Warcraft III Direct3D game results recorded in
+[game compatibility](../COMPATIBILITY.md). Details and the fixes these controls took are in
 [WINE_PS5_BUILD.md](WINE_PS5_BUILD.md#vulkan).
 
 ## Evidence rules

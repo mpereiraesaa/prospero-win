@@ -12,6 +12,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 DOCUMENTS = [
     ROOT / "README.md",
+    ROOT / "COMPATIBILITY.md",
     ROOT / "CONTRIBUTING.md",
     ROOT / "LICENSING.md",
     ROOT / "NOTICE.md",

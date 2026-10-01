@@ -21,12 +21,14 @@ has only been tested on one console, on firmware 12.02.
 
 ## What runs
 
-| Game | How it runs |
-| --- | --- |
-| Warcraft III: Reign of Chaos (1.27a) | Plays: menus, skirmish, campaign cinematics with sound, widescreen with RenderEdge. Direct3D 9 through DXVK. |
-| Space Cadet Pinball | Plays full screen with the DualSense. |
-| Wine's Minesweeper | Plays with a stick-driven pointer. |
-| 7-Zip, nbench, a pi program | Benchmarks. The translator reaches about 85–93% of the console's native speed ([details](docs/DBT_BENCHMARK.md)). |
+Warcraft III 1.27a, Pinball and Minesweeper have reported play sessions.
+OpenArena has run a bot match, Half-Life has rendered its `c1a0` scene with
+sound, and Counter-Strike 1.6 has reached its menu. These are different
+levels of testing; they do not establish complete campaigns or multiplayer.
+
+See [game compatibility](COMPATIBILITY.md) for versions, graphics backends,
+test scope and limitations. Translator benchmark results are in
+[DBT benchmarks](docs/DBT_BENCHMARK.md).
 
 Game profiles, controller presets and install recipes live in
 [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles).
