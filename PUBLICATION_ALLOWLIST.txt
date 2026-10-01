@@ -302,3 +302,6 @@ COMPATIBILITY.md
 .github/PULL_REQUEST_TEMPLATE.md
 tools/check_setup.py
 .github/rulesets/main.json
+native/pw_diagnostics.c
+native/pw_diagnostics.h
+tests/test_pw_diagnostics.c

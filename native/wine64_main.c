@@ -21,6 +21,12 @@
  * audio port through the title's audio sink.
  */
 #include "ps5log/ps5log.h"
+#include "pw_diagnostics.h"
+#undef PS5LOG_LOG
+#define PS5LOG_LOG(...) pw_diagnostics_log(__VA_ARGS__)
+#ifndef PW_BUILD_ID
+#define PW_BUILD_ID "unknown"
+#endif
 #include "../src/pw_wine_start.h"
 #include "../src/pw_launcher_render.h"
 #include "../src/pw_wine_launch.h"
@@ -448,7 +454,9 @@ static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reas
     for (size_t i = 0; i < sizeof(eboots) / sizeof(eboots[0]); i++) {
         PS5LOG_LOG("PW_WINE64 restart to=%s cycle=%u reason=%s eboot=%s", app ? app->id : "launcher",
                    (unsigned)cycle, reason, eboots[i]);
+        pw_diagnostics_close(reason);
         int rc = sceSystemServiceLoadExec(eboots[i], next);
+        pw_diagnostics_resume();
         PS5LOG_LOG("PW_WINE64 restart failed rc=0x%08x", (unsigned)rc);
     }
 }
@@ -459,7 +467,7 @@ static void on_exit_report(void)
 {
     PS5LOG_LOG("PW_WINE64 exit sink_calls=%lu", sink_calls);
     restart_title(NULL, launch.cycle + 1u, "wine-exit");
-    ps5log_close("wine64-exit");
+    pw_diagnostics_close("wine64-exit");
 }
 
 /* ---- library ------------------------------------------------------------ */
@@ -568,7 +576,16 @@ static void run_launcher(void)
                pw_result_name(video_status), pw_result_name(pad_status), pw_result_name(hid_status),
                frame != MAP_FAILED,
                (unsigned)catalog_count, (unsigned)launch.cycle, launch.refused, PW_WINE64_SCRIPT);
+    char log_status[80], report_path[96];
+    snprintf(report_path, sizeof(report_path), "GET LOGS OVER FTP: %s/LOGS", library_root);
+    int report_help = 0;
+    pw_diagnostics_status(log_status, sizeof(log_status));
+    scene.status = log_status;
     for (uint64_t tick = 1; chosen < 0; tick++) {
+        pw_diagnostics_tick(now_ns());
+        if (tick % PW_WINE64_TICKS_PER_S == 0 && !report_help) {
+            pw_diagnostics_status(log_status, sizeof(log_status)); dirty = 1;
+        }
         uint32_t before = scene.selected;
         if (pad_status == PW_OK && pw_pad_ps5_read(&pad) == PW_OK) {
             static const struct { uint32_t button; PwLauncherAction action; } pad_actions[] = {
@@ -576,6 +593,11 @@ static void run_launcher(void)
                 { PAD_DOWN, PW_LAUNCHER_ACTION_DOWN }, { PAD_UP, PW_LAUNCHER_ACTION_UP },
                 { PAD_CROSS, PW_LAUNCHER_ACTION_CHOOSE },
             };
+            if (pad.core.pressed_edges & PAD_OPTIONS) {
+                report_help = !report_help;
+                scene.status = report_help ? report_path : log_status;
+                dirty = 1;
+            }
             for (size_t i = 0; i < sizeof(pad_actions) / sizeof(pad_actions[0]); i++)
                 if ((pad.core.pressed_edges & pad_actions[i].button) &&
                     pw_launcher_navigate(&scene, pad_actions[i].action, (uint32_t)catalog_count))
@@ -598,7 +620,7 @@ static void run_launcher(void)
         if (PW_WINE64_SCRIPT && tick == 3 * PW_WINE64_TICKS_PER_S) {
             if (launch.cycle >= PW_WINE64_SCRIPT_CYCLES) {
                 PS5LOG_LOG("PW_WINE64 launcher script done cycles=%u", (unsigned)launch.cycle);
-                ps5log_close("wine64-script-done");
+                pw_diagnostics_close("wine64-script-done");
                 _exit(0);
             }
             /* One game per cycle, in the library's order. */
@@ -621,7 +643,7 @@ static void run_launcher(void)
     if (pad_status == PW_OK) (void)pw_pad_ps5_close(&pad);
     if (video_status == PW_OK) (void)pw_videoout_ps5_close(&video);
     restart_title(&catalog[chosen], launch.cycle, "launcher");
-    ps5log_close("wine64-launch-failed");
+    pw_diagnostics_close("wine64-launch-failed");
     _exit(1);
 }
 
@@ -630,22 +652,11 @@ static void run_launcher(void)
 /* Until Wine installs its own handlers, a fault inside ntdll would end the
  * process silently; report where it happened relative to ntdll's segments.
  * RIP is read at the measured ucontext offset (224). */
-static PwWineStart *fault_start;
-
 static void early_fault(int sig, siginfo_t *info, void *opaque)
 {
     uint64_t rip = 0;
-
     memcpy(&rip, (const uint8_t *)opaque + 224, sizeof(rip));
-    PS5LOG_LOG("PW_WINE64 fault sig=%d addr=%p rip=0x%llx", sig, info ? info->si_addr : NULL,
-               (unsigned long long)rip);
-    for (uint32_t i = 0; fault_start && i < fault_start->segment_count; i++) {
-        uint64_t base = (uint64_t)(uintptr_t)fault_start->segments[i].address;
-        if (rip >= base && rip < base + fault_start->segments[i].size)
-            PS5LOG_LOG("PW_WINE64 fault in ntdll segment %u offset=0x%llx", i,
-                       (unsigned long long)(rip - base));
-    }
-    ps5log_close("wine64-early-fault");
+    pw_diagnostics_emergency(sig, (uintptr_t)(info ? info->si_addr : NULL), rip);
     _exit(3);
 }
 
@@ -653,7 +664,7 @@ static void install_early_fault_report(PwWineStart *start)
 {
     struct sigaction action;
 
-    fault_start = start;
+    (void)start;
     memset(&action, 0, sizeof(action));
     action.sa_sigaction = early_fault;
     action.sa_flags = SA_SIGINFO;
@@ -761,6 +772,8 @@ int main(int argc, char **argv)
     pw_hid_ps5_preload(hid_log);   /* before the /data grant changes the title's credentials */
     open_library();
     (void)pw_wine_launch_parse(argc, argv, catalog, catalog_count, &launch);
+    (void)pw_diagnostics_open(library_root, PW_BUILD_ID,
+                              launch.app ? launch.app->id : "launcher", launch.cycle);
     PS5LOG_LOG("PW_WINE64 args argc=%d mode=%s profile=%s cycle=%u refused=%u", argc,
                launch.mode == PW_WINE_LAUNCH_GAME ? "game" : "launcher",
                launch.app ? launch.app->id : "-", (unsigned)launch.cycle, launch.refused);
@@ -954,6 +967,7 @@ int main(int argc, char **argv)
 #endif
     for (uint64_t tick = 1; status == PW_OK; tick++) {
         uint64_t now = now_ns();
+        pw_diagnostics_tick(now);
         PwPresentView view;
         PwWineInput events[2 * PW_GAME_BUTTON_COUNT + 1];
         int presented = 0;
@@ -1052,6 +1066,9 @@ int main(int argc, char **argv)
         /* Closing: Options+Create held for a second, or the deadline, asks
          * the game to close with Alt+F4; Wine's exit then restarts the
          * title (on_exit_report). A game that does not close is left. */
+        if (pad_status == PW_OK && (pad.core.pressed_edges & PAD_CREATE) &&
+            !(pad.core.previous_buttons & PAD_OPTIONS))
+            PS5LOG_LOG("PW_WINE64 marker by=player tick=%llu", (unsigned long long)tick);
         combo_ticks = pad_status == PW_OK && (pad.core.previous_buttons & PAD_CLOSE) == PAD_CLOSE ?
                       combo_ticks + 1 : 0;
         if (!close_requested &&
@@ -1129,6 +1146,6 @@ int main(int argc, char **argv)
     }
     PS5LOG_LOG("PW_WINE64 done status=%d stage=%d", status, start.stage);
     if (status != PW_OK) restart_title(NULL, launch.cycle + 1u, "start-failed");
-    ps5log_close(status == PW_OK ? "wine64-restart-failed" : "wine64-start-failed");
+    pw_diagnostics_close(status == PW_OK ? "wine64-restart-failed" : "wine64-start-failed");
     _exit(1);
 }

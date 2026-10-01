@@ -107,14 +107,16 @@ rm -rf -- "$build" "$dist"
 mkdir -p "$build/obj" "$build/import-stubs" "$dist/sce_sys" "$dist/sce_module"
 
 cc=(env PS5_PAYLOAD_SDK="$sdk" sh "$foundation/tooling/prospero-clang18")
-common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
+build_id=$(git -C "$root" rev-parse HEAD)
+git -C "$root" diff --quiet || build_id="$build_id-dirty"
+common=(-DPW_BUILD_ID=\""$build_id"\" -O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -I"$root/include" -I"$root/src" -I"$root/native"
         -I"$root/native/ps5log"
         -DPW_WINE64_SCRIPT="$wine64_script" -DPW_WINE64_SECONDS="$wine64_seconds"
         -DPW_WINE64_SCRIPT_CYCLES="$wine64_cycles" -DPW_WINE64_WAIT_WATCHDOG="$wine64_watchdog")
 
 sources=(
-    native/wine64_main.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c
+    native/wine64_main.c native/pw_diagnostics.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c
     native/pw_agc_submit_lifecycle.c native/pw_videoout_ps5.c native/pw_data_mount.c
     native/pw_wine_display.c native/pw_wine_library.c native/pw_hid_ps5.c native/pw_wine_prefix.c
     src/pw_result.c src/pw_wine_start.c src/pw_wine_launch.c src/pw_game_profile.c src/pw_prefix_temp.c

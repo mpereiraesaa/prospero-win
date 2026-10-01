@@ -110,7 +110,9 @@ box86-catalog: $(BUILD)/pw_x86_decode_probe
 		--json-output data/box86_opcode_catalog.json \
 		--markdown-output docs/BOX86_OPCODE_CATALOG.md
 
-TESTS := test_pw_x86_hostexec test_pw_app_profile test_pw_profile_catalog test_pw_present \
+$(eval $(call test_rule,test_pw_diagnostics,tests/test_pw_diagnostics.c native/pw_diagnostics.c,-pthread -DPW_DIAGNOSTICS_CHUNK=4096))
+
+TESTS := test_pw_diagnostics test_pw_x86_hostexec test_pw_app_profile test_pw_profile_catalog test_pw_present \
 	test_pw_wine_heap test_pw_wine_dmem test_pw_wine_dmem_ps5 test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_game_profile test_pw_prefix_temp \
 	test_pw_wine_library test_pw_wine_display test_pw_hid test_pw_hid_ps5 test_pw_spinner test_pw_wine_dl test_pw_wine_sink \
 	test_pw_wine_threads test_pw_wine_compat test_pw_wine_cwd test_pw_launcher_render test_pw_pad \
