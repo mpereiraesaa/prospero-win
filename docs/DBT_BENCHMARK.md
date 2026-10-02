@@ -920,8 +920,3 @@ not a performance result.
 PR288 is independent of the touched-slot reset trial (#287); its console
 baseline retains the merged occupancy cap, profiler and null-target fix.
 Use identical timing code on both sides of each speedup comparison.
-
-The post-cap two-way candidate clears both banks on allocation and reset.
-Both slot-zero entries retain the nonmatching null-target sentinel; a zero
-tag in the secondary bank must not turn a null guest target into a host jump.
-The inherited null CALL/JMP/RET and reset regressions exercise both banks.

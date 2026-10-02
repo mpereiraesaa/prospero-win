@@ -6,7 +6,8 @@
 
 /* A zero tag would match guest PC zero and jump through an empty pointer.
  * PC one hashes to slot one, so it cannot match any lookup in empty slot
- * zero. A published PC zero replaces this sentinel normally. */
+ * zero in either bank. A published PC zero replaces this sentinel normally.
+ * Both banks are cleared so no discarded host pointer remains reachable. */
 static void clear_chain_targets(PwX86IndirectTarget *targets)
 {
     memset(targets,0,PW_X86_REENCODE_CHAIN_ENTRIES*sizeof(*targets));
