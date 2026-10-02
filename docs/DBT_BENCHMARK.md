@@ -771,3 +771,36 @@ not a performance result.
 PR288 is independent of the touched-slot reset trial (#287); its console
 baseline retains the merged occupancy cap, profiler and null-target fix.
 Use identical timing code on both sides of each speedup comparison.
+
+## Indirect operand load candidate
+
+The route-v6 instruction profile attributes about 37% of the main thread's
+block-exit samples to `lea r11d, [eax+disp]` with vtable displacements: the
+address of a `call [reg+disp]` operand. With fault markers, `call`, `jmp`
+and `push` through memory still built that address in `r11` and then
+loaded `[r11]`, although other copied memory operands already address the
+guest's operand directly. The candidate loads `r10d` with one `0x67` MOV
+through the guest's own base, index, scale and displacement (esp and edi as
+`r12` and `r13`). The block's fault table lists the MOV as a direct site,
+and its refused-access path recomputes the address for the fault report.
+Each such site emits one instruction fewer. The guarded mode (markers off)
+is unchanged, and the decoder still refuses `fs:` on these forms.
+
+The load still comes before the return-address push, so a refused operand
+leaves esp, the guest stack and the flags as they were. Fault regressions
+compare the guarded and marked modes on both the guest and the host call
+stack: the same EIP, registers, flags, fault address, width and direction,
+with nothing written below esp. They cover `call`, `jmp` and `push` with
+disp8 and disp32 (also negative), a base plus displacement wrapping at
+2^32, esp and edi as base and index, ebp without a displacement and an
+absolute operand. A second program makes vtable-style calls that succeed,
+including a callee that reads CF set before its call. A byte check confirms
+the single direct load for each form, and fails on the previous encoder.
+
+Much of the sampled LEA time is probably the wait for the vtable load in
+the block body, which the next instruction inherits. Removing the LEA
+shortens that dependency by about one cycle per call. It is a structural
+change, not a measured gain. The console pair was built on the unmerged
+HL2 DBT branch stack at 22fc97d, where the profile was taken. Only
+`pw_x86_reencode.o` differs between its baseline and candidate PRX. PS5
+validation is pending.
