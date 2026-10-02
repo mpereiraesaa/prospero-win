@@ -926,6 +926,32 @@ static void test_fault(void)
     same(&reencoded, &emitter);
 }
 
+static void test_prefixed_padding(void)
+{
+    static const uint8_t padding[] = {
+        0x66,0x66,0x66,0x66,0x66,0x66,0x2e,0x0f,0x1f,0x84,0,0,0,0,0,
+        0x67,0x0f,0x1f,0x06,0,0,
+        0x64,0x65,0x2e,0x66,0x0f,0x1f,0x00,
+        0x66,0x66,0x90,0xc3
+    };
+    Run reference = run(padding,sizeof(padding),0);
+    Run translated = run(padding,sizeof(padding),1);
+    same(&reference,&translated);
+    assert(translated.reencoded && translated.status == PW_OK);
+    translated = run_superblocks(padding,sizeof(padding));
+    same(&reference,&translated);
+    /* Invalid sub-opcodes and overlong padding cannot be normalized to NOP. */
+    {
+        const uint8_t invalid[]={0x66,0x0f,0x1f,0xc8,0xc3};
+        uint8_t overlong[17];
+        memset(overlong,0x66,8);memcpy(overlong+8,padding+7,8);overlong[16]=0xc3;
+        translated=run(invalid,sizeof(invalid),1);
+        assert(translated.status==PW_ERR_UNSUPPORTED && translated.state.eip==low+CODE);
+        translated=run(overlong,sizeof(overlong),1);
+        assert(translated.status==PW_ERR_UNSUPPORTED && translated.state.eip==low+CODE);
+    }
+}
+
 int main(void)
 {
     guest = mmap(NULL, SPAN, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -953,6 +979,7 @@ int main(void)
         assert(!sigaction(SIGSEGV, &action, NULL));
     }
     test_options();
+    test_prefixed_padding();
     test_registers();
     test_xchg();
     test_atomic_and_segments();

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "../src/pw_x86_block.h"
+#include "../src/pw_x86_padding.h"
 #include "../src/pw_guest_call.h"
 #include "../src/pw_vm_posix.h"
 #include <assert.h>
@@ -1925,6 +1926,50 @@ static void address_form_tests(void)
     state = saved;
 }
 
+static void prefixed_padding_tests(void)
+{
+    static const uint8_t forms[][15] = {
+        {0x90}, {0x66,0x66,0x90}, {0x0f,0x1f,0xc0},
+        {0x66,0x0f,0x1f,0x44,0,0},
+        {0x66,0x66,0x66,0x66,0x66,0x66,0x2e,0x0f,0x1f,0x84,0,0,0,0,0},
+        {0x67,0x0f,0x1f,0x06,0,0},
+        {0x67,0x0f,0x1f,0x80,0,0},
+        {0x64,0x65,0x2e,0x66,0x0f,0x1f,0x00}
+    };
+    static const unsigned lengths[] = {1,3,3,6,15,6,6,7};
+    PwX86Block block;
+    uint8_t output[4096], overlong[16];
+    uintptr_t before, after;
+    __asm__ volatile("pushfq; pop %0; .byte 0x66,0x66,0x66,0x66,0x66,0x66,0x2e,0x0f,0x1f,0x84,0,0,0,0,0; pushfq; pop %1"
+                     : "=r"(before), "=r"(after) : : "memory");
+    assert(before == after);
+    for (unsigned f = 0; f < sizeof(lengths)/sizeof(lengths[0]); f++) {
+        assert(pw_x86_padding_length(forms[f], lengths[f]) == (int)lengths[f]);
+        for (unsigned n = 1; n < lengths[f]; n++)
+            assert(pw_x86_translate(forms[f],n,0,output,sizeof(output),&block)==PW_ERR_TRUNCATED);
+        for (unsigned mode = 0; mode < 4; mode++) {
+            PwX86State saved;
+            state.gpr[0] = 0; /* a NOP's nominal memory operand is unmapped */
+            state.memory_count = 0; state.eflags = 0xad7;
+            saved = state;
+            assert(run_mode(forms[f],lengths[f],0x9000,mode&1,mode>>1)==0);
+            assert(!memcmp(state.gpr,saved.gpr,sizeof(state.gpr)));
+            assert(state.eflags==saved.eflags && state.eip==0x9000+lengths[f]);
+        }
+    }
+    memset(overlong,0x66,8); memcpy(overlong+8,forms[4]+7,8);
+    assert(pw_x86_translate(overlong,sizeof(overlong),0,output,sizeof(output),&block)==PW_ERR_UNSUPPORTED);
+    {
+        const uint8_t bad[]={0x66,0x0f,0x1f,0xc8};
+        const uint8_t lock[]={0xf0,0x0f,0x1f,0x00};
+        const uint8_t other[]={0x66,0x89,0xc1}, pause[]={0xf3,0x90};
+        assert(pw_x86_translate(bad,sizeof(bad),0,output,sizeof(output),&block)==PW_ERR_UNSUPPORTED);
+        assert(pw_x86_translate(lock,sizeof(lock),0,output,sizeof(output),&block)==PW_ERR_UNSUPPORTED);
+        assert(!pw_x86_padding_length(other,sizeof(other)));
+        assert(!pw_x86_padding_length(pause,sizeof(pause)));
+    }
+}
+
 int main(int argc, char **argv)
 {
     assert(pw_vm_posix_backend(&backend)==PW_OK);
@@ -1939,6 +1984,7 @@ int main(int argc, char **argv)
     if (argc==2 && strcmp(argv[1],"--sse-matrix")==0)
         return sse_matrix();
     string_tests();
+    prefixed_padding_tests();
     muldiv_tests();
     address_form_tests();
     /* Independent reference in test_pw_x86_reference.S executes these
@@ -2410,8 +2456,9 @@ int main(int argc, char **argv)
     assert(run(indirect_call,2,0x2200)==-1 && state.eip==0x2200);
     uint8_t scratch[4096]; PwX86Block block;
     const uint8_t fs[]={0x64,0x90};
-    assert(pw_x86_translate(fs,sizeof(fs),0,scratch,sizeof(scratch),&block)==PW_ERR_UNSUPPORTED);
-    assert(block.code_bytes==0);
+    /* A segment override on NOP is ignored; it does not read FS memory. */
+    assert(pw_x86_translate(fs,sizeof(fs),0,scratch,sizeof(scratch),&block)==PW_OK);
+    assert(block.source_bytes==sizeof(fs));
     /* Only FS absolute dword operands are supported: GS, an FS memory
      * operand with a base or index, and byte-width FS forms stay refused
      * rather than being translated as something else. */
