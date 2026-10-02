@@ -830,3 +830,18 @@ without acknowledgement, while three of the four DBT comparison runs above
 needed acknowledgement. This establishes a repeatable difference in these
 controls, not whether translator behavior or the slower execution triggers
 the assertion. Unattended DBT shutdown remains unresolved.
+
+Bounded process inspection subsequently captured the shutdown assertion in
+two full DBT demo runs. The second recovered the exact thread handle checked
+by the teardown frame, validated the saved `STILL_ACTIVE` result and
+confirmed that a zero-timeout wait on that handle returned `WAIT_TIMEOUT`.
+Both saved 32-bit and 64-bit contexts named the
+`NtWaitForAlertByThreadId` syscall stubs; the caller belonged to `server.dll`.
+The dialog thread and checked worker were briefly suspended for context
+capture, with one suspend count restored for each. Both runs exited after
+one recorded assertion acknowledgement; prefix DLL/config restoration was
+verified, with no DBT or guest-exception diagnostics. This narrows the
+investigation to that worker's stop/wake path during module teardown. It
+does not establish why the worker remains active, a caller timeout, or an
+unattended-shutdown fix. Private captures and the inspection helper remain
+outside Git; no vendor binaries were changed.
