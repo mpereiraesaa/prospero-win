@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Fri, 2 Oct 2026 01:21:12 +0200
+Subject: [PATCH] server: Back anonymous mappings with shared memory on PS5.
+
+Wine creates the fd behind an anonymous section with memfd_create, which
+the PS5 lacks, so every anonymous section became a temp file in the
+server directory under the prefix on /data. A 32-bit DXVK keeps managed
+textures in 64 MiB anonymous sections that it creates and closes
+constantly (1401 of them while Half-Life 2 loads its first map), so the
+console wrote them to storage, and Half-Life 2's main thread was seen
+blocked for good closing one.
+
+On the PS5, an anonymous section is now an anonymous POSIX shared memory
+object (shm_open with SHM_ANON), sized with ftruncate. If the kernel
+refuses one, the temp file remains the fallback. The server logs once
+which of the two it uses. Shared sections of PE images keep their temp
+file, which the server fills with pwrite.
+---
+ server/mapping.c | 36 +++++++++++++++++++++++++++++++++++-
+ 1 file changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/server/mapping.c b/server/mapping.c
+index 65bebaa..9294dec 100644
+--- a/server/mapping.c
++++ b/server/mapping.c
+@@ -21,6 +21,7 @@
+ #include "config.h"
+ 
+ #include <assert.h>
++#include <errno.h>
+ #include <fcntl.h>
+ #include <stdarg.h>
+ #include <stdio.h>
+@@ -356,6 +357,39 @@ static int create_temp_file( file_pos_t size )
+     return fd;
+ }
+ 
++/* create the unix fd behind an anonymous mapping */
++static int create_anonymous_mapping_fd( file_pos_t size )
++{
++#ifdef __PROSPERO__
++    /* There is no memfd on the PS5, so a temp file lives on the console's
++     * storage: every write through a view dirties the page cache of an
++     * unlinked file, and closing the last fd of one was seen to block for
++     * good (Half-Life 2, whose 32-bit DXVK keeps textures in 64 MiB
++     * anonymous mappings). An anonymous shared memory object stays in
++     * memory instead; the temp file remains the fallback. */
++    static int logged;
++    off_t length = size;
++    int fd;
++
++    if (sizeof(size) > sizeof(length) && length != size)
++    {
++        set_error( STATUS_INVALID_PARAMETER );
++        return -1;
++    }
++    if ((fd = shm_open( SHM_ANON, O_RDWR, 0600 )) != -1)
++    {
++        if (!ftruncate( fd, length ))
++        {
++            if (!logged++) fprintf( stderr, "wine-ps5: anonymous mappings in shared memory\n" );
++            return fd;
++        }
++        close( fd );
++    }
++    if (!logged++) fprintf( stderr, "wine-ps5: anonymous mappings in temp files: shared memory errno %d\n", errno );
++#endif
++    return create_temp_file( size );
++}
++
+ /* find a memory view from its base address */
+ struct memory_view *find_mapped_view( struct process *process, client_ptr_t base )
+ {
+@@ -1137,7 +1171,7 @@ static bool mapping_init( struct object *obj, const void *init_data )
+         }
+         if ((data->flags & SEC_RESERVE) && !(mapping->committed = create_ranges())) return false;
+         mapping->size = round_size( mapping->size, page_mask );
+-        if ((unix_fd = create_temp_file( mapping->size )) == -1) goto error;
++        if ((unix_fd = create_anonymous_mapping_fd( mapping->size )) == -1) goto error;
+         if (!(mapping->fd = create_anonymous_fd( &mapping_fd_ops, unix_fd, &mapping->obj,
+                                                  FILE_SYNCHRONOUS_IO_NONALERT ))) goto error;
+         allow_fd_caching( mapping->fd );
+-- 
+2.43.0
+
