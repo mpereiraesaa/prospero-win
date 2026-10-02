@@ -4,6 +4,15 @@
 #include "pw_guest_fp.h"
 #include <string.h>
 
+/* A zero tag would match guest PC zero and jump through an empty pointer.
+ * PC one hashes to slot one, so it cannot match any lookup in empty slot
+ * zero. A published PC zero replaces this sentinel normally. */
+static void clear_chain_targets(PwX86IndirectTarget *targets)
+{
+    memset(targets,0,PW_X86_REENCODE_CHAIN_SLOTS*sizeof(*targets));
+    targets[0].guest_pc=1;
+}
+
 #if defined(__clang__)
 __attribute__((no_sanitize("function")))
 #endif
@@ -138,7 +147,7 @@ int pw_x86_engine_set_reencode(PwX86Engine *engine, unsigned enabled)
             return status;
         }
         engine->chain_targets=engine->chain.write_base;
-        memset(engine->chain_targets,0,bytes);
+        clear_chain_targets(engine->chain_targets);
     }
     engine->reencode_enabled = enabled ? 1 : 0;
     return PW_OK;
@@ -752,7 +761,7 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
     if(engine->indirect_targets)
         memset(engine->indirect_targets,0,PW_X86_ENGINE_INDIRECT_SLOTS*sizeof(PwX86IndirectTarget));
     if(engine->chain_targets)
-        memset(engine->chain_targets,0,PW_X86_REENCODE_CHAIN_SLOTS*sizeof(PwX86IndirectTarget));
+        clear_chain_targets(engine->chain_targets);
     if(engine->block_map)
         memset(engine->block_map,0,
                ((discarded_bytes+PW_X86_ENGINE_FAULT_GRANULE-1)/PW_X86_ENGINE_FAULT_GRANULE)*sizeof(uint32_t));

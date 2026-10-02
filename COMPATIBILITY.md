@@ -9,7 +9,8 @@ long sessions, multiplayer and complete campaigns remain unverified.
 Profiles and recipes live in
 [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles).
 The snapshot below was checked against its `main` revision
-`3571b268f9bd4104d301cee58e1264577d699ddf` on 2026-10-01. Profile validation
+`3571b268f9bd4104d301cee58e1264577d699ddf` on 2026-10-01, and Half-Life 2's
+row against `1d6e0ffc252f6a6b5c35599a1e8a181b3eb70b86` on 2026-10-02. Profile validation
 checks configuration syntax; it does not prove gameplay compatibility.
 
 ## Reported games
@@ -22,6 +23,7 @@ checks configuration syntax; it does not prove gameplay compatibility.
 | [OpenArena 0.8.8, official Windows build](https://github.com/mpereiraesaa/prospero-win-profiles/blob/3571b268f9bd4104d301cee58e1264577d699ddf/profiles/openarena-088.profile) | OpenGL, PE32 | `aggressor` match with bots; no rejected draw or present failure | USB keyboard/mouse | 2026-10-01; other maps and multiplayer unverified |
 | [Half-Life 1](https://github.com/mpereiraesaa/prospero-win-profiles/blob/3571b268f9bd4104d301cee58e1264577d699ddf/profiles/half-life.profile) | OpenGL, PE32 | `c1a0` scene, scripted movement and audio | USB keyboard/mouse; profile selects XInput | 2026-10-01; edition not recorded, campaign progression and controller gameplay unverified |
 | [Counter-Strike 1.6](https://github.com/mpereiraesaa/prospero-win-profiles/blob/3571b268f9bd4104d301cee58e1264577d699ddf/profiles/counter-strike-16.profile) | OpenGL, PE32 | Main menu, core fonts, 1920x1080 at 60 fps with vsync | USB keyboard/mouse | 2026-10-01; profile reports a non-Steam Cataclysm 1.04 package; matches and networking unverified |
+| [Half-Life 2](https://github.com/mpereiraesaa/prospero-win-profiles/blob/1d6e0ffc252f6a6b5c35599a1e8a181b3eb70b86/profiles/half-life-2.profile) | DXVK 2.6.2 / RADV, PE32 | `d1_trainstation_01` and `d1_canals_01` load in about 25 s and render; a 91 s recorded train-station demo at 59.7 fps on average, never under 56 | Keyboard (flashlight, pause menu); profile selects XInput | 2026-10-02; needs #289 and #296; campaign progression, mouse and DualSense unverified |
 
 **Save/load, sustained play and orderly exit have not been recorded per game
 in this table.** A playable report must not be read as verification of these
