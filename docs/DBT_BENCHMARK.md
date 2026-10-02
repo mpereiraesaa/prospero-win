@@ -584,6 +584,34 @@ clean shutdown remains unverified. Console measurements remain pending.
 
 [b]: https://box86.org/2022/03/box86-box64-vs-qemu-vs-fex-vs-rosetta2/
 
+## Cache lookup diagnostics
+
+`PW_WOW_TIMING` (the console trigger `pw_wow_timing`) also emits an additive
+`wowprospero cache` row per owner thread at each timing report and termination.
+It reports cumulative hits, misses, probes, publishes and resets, plus the
+current capacity, generation, occupancy and arena use. Occupancy is successful
+publishes since the last cache reset; rejected publications do not count.
+An instance ID separates reused guest thread IDs in the same process.
+The report reads existing counters outside signal handlers, without walking
+the table or adding per-lookup accounting. The existing timing row is unchanged.
+
+Analyze one process capture with:
+
+```sh
+python3 tools/pw_cache_stats.py run.log --output cache-stats.json
+```
+
+The tool subtracts adjacent cumulative records and weights average probes by
+lookup count. It preserves intervals spanning resets and flags regressing
+counters, inconsistent occupancy or clocks, and changed capacity. It does not
+combine distinct instances, sum cumulative snapshots or infer missing early
+work. `max_probe` is a lifetime maximum, not the interval's maximum. These
+counts explain lookup behavior; they do not measure CPU time or establish a
+frame-rate gain. `probes` and `max_probe` cover only cache lookup calls: the
+publication walk and the engine's compile-time chain-patch walk are uncounted.
+They can also traverse long clusters, so these counters do not represent
+all probing work per compiled block. Apply identical diagnostics to both comparison builds, then
+repeat gameplay with diagnostics off to assess reporting overhead.
 ## Thread-owned hotspot sampling
 
 On Linux, set `PW_WOW_PROFILE=1` to log each thread's top 20 translated
