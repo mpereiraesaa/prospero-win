@@ -41,11 +41,14 @@ typedef struct PwX86Cache {
     size_t arena_bytes,cursor;
     uint64_t hits,misses,publishes,resets,lookup_probes;
     uint32_t max_probe;
+    uint32_t occupied;  /* entries published in this generation */
 } PwX86Cache;
 
 /* Generated code storage and RW/RX transitions remain owner-managed. Entries
  * use open addressing keyed by guest PC, making hot dispatch O(1) average
- * rather than scanning the complete capacity. A generation is valid only
+ * rather than scanning the complete capacity. Linear probing only stays short
+ * while the table has room, so a publish past three quarters of the capacity
+ * is refused with PW_ERR_LIMIT, as a full arena is, and the owner resets. A generation is valid only
  * while its immutable guest image mapping is alive. */
 int pw_x86_cache_init(PwX86Cache *,PwX86CacheEntry *,uint32_t,size_t,uint32_t);
 int pw_x86_cache_lookup(PwX86Cache *,uint32_t,const PwX86CacheEntry **);
