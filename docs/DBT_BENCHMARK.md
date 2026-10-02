@@ -794,3 +794,14 @@ They include native execution of the exact padding form, unchanged flags,
 unmapped nominal operands, every truncation boundary, invalid sub-opcodes
 and a 16-byte encoding. Full HL2 startup and shutdown validation on PC and
 console remains required before declaring this correctness issue resolved.
+
+PC validation subsequently completed three full 5,182-frame demos without
+DBT or guest-exception diagnostics. Two close requests timed out; capturing
+the owned game window identified a Source assertion at `threadtools.cpp:1667`
+about illegal worker-thread termination. On the third run, acknowledging
+that single recorded assertion let HL2 exit with status zero and without
+forced cleanup or an unsupported-instruction message. The original prefix
+DLL/config were restored after each run. This is exit after an assertion
+acknowledgement, not unattended clean shutdown; the assertion's cause and
+console startup/shutdown validation remain outstanding. Normal/sanitizer
+test suites and all three differential modes pass (zero mismatches).
