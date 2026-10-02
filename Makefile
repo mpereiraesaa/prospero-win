@@ -51,6 +51,7 @@ $(eval $(call test_rule,test_pw_wine_threads,tests/test_pw_wine_threads.c wine/p
 $(eval $(call test_rule,test_pw_wine_sink,tests/test_pw_wine_sink.c wine/ps5/pw_wine_sink.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_start,tests/test_pw_wine_start.c src/pw_wine_start.c wine/ps5/pw_wine_prx.c,-I.))
 $(eval $(call test_rule,test_pw_wine_launch,tests/test_pw_wine_launch.c src/pw_wine_launch.c,))
+$(eval $(call test_rule,test_pw_script_input,tests/test_pw_script_input.c src/pw_script_input.c,))
 $(eval $(call test_rule,test_pw_game_profile,tests/test_pw_game_profile.c src/pw_game_profile.c src/pw_app_profile.c,))
 $(eval $(call test_rule,test_pw_prefix_temp,tests/test_pw_prefix_temp.c src/pw_prefix_temp.c native/pw_wine_prefix.c,-D_DEFAULT_SOURCE))
 $(eval $(call test_rule,test_pw_wine_library,tests/test_pw_wine_library.c native/pw_wine_library.c src/pw_game_profile.c src/pw_app_profile.c src/pw_profile_catalog.c,-D_DEFAULT_SOURCE))
@@ -113,7 +114,7 @@ box86-catalog: $(BUILD)/pw_x86_decode_probe
 $(eval $(call test_rule,test_pw_diagnostics,tests/test_pw_diagnostics.c native/pw_diagnostics.c,-pthread -DPW_DIAGNOSTICS_CHUNK=4096 -DPW_DIAGNOSTICS_TESTING=1))
 
 TESTS := test_pw_diagnostics test_pw_x86_hostexec test_pw_app_profile test_pw_profile_catalog test_pw_present \
-	test_pw_wine_heap test_pw_wine_dmem test_pw_wine_dmem_ps5 test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_game_profile test_pw_prefix_temp \
+	test_pw_wine_heap test_pw_wine_dmem test_pw_wine_dmem_ps5 test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_script_input test_pw_game_profile test_pw_prefix_temp \
 	test_pw_wine_library test_pw_wine_display test_pw_hid test_pw_hid_ps5 test_pw_spinner test_pw_wine_dl test_pw_wine_sink \
 	test_pw_wine_threads test_pw_wine_compat test_pw_wine_cwd test_pw_launcher_render test_pw_pad \
 	test_pw_guest_fp test_pw_vm test_pw_x86_block test_pw_x86_flat test_pw_x86_cache test_pw_x86_code_pages test_pw_wow_thread_budget \
@@ -139,6 +140,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_pw_sse_matrix.py
 	python3 tests/test_wine_runtime_manifest.py
 	python3 tests/test_wowprospero_contract.py
+	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wowprospero_unmap.py
 	python3 tests/test_build_wine_ps5.py
 	python3 tests/test_pw_install.py
 	python3 tests/test_pw_prefix.py
@@ -151,6 +153,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_startup_x87_contract.py
 	python3 tests/test_build_source_oracle.py
 	python3 tests/test_dynarec_bench.py
+	python3 tests/test_pw_cache_stats.py
 	python3 tests/test_bench_7zip.py
 	rm -rf tools/__pycache__ tests/__pycache__
 
