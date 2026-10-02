@@ -765,6 +765,19 @@ Its 99.327 s/52.17 FPS result ran with concurrent Remote Play activity, so it
 is a runtime receipt rather than a performance comparison. Forced shutdown
 after the result does not certify clean game shutdown.
 
+A subsequent four-run comparison alternated lazy/chain/chain/lazy with
+stride-64 execution timing and CPU affinity 0–11. Lazy FP took
+88.342/88.752 seconds for the demo versus 87.862/87.421 for the chain
+baseline. Calibrated phase CPU estimates were 174.471/174.084 seconds
+versus 173.082/170.469: the lazy candidate was 1.46% worse by median CPU
+estimate and 1.03% worse by median frame time. All runs had zero detected
+DBT diagnostics and zero reported clock errors. Remote Play consumed
+roughly 1100–1200% host CPU throughout; sampled low-call threads and
+inferred phase boundaries retain the timing qualifications below.
+This trial provides no HL2 improvement evidence. Keep the candidate draft
+pending console measurements; the wrapper microbenchmark does not justify
+merging it.
+
 The preceding chain-hash four-run timing experiment produced calibrated
 phase estimates of 200.7/207.3 CPU-seconds for the previous build and
 196.8/185.8 for the candidate, a 6.2% median estimated reduction. These sum
