@@ -769,3 +769,32 @@ DLL/config were restored after each run. This is exit after an assertion
 acknowledgement, not unattended clean shutdown; the assertion's cause and
 console startup/shutdown validation remain outstanding. Normal/sanitizer
 test suites and all three differential modes pass (zero mismatches).
+
+## Shared fault-exit trial
+
+Reencoded blocks now share one cold-path register/flag save and return
+epilogue. Each fault site retains its own initial guest EIP store, any saved
+flags restoration, effective address and width/write metadata. A flag-free
+jump reaches the common epilogue; the final site falls through. Fault-table
+entries still point to their unique metadata prefixes. Blocks with one
+fault site add no jump, and blocks without fault sites add no epilogue.
+
+A deterministic size probe of identical blocks containing absolute dword
+loads, with fault markers and the host call stack enabled, measured:
+
+| Memory accesses | Previous bytes | Shared-exit bytes | Reduction |
+| --- | ---: | ---: | ---: |
+| 1 | 361 | 361 | 0% |
+| 2 | 482 | 421 | 12.7% |
+| 4 | 724 | 541 | 25.3% |
+| 8 | 1,208 | 781 | 35.3% |
+| 16 | 2,176 | 1,261 | 42.0% |
+| 32 | 4,112 | 2,221 | 46.0% |
+
+These are emitted-code sizes, not execution-time improvements. The intended
+benefit is a smaller translated working set; there is no CPU speedup claim
+before fixed-workload timing and console validation. The regression faults
+each of fifteen loads in a single block, with preceding ADC operations that
+change registers and consume flags, through both guarded and native-fault
+paths, with and without the host call stack. Every path must report the
+same EIP, guest registers/flags and fault metadata as before.

@@ -24,6 +24,8 @@ static uint8_t *guest;
 static uint32_t low;
 static PwX86Engine *current;
 static unsigned redirected;
+static unsigned host_call_stack;
+static _Alignas(16) uint8_t call_memory[0x4000];
 
 static int view(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes)
 {
@@ -86,6 +88,10 @@ static Run run(const uint8_t *code, size_t bytes, unsigned markers)
     assert(pw_x86_engine_set_flat_memory(&engine, low, low + SPAN) == PW_OK);
     assert(pw_x86_engine_set_reencode(&engine, 1) == PW_OK);
     assert(pw_x86_engine_set_fault_markers(&engine, markers) == PW_OK);
+    if (host_call_stack) {
+        assert(pw_x86_engine_set_unbounded_chains(&engine, 1) == PW_OK);
+        assert(pw_x86_engine_set_call_stack(&engine, call_memory, sizeof(call_memory)) == PW_OK);
+    }
     current = &engine;
     redirected = 0;
     r.status = PW_OK;
@@ -327,6 +333,36 @@ static void test_profile_capacity(void)
         assert(profile.slots[i].guest_pc == i && profile.slots[i].samples == 1);
 }
 
+static void test_multiple_fault_paths(void)
+{
+    /* Fifteen loads in one block, each followed by ADC so the incoming
+     * flags must survive its guard. Fault the first, middle and final
+     * accesses in turn; prior loads/ADCs must have updated the guest state. */
+    uint8_t program[2 + 15 * 8 + 1];
+    uint32_t address = low + DATA, value = 7;
+    memcpy(guest + DATA, &value, sizeof(value));
+    program[0]=0x31;program[1]=0xdb; /* xor ebx,ebx */
+    for (unsigned k=0;k<15;k++) {
+        unsigned at=2+8*k;
+        program[at]=0x8b;program[at+1]=0x05; /* mov eax,[absolute] */
+        memcpy(program+at+2,&address,4);
+        program[at+6]=0x11;program[at+7]=0xc3; /* adc ebx,eax */
+    }
+    program[sizeof(program)-1]=0xc3;
+    for (unsigned stack=0;stack<2;stack++) {
+        host_call_stack=stack;
+        for (unsigned site=0;site<15;site++) {
+            uint32_t invalid=0x40;
+            memcpy(program+2+8*site+2,&invalid,4);
+            compare("multiple cold paths",program,sizeof(program),2+8*site,invalid,0,-1);
+            Run marked=run(program,sizeof(program),1);
+            assert(marked.state.gpr[3]==site*value);
+            memcpy(program+2+8*site+2,&address,4);
+        }
+    }
+    host_call_stack=0;
+}
+
 static void test_fault_table(void)
 {
     /* Three rows: sites 0x10, 0x30 and 0x2345 with their paths. */
@@ -385,6 +421,7 @@ int main(void)
     test_engine_lookup();
     test_profile_capacity();
     test_fault_table();
+    test_multiple_fault_paths();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
            "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
            "and stack form matches the guard; the engine finds each access's path and nothing else\n");
