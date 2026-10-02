@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "../src/pw_x86_engine.h"
+#include "../src/pw_x86_reencode.h"
 #include "../src/pw_vm_posix.h"
 #include <assert.h>
 
@@ -35,7 +36,7 @@ static void test_dispatch_profile(void)
     assert(pw_x86_engine_set_indirect(&engine,1)==PW_OK);
     assert(pw_x86_engine_set_counters(&engine,0)==PW_OK);
     assert(pw_x86_engine_set_global_resident(&engine,0xfb)==PW_OK);
-    assert(pw_x86_engine_set_flat_memory(&engine,0x1000,0x20000)==PW_OK);
+    assert(pw_x86_engine_set_flat_memory(&engine,0x1000,0x40000)==PW_OK);
     assert(pw_x86_engine_set_reencode(&engine,1)==PW_OK);
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
     assert(engine.chain_targets[0x1000].host_code &&
@@ -47,22 +48,37 @@ static void test_dispatch_profile(void)
     assert(engine.dispatch_chain_matches==1);
     assert(pw_x86_chain_slot(0x1000)!=pw_x86_chain_slot(0x11000));
     assert(pw_x86_chain_slot(0x1000)==pw_x86_chain_slot(0x10f00));
-    /* Real compiled targets colliding in the full-PC hash replace each other. */
+    /* Real compiled colliding targets occupy different banks. */
     source.base=state.eip=0x10f00;
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
     assert(engine.chain_targets[0x1000].guest_pc==0x10f00);
+    assert(engine.chain_targets[0x1000+PW_X86_REENCODE_CHAIN_SLOTS].guest_pc==0x1000);
     source.base=state.eip=0x1000;
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && step.cache_hit);
-    assert(engine.dispatch_chain_collisions==2);
+    assert(engine.dispatch_chain_collisions==1);
     assert(state.gpr[0]==4); /* Profiling preserves the executed loop. */
+    /* A third collider displaces the oldest bank; republishing an evicted
+     * cache entry must not retain a dangling or incorrect target. */
+    assert(pw_x86_chain_slot(0x20e00)==pw_x86_chain_slot(0x1000));
+    source.base=state.eip=0x20e00;
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
+    assert(engine.chain_targets[0x1000].guest_pc==0x20e00);
+    assert(engine.chain_targets[0x1000+PW_X86_REENCODE_CHAIN_SLOTS].guest_pc==0x10f00);
+    source.base=state.eip=0x1000;
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && step.cache_hit);
+    assert(engine.chain_targets[0x1000].guest_pc==0x1000);
+    assert(engine.chain_targets[0x1000+PW_X86_REENCODE_CHAIN_SLOTS].guest_pc==0x20e00);
+    assert(engine.dispatch_chain_collisions==3 && state.gpr[0]==6);
     assert(pw_x86_engine_reset(&engine,2)==PW_OK);
+    assert(!engine.chain_targets[0x1000].host_code &&
+           !engine.chain_targets[0x1000+PW_X86_REENCODE_CHAIN_SLOTS].host_code);
     state.eip=0x1000;
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
-    assert(engine.dispatch_chain_empty==1 && engine.dispatch_chain_collisions==2 &&
-           engine.dispatch_chain_matches==1); /* Cumulative over reset. */
+    assert(engine.dispatch_chain_empty==1 && engine.dispatch_chain_collisions==3 &&
+           engine.dispatch_chain_matches==2); /* Cumulative over reset. */
     assert(pw_x86_engine_set_dispatch_profile(&engine,0)==PW_OK);
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
-    assert(engine.dispatch_chain_matches==1 && state.gpr[0]==6);
+    assert(engine.dispatch_chain_matches==2 && state.gpr[0]==8);
     assert(pw_x86_engine_destroy(&engine)==PW_OK);
 }
 

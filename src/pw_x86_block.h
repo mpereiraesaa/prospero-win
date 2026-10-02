@@ -201,9 +201,11 @@ typedef struct PwX86TranslateOptions {
      * the reg_* counts): a step's report then counts no retired instructions
      * and the engine's transition and register totals stay zero. */
     unsigned no_counters;
-    /* The re-encoder's own indirect targets (pw_x86_reencode.h): 65536
-     * slots indexed by pw_x86_chain_slot(), pointing at chain
-     * entries, so a return between re-encoded blocks stays pinned. NULL:
+    /* The re-encoder's own indirect targets (pw_x86_reencode.h): two
+     * banks of 65536 slots indexed by pw_x86_chain_slot(), pointing at chain
+     * entries, so a return between re-encoded blocks stays pinned. The second
+     * bank starts at PW_X86_REENCODE_CHAIN_SLOTS and is probed on a first-bank
+     * PC mismatch. The owner must allocate and clear both banks. NULL:
      * dynamic exits use indirect_targets only. */
     const PwX86IndirectTarget *chain_targets;
     /* Guest GPRs (bit n = gpr n) held in the same host register by every

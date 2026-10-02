@@ -134,12 +134,16 @@ int pw_x86_engine_set_reencode(PwX86Engine *engine, unsigned enabled)
 {
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
     if(enabled && !engine->chain_targets) {
-        const size_t bytes=PW_X86_REENCODE_CHAIN_SLOTS*sizeof(PwX86IndirectTarget);
+        const size_t bytes=PW_X86_REENCODE_CHAIN_ENTRIES*sizeof(PwX86IndirectTarget);
         int status=engine->backend->reserve(engine->backend->context,bytes,
                                             engine->backend->page_bytes,&engine->chain);
         if(status!=PW_OK)return status;
         status=engine->backend->commit(engine->backend->context,&engine->chain,0,
                                        engine->chain.bytes,PW_PROT_READ|PW_PROT_WRITE);
+        /* Wine's lazy backend makes pages accessible through protect;
+         * the whole-region commit call above only validates the range. */
+        if(status==PW_OK) status=engine->backend->protect(engine->backend->context,&engine->chain,
+                                                        0,engine->chain.bytes,PW_PROT_READ|PW_PROT_WRITE);
         if(status!=PW_OK) {
             (void)engine->backend->release(engine->backend->context,&engine->chain);
             return status;
@@ -586,8 +590,10 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
     memset(report,0,sizeof(*report));report->guest_pc=state->eip;
     if(engine->dispatch_profile && engine->chain_targets) {
         const PwX86IndirectTarget *target=&engine->chain_targets[pw_x86_chain_slot(state->eip)];
-        if(!target->host_code) engine->dispatch_chain_empty++;
-        else if(target->guest_pc==state->eip) engine->dispatch_chain_matches++;
+        const PwX86IndirectTarget *second=target+PW_X86_REENCODE_CHAIN_SLOTS;
+        if((target->host_code && target->guest_pc==state->eip) ||
+           (second->host_code && second->guest_pc==state->eip)) engine->dispatch_chain_matches++;
+        else if(!target->host_code && !second->host_code) engine->dispatch_chain_empty++;
         else engine->dispatch_chain_collisions++;
     }
 
@@ -657,6 +663,11 @@ dispatch:;
         }
         if(engine->chain_targets && pw_x86_reencoded(&entry->entry_contract)) {
             PwX86IndirectTarget *chain=&engine->chain_targets[pw_x86_chain_slot(entry->guest_pc)];
+            PwX86IndirectTarget *second=chain+PW_X86_REENCODE_CHAIN_SLOTS;
+            /* Existing targets keep their bank. A new colliding PC displaces
+             * the primary into the secondary; no generated-code writes. */
+            if(second->host_code && second->guest_pc==entry->guest_pc) chain=second;
+            else if(chain->host_code && chain->guest_pc!=entry->guest_pc) *second=*chain;
             chain->guest_pc=entry->guest_pc;
             chain->host_code=(const uint8_t *)engine->code.exec_base+entry->code_offset+
                              entry->chain_entry_offset;
@@ -801,7 +812,7 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
     if(engine->indirect_targets)
         memset(engine->indirect_targets,0,PW_X86_ENGINE_INDIRECT_SLOTS*sizeof(PwX86IndirectTarget));
     if(engine->chain_targets)
-        memset(engine->chain_targets,0,PW_X86_REENCODE_CHAIN_SLOTS*sizeof(PwX86IndirectTarget));
+        memset(engine->chain_targets,0,PW_X86_REENCODE_CHAIN_ENTRIES*sizeof(PwX86IndirectTarget));
     if(engine->block_map)
         memset(engine->block_map,0,
                ((discarded_bytes+PW_X86_ENGINE_FAULT_GRANULE-1)/PW_X86_ENGINE_FAULT_GRANULE)*sizeof(uint32_t));
