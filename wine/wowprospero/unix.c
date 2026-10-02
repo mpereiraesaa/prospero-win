@@ -369,6 +369,14 @@ static struct pw_thread *get_thread(void)
                                  (!getenv( "PW_WOW_NATIVE_FP" ) || strcmp( getenv( "PW_WOW_NATIVE_FP" ), "0" )) );
     pw_x86_engine_set_superblocks( &thread->engine, thread->engine.unbounded_chains &&
                                    (!getenv( "PW_WOW_SUPERBLOCKS" ) || strcmp( getenv( "PW_WOW_SUPERBLOCKS" ), "0" )) );
+    {
+        int call_cache = getenv( "PW_WOW_CALL_IC" ) && !strcmp( getenv( "PW_WOW_CALL_IC" ), "1" );
+#ifdef __PROSPERO__
+        struct stat call_cache_st;
+        if (!stat( "/data/prospero-win/pw_wow_call_ic", &call_cache_st )) call_cache = 1;
+#endif
+        pw_x86_engine_set_call_inline_cache( &thread->engine, thread->engine.superblocks && call_cache );
+    }
     /* Calls and returns on a call stack, so the host predicts the returns
      * (PW_WOW_CALL_STACK=0 keeps the lookup); its guard sends a call that
      * runs out of it to redirect_fault. */
@@ -389,6 +397,10 @@ static struct pw_thread *get_thread(void)
             thread->call_stack = NULL;
         }
     }
+    if (thread->engine.call_inline_cache)
+        fprintf( stderr, "wowprospero call_ic: tid=%04x enabled=%u\n",
+                 (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+                 thread->engine.call_stack_base != NULL && thread->engine.unbounded_chains );
     thread->cache_epoch = (uint32_t)code_generation;
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;

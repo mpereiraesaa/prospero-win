@@ -242,6 +242,9 @@ typedef struct PwX86TranslateOptions {
      * engine then never links re-encoded and emitted blocks to each other:
      * the emitter keeps that state in memory and uses xmm as scratch. */
     unsigned native_fp;
+    /* Opt-in call-site prediction for unbounded host-call-stack chains.
+     * Executable code must also be writable, as with self-linking side exits. */
+    unsigned call_inline_cache;
 } PwX86TranslateOptions;
 
 /* The fault table of a re-encoded block with fault markers, at

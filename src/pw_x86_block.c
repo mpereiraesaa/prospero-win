@@ -1584,7 +1584,7 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
                          uint8_t *output, size_t capacity, PwX86Block *block,
                          unsigned residency_enabled, unsigned lazy_flags_enabled)
 {
-    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0, 0, NULL, 0, 0, 0, 0, 0, 0 };
+    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0, 0, NULL, 0, 0, 0, 0, 0, 0, 0 };
 
     return pw_x86_translate_opts(source, bytes, pc, output, capacity, block, &options);
 }

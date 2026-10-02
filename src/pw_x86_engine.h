@@ -91,6 +91,7 @@ typedef struct PwX86Engine {
     unsigned unbounded_chains;  /* PwX86TranslateOptions.unbounded_chains */
     unsigned superblocks;       /* PwX86TranslateOptions.superblocks */
     unsigned native_fp;         /* PwX86TranslateOptions.native_fp */
+    unsigned call_inline_cache; /* Writable, unbounded re-encoded call sites. */
     uint8_t fxsave_image[512 + 15];  /* the guest's FP state while a block runs */
     /* The image above, not PwX86State.fp, holds the guest's x87/SSE state
      * (pw_x86_engine_fp_sync). */
@@ -149,6 +150,8 @@ int pw_x86_engine_set_unbounded_chains(PwX86Engine *, unsigned enabled);
 int pw_x86_engine_set_superblocks(PwX86Engine *, unsigned enabled);
 /* PwX86TranslateOptions.native_fp, before any block is translated. */
 int pw_x86_engine_set_native_fp(PwX86Engine *, unsigned enabled);
+/* Before compilation; requires a writable executable arena for self-patching. */
+int pw_x86_engine_set_call_inline_cache(PwX86Engine *, unsigned enabled);
 /* With native_fp, re-encoded blocks run on the guest's x87/SSE state as an
  * FXSAVE image in the host FPU. Converting it to and from PwX86State.fp
  * around every step cost an OpenGL game a fifth of its time, so the image

@@ -65,6 +65,7 @@ static PwX86HostExec hostexec;
  * 64 KiB guard, and the host faults the guard takes. */
 enum { CALL_STACK_BYTES = 0x4000 };
 static unsigned call_stack, call_stack_faults;
+static unsigned call_cache, trained_sites, replay_patch;
 /* run() with superblocks, whose side exits rewrite their own code: the
  * engine's code stays writable (and executable) while it runs. */
 static unsigned superblocks;
@@ -114,7 +115,7 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
     initial(&r.state);
     memcpy(guest + STACK_TOP, &(uint32_t){ 0xdead0000u }, 4);
     assert(pw_vm_posix_backend(&vm) == PW_OK);
-    if (superblocks) {
+    if (superblocks || call_cache) {
         posix = vm;
         vm.commit = writable_commit;
         vm.protect = writable_protect;
@@ -128,13 +129,21 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
     assert(pw_x86_engine_set_unbounded_chains(&engine, unbounded || call_stack || superblocks) == PW_OK);
     assert(pw_x86_engine_set_superblocks(&engine, superblocks) == PW_OK);
     assert(pw_x86_engine_set_native_fp(&engine, native_fp && reencode) == PW_OK);
+    assert(pw_x86_engine_set_call_inline_cache(&engine, call_cache && reencode) == PW_OK);
     if (call_stack && reencode)
         assert(pw_x86_engine_set_call_stack(&engine, call_stack_region + PW_X86_ENGINE_CALL_STACK_GUARD,
                                             CALL_STACK_BYTES) == PW_OK);
     current = &engine;
     r.status = PW_OK;
     r.steps = 0;
-    for (unsigned i = 0; i < 100000 && r.state.eip != 0xdead0000u; i++, r.steps++) {
+    for (unsigned round = 0; round < (replay_patch ? 2u : 1u); round++) {
+      if (round) {
+        pw_x86_engine_fp_sync(&engine, &r.state);
+        assert(pw_x86_engine_reset(&engine, 2) == PW_OK);
+        guest[CODE + replay_patch] = 7;
+        initial(&r.state);
+      }
+      for (unsigned i = 0; i < 100000 && r.state.eip != 0xdead0000u; i++, r.steps++) {
         r.status = pw_x86_engine_step(&engine, &r.state, &step);
         if (r.status == PW_ERR_UNSUPPORTED && hostexec_fallback) {
             /* As wowprospero does: the one instruction on the host. */
@@ -144,6 +153,7 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
             if ((r.status = pw_x86_hostexec_step(&hostexec, &r.state, at, 15)) == PW_OK) continue;
         }
         if (r.status != PW_OK) break;
+      }
     }
     current = NULL;
     pw_x86_engine_fp_sync(&engine, &r.state);
@@ -152,6 +162,17 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
     r.chain_slots = 0;
     for (unsigned k = 0; engine.chain_targets && k < PW_X86_REENCODE_CHAIN_SLOTS; k++)
         r.chain_slots += engine.chain_targets[k].host_code != NULL;
+    trained_sites = 0;
+    if (call_cache) {
+        const uint8_t *code = engine.code.write_base;
+        for (size_t k = 0; k + 16 <= engine.cache.cursor; k++) {
+            uintptr_t prediction;
+            if (code[k] != 0x49 || code[k + 1] != 0xbb ||
+                memcmp(code + k + 10, "\x49\x89\xc9\x4c\x89\xd9", 6)) continue;
+            memcpy(&prediction, code + k + 2, sizeof(prediction));
+            trained_sites += prediction != 0;
+        }
+    }
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
     return r;
 }
@@ -494,6 +515,60 @@ static void test_chain_hash_flags(void)
     assert(captured.status==PW_OK && captured.state.eip==0xdead0000u);
     assert(captured.state.gpr[0]==0x80000100u && (captured.state.gpr[2]&0xffffu)==0x0100u);
     assert(captured.data[0]==1);
+}
+
+static void test_return_targets(void);
+static void test_call_stack(void);
+static void test_native_fp(void);
+static void test_native_fp_forms(void);
+static void test_native_fp_gpr(void);
+static void test_native_fp_emitter(void);
+static void test_call_inline_cache(void)
+{
+    uint8_t code[] = {
+        0xb9,64,0,0,0,                   /* mov ecx,64 */
+        0xbb,0,0,0,0,                    /* mov ebx,F */
+        0xbf,0,0,0,0,                    /* mov edi,G */
+        0x31,0xc0,                       /* xor eax,eax */
+        0xff,0xd3,                       /* L: call ebx */
+        0x87,0xfb,                       /* xchg ebx,edi */
+        0x49,0x75,0xf9,0xc3,             /* dec ecx; jnz L; ret */
+        0x83,0xc0,1,0xc3,                /* F: add eax,1; ret */
+        0x83,0xc0,3,0xc3,                /* G: add eax,3; ret */
+    };
+    uint32_t f=low+CODE+25, g=low+CODE+29;
+    Run reference, predicted;
+    memcpy(code+6,&f,4);memcpy(code+11,&g,4);
+    reference=run_call_stack(code,sizeof(code));
+    call_cache=1;
+    predicted=run_call_stack(code,sizeof(code));
+    assert(trained_sites && predicted.state.gpr[0]==128);
+    same(&predicted,&reference);
+    /* Changing targets must replace a prediction; an arena reset then
+     * changes F at the same guest PC, exercising stale-target invalidation. */
+    replay_patch=27;
+    predicted=run_call_stack(code,sizeof(code));
+    assert(trained_sites && predicted.state.gpr[0]==320);
+    call_cache=0;
+    reference=run_call_stack(code,sizeof(code));
+    same(&predicted,&reference);
+    replay_patch=0;
+    /* Stable warmed calls retain all arithmetic flags and guest registers. */
+    call_cache=1;
+    test_chain_hash_flags();
+    test_return_targets();
+    test_call_stack();
+    test_native_fp();
+    test_native_fp_forms();
+    test_native_fp_gpr();
+    test_native_fp_emitter();
+    /* An untrained prediction cannot interpret a zero guest PC as a hit. */
+    {
+        const uint8_t zero_target[]={0x31,0xdb,0xff,0xd3,0xc3};
+        predicted=run_call_stack(zero_target,sizeof(zero_target));
+        assert(predicted.status!=PW_OK && predicted.state.eip==0);
+    }
+    call_cache=0;
 }
 
 static void test_return_targets(void)
@@ -965,6 +1040,7 @@ int main(void)
     test_unbounded_chains();
     test_call_stack();
     test_superblocks();
+    test_call_inline_cache();
     test_strings();
     test_native_fp();
     test_native_fp_forms();
