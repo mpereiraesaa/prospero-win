@@ -18,16 +18,16 @@ static void test_budgets(void)
     PwWowThreadBudget b;
 
     assert(!pw_wow_thread_budget(1, 0, &b));
-    assert(b.entries == 65536 && b.arena_bytes == 128u << 20 && b.hostexec_bytes == 4u << 20);
+    assert(b.entries == 131072 && b.arena_bytes == 128u << 20 && b.hostexec_bytes == 4u << 20);
     assert(!pw_wow_thread_budget(0, 0, &b));
     assert(b.entries == 16384 && b.arena_bytes == 32u << 20 && b.hostexec_bytes == 1u << 20);
     /* Each retry halves everything. */
     assert(!pw_wow_thread_budget(1, 1, &b));
-    assert(b.entries == 32768 && b.arena_bytes == 64u << 20 && b.hostexec_bytes == 2u << 20);
+    assert(b.entries == 65536 && b.arena_bytes == 64u << 20 && b.hostexec_bytes == 2u << 20);
     assert(!pw_wow_thread_budget(0, 2, &b));
     assert(b.entries == 4096 && b.arena_bytes == 8u << 20 && b.hostexec_bytes == 256u << 10);
     /* The first thread goes 128, 64, ... 2 MiB; a later one 32, 16, ... 2. */
-    assert(!pw_wow_thread_budget(1, 6, &b) && b.arena_bytes == 2u << 20 && b.entries == 1024);
+    assert(!pw_wow_thread_budget(1, 6, &b) && b.arena_bytes == 2u << 20 && b.entries == 2048);
     assert(pw_wow_thread_budget(1, 7, &b) == -1);
     assert(!pw_wow_thread_budget(0, 4, &b) && b.arena_bytes == 2u << 20 && b.entries == 1024);
     assert(pw_wow_thread_budget(0, 5, &b) == -1);
