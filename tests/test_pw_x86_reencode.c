@@ -66,6 +66,7 @@ static PwX86HostExec hostexec;
 enum { CALL_STACK_BYTES = 0x4000 };
 static unsigned call_stack, call_stack_faults;
 static unsigned call_cache, trained_sites, replay_patch;
+static uint32_t trained_pc;
 /* run() with superblocks, whose side exits rewrite their own code: the
  * engine's code stays writable (and executable) while it runs. */
 static unsigned superblocks;
@@ -163,6 +164,7 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
     for (unsigned k = 0; engine.chain_targets && k < PW_X86_REENCODE_CHAIN_SLOTS; k++)
         r.chain_slots += engine.chain_targets[k].host_code != NULL;
     trained_sites = 0;
+    trained_pc = 0;
     if (call_cache) {
         const uint8_t *code = engine.code.write_base;
         for (size_t k = 0; k + 16 <= engine.cache.cursor; k++) {
@@ -171,6 +173,11 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
                 memcmp(code + k + 10, "\x49\x89\xc9\x4c\x89\xd9", 6)) continue;
             memcpy(&prediction, code + k + 2, sizeof(prediction));
             trained_sites += prediction != 0;
+            if (prediction && k + 25 <= engine.cache.cursor) {
+                uint32_t negative_pc;
+                memcpy(&negative_pc, code + k + 21, sizeof(negative_pc));
+                trained_pc = 0u - negative_pc;
+            }
         }
     }
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
@@ -543,12 +550,16 @@ static void test_call_inline_cache(void)
     call_cache=1;
     predicted=run_call_stack(code,sizeof(code));
     assert(trained_sites && predicted.state.gpr[0]==128);
+    /* F is the first already-translated target; the final iteration calls
+     * G, which must use the table without replacing the F prediction. */
+    assert(trained_sites == 1 && trained_pc == f);
     same(&predicted,&reference);
-    /* Changing targets must replace a prediction; an arena reset then
+    /* Changing targets must retain a prediction; an arena reset then
      * changes F at the same guest PC, exercising stale-target invalidation. */
     replay_patch=27;
     predicted=run_call_stack(code,sizeof(code));
     assert(trained_sites && predicted.state.gpr[0]==320);
+    assert(trained_sites == 1 && trained_pc == f);
     call_cache=0;
     reference=run_call_stack(code,sizeof(code));
     same(&predicted,&reference);

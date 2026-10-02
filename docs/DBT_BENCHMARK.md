@@ -735,3 +735,29 @@ time was 238.4 s versus 225.8 s; both runs were forcibly stopped after their
 results, so they do not certify clean shutdown. A reversed-order four-run
 comparison with timestamped execution reports and sampling profiles remains
 in progress; console measurements remain pending.
+
+## Indirect-call cache training trial
+
+The optional `PW_WOW_CALL_IC=1` cache now trains each call site once per code
+generation. A different target continues through the existing shared table
+without replacing the cached pointer and guest PC. An arena reset discards
+the prediction with its generated code. The warmed hit path is unchanged;
+the training guard uses MOV, JRCXZ and JMP while retaining guest RCX and flags.
+The option remains disabled by default.
+
+This follows a negative four-run trial of replacement on every successful
+table lookup: estimated translated CPU time increased 15.94%, and frame time
+increased 12.34%. A private PC diagnostic then completed the 5,182-frame HL2
+demo without DBT diagnostics. In fully contained playback intervals, two
+worker threads recorded 19.80 million and 16.14 million literal rewrites,
+while compiling only 702 and 121 additional blocks. Reports were cumulative
+and subtracted within each thread; they were not summed across windows.
+The diagnostic counter changes lookup cost and does not establish causality
+or measure this training trial's speedup. Native RemotePlay load also limited
+benchmark control. A fresh comparison without that counter and console
+validation are required before accepting any performance claim.
+
+The alternating-target regression checks that later targets preserve guest
+behavior through the fallback and leave the first prediction in place.
+It also resets the arena and changes code at the same guest PC to check
+that the discarded host pointer cannot survive a generation change.

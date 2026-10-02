@@ -962,7 +962,7 @@ static void emit_dynamic_exit_cached(Ctx *c, unsigned cache_call)
         mov_rcx_r9(o);
         b(o, 0x4d); b(o, 0x8b); b(o, 0x5b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, host_code));
         if (cache_host) {
-            size_t patch;
+            size_t patch, train, trained;
             mov_r9_rcx(o);
             rr(o, 0x89, 1, 1, R11);
             empty_target = jump8(o, 0xe3);
@@ -972,11 +972,22 @@ static void emit_dynamic_exit_cached(Ctx *c, unsigned cache_call)
              * and discarded together with their arena generation. */
             b(o, 0x4c); b(o, 0x8d); b(o, 0x05);
             patch = o->n; w32(o, (uint32_t)(cache_host - (patch + 4)));
+            /* Only the first successful target trains a site. Alternating
+             * targets use the full table without repeatedly modifying the
+             * executable cache literals. Preserve guest RCX and flags. */
+            mov_r9_rcx(o);
+            b(o, 0x49); b(o, 0x8b); b(o, 0x08);                 /* mov rcx, [r8] */
+            train = jump8(o, 0xe3);
+            mov_rcx_r9(o);
+            trained = jump8(o, 0xeb);
+            land8(o, train);
+            mov_rcx_r9(o);
             b(o, 0x4d); b(o, 0x89); b(o, 0x18);                  /* mov [r8], r11 */
             rr(o, 0x89, 0, R9, R10);
             b(o, 0x41); b(o, 0xf7); b(o, 0xd1);                  /* not r9d */
             b(o, 0x45); b(o, 0x8d); b(o, 0x49); b(o, 1);         /* lea r9d, [r9+1] */
             b(o, 0x45); b(o, 0x89); b(o, 0x48); b(o, (uint8_t)(cache_pc - cache_host));
+            land8(o, trained);
         }
         b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
         if (c->bounded) {
