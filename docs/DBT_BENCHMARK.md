@@ -771,3 +771,16 @@ not a performance result.
 PR288 is independent of the touched-slot reset trial (#287); its console
 baseline retains the merged occupancy cap, profiler and null-target fix.
 Use identical timing code on both sides of each speedup comparison.
+
+## Cache probing without a division per slot
+
+Each probe of the translation cache lookup, the publish and the engine's
+chain-patch loop stepped with `(slot + 1) % capacity`. The capacity is only
+known at run time, so that was a hardware division per slot. The steps now
+wrap with a compare. The home slot keeps its single `%`, so the probe order
+is unchanged for any capacity. A capacity-5 regression pins it: colliders in
+slots 4, 0 and 1, a miss stopping at the first empty slot, a miss probing
+every slot, and a refused publish at the occupancy limit. It passes on both
+the previous and the new code. With the three-quarter occupancy limit, a
+miss averages about eight probes, so this saves a few divisions per miss.
+No speedup is claimed before a PS5 measurement against a matched baseline.

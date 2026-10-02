@@ -443,7 +443,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
                 cand = c;
                 break;
             }
-            slot=(slot+1)%engine->cache.capacity;
+            if(++slot==engine->cache.capacity)slot=0;   /* as pw_x86_cache_lookup */
         }
         if(cand) {
             uintptr_t taken_slot = (uintptr_t)&cand->link_slots[0].target_code;

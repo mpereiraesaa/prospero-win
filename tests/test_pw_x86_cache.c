@@ -38,5 +38,38 @@ int main(void)
     assert(pw_x86_cache_lookup(&cache,0x2000,&entry)==PW_ERR_NOT_FOUND);
     assert(pw_x86_cache_reset(&cache,2)==PW_OK && cache.occupied==0);
     assert(pw_x86_cache_publish(&cache,0x2000,&small,0,&entry)==PW_OK && cache.occupied==1);
+    {
+        /* An odd capacity: probing wraps from the last slot to the first in
+         * the same order, colliders land in slots 4, 0 and 1, a miss stops
+         * at the first empty slot, and with every slot but one used a miss
+         * probes them all. Five entries take four before the limit. */
+        PwX86CacheEntry odd[5];
+        uint32_t pcs[5], found=0, other=0;
+        for(uint32_t pc=1; found<4; pc++) {
+            uint32_t hash=pc*2654435761u;hash^=hash>>16;
+            if(hash%5==4) pcs[found++]=pc;
+        }
+        for(uint32_t pc=1;;pc++) {
+            uint32_t hash=pc*2654435761u;hash^=hash>>16;
+            if(hash%5==2) { other=pc; break; }
+        }
+        assert(pw_x86_cache_init(&cache,odd,5,1024,1)==PW_OK);
+        static const uint32_t slots[3]={4,0,1};
+        for(unsigned i=0;i<3;i++) {
+            assert(pw_x86_cache_publish(&cache,pcs[i],&small,cache.cursor,&entry)==PW_OK);
+            assert(entry==&odd[slots[i]]);
+        }
+        for(unsigned i=0;i<3;i++) {
+            cache.max_probe=0;
+            assert(pw_x86_cache_lookup(&cache,pcs[i],&entry)==PW_OK && entry==&odd[slots[i]]);
+            assert(cache.max_probe==i+1);
+        }
+        cache.max_probe=0;
+        assert(pw_x86_cache_lookup(&cache,pcs[3],&entry)==PW_ERR_NOT_FOUND && cache.max_probe==4);
+        assert(pw_x86_cache_publish(&cache,other,&small,cache.cursor,&entry)==PW_OK && entry==&odd[2]);
+        cache.max_probe=0;
+        assert(pw_x86_cache_lookup(&cache,pcs[3],&entry)==PW_ERR_NOT_FOUND && cache.max_probe==5);
+        assert(pw_x86_cache_publish(&cache,pcs[3],&small,cache.cursor,&entry)==PW_ERR_LIMIT);
+    }
     return 0;
 }

@@ -9,6 +9,9 @@ static uint32_t first_slot(const PwX86Cache *cache,uint32_t guest_pc)
     return hash%cache->capacity;
 }
 
+/* Probing steps with a compare, not % capacity: the capacity is only known
+ * at run time, so % would be a division per slot probed. The order is the
+ * same for any capacity. */
 static void record_probes(PwX86Cache *cache,uint32_t probes)
 {
     cache->lookup_probes+=probes;
@@ -45,7 +48,7 @@ int pw_x86_cache_lookup_mut(PwX86Cache *cache,uint32_t guest_pc,PwX86CacheEntry 
         if(candidate->generation==cache->generation && candidate->guest_pc==guest_pc) {
             record_probes(cache,probe);cache->hits++;*entry=candidate;return PW_OK;
         }
-        slot=(slot+1)%cache->capacity;
+        if(++slot==cache->capacity)slot=0;
     }
     record_probes(cache,cache->capacity);cache->misses++;*entry=NULL;
     return PW_ERR_NOT_FOUND;
@@ -68,7 +71,7 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
         if(!candidate->used){available=1;break;}
         if(candidate->generation==cache->generation && candidate->guest_pc==guest_pc)
             return PW_ERR_STATE;
-        slot=(slot+1)%cache->capacity;
+        if(++slot==cache->capacity)slot=0;
     }
     if(!available)return PW_ERR_LIMIT;
     uint32_t pending_head=cache->entries[slot].pending_head;
