@@ -718,3 +718,20 @@ totals include time after the timedemo and are not benchmark-only miss rates.
 The full `make test` gate (including all three differential modes) passes.
 Controlled PC A/B results and console measurements remain required before
 accepting a performance claim.
+
+The first affinity-controlled PC pair on `hl2long` completed 5182 frames
+with no detected DBT fault or untranslatable-instruction diagnostics:
+
+| Build | Measured seconds | FPS |
+| --- | ---: | ---: |
+| Full-PC hash (`e13bd3e`) | 88.959 | 58.25 |
+| Previous dispatcher build (`d752ce8`) | 94.521 | 54.82 |
+
+Both used CPUs 0–11, the same private Wine prefix and dispatcher diagnostics,
+with the execution clock and sampling profiler disabled. This single pair
+ran candidate first and reduced measured frame time by 5.9%. It does not
+measure translated CPU time or establish the 30% target. Launch-to-result
+time was 238.4 s versus 225.8 s; both runs were forcibly stopped after their
+results, so they do not certify clean shutdown. A reversed-order four-run
+comparison with timestamped execution reports and sampling profiles remains
+in progress; console measurements remain pending.
