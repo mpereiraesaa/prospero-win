@@ -543,3 +543,31 @@ faster core. Getting 1383 on a 3.46 GHz Zen 2 core puts the console within
 the same ratio range.
 
 [b]: https://box86.org/2022/03/box86-box64-vs-qemu-vs-fex-vs-rosetta2/
+
+## Empty chain-table targets
+
+An all-zero re-encoder chain table treated guest PC zero as a tag hit and
+jumped through its empty host pointer. Null indirect calls, jumps and
+returns could therefore fault at host RIP zero outside translated code,
+instead of returning to guest exception handling. Clear the table with a
+PC-one sentinel in slot zero at allocation and reset. PC one hashes to
+slot one, so this empty sentinel cannot match a requested target; a real
+translation at PC zero replaces it normally. No instruction is added to
+the generated lookup. A missing executable source span is also reported as
+a guest access violation at its EIP, rather than an internal DBT error;
+previous data-fault metadata is not reused for that instruction-fetch fault.
+
+Regressions execute null register and memory calls/jumps and a null return,
+checking dispatcher result, registers, flags and data against the emitter
+in ordinary, unbounded, call-stack and superblock modes. A lifecycle test
+also executes null lookups before and after reset and publishes real PC-zero
+code in each generation. The same reporting helper used by the Unix adapter
+is checked with the actual missing-source result and stale fault metadata,
+plus data faults, unsupported instructions, x87 traps and internal errors.
+An unmodified-engine negative control hits the host-null fault; the regression
+uses a fixed source PC so random mapping cannot hide it by filling slot zero.
+`make -j2 all audit check-whitespace` and `make -j2 sanitize` pass, including
+362 differential forms with zero mismatches (93 unsupported forms skipped).
+The PS5 SDK compiles and links the updated Unix adapter and engine. Console
+execution and clean-game validation remain pending; this correctness fix is
+not a performance result.
