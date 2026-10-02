@@ -567,5 +567,8 @@ counters, inconsistent occupancy or clocks, and changed capacity. It does not
 combine distinct instances, sum cumulative snapshots or infer missing early
 work. `max_probe` is a lifetime maximum, not the interval's maximum. These
 counts explain lookup behavior; they do not measure CPU time or establish a
-frame-rate gain. Apply identical diagnostics to both comparison builds, then
+frame-rate gain. `probes` and `max_probe` cover only cache lookup calls: the
+publication walk and the engine's compile-time chain-patch walk are uncounted.
+They can also traverse long clusters, so these counters do not represent
+all probing work per compiled block. Apply identical diagnostics to both comparison builds, then
 repeat gameplay with diagnostics off to assess reporting overhead.

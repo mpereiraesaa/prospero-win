@@ -108,6 +108,7 @@ def main():
     result = {"log": str(args.log), "sha256": hashlib.sha256(raw).hexdigest(),
               "threads": analyze(records), "invalid_records": invalid,
               "limits": "One process per input. Counters describe lookups, not CPU time or frames. "
+                        "Probe counts cover lookups only, excluding publish and compile chain-patch walks. "
                         "max_probe is a lifetime maximum. No observations before the first report."}
     output = json.dumps(result, indent=2) + "\n"
     if args.output:
