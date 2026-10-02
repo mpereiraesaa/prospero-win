@@ -840,8 +840,17 @@ Both saved 32-bit and 64-bit contexts named the
 The dialog thread and checked worker were briefly suspended for context
 capture, with one suspend count restored for each. Both runs exited after
 one recorded assertion acknowledgement; prefix DLL/config restoration was
-verified, with no DBT or guest-exception diagnostics. This narrows the
-investigation to that worker's stop/wake path during module teardown. It
-does not establish why the worker remains active, a caller timeout, or an
-unattended-shutdown fix. Private captures and the inspection helper remain
-outside Git; no vendor binaries were changed.
+verified, with no DBT or guest-exception diagnostics.
+
+Further bounded inspection recovered the worker's frame chain through
+`RtlExitUserThread`, `LdrShutdownThread` and `RtlEnterCriticalSection`.
+The lock argument matched the pinned Wine build's loader critical section;
+its owner thread ID matched the main/UI thread displaying the teardown
+assertion. The worker has entered exit cleanup and is waiting for the
+loader lock held by the main thread. Its handle remains unsignaled until
+thread cleanup completes. One additional run exited without an assertion;
+the following repeat captured the lock ownership and required one recorded
+acknowledgement. This establishes an intermittent shutdown ordering problem,
+not an unattended-shutdown fix or proof of a translator correctness defect.
+Suspend counts and prefix DLL/config were restored. Private captures and
+the inspection helper remain outside Git; no vendor binaries were changed.
