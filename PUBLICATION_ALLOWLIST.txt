@@ -261,6 +261,7 @@ tests/test_pw_wine_start.c
 tests/test_pw_wine_launch.c
 tests/test_pw_game_profile.c
 tests/test_pw_gameplay_run.py
+tests/test_pw_cache_stats.py
 tests/test_pw_wine_display.c
 tests/test_pw_wine_library.c
 native/pw_data_mount.c
@@ -289,6 +290,7 @@ docs/GETTING_STARTED.md
 docs/CONTROLS.md
 tests/test_pw_install.py
 tools/pw_gameplay_run.py
+tools/pw_cache_stats.py
 tools/pw_install.py
 tests/test_pw_prefix.py
 tools/build_host_wine.sh
