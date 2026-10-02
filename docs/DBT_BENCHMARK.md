@@ -542,4 +542,26 @@ run of the same build rated 1416 total at 29% of its native 4850, on a
 faster core. Getting 1383 on a 3.46 GHz Zen 2 core puts the console within
 the same ratio range.
 
+### Unmap notification correctness
+
+The WoW64 CPU backend captures the complete mapped-view or image extent
+before an unmap and invalidates that range after success. A failure anywhere
+in the region walk falls back to full invalidation; a partial extent could
+leave translated code from the remaining regions alive. Failed unmaps do
+not invalidate code.
+
+Before/after pairs retain their caller thread, original address and nested
+order. A failed query still reserves a pair so its completion cannot consume
+an older extent. The bounded 64-record bank falls back to full invalidation
+on saturation or ambiguous ordering until outstanding pairs drain. Queries
+and invalidation run outside the bank lock.
+
+`tests/test_wowprospero_unmap.py` compiles and executes the actual callback
+code with controlled VM replies, including multi-region views, partial query
+failure, nested/reentrant callbacks, eight concurrent threads, saturation
+and recovery, failed unmaps, and nonprogressing or overflowing regions.
+Both `make test` and `make sanitize` run it with their selected compiler and
+flags. These tests establish callback behavior; they do not establish a
+game performance improvement or console compatibility.
+
 [b]: https://box86.org/2022/03/box86-box64-vs-qemu-vs-fex-vs-rosetta2/
