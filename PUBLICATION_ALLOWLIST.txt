@@ -46,6 +46,7 @@ src/pw_vm_posix.c
 src/pw_vm_posix.h
 src/pw_x86_block.c
 src/pw_x86_block.h
+src/pw_x86_padding.h
 src/pw_x86_cache.c
 src/pw_x86_cache.h
 src/pw_x86_engine.c

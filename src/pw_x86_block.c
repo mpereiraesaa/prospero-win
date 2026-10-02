@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_x86_block.h"
+#include "pw_x86_padding.h"
 #include "pw_x87.h"
 #include <string.h>
 
@@ -1666,7 +1667,12 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
         uint32_t flags_def = 0, flags_use = 0;
         int can_fault = 0;
 
-        if(op==0x66 && bytes-cursor>=2 && source[cursor+1]==0xf3) {
+        int padding = pw_x86_padding_length(source + cursor, bytes - cursor);
+        if (padding < 0) DECODE_FAIL(padding == -1 ? PW_ERR_TRUNCATED : PW_ERR_UNSUPPORTED);
+        if (padding) {
+            length = (size_t)padding;
+            d->op = 0x90;
+        } else if(op==0x66 && bytes-cursor>=2 && source[cursor+1]==0xf3) {
             if(bytes-cursor<3)DECODE_FAIL(PW_ERR_TRUNCATED);
             if(source[cursor+2]!=0xa5 && source[cursor+2]!=0xab)DECODE_FAIL(PW_ERR_UNSUPPORTED);
             string_op=source[cursor+2];string_width=2;string_repeat=1;length=3;can_fault=1;

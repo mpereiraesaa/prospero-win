@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_x86_reencode.h"
+#include "pw_x86_padding.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -259,6 +260,13 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
 
     memset(in, 0, sizeof(*in));
     in->bytes = s;
+    int padding = pw_x86_padding_length(s, avail);
+    if (padding < 0) return 0;
+    if (padding) {
+        in->kind = K_NOP;
+        in->len = (uint8_t)padding;
+        return 1;
+    }
     /* Operand size, lock, fs, and the segment overrides that name the flat
      * segments (cs ds es ss, and the branch hints on jcc). */
     for (; i < avail && i < 4; i++) {
