@@ -310,26 +310,61 @@ static void map_block(PwX86Engine *engine, const PwX86CacheEntry *entry)
         if(!engine->block_map[g]) engine->block_map[g]=index;
 }
 
-uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *engine, uintptr_t rip)
+const PwX86CacheEntry *pw_x86_engine_host_block(const PwX86Engine *engine, uintptr_t rip)
 {
     const uintptr_t low = (uintptr_t)engine->code.exec_base;
     uint32_t index;
 
-    if(!engine->block_map || rip < low || rip >= low + engine->code.bytes) return 0;
+    if(!engine->block_map || rip < low || rip - low >= engine->code.bytes) return NULL;
     index = engine->block_map[(rip - low) / PW_X86_ENGINE_FAULT_GRANULE];
     while(index && index <= engine->cache.capacity) {
         const PwX86CacheEntry *e = &engine->cache.entries[index - 1];
         const uintptr_t start = low + e->code_offset;
-        if(rip < start) return 0;
-        if(rip < start + e->code_bytes) {
-            size_t path;
-            if(!e->fault_table_offset) return 0;
-            path = pw_x86_fault_table_path((const uint8_t *)start, e->fault_table_offset, rip - start);
-            return path ? start + path : 0;
-        }
+        if(!e->used || e->generation != engine->cache.generation || rip < start) return NULL;
+        if(rip - start < e->code_bytes) return e;
         index = e->arena_next;
     }
-    return 0;
+    return NULL;
+}
+
+void pw_x86_engine_sample(const PwX86Engine *engine, uintptr_t rip, PwX86HotspotProfile *profile)
+{
+    const uintptr_t base = (uintptr_t)engine->code.exec_base;
+    const PwX86CacheEntry *entry;
+    unsigned bucket;
+
+    profile->samples++;
+    if(rip < base || rip - base >= engine->code.bytes) { profile->outside++; return; }
+    entry = pw_x86_engine_host_block(engine, rip);
+    if(!entry) { profile->stubs++; return; }
+    bucket = (entry->guest_pc * 2654435761u) & (PW_X86_HOTSPOT_SLOTS - 1);
+    for(unsigned probe = 0; probe < PW_X86_HOTSPOT_SLOTS; probe++) {
+        PwX86Hotspot *row = &profile->slots[bucket];
+        if(!row->samples || row->guest_pc == entry->guest_pc) {
+            const size_t offset = rip - base - entry->code_offset;
+            row->guest_pc = entry->guest_pc;
+            row->samples++;
+            if(!pw_x86_reencoded(&entry->entry_contract) || !entry->exit_offset) row->emitted++;
+            else if(offset < entry->chain_entry_offset) row->entry++;
+            else if(offset < entry->exit_offset) row->body++;
+            else row->exit++;
+            return;
+        }
+        bucket = (bucket + 1) & (PW_X86_HOTSPOT_SLOTS - 1);
+    }
+    profile->overflow++;
+}
+
+uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *engine, uintptr_t rip)
+{
+    const PwX86CacheEntry *e = pw_x86_engine_host_block(engine, rip);
+    uintptr_t start;
+    size_t path;
+
+    if(!e || !e->fault_table_offset) return 0;
+    start = (uintptr_t)engine->code.exec_base + e->code_offset;
+    path = pw_x86_fault_table_path((const uint8_t *)start, e->fault_table_offset, rip - start);
+    return path ? start + path : 0;
 }
 
 int pw_x86_engine_set_counters(PwX86Engine *engine, unsigned enabled)
@@ -638,6 +673,14 @@ dispatch:;
     state->call_stack_top = engine->call_stack_top;
     void *code_entry=(uint8_t *)engine->code.exec_base+entry->code_offset+entry->canonical_entry_offset;
     int invoked;
+    uint64_t execution_begin=0;
+    unsigned timed=0;
+    if(engine->execution_clock) {
+        engine->execution_calls++;
+        engine->execution_random=engine->execution_random*1664525u+1013904223u;
+        timed=engine->execution_stride==1 ||
+              engine->execution_random<=UINT32_MAX/engine->execution_stride;
+    }
     if(engine->native_fp && pw_x86_reencoded(&entry->entry_contract)) {
         /* The guest's x87, MMX and SSE state in the host FPU for the chain;
          * it stays in the image afterwards (pw_x86_engine_fp_sync). */
@@ -646,11 +689,21 @@ dispatch:;
             pw_guest_fp_to_fxsave(&state->fp,image);
             engine->fp_image_live=1;
         }
+        if(timed)
+            execution_begin=engine->execution_clock(engine->execution_clock_opaque);
         invoked=pw_x86_run_block_fp(state,code_entry,image);
     } else {
         /* Emitter blocks work on state->fp. */
         pw_x86_engine_fp_sync(engine,state);
+        if(timed)
+            execution_begin=engine->execution_clock(engine->execution_clock_opaque);
         invoked=invoke(code_entry,state);
+    }
+    if(timed) {
+        uint64_t end=engine->execution_clock(engine->execution_clock_opaque);
+        engine->execution_samples++;
+        if(!execution_begin || !end || end<execution_begin)engine->execution_clock_errors++;
+        else engine->execution_ns+=end-execution_begin;
     }
 
     /* The block a failed step entered, for the fault report. Taken only on
@@ -696,10 +749,44 @@ dispatch:;
     return invoked==PW_ERR_X87_TRAP?PW_ERR_X87_TRAP:invoked?PW_ERR_VM:PW_OK;
 }
 
+int pw_x86_execution_clock_batch(PwX86ExecutionClock clock, void *opaque, uint64_t *mean_ns)
+{
+    if(!clock || !mean_ns)return PW_ERR_PRECONDITION;
+    *mean_ns=0;
+    uint64_t means[8];
+    for(unsigned i=0;i<8;i++) {
+        uint64_t begin=clock(opaque),last=begin;
+        if(!begin)return PW_ERR_VM;
+        for(unsigned read=0;read<1024;read++) {
+            uint64_t now=clock(opaque);
+            if(!now || now<last)return PW_ERR_VM;
+            last=now;
+        }
+        uint64_t elapsed=last-begin;
+        means[i]=elapsed/1024+(elapsed%1024>=512);
+        for(unsigned j=i;j && means[j]<means[j-1];j--) {
+            uint64_t temporary=means[j];means[j]=means[j-1];means[j-1]=temporary;
+        }
+    }
+    *mean_ns=means[4];
+    return PW_OK; /* A valid fast/quantized clock can have a zero batch mean. */
+}
+
+int pw_x86_engine_set_execution_clock(PwX86Engine *engine, PwX86ExecutionClock clock, void *opaque, uint32_t stride)
+{
+    if(!engine || !engine->initialized || (clock && !stride))return PW_ERR_PRECONDITION;
+    engine->execution_clock=clock;
+    engine->execution_clock_opaque=opaque;
+    engine->execution_stride=stride;
+    engine->execution_random=0x9e3779b9u;
+    return PW_OK;
+}
+
 int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
 {
     if(!engine || !engine->initialized)return PW_ERR_PRECONDITION;
     unsigned was_sealed=engine->sealed;
+    const size_t discarded_bytes=engine->cache.cursor;
     if((engine->sealed || engine->failed) &&
        protection(engine,0,engine->code.bytes,PW_PROT_READ|PW_PROT_WRITE)!=PW_OK)
         return PW_ERR_VM;
@@ -719,14 +806,18 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
             engine->failed=1;
         return status;
     }
-    memset(engine->code.write_base,0xcc,engine->code.bytes);
+    /* Trap the discarded code, including its alignment padding. Unused arena
+     * pages have never held published entry points and need no reset writes.
+     * Poisoning the whole reserved arena made short flushes write 128 MiB. */
+    if(discarded_bytes) memset(engine->code.write_base,0xcc,discarded_bytes);
     /* Every indirect target pointed into the code just discarded. */
     if(engine->indirect_targets)
         memset(engine->indirect_targets,0,PW_X86_ENGINE_INDIRECT_SLOTS*sizeof(PwX86IndirectTarget));
     if(engine->chain_targets)
         clear_chain_targets(engine->chain_targets);
     if(engine->block_map)
-        memset(engine->block_map,0,(engine->code.bytes/PW_X86_ENGINE_FAULT_GRANULE+1)*sizeof(uint32_t));
+        memset(engine->block_map,0,
+               ((discarded_bytes+PW_X86_ENGINE_FAULT_GRANULE-1)/PW_X86_ENGINE_FAULT_GRANULE)*sizeof(uint32_t));
     engine->last_published=0;
     engine->dispatches=0;engine->retired_instructions=0;engine->failed=0;
     return emit_return_stub(engine);

@@ -12,6 +12,8 @@ enum { PW_X86_ENGINE_MAX_SOURCE=15*32, PW_X86_ENGINE_MAX_CODE=16384,
  * remains alive and unchanged for the engine generation. */
 typedef int (*PwX86SourceView)(void *opaque,uint32_t guest_pc,
                                const uint8_t **source,size_t *bytes);
+/* Optional owner-thread CPU clock in nanoseconds; zero means unavailable. */
+typedef uint64_t (*PwX86ExecutionClock)(void *opaque);
 
 typedef struct PwX86StepReport {
     uint32_t guest_pc;
@@ -20,6 +22,17 @@ typedef struct PwX86StepReport {
     unsigned cache_hit;
 } PwX86StepReport;
 
+/* Bounded, owner-thread sample counts. No pointers survive cache resets. */
+enum { PW_X86_HOTSPOT_SLOTS = 4096 };
+typedef struct PwX86Hotspot {
+    uint32_t guest_pc;
+    uint64_t samples, entry, body, exit, emitted;
+} PwX86Hotspot;
+typedef struct PwX86HotspotProfile {
+    PwX86Hotspot slots[PW_X86_HOTSPOT_SLOTS];
+    uint64_t samples, outside, stubs, overflow;
+} PwX86HotspotProfile;
+
 typedef struct PwX86Engine {
     const PwVmBackend *backend;
     PwVmRegion code;
@@ -27,6 +40,10 @@ typedef struct PwX86Engine {
     PwX86SourceView source_view;
     void *source_opaque;
     uint64_t dispatches,retired_instructions,compiles;
+    PwX86ExecutionClock execution_clock;
+    void *execution_clock_opaque;
+    uint64_t execution_ns, execution_calls, execution_samples, execution_clock_errors;
+    uint32_t execution_stride, execution_random;
     uint64_t protection_calls,protection_bytes;
     uint64_t attempted_links, successful_links;
     uint64_t linked_transitions, dispatcher_transitions;
@@ -153,6 +170,14 @@ int pw_x86_engine_call_stack_fault(const PwX86Engine *, uintptr_t address, uintp
 /* Where to resume a host fault at rip: the refused-access path of the
  * marked access that faulted, or 0 when rip is not one (not ours). Safe in
  * a signal handler: it reads only the engine and its code. */
+/* Resolve a sampled host PC using the arena's block map, including entry and
+ * exit code. Requires fault markers and the owner thread's stable cache;
+ * returns NULL for stubs, gaps, outside addresses and stale generations. */
+const PwX86CacheEntry *pw_x86_engine_host_block(const PwX86Engine *, uintptr_t rip);
+/* Sample only from the owner thread while its cache is stable. Reporting
+ * must block the sampling signal; sampling allocates nothing and calls no
+ * platform functions. Overflow is explicit and never replaces older rows. */
+void pw_x86_engine_sample(const PwX86Engine *, uintptr_t rip, PwX86HotspotProfile *);
 uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *, uintptr_t rip);
 /* Leave the statistics counters out of blocks translated from now on (they
  * are on by default): a step then reports no retired instructions, and the
@@ -160,6 +185,14 @@ uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *, uintptr_t rip);
  * slots and every guest-visible effect are unchanged. */
 int pw_x86_engine_set_counters(PwX86Engine *, unsigned enabled);
 int pw_x86_engine_step(PwX86Engine *,PwX86State *,PwX86StepReport *);
+/* Time generated-code invocation (including its FP wrapper), excluding
+ * compilation, resets and dispatcher work. Totals survive cache resets.
+ * stride=1 times every invocation; larger strides sample approximately 1/N
+ * invocations. execution_ns sums samples only. NULL disables clock reads.
+ * Set only from the engine's owner thread. */
+/* Median batch mean including loop overhead; diagnostic only, not a correction. */
+int pw_x86_execution_clock_batch(PwX86ExecutionClock, void *opaque, uint64_t *mean_ns);
+int pw_x86_engine_set_execution_clock(PwX86Engine *, PwX86ExecutionClock, void *opaque, uint32_t stride);
 int pw_x86_engine_reset(PwX86Engine *,uint32_t);
 int pw_x86_engine_destroy(PwX86Engine *);
 #endif

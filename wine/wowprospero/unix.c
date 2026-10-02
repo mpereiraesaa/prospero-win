@@ -75,6 +75,9 @@ struct pw_thread
     uint64_t wall_window;
     double tsc_per_us;       /* measured at the last report */
     uint32_t n_unix, n_sys, n_other, n_unix_long, n_resets, n_flushes, last_reason;
+    PwX86HotspotProfile *profile;
+    uint64_t profile_last_dump;
+    uint64_t execution_clock_cost, execution_clock_resolution;
 };
 
 C_ASSERT( sizeof(((I386_CONTEXT *)0)->ExtendedRegisters) == PW_GUEST_FXSAVE_BYTES );
@@ -89,7 +92,7 @@ static __thread struct pw_thread *self;
  * not mapped) stays Wine's, as before. The handler reads the translators'
  * code ranges from this table rather than thread-local storage. */
 enum { MAX_ARENAS = 1024 };
-static struct { uintptr_t low, high; PwX86Engine *engine; PwX86State *state; } arenas[MAX_ARENAS];
+static struct { uintptr_t low, high; PwX86Engine *engine; PwX86State *state; PwX86HotspotProfile *profile; } arenas[MAX_ARENAS];
 #ifndef __PROSPERO__
 static struct sigaction wine_segv;
 #endif
@@ -230,6 +233,28 @@ static int setup_thread( void *context, const PwWowThreadBudget *budget )
     return -1;
 }
 
+static uint64_t execution_clock( void *opaque )
+{
+    struct timespec now;
+    (void)opaque;
+    if (clock_gettime( CLOCK_THREAD_CPUTIME_ID, &now )) return 0;
+    return now.tv_sec * 1000000000ull + now.tv_nsec;
+}
+
+static void execution_report( struct pw_thread *thread )
+{
+    if (!thread->engine.execution_clock) return;
+    fprintf( stderr, "wowprospero execution: tid=%04x cumulative=1 sample_cpu_ns=%llu calls=%llu samples=%llu stride=%u clock_batch_read_ns=%llu clock_resolution_ns=%llu clock_errors=%llu\n",
+             (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+             (unsigned long long)thread->engine.execution_ns,
+             (unsigned long long)thread->engine.execution_calls,
+             (unsigned long long)thread->engine.execution_samples,
+             thread->engine.execution_stride,
+             (unsigned long long)thread->execution_clock_cost,
+             (unsigned long long)thread->execution_clock_resolution,
+             (unsigned long long)thread->engine.execution_clock_errors );
+}
+
 static struct pw_thread *get_thread(void)
 {
     struct pw_thread *thread = self;
@@ -343,6 +368,25 @@ static struct pw_thread *get_thread(void)
     thread->cache_epoch = (uint32_t)code_generation;
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
+    {
+        int enabled = getenv( "PW_WOW_EXEC_TIMING" ) != NULL;
+#ifdef __PROSPERO__
+        struct stat st;
+        if (!stat( "/data/prospero-win/pw_wow_exec_timing", &st )) enabled = 1;
+#endif
+        if (enabled)
+        {
+            const char *option = getenv( "PW_WOW_EXEC_STRIDE" );
+            unsigned long stride = option ? strtoul( option, NULL, 10 ) : 64;
+            if (!stride || stride > UINT32_MAX) stride = 64;
+            struct timespec resolution;
+            if (!clock_getres( CLOCK_THREAD_CPUTIME_ID, &resolution ))
+                thread->execution_clock_resolution = resolution.tv_sec * 1000000000ull + resolution.tv_nsec;
+            if (pw_x86_execution_clock_batch( execution_clock, NULL, &thread->execution_clock_cost ) == PW_OK)
+                pw_x86_engine_set_execution_clock( &thread->engine, execution_clock, NULL, (uint32_t)stride );
+            else fprintf( stderr, "wowprospero execution: unavailable thread CPU clock; timing disabled\n" );
+        }
+    }
     profile_add_thread( thread );
     return self = thread;
 }
@@ -515,225 +559,208 @@ static void segv_handler( int signal, siginfo_t *info, void *context )
 }
 #endif
 
-#ifndef __PROSPERO__
-/* PW_WOW_PROFILE=<file>: sample the host RIP with SIGPROF (1 ms of CPU) and
- * write, every few seconds from run(), where the time goes: translated
- * blocks by guest EIP (with the host and guest bytes of the hottest), and
- * everything else by module and symbol. A host-only diagnostic. */
-#include <dlfcn.h>
-#include <sys/time.h>
-
-enum { PROFILE_SAMPLES = 1 << 20, PROFILE_THREADS = 64, PROFILE_TOP = 40, PROFILE_DUMP = 12 };
-static uint64_t *profile_rips;
-static uint32_t profile_count;
+/* Profiles belong to the sampled thread. Resolve the PC immediately, before
+ * cache invalidation can reuse its arena, and retain only addresses/counts.
+ * No cache of another thread or proprietary guest bytes is read by reporting. */
 static const char *profile_path;
-static struct pw_thread *profile_threads[PROFILE_THREADS];
-static uint32_t profile_thread_count;
-static uint64_t profile_last_dump;
-
-static void profile_handler( int signal, siginfo_t *info, void *context )
+static uint64_t profile_ticks, profile_unattributed;
+#include <sys/time.h>
+#ifndef __PROSPERO__
+#include <dlfcn.h>
+#endif
+/* Native PCs are process-wide and cumulative. Keys never move or disappear;
+ * atomic publication/counts allow signals on different threads to sample
+ * without a lock, TLS, or access to another thread's cache. */
+enum { PROFILE_NATIVE_SLOTS = 4096 };
+static struct profile_native { uintptr_t pc; uint64_t samples; } profile_native[PROFILE_NATIVE_SLOTS];
+static uint64_t profile_native_overflow, profile_native_last_dump;
+static void profile_native_sample(uintptr_t pc)
 {
-    uint32_t i = __atomic_fetch_add( &profile_count, 1, __ATOMIC_RELAXED );
+    unsigned bucket = (unsigned)((pc >> 4) * 2654435761u) & (PROFILE_NATIVE_SLOTS - 1);
+    if(!pc) return;
+    for(unsigned i = 0; i < PROFILE_NATIVE_SLOTS; i++) {
+        uintptr_t key = __atomic_load_n(&profile_native[bucket].pc, __ATOMIC_ACQUIRE);
+        if(!key) {
+            uintptr_t empty = 0;
+            if(__atomic_compare_exchange_n(&profile_native[bucket].pc, &empty, pc, 0,
+                                           __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) key = pc;
+            else key = empty;
+        }
+        if(key == pc) {
+            __atomic_fetch_add(&profile_native[bucket].samples, 1, __ATOMIC_RELAXED);
+            return;
+        }
+        bucket = (bucket + 1) & (PROFILE_NATIVE_SLOTS - 1);
+    }
+    __atomic_fetch_add(&profile_native_overflow, 1, __ATOMIC_RELAXED);
+}
+static void profile_handler(int signal, siginfo_t *info, void *context)
+{
+    const uintptr_t rip = *context_rip(context);
     (void)signal; (void)info;
-    if (i < PROFILE_SAMPLES) profile_rips[i] = *context_rip( context );
+    __atomic_fetch_add(&profile_ticks, 1, __ATOMIC_RELAXED);
+    /* Wine may change FS before entering translated code: compiler TLS access
+     * (including __tls_get_addr) is unsafe here. Locate the interrupted arena
+     * instead. Only its owner can execute it, so no other cache is inspected. */
+    for(unsigned i = 0; i < MAX_ARENAS; i++) {
+        uintptr_t low = __atomic_load_n(&arenas[i].low, __ATOMIC_ACQUIRE);
+        if(low && rip >= low && rip < __atomic_load_n(&arenas[i].high, __ATOMIC_ACQUIRE)) {
+            PwX86HotspotProfile *profile = __atomic_load_n(&arenas[i].profile, __ATOMIC_ACQUIRE);
+            if(profile) {
+                pw_x86_engine_sample(arenas[i].engine, rip, profile);
+                return;
+            }
+            break;
+        }
+    }
+    __atomic_fetch_add(&profile_unattributed, 1, __ATOMIC_RELAXED);
+    profile_native_sample(rip);
 }
 
 static void profile_start(void)
 {
+    profile_path = getenv("PW_WOW_PROFILE");
+#ifdef __PROSPERO__
+    if(!profile_path) {
+        struct stat st;
+        if(!stat("/data/prospero-win/pw_wow_profile", &st)) profile_path = "1";
+    }
+#endif
+    if(!profile_path || !*profile_path) { profile_path = NULL; return; }
     struct sigaction action;
     struct itimerval timer = { { 0, 1000 }, { 0, 1000 } };
-
-    if (!(profile_path = getenv( "PW_WOW_PROFILE" )) || !*profile_path) { profile_path = NULL; return; }
-    if (!(profile_rips = calloc( PROFILE_SAMPLES, sizeof(*profile_rips) ))) { profile_path = NULL; return; }
-    memset( &action, 0, sizeof(action) );
+    memset(&action, 0, sizeof(action));
     action.sa_sigaction = profile_handler;
-    /* On the signal stack: translated code may run on the call stack. */
     action.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
-    sigemptyset( &action.sa_mask );
-    sigaction( SIGPROF, &action, NULL );
-    setitimer( ITIMER_PROF, &timer, NULL );
+    sigemptyset(&action.sa_mask);
+    if(sigaction(SIGPROF, &action, NULL) || setitimer(ITIMER_PROF, &timer, NULL)) {
+        fprintf(stderr, "wowprospero profile: sampling timer unavailable\n");
+        profile_path = NULL;
+    }
 }
 
-static void profile_add_thread( struct pw_thread *thread )
+static void profile_add_thread(struct pw_thread *thread)
 {
-    uint32_t i = __atomic_fetch_add( &profile_thread_count, 1, __ATOMIC_RELAXED );
-    if (i < PROFILE_THREADS) profile_threads[i] = thread;
+    if(profile_path && !thread->engine.fault_markers) {
+        fprintf(stderr, "wowprospero profile: requires fault-marker block map\n");
+        return;
+    }
+    if(profile_path) {
+        thread->profile = calloc(1, sizeof(*thread->profile));
+        for(unsigned i = 0; i < MAX_ARENAS; i++)
+            if(__atomic_load_n(&arenas[i].high, __ATOMIC_ACQUIRE) && arenas[i].engine == &thread->engine) {
+                __atomic_store_n(&arenas[i].profile, thread->profile, __ATOMIC_RELEASE);
+                break;
+            }
+    }
 }
 
-static int compare_u64( const void *a, const void *b )
+static int compare_hotspots(const void *a, const void *b)
 {
-    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
-    return x < y ? -1 : x > y;
-}
-
-struct profile_block { const PwX86CacheEntry *entry; const uint8_t *code; uint32_t samples; };
-
-static int compare_block_samples( const void *a, const void *b )
-{
-    const struct profile_block *x = a, *y = b;
+    const PwX86Hotspot *x = a, *y = b;
     return x->samples < y->samples ? 1 : x->samples > y->samples ? -1 : 0;
 }
 
-static const PwX86CacheEntry *profile_find( uint64_t rip, const uint8_t **code )
+static int compare_native_samples(const void *a, const void *b)
 {
-    for (uint32_t t = 0; t < profile_thread_count && t < PROFILE_THREADS; t++)
-    {
-        PwX86Engine *engine = &profile_threads[t]->engine;
-        const uint8_t *base = engine->code.exec_base;
-        if (!base || rip < (uintptr_t)base || rip >= (uintptr_t)base + engine->code.bytes) continue;
-        for (uint32_t i = 0; i < engine->cache.capacity; i++)
-        {
-            const PwX86CacheEntry *e = &engine->cache.entries[i];
-            if (!e->used || e->generation != engine->cache.generation) continue;
-            if (rip >= (uintptr_t)base + e->code_offset && rip < (uintptr_t)base + e->code_offset + e->code_bytes)
-            {
-                *code = base + e->code_offset;
-                return e;
-            }
-        }
-        *code = NULL;
-        return NULL;  /* in an arena, outside every block: stubs */
-    }
-    *code = (const uint8_t *)1;
-    return NULL;
+    const struct profile_native *x = a, *y = b;
+    return x->samples < y->samples ? 1 : x->samples > y->samples ? -1 : 0;
 }
 
-static void profile_dump(void)
+static void profile_native_dump(uint64_t now, FILE *out)
 {
-    uint32_t n = __atomic_load_n( &profile_count, __ATOMIC_RELAXED ), blocks = 0, arena = 0, stubs = 0;
-    uint32_t part[4] = { 0 };  /* re-encoded entry, body, exit; emitter blocks */
-    uint32_t exits[4] = { 0 }; /* exit samples by the block's exit kind */
-    struct profile_block *table;
-    uint64_t *rips;
-    char name[512];
-    FILE *out;
-
-    if (n > PROFILE_SAMPLES) n = PROFILE_SAMPLES;
-    if (!n || !(rips = malloc( n * sizeof(*rips) ))) return;
-    if (!(table = calloc( 65536, sizeof(*table) ))) { free( rips ); return; }
-    memcpy( rips, profile_rips, n * sizeof(*rips) );
-    qsort( rips, n, sizeof(*rips), compare_u64 );
-    snprintf( name, sizeof(name), "%s.tmp", profile_path );
-    if (!(out = fopen( name, "w" ))) { free( rips ); free( table ); return; }
-    fprintf( out, "samples %u\n\n== outside translated code (module!symbol+offset)\n", n );
-    for (uint32_t i = 0; i < n; )
-    {
-        const uint8_t *code;
-        const PwX86CacheEntry *e = profile_find( rips[i], &code );
-        uint32_t j = i;
-
-        if (e)
-        {
-            uint32_t k;
-            for (k = 0; k < blocks && table[k].entry != e; k++);
-            if (k == blocks && blocks < 65536) { table[blocks].entry = e; table[blocks].code = code; blocks++; }
-            while (j < n && rips[j] < (uintptr_t)code + e->code_bytes)
-            {
-                const size_t at = rips[j] - (uintptr_t)code;
-                if (!pw_x86_reencoded( &e->entry_contract ) || !e->exit_offset) part[3]++;
-                else
-                {
-                    unsigned where = at < e->chain_entry_offset ? 0 : at < e->exit_offset ? 1 : 2;
-                    part[where]++;
-                    if (where == 2) exits[e->exit.kind < 4 ? e->exit.kind : 0]++;
-                }
-                j++;
-            }
-            if (k < 65536) table[k].samples += j - i;
-            arena += j - i;
-        }
-        else if (!code)
-        {
-            while (j < n && rips[j] == rips[i]) j++;
-            stubs += j - i;
-            arena += j - i;
-        }
-        else
-        {
-            Dl_info info;
-            const char *module = "?", *symbol = "?";
-            uintptr_t symbol_address = 0;
-            int known = dladdr( (void *)(uintptr_t)rips[i], &info );
-            if (known)
-            {
-                if (info.dli_fname) module = strrchr( info.dli_fname, '/' ) ? strrchr( info.dli_fname, '/' ) + 1 : info.dli_fname;
-                if (info.dli_sname) { symbol = info.dli_sname; symbol_address = (uintptr_t)info.dli_saddr; }
-            }
-            /* group by symbol (unresolved addresses: by 64 KiB) */
-            for (j = i + 1; j < n; j++)
-            {
-                Dl_info other;
-                const uint8_t *c2;
-                if (profile_find( rips[j], &c2 ) || c2 != (const uint8_t *)1) break;
-                if (known ? !dladdr( (void *)(uintptr_t)rips[j], &other ) || other.dli_saddr != info.dli_saddr ||
-                            other.dli_fbase != info.dli_fbase
-                          : (rips[j] >> 16) != (rips[i] >> 16) || dladdr( (void *)(uintptr_t)rips[j], &other ))
-                    break;
-            }
-            if ((j - i) * 1000 >= n)
-                fprintf( out, "%5.1f%% %s!%s (%#lx)\n", 100.0 * (j - i) / n, module, symbol,
-                         (unsigned long)(rips[i] - symbol_address) );
-        }
-        i = j;
+    uint64_t last = __atomic_load_n(&profile_native_last_dump, __ATOMIC_RELAXED);
+    struct profile_native *rows;
+    if(now - last < 5000 || !__atomic_compare_exchange_n(&profile_native_last_dump, &last, now, 0,
+                                                         __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
+    rows = malloc(sizeof(profile_native));
+    if(!rows) return;
+    for(unsigned i = 0; i < PROFILE_NATIVE_SLOTS; i++) {
+        rows[i].pc = __atomic_load_n(&profile_native[i].pc, __ATOMIC_ACQUIRE);
+        rows[i].samples = __atomic_load_n(&profile_native[i].samples, __ATOMIC_RELAXED);
     }
-    fprintf( out, "\n== translated code %.1f%% (%u blocks), of it outside blocks (stubs) %.1f%%\n",
-             100.0 * arena / n, blocks, 100.0 * stubs / n );
-    fprintf( out, "re-encoded: entry %.1f%%, body %.1f%%, exits %.1f%%; emitter blocks %.1f%%\n",
-             100.0 * part[0] / n, 100.0 * part[1] / n, 100.0 * part[2] / n, 100.0 * part[3] / n );
-    fprintf( out, "exits by kind: direct jump %.1f%%, conditional %.1f%%, dynamic %.1f%%, other %.1f%%\n",
-             100.0 * exits[PW_X86_EXIT_DIRECT_JUMP] / n, 100.0 * exits[PW_X86_EXIT_CONDITIONAL] / n,
-             100.0 * exits[PW_X86_EXIT_DYNAMIC] / n, 100.0 * exits[0] / n );
-    qsort( table, blocks, sizeof(*table), compare_block_samples );
-    for (uint32_t k = 0; k < blocks && k < PROFILE_TOP; k++)
-    {
-        const PwX86CacheEntry *e = table[k].entry;
-        fprintf( out, "%5.2f%% %c eip=%08x instr=%u guest_bytes=%zu host_bytes=%zu entry=%#zx exit=%#zx\n",
-                 100.0 * table[k].samples / n, pw_x86_reencoded( &e->entry_contract ) ? 'R' : 'E',
-                 e->guest_pc, e->instructions, e->source_bytes, e->code_bytes, e->chain_entry_offset, e->exit_offset );
-        if (k < PROFILE_DUMP)
-        {
-            FILE *bin;
-            snprintf( name, sizeof(name), "%s.%02u.host", profile_path, k );
-            if ((bin = fopen( name, "wb" ))) { fwrite( table[k].code, 1, e->code_bytes, bin ); fclose( bin ); }
-            snprintf( name, sizeof(name), "%s.%02u.guest", profile_path, k );
-            if ((bin = fopen( name, "wb" ))) { fwrite( (const void *)(uintptr_t)e->guest_pc, 1, e->source_bytes, bin ); fclose( bin ); }
-            /* where inside the block */
-            fprintf( out, "   hot offsets:" );
-            for (uint32_t i = 0; i < n; i++)
-            {
-                uint32_t j = i;
-                if (rips[i] < (uintptr_t)table[k].code || rips[i] >= (uintptr_t)table[k].code + e->code_bytes) continue;
-                while (j < n && rips[j] == rips[i]) j++;
-                if ((j - i) * 200 >= table[k].samples) fprintf( out, " +%#lx:%u", (unsigned long)(rips[i] - (uintptr_t)table[k].code), j - i );
-                i = j - 1;
-            }
-            fprintf( out, "\n" );
+    qsort(rows, PROFILE_NATIVE_SLOTS, sizeof(*rows), compare_native_samples);
+    fprintf(out, "wowprospero native_summary: cumulative=1 overflow=%llu\n",
+            (unsigned long long)__atomic_load_n(&profile_native_overflow, __ATOMIC_RELAXED));
+    for(unsigned i = 0; i < 12 && rows[i].samples; i++) {
+        const char *module = "?", *symbol = "?";
+        uintptr_t offset = rows[i].pc;
+#ifndef __PROSPERO__
+        Dl_info info;
+        if(dladdr((void *)rows[i].pc, &info)) {
+            if(info.dli_fname) module = info.dli_fname;
+            if(info.dli_sname) symbol = info.dli_sname;
+            offset -= (uintptr_t)(info.dli_saddr ? info.dli_saddr : info.dli_fbase);
         }
+#endif
+        fprintf(out, "wowprospero native: pc=%#lx samples=%llu module=%s symbol=%s offset=%#lx\n",
+                (unsigned long)rows[i].pc, (unsigned long long)rows[i].samples,
+                module, symbol, (unsigned long)offset);
     }
-    fclose( out );
-    snprintf( name, sizeof(name), "%s.tmp", profile_path );
-    rename( name, profile_path );
-    free( rips );
-    free( table );
+    free(rows);
 }
 
 static void profile_maybe_dump(void)
 {
+    struct pw_thread *thread = self;
     struct timespec now;
-    uint64_t ms;
+    sigset_t mask, previous;
+    PwX86HotspotProfile *snapshot;
+    uint64_t ms, interval, entry_samples = 0, body_samples = 0, exit_samples = 0, emitted_samples = 0;
+    unsigned tid = HandleToULong(NtCurrentTeb()->ClientId.UniqueThread);
+    FILE *out = stderr;
+    char path[512];
 
-    if (!profile_path) return;
-    clock_gettime( CLOCK_MONOTONIC, &now );
+    if(!thread || !thread->profile) return;
+    clock_gettime(CLOCK_MONOTONIC, &now);
     ms = now.tv_sec * 1000ull + now.tv_nsec / 1000000;
-    if (ms - profile_last_dump < 5000) return;
-    profile_last_dump = ms;
-    profile_dump();
-}
+    if(!thread->profile_last_dump) { thread->profile_last_dump = ms; return; }
+    interval = ms - thread->profile_last_dump;
+    if(interval < 5000) return;
+    thread->profile_last_dump = ms;
+    snapshot = malloc(sizeof(*snapshot));
+    if(!snapshot) return;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGPROF);
+    if(sigprocmask(SIG_BLOCK, &mask, &previous)) { free(snapshot); return; }
+    memcpy(snapshot, thread->profile, sizeof(*snapshot));
+    memset(thread->profile, 0, sizeof(*thread->profile));
+    sigprocmask(SIG_SETMASK, &previous, NULL);
+    for(unsigned i = 0; i < PW_X86_HOTSPOT_SLOTS; i++) {
+        entry_samples += snapshot->slots[i].entry;
+        body_samples += snapshot->slots[i].body;
+        exit_samples += snapshot->slots[i].exit;
+        emitted_samples += snapshot->slots[i].emitted;
+    }
+    qsort(snapshot->slots, PW_X86_HOTSPOT_SLOTS, sizeof(snapshot->slots[0]), compare_hotspots);
+#ifndef __PROSPERO__
+    if(strcmp(profile_path, "1")) {
+        snprintf(path, sizeof(path), "%s.%04x", profile_path, tid);
+        out = fopen(path, "w");
+        if(!out) out = stderr;
+    }
 #else
-static void profile_start(void) {}
-static void profile_add_thread( struct pw_thread *thread ) { (void)thread; }
-static void profile_maybe_dump(void) {}
+    (void)path;
 #endif
+    fprintf(out, "wowprospero profile: tid=%04x interval_ms=%llu samples=%llu outside=%llu stubs=%llu overflow=%llu\n",
+            tid, (unsigned long long)interval, (unsigned long long)snapshot->samples, (unsigned long long)snapshot->outside,
+            (unsigned long long)snapshot->stubs, (unsigned long long)snapshot->overflow);
+    fprintf(out, "wowprospero profile_process: ticks=%llu unattributed=%llu\n",
+            (unsigned long long)__atomic_load_n(&profile_ticks, __ATOMIC_RELAXED),
+            (unsigned long long)__atomic_load_n(&profile_unattributed, __ATOMIC_RELAXED));
+    fprintf(out, "wowprospero profile_parts: tid=%04x entry=%llu body=%llu exit=%llu emitted=%llu\n",
+            tid, (unsigned long long)entry_samples, (unsigned long long)body_samples,
+            (unsigned long long)exit_samples, (unsigned long long)emitted_samples);
+    for(unsigned i = 0; i < 20 && snapshot->slots[i].samples; i++) {
+        const PwX86Hotspot *row = &snapshot->slots[i];
+        fprintf(out, "wowprospero hotspot: tid=%04x pc=%08x samples=%llu entry=%llu body=%llu exit=%llu emitted=%llu\n",
+                tid, row->guest_pc, (unsigned long long)row->samples, (unsigned long long)row->entry,
+                (unsigned long long)row->body, (unsigned long long)row->exit, (unsigned long long)row->emitted);
+    }
+    profile_native_dump(ms, out);
+    if(out != stderr) fclose(out);
+    free(snapshot);
+}
 
 static void register_arena( struct pw_thread *thread, int add )
 {
@@ -748,6 +775,7 @@ static void register_arena( struct pw_thread *thread, int add )
             uintptr_t none = 0;
             if (__atomic_compare_exchange_n( &arenas[i].low, &none, low, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ))
             {
+                __atomic_store_n(&arenas[i].profile, NULL, __ATOMIC_RELEASE);
                 arenas[i].engine = &thread->engine;
                 arenas[i].state = &thread->state;
                 __atomic_store_n( &arenas[i].high, low + thread->engine.code.bytes, __ATOMIC_RELEASE );
@@ -757,6 +785,7 @@ static void register_arena( struct pw_thread *thread, int add )
         else if (__atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE ) == low)
         {
             __atomic_store_n( &arenas[i].high, 0, __ATOMIC_RELEASE );
+            __atomic_store_n( &arenas[i].profile, NULL, __ATOMIC_RELEASE );
             __atomic_store_n( &arenas[i].low, 0, __ATOMIC_RELEASE );
             return;
         }
@@ -824,12 +853,13 @@ static uint64_t timing_now_ns(void)
 
 static void timing_init(void)
 {
-    timing_enabled = getenv( "PW_WOW_TIMING" ) != NULL;
+    timing_enabled = getenv( "PW_WOW_TIMING" ) != NULL || getenv( "PW_WOW_EXEC_TIMING" ) != NULL;
 #ifdef PW_WOW_TIMING_TRIGGER
     {
         struct stat st;  /* access() is refused to a title */
 
         if (!stat( PW_WOW_TIMING_TRIGGER, &st )) timing_enabled = 1;
+        if (!stat( "/data/prospero-win/pw_wow_exec_timing", &st )) timing_enabled = 1;
     }
 #endif
 }
@@ -840,6 +870,8 @@ static void timing_report( struct pw_thread *thread, uint64_t tsc )
     double cycles = (double)(tsc - thread->t_window);
     double seconds = (wall - thread->wall_window) / 1e9;
     double per_us = cycles / seconds / 1e6;
+
+    execution_report( thread );
 
     if (thread->n_unix + thread->n_sys > 1000)
         fprintf( stderr, "wowprospero timing: tid=%04x run=%.1f%% unix=%.1f%% (%.0f/s %.2fus) "
@@ -973,8 +1005,8 @@ static NTSTATUS run( void *args )
     pw_x86_commit_canonical_flags( state );
     store_state( state, ctx );
     sync_fp_out( thread, ctx );
-    profile_maybe_dump();
     if (timing_enabled) timing_leave( thread, params->reason );
+    profile_maybe_dump();
     return STATUS_SUCCESS;
 }
 
@@ -1024,8 +1056,10 @@ static NTSTATUS thread_term( void *args )
     struct pw_thread *thread = self;
 
     if (!thread) return STATUS_SUCCESS;
+    execution_report( thread );
     self = NULL;
     if (thread->engine.fault_markers) register_arena( thread, 0 );
+    free(thread->profile);
     pw_x86_hostexec_destroy( &thread->hostexec );
     pw_x86_engine_destroy( &thread->engine );
     release( thread->entries, 0 );

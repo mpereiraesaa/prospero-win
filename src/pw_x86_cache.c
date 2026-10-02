@@ -60,6 +60,8 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
     if(code_offset!=cache->cursor || code_offset>cache->arena_bytes ||
        block->code_bytes>cache->arena_bytes-code_offset)
         return PW_ERR_LIMIT;
+    /* A nearly full table turns every miss into a scan of its clusters. */
+    if(cache->occupied>=cache->capacity-cache->capacity/4)return PW_ERR_LIMIT;
     uint32_t slot=first_slot(cache,guest_pc);unsigned available=0;
     for(uint32_t probe=0;probe<cache->capacity;probe++) {
         PwX86CacheEntry *candidate=&cache->entries[slot];
@@ -89,7 +91,7 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
     size_t end=code_offset+block->code_bytes;
     cache->cursor=(end+15)&~(size_t)15;
     if(cache->cursor>cache->arena_bytes)cache->cursor=cache->arena_bytes;
-    cache->publishes++;*entry=&cache->entries[slot];return PW_OK;
+    cache->publishes++;cache->occupied++;*entry=&cache->entries[slot];return PW_OK;
 }
 
 int pw_x86_cache_reset(PwX86Cache *cache,uint32_t generation)
@@ -97,5 +99,5 @@ int pw_x86_cache_reset(PwX86Cache *cache,uint32_t generation)
     if(!cache || !cache->entries || !cache->capacity || !generation ||
        generation==cache->generation)return PW_ERR_PRECONDITION;
     memset(cache->entries,0,sizeof(*cache->entries)*cache->capacity);
-    cache->generation=generation;cache->cursor=0;cache->resets++;return PW_OK;
+    cache->generation=generation;cache->cursor=0;cache->occupied=0;cache->resets++;return PW_OK;
 }
