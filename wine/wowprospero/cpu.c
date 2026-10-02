@@ -176,9 +176,74 @@ void WINAPI BTCpuNotifyMemoryProtect( void *addr, SIZE_T size, ULONG prot, BOOL 
     if (is_after && !status) flush( addr, size );
 }
 
+/* Wine tells the backend only the address of a view being unmapped, and a
+ * flush with no size discards every thread's translations. A 32-bit DXVK
+ * maps and unmaps windows of its texture memory thousands of times while a
+ * game loads (Half-Life 2: about 12,000 times for its first map), so the
+ * extent of each view is taken just before the unmap and only that range is
+ * flushed after it. A view whose extent could not be kept is still flushed
+ * whole. */
+struct pending_unmap
+{
+    ULONG_PTR base;
+    SIZE_T size;
+};
+static struct pending_unmap pending_unmaps[64];
+static RTL_SRWLOCK pending_lock = RTL_SRWLOCK_INIT;
+
+/* The view containing addr: its allocation's regions, as long as they are
+ * one mapped view or image. */
+static SIZE_T view_extent( void *addr, ULONG_PTR *base )
+{
+    MEMORY_BASIC_INFORMATION info;
+    char *start, *end;
+
+    if (NtQueryVirtualMemory( GetCurrentProcess(), addr, MemoryBasicInformation, &info, sizeof(info), NULL ) ||
+        info.State == MEM_FREE || (info.Type != MEM_MAPPED && info.Type != MEM_IMAGE))
+        return 0;
+    start = end = info.AllocationBase;
+    while (!NtQueryVirtualMemory( GetCurrentProcess(), end, MemoryBasicInformation, &info, sizeof(info), NULL ) &&
+           info.State != MEM_FREE && info.AllocationBase == start)
+        end = (char *)info.BaseAddress + info.RegionSize;
+    *base = (ULONG_PTR)start;
+    return end - start;
+}
+
 void WINAPI BTCpuNotifyUnmapViewOfSection( void *addr, BOOL is_after, NTSTATUS status )
 {
-    if (is_after && !status) flush( addr, 0 );
+    ULONG_PTR at = (ULONG_PTR)addr, base = 0;
+    SIZE_T size = 0;
+    unsigned int i;
+
+    if (!is_after)
+    {
+        if (!(size = view_extent( addr, &base ))) return;
+        RtlAcquireSRWLockExclusive( &pending_lock );
+        for (i = 0; i < ARRAY_SIZE(pending_unmaps); i++)
+        {
+            if (pending_unmaps[i].size) continue;
+            pending_unmaps[i].base = base;
+            pending_unmaps[i].size = size;
+            break;
+        }
+        RtlReleaseSRWLockExclusive( &pending_lock );
+        return;
+    }
+    RtlAcquireSRWLockExclusive( &pending_lock );
+    for (i = 0; i < ARRAY_SIZE(pending_unmaps); i++)
+    {
+        if (!pending_unmaps[i].size || at < pending_unmaps[i].base ||
+            at - pending_unmaps[i].base >= pending_unmaps[i].size)
+            continue;
+        base = pending_unmaps[i].base;
+        size = pending_unmaps[i].size;
+        pending_unmaps[i].size = 0;
+        break;
+    }
+    RtlReleaseSRWLockExclusive( &pending_lock );
+    if (status) return;
+    if (size) flush( (void *)base, size );
+    else flush( addr, 0 );
 }
 
 static void raise_guest_exception( I386_CONTEXT *ctx, DWORD code, UINT address, UINT write )
