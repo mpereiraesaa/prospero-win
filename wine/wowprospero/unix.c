@@ -1014,13 +1014,7 @@ static NTSTATUS run( void *args )
             pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
             continue;
         }
-        params->status = status;
-        params->fault_address = state->fault_address;
-        params->fault_write = state->fault_write;
-        if (status == PW_ERR_VM) params->reason = PW_WOW_FAULT;
-        else if (status == PW_ERR_UNSUPPORTED) params->reason = PW_WOW_UNSUPPORTED;
-        else if (status == PW_ERR_X87_TRAP) params->reason = PW_WOW_X87_TRAP;
-        else params->reason = PW_WOW_ERROR;
+        pw_wow_report_error(params, status, state->eip, state->fault_address, state->fault_write);
         break;
     }
     pw_x86_commit_canonical_flags( state );

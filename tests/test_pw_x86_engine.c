@@ -2,6 +2,11 @@
 #include "../src/pw_x86_engine.h"
 #include "../src/pw_vm_posix.h"
 #include <assert.h>
+/* Fixed-width aliases for the shared PE/Unix reporting contract. */
+typedef uint64_t UINT64;
+typedef uint32_t UINT;
+typedef int32_t INT;
+#include "../wine/wowprospero/wowprospero.h"
 
 static uint64_t clock_now;
 static unsigned clock_reads, clock_failed;
@@ -19,6 +24,66 @@ static int source_view(void *opaque,uint32_t pc,const uint8_t **data,size_t *byt
     clock_now+=1000; /* Simulated translation work must not count as execution. */
     if(pc<s->base || (uint64_t)pc>=s->base+s->bytes)return PW_ERR_NOT_FOUND;
     size_t offset=pc-s->base;*data=s->data+offset;*bytes=s->bytes-offset;return PW_OK;
+}
+
+static void test_empty_chain_reset(void)
+{
+    const uint8_t jump[]={0xff,0xe2}; /* jmp edx, which is zero */
+    const uint8_t body[]={0x40}; /* finite code at PC zero */
+    Source source={0x1000,jump,sizeof(jump)};
+    PwVmBackend vm;PwX86Engine engine;PwX86CacheEntry entries[8];
+    PwX86State state={.eip=0x1000};PwX86StepReport step;
+    assert(pw_vm_posix_backend(&vm)==PW_OK);
+    assert(pw_x86_engine_init(&engine,&vm,entries,8,16384,1,source_view,&source)==PW_OK);
+    assert(pw_x86_engine_set_chaining(&engine,1)==PW_OK);
+    assert(pw_x86_engine_set_quantum(&engine,1)==PW_OK);
+    assert(pw_x86_engine_set_indirect(&engine,1)==PW_OK);
+    assert(pw_x86_engine_set_counters(&engine,0)==PW_OK);
+    assert(pw_x86_engine_set_flat_memory(&engine,0x1000,0x20000)==PW_OK);
+    assert(pw_x86_engine_set_reencode(&engine,1)==PW_OK);
+    assert(pw_x86_engine_set_unbounded_chains(&engine,1)==PW_OK);
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && state.eip==0);
+    {
+        const int status=pw_x86_engine_step(&engine,&state,&step);
+        struct pw_wow_run_params result={0};
+        assert(status==PW_ERR_NOT_FOUND);
+        pw_wow_report_error(&result,status,state.eip,0xdead1234u,1);
+        assert(result.reason==PW_WOW_FAULT && result.status==status &&
+               result.fault_address==0 && result.fault_write==0);
+    }
+    /* A real PC-zero translation replaces the empty sentinel. */
+    source=(Source){0,body,sizeof(body)};
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
+    assert(state.gpr[0]==1 && state.eip==1 && engine.chain_targets[0].host_code &&
+           engine.chain_targets[0].guest_pc==0);
+    for (uint64_t generation=2; generation<4; generation++) {
+        assert(pw_x86_engine_reset(&engine,generation)==PW_OK);
+        source=(Source){0x1000,jump,sizeof(jump)};
+        state.eip=0x1000;
+        assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && state.eip==0);
+        assert(pw_x86_engine_step(&engine,&state,&step)==PW_ERR_NOT_FOUND);
+        /* The sentinel also permits PC zero to be published after reset. */
+        source=(Source){0,body,sizeof(body)};
+        assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && state.eip==1);
+        assert(state.gpr[0]==generation && engine.chain_targets[0].host_code &&
+               engine.chain_targets[0].guest_pc==0);
+    }
+    assert(pw_x86_engine_destroy(&engine)==PW_OK);
+}
+
+static void test_guest_error_reporting(void)
+{
+    struct pw_wow_run_params result={0};
+    pw_wow_report_error(&result,PW_ERR_NOT_FOUND,0xfffff000u,0xdead1234u,1);
+    assert(result.reason==PW_WOW_FAULT && result.fault_address==0xfffff000u && !result.fault_write);
+    pw_wow_report_error(&result,PW_ERR_VM,0x1234,0x5678,1);
+    assert(result.reason==PW_WOW_FAULT && result.fault_address==0x5678 && result.fault_write==1);
+    pw_wow_report_error(&result,PW_ERR_UNSUPPORTED,0x1234,0,0);
+    assert(result.reason==PW_WOW_UNSUPPORTED);
+    pw_wow_report_error(&result,PW_ERR_X87_TRAP,0x1234,0,0);
+    assert(result.reason==PW_WOW_X87_TRAP);
+    pw_wow_report_error(&result,PW_ERR_STATE,0x1234,0,0);
+    assert(result.reason==PW_WOW_ERROR);
 }
 
 int main(void)
@@ -106,5 +171,7 @@ int main(void)
     assert(clock_reads==2*engine.execution_samples);
     assert(engine.execution_ns==10*(engine.execution_samples-1)); /* Failed clock sample excluded. */
     assert(pw_x86_engine_destroy(&engine)==PW_OK);
+    test_empty_chain_reset();
+    test_guest_error_reporting();
     return 0;
 }

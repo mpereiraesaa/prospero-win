@@ -51,16 +51,6 @@ int pw_x86_cache_lookup_mut(PwX86Cache *cache,uint32_t guest_pc,PwX86CacheEntry 
     return PW_ERR_NOT_FOUND;
 }
 
-void pw_x86_cache_touch(PwX86Cache *cache,uint32_t index)
-{
-    if(!cache || !cache->entries || index>=cache->capacity)return;
-    PwX86CacheEntry *entry=&cache->entries[index];
-    if(entry->reset_tracked)return;
-    entry->reset_next=cache->reset_head;
-    entry->reset_tracked=1;
-    cache->reset_head=index+1;
-}
-
 int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *block,
                          size_t code_offset,const PwX86CacheEntry **entry)
 {
@@ -70,6 +60,8 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
     if(code_offset!=cache->cursor || code_offset>cache->arena_bytes ||
        block->code_bytes>cache->arena_bytes-code_offset)
         return PW_ERR_LIMIT;
+    /* A nearly full table turns every miss into a scan of its clusters. */
+    if(cache->occupied>=cache->capacity-cache->capacity/4)return PW_ERR_LIMIT;
     uint32_t slot=first_slot(cache,guest_pc);unsigned available=0;
     for(uint32_t probe=0;probe<cache->capacity;probe++) {
         PwX86CacheEntry *candidate=&cache->entries[slot];
@@ -79,9 +71,7 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
         slot=(slot+1)%cache->capacity;
     }
     if(!available)return PW_ERR_LIMIT;
-    pw_x86_cache_touch(cache,slot);
     uint32_t pending_head=cache->entries[slot].pending_head;
-    uint32_t reset_next=cache->entries[slot].reset_next;
     cache->entries[slot]=(PwX86CacheEntry){
         .guest_pc=guest_pc,.generation=cache->generation,.code_offset=code_offset,
         .code_bytes=block->code_bytes,.source_bytes=block->source_bytes,
@@ -91,8 +81,7 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
         .entry_contract=block->entry_contract,
         .exit_contract=block->exit_contract,
         .exit=block->exit,.pending_head=pending_head,
-        .fault_table_offset=block->fault_table_offset,.exit_offset=block->exit_offset,
-        .reset_next=reset_next,.reset_tracked=1,.used=1};
+        .fault_table_offset=block->fault_table_offset,.exit_offset=block->exit_offset,.used=1};
     cache->entries[slot].link_slots[0]=(PwX86LinkSlot){
         .target_pc=block->exit.target_pc,.source_pc=guest_pc,.target_code=NULL,.canonical_code=NULL,.is_linked=0,.is_reconciled=0};
     cache->entries[slot].link_slots[1]=(PwX86LinkSlot){
@@ -102,17 +91,13 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
     size_t end=code_offset+block->code_bytes;
     cache->cursor=(end+15)&~(size_t)15;
     if(cache->cursor>cache->arena_bytes)cache->cursor=cache->arena_bytes;
-    cache->publishes++;*entry=&cache->entries[slot];return PW_OK;
+    cache->publishes++;cache->occupied++;*entry=&cache->entries[slot];return PW_OK;
 }
 
 int pw_x86_cache_reset(PwX86Cache *cache,uint32_t generation)
 {
     if(!cache || !cache->entries || !cache->capacity || !generation ||
        generation==cache->generation)return PW_ERR_PRECONDITION;
-    while(cache->reset_head) {
-        PwX86CacheEntry *entry=&cache->entries[cache->reset_head-1];
-        cache->reset_head=entry->reset_next;
-        memset(entry,0,sizeof(*entry));
-    }
-    cache->generation=generation;cache->cursor=0;cache->resets++;return PW_OK;
+    memset(cache->entries,0,sizeof(*cache->entries)*cache->capacity);
+    cache->generation=generation;cache->cursor=0;cache->occupied=0;cache->resets++;return PW_OK;
 }

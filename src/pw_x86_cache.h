@@ -32,8 +32,6 @@ typedef struct PwX86CacheEntry {
     size_t fault_table_offset;  /* PwX86Block.fault_table_offset */
     size_t exit_offset;         /* PwX86Block.exit_offset */
     uint32_t arena_next;        /* the next block in the arena, as index + 1 */
-    uint32_t reset_next;       /* one-based touched-slot list */
-    unsigned reset_tracked;   /* list membership, cleared by reset */
     unsigned used;
 } PwX86CacheEntry;
 
@@ -43,20 +41,19 @@ typedef struct PwX86Cache {
     size_t arena_bytes,cursor;
     uint64_t hits,misses,publishes,resets,lookup_probes;
     uint32_t max_probe;
-    uint32_t reset_head;
+    uint32_t occupied;  /* entries published in this generation */
 } PwX86Cache;
 
 /* Generated code storage and RW/RX transitions remain owner-managed. Entries
  * use open addressing keyed by guest PC, making hot dispatch O(1) average
- * rather than scanning the complete capacity. A generation is valid only
+ * rather than scanning the complete capacity. Linear probing only stays short
+ * while the table has room, so a publish past three quarters of the capacity
+ * is refused with PW_ERR_LIMIT, as a full arena is, and the owner resets. A generation is valid only
  * while its immutable guest image mapping is alive. */
 int pw_x86_cache_init(PwX86Cache *,PwX86CacheEntry *,uint32_t,size_t,uint32_t);
 int pw_x86_cache_lookup(PwX86Cache *,uint32_t,const PwX86CacheEntry **);
 int pw_x86_cache_lookup_mut(PwX86Cache *,uint32_t,PwX86CacheEntry **);
 int pw_x86_cache_publish(PwX86Cache *,uint32_t,const PwX86Block *,size_t,
                          const PwX86CacheEntry **);
-/* Register a slot before changing metadata outside publish(), including
- * pending-link buckets that do not yet contain a published block. */
-void pw_x86_cache_touch(PwX86Cache *, uint32_t index);
 int pw_x86_cache_reset(PwX86Cache *,uint32_t);
 #endif
