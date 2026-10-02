@@ -458,6 +458,44 @@ static void test_mixed_and_indirect(void)
 /* Returns and indirect calls between re-encoded blocks enter their target's
  * chain entry with the guest state still pinned once the target is known
  * (the dispatcher records it in the chain table). */
+static void test_chain_hash_flags(void)
+{
+    uint8_t code[]={
+        0xb9,200,0,0,0,                     /* mov ecx,200 */
+        0xbb,0,0,0,0,                       /* mov ebx,F */
+        0xb8,0xff,0xff,0xff,0xff,           /* L: mov eax,-1 */
+        0x05,1,0,0,0,                       /* add eax,1 */
+        0xff,0xd3,                          /* call ebx: hash must preserve flags */
+        0x49,0x75,0xf1,                     /* dec ecx; jnz L */
+        0xc3,
+        0x0f,0x92,0xc2,                     /* F: setb dl */
+        0x0f,0x94,0xc0,                     /* sete al */
+        0x0f,0x9a,0xc6,                     /* setp dh */
+        0x0f,0x90,0xc4,                     /* seto ah */
+        0x53,                              /* preserve indirect target in ebx */
+        0x0f,0x98,0xc3,                     /* sets bl (reference supports register SETcc) */
+        0x88,0x1e,                          /* mov [esi],bl */
+        0x5b,                              /* pop ebx */
+        0xc3,
+    };
+    uint32_t f=low+CODE+26;
+    Run captured;
+    memcpy(code+6,&f,4);
+    compare(code,sizeof(code));
+    captured=run(code,sizeof(code),1);
+    assert(captured.status==PW_OK && captured.state.eip==0xdead0000u);
+    assert(captured.chain_slots>=3 && captured.state.gpr[1]==0);
+    assert(captured.state.gpr[0]==1 && (captured.state.gpr[2]&0xffffu)==0x0101u);
+    assert(captured.data[0]==0);
+    /* A different carry/zero/sign/overflow pattern at the same dynamic exit. */
+    memcpy(code+11,&(uint32_t){0x7fffffffu},4);
+    compare(code,sizeof(code));
+    captured=run(code,sizeof(code),1);
+    assert(captured.status==PW_OK && captured.state.eip==0xdead0000u);
+    assert(captured.state.gpr[0]==0x80000100u && (captured.state.gpr[2]&0xffffu)==0x0100u);
+    assert(captured.data[0]==1);
+}
+
 static void test_return_targets(void)
 {
     uint8_t code[] = {
@@ -922,6 +960,7 @@ int main(void)
     test_control();
     test_bnd_branches();
     test_mixed_and_indirect();
+    test_chain_hash_flags();
     test_return_targets();
     test_unbounded_chains();
     test_call_stack();

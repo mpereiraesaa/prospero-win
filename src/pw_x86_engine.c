@@ -585,7 +585,7 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
     if(!engine || !state || !report || !engine->initialized)return PW_ERR_PRECONDITION;
     memset(report,0,sizeof(*report));report->guest_pc=state->eip;
     if(engine->dispatch_profile && engine->chain_targets) {
-        const PwX86IndirectTarget *target=&engine->chain_targets[state->eip & 0xffffu];
+        const PwX86IndirectTarget *target=&engine->chain_targets[pw_x86_chain_slot(state->eip)];
         if(!target->host_code) engine->dispatch_chain_empty++;
         else if(target->guest_pc==state->eip) engine->dispatch_chain_matches++;
         else engine->dispatch_chain_collisions++;
@@ -656,7 +656,7 @@ dispatch:;
                               entry->canonical_entry_offset;
         }
         if(engine->chain_targets && pw_x86_reencoded(&entry->entry_contract)) {
-            PwX86IndirectTarget *chain=&engine->chain_targets[entry->guest_pc & 0xffffu];
+            PwX86IndirectTarget *chain=&engine->chain_targets[pw_x86_chain_slot(entry->guest_pc)];
             chain->guest_pc=entry->guest_pc;
             chain->host_code=(const uint8_t *)engine->code.exec_base+entry->code_offset+
                              entry->chain_entry_offset;

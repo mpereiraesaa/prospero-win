@@ -896,6 +896,16 @@ static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots, size_t jc
     b(o, 0x41); b(o, 0xff); b(o, 0x23);
 }
 
+/* pw_x86_chain_slot(r10d), retaining guest arithmetic flags. Dynamic
+ * exits and superblock side exits share this published-table index. */
+static void emit_chain_slot(Out *o)
+{
+    b(o, 0x45); b(o, 0x89); b(o, 0xd3);                            /* mov r11d, r10d */
+    b(o, 0x41); b(o, 0x0f); b(o, 0xcb);                            /* bswap r11d */
+    b(o, 0x47); b(o, 0x8d); b(o, 0x1c); b(o, 0x13);                /* lea r11d, [r11+r10] */
+    b(o, 0x45); b(o, 0x0f); b(o, 0xb7); b(o, 0xdb);                /* movzx r11d, r11w */
+}
+
 /* The dynamic exit to the guest EIP in r10d: the indirect table when the
  * translation has one, otherwise back to the dispatcher. */
 static void emit_dynamic_exit(Ctx *c)
@@ -904,12 +914,12 @@ static void emit_dynamic_exit(Ctx *c)
 
     if (c->chain_table) {
         /* A re-encoded target is entered at its chain entry with the guest
-         * state still pinned: the slot of the low 16 bits of the PC, its
+         * state still pinned: a full-PC mixed slot, its
          * PC compared as not(slot) + pc + 1 == 0, all without flags. */
         const size_t budget = offsetof(PwX86State, chain_budget);
         uint64_t base = (uint64_t)(uintptr_t)c->chain_table;
         size_t to_hit, to_miss, to_spent = 0;
-        b(o, 0x45); b(o, 0x0f); b(o, 0xb7); b(o, 0xda);                 /* movzx r11d, r10w */
+        emit_chain_slot(o);
         b(o, 0x4e); b(o, 0x8d); b(o, 0x1c); b(o, 0xdd); w32(o, 0);      /* lea r11, [r11*8] */
         b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x1b);                 /* lea r11, [r11+r11] */
         b(o, 0x49); b(o, 0xb9); w64(o, base);                           /* movabs r9, table */
@@ -1081,7 +1091,7 @@ static void emit_side_exits(Ctx *c)
         to_common[k] = jump32(o);
     }
     for (unsigned k = 0; k < c->side_count; k++) land32(o, to_common[k]);
-    b(o, 0x45); b(o, 0x0f); b(o, 0xb7); b(o, 0xda);                 /* movzx r11d, r10w */
+    emit_chain_slot(o);
     b(o, 0x4e); b(o, 0x8d); b(o, 0x1c); b(o, 0xdd); w32(o, 0);      /* lea r11, [r11*8] */
     b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x1b);                 /* lea r11, [r11+r11] */
     b(o, 0x49); b(o, 0xb9); w64(o, base);                           /* movabs r9, table */

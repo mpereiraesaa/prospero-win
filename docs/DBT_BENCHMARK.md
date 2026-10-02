@@ -695,5 +695,26 @@ arrivals also follow native calls, safepoints and emitted blocks. A collision
 at arrival is evidence of table aliasing, not proof that a collision caused
 that return. Compare these counts with the FP-wrapper/native samples before
 changing the chain table hash or size. Tests execute two compiled PCs sharing
-the low 16 bits, verify replacement and cache-hit execution, and check reset
+a chain slot, verify replacement and cache-hit execution, and check reset
 and disabled collection. Console reports remain unvalidated.
+
+### Full-PC chain hash trial
+
+The chain table now indexes `(pc + bswap32(pc)) & 0xffff`, so its 65536
+slots incorporate every byte of the guest PC. Publication, dispatcher
+diagnostics, generated dynamic exits and superblock side exits use the same
+index. Generated lookups use MOV, BSWAP, LEA and MOVZX to retain arithmetic
+flags. The separate emitted-block indirect table keeps its existing hash.
+
+Focused tests cover real slot replacement, cache hits, reset, repeated
+indirect calls and returns with carry/zero/parity/sign/overflow captures,
+and superblock side-exit linking. A reference test uses register SETcc and
+stores the sign capture separately because the reference emitter does not
+support memory-form SETcc.
+
+This is a performance candidate, with no measured speedup claim yet. The
+earlier dispatcher profile showed substantial aliasing, but its cumulative
+totals include time after the timedemo and are not benchmark-only miss rates.
+The full `make test` gate (including all three differential modes) passes.
+Controlled PC A/B results and console measurements remain required before
+accepting a performance claim.

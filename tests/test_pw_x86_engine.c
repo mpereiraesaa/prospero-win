@@ -45,10 +45,12 @@ static void test_dispatch_profile(void)
     assert(pw_x86_engine_set_dispatch_profile(&engine,1)==PW_OK);
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
     assert(engine.dispatch_chain_matches==1);
-    /* Real compiled targets sharing low 16 bits replace each other. */
-    source.base=state.eip=0x11000;
+    assert(pw_x86_chain_slot(0x1000)!=pw_x86_chain_slot(0x11000));
+    assert(pw_x86_chain_slot(0x1000)==pw_x86_chain_slot(0x10f00));
+    /* Real compiled targets colliding in the full-PC hash replace each other. */
+    source.base=state.eip=0x10f00;
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
-    assert(engine.chain_targets[0x1000].guest_pc==0x11000);
+    assert(engine.chain_targets[0x1000].guest_pc==0x10f00);
     source.base=state.eip=0x1000;
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && step.cache_hit);
     assert(engine.dispatch_chain_collisions==2);
