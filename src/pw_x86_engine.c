@@ -773,7 +773,8 @@ int pw_x86_execution_clock_batch(PwX86ExecutionClock clock, void *opaque, uint64
             if(!now || now<last)return PW_ERR_VM;
             last=now;
         }
-        means[i]=(last-begin)/1024;
+        uint64_t elapsed=last-begin;
+        means[i]=elapsed/1024+(elapsed%1024>=512);
         for(unsigned j=i;j && means[j]<means[j-1];j--) {
             uint64_t temporary=means[j];means[j]=means[j-1];means[j-1]=temporary;
         }
