@@ -11,6 +11,7 @@ static void clear_chain_targets(PwX86IndirectTarget *targets)
 {
     memset(targets,0,PW_X86_REENCODE_CHAIN_SLOTS*sizeof(*targets));
     targets[0].guest_pc=1;
+    targets[0].chain_pc_negated=0u-1u;
 }
 
 #if defined(__clang__)
@@ -619,6 +620,7 @@ dispatch:;
         if(engine->chain_targets && pw_x86_reencoded(&entry->entry_contract)) {
             PwX86IndirectTarget *chain=&engine->chain_targets[entry->guest_pc & 0xffffu];
             chain->guest_pc=entry->guest_pc;
+            chain->chain_pc_negated=0u-entry->guest_pc;
             chain->host_code=(const uint8_t *)engine->code.exec_base+entry->code_offset+
                              entry->chain_entry_offset;
         }

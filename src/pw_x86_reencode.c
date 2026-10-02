@@ -905,7 +905,7 @@ static void emit_dynamic_exit(Ctx *c)
     if (c->chain_table) {
         /* A re-encoded target is entered at its chain entry with the guest
          * state still pinned: the slot of the low 16 bits of the PC, its
-         * PC compared as not(slot) + pc + 1 == 0, all without flags. */
+         * PC compared as negative tag + pc == 0, all without flags. */
         const size_t budget = offsetof(PwX86State, chain_budget);
         uint64_t base = (uint64_t)(uintptr_t)c->chain_table;
         size_t to_hit, to_miss, to_spent = 0;
@@ -915,9 +915,8 @@ static void emit_dynamic_exit(Ctx *c)
         b(o, 0x49); b(o, 0xb9); w64(o, base);                           /* movabs r9, table */
         b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x19);                 /* lea r11, [r9+r11] */
         mov_r9_rcx(o);
-        b(o, 0x41); b(o, 0x8b); b(o, 0x0b);                             /* mov ecx, [r11] */
-        b(o, 0xf7); b(o, 0xd1);                                         /* not ecx */
-        b(o, 0x42); b(o, 0x8d); b(o, 0x4c); b(o, 0x11); b(o, 1);        /* lea ecx, [rcx+r10+1] */
+        b(o, 0x41); b(o, 0x8b); b(o, 0x4b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, chain_pc_negated));
+        b(o, 0x42); b(o, 0x8d); b(o, 0x0c); b(o, 0x11);                /* lea ecx, [rcx+r10] */
         to_hit = jump8(o, 0xe3);                                        /* jrcxz hit */
         mov_rcx_r9(o);
         to_miss = jump8(o, 0xeb);
@@ -1087,9 +1086,8 @@ static void emit_side_exits(Ctx *c)
     b(o, 0x49); b(o, 0xb9); w64(o, base);                           /* movabs r9, table */
     b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x19);                 /* lea r11, [r9+r11] */
     mov_r9_rcx(o);
-    b(o, 0x41); b(o, 0x8b); b(o, 0x0b);                             /* mov ecx, [r11] */
-    b(o, 0xf7); b(o, 0xd1);                                         /* not ecx */
-    b(o, 0x42); b(o, 0x8d); b(o, 0x4c); b(o, 0x11); b(o, 1);        /* lea ecx, [rcx+r10+1] */
+    b(o, 0x41); b(o, 0x8b); b(o, 0x4b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, chain_pc_negated));
+    b(o, 0x42); b(o, 0x8d); b(o, 0x0c); b(o, 0x11);                /* lea ecx, [rcx+r10] */
     to_hit = jump8(o, 0xe3);                                        /* jrcxz hit */
     mov_rcx_r9(o);
     to_miss = jump8(o, 0xeb);

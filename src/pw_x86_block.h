@@ -170,7 +170,7 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t guest_pc,
  */
 typedef struct PwX86IndirectTarget {
     uint32_t guest_pc;
-    uint32_t reserved;
+    uint32_t chain_pc_negated;  /* chain only: 0 - guest_pc, modulo 2^32 */
     const void *host_code;      /* NULL: empty */
 } PwX86IndirectTarget;
 
@@ -195,7 +195,9 @@ typedef struct PwX86TranslateOptions {
     unsigned no_counters;
     /* The re-encoder's own indirect targets (pw_x86_reencode.h): 65536
      * slots indexed by the low 16 bits of the guest PC, pointing at chain
-     * entries, so a return between re-encoded blocks stays pinned. NULL:
+     * entries. Published slots also set chain_pc_negated to 0u - guest_pc;
+     * slot zero uses guest_pc=1 and chain_pc_negated=0u-1 while empty.
+     * A return between re-encoded blocks stays pinned. NULL:
      * dynamic exits use indirect_targets only. */
     const PwX86IndirectTarget *chain_targets;
     /* Guest GPRs (bit n = gpr n) held in the same host register by every

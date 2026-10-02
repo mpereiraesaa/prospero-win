@@ -571,3 +571,23 @@ uses a fixed source PC so random mapping cannot hide it by filling slot zero.
 The PS5 SDK compiles and links the updated Unix adapter and engine. Console
 execution and clean-game validation remain pending; this correctness fix is
 not a performance result.
+
+## Precomputed chain tags (focused integration candidate)
+
+Use the chain slot's previously reserved word for `0u - guest_pc`. The
+flag-preserving dynamic and superblock side-exit comparison becomes one tag
+load plus LEA/JRCXZ, removing the NOT and the LEA's extra +1. Each lookup
+has one fewer instruction and two fewer bytes; the 16-byte slot layout and
+raw PC used by diagnostics remain unchanged. Both initial/reset empty
+slot-zero tags retain the nonmatching PC-one sentinel, including its
+negative tag. Every private chain-table publisher must set both words.
+
+This focused candidate is independent of the experimental full-PC hash,
+chain address calculation, profiler and call-prediction patches. Guarded
+table tests execute all 64 arithmetic-flag combinations over first/last
+slots and high/wrapping PCs, hits, collisions, budgets, call-stack and
+cold/self-linked side exits. Engine tests exercise publication, collisions,
+cached republishing, resets and actual valid/missing PC-zero targets.
+`make -j2 all audit check-whitespace` and `make -j2 sanitize` pass. The
+expanded matched console pair is delivered separately and its repeated
+console runs are in progress; no translated-time or FPS gain is established.

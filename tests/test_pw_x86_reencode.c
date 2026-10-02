@@ -498,6 +498,99 @@ static void test_null_targets(void)
     source_pc = 0;
 }
 
+/* Exercise actual lookup execution at both guarded table edges, including
+ * 32-bit PC wraparound. SETcc in the destination observes incoming flags;
+ * a collision must return without executing that destination. */
+static void test_chain_tag_flags(void)
+{
+    static const uint32_t targets[] = {
+        0, 1, 0xfffe, 0xffff, 0x80000000u, 0xffff0000u, 0xffffffffu, 0x12345678u
+    };
+    static const unsigned flag_bits[] = { 1, 4, 0x10, 0x40, 0x80, 0x800 };
+    static const uint8_t dynamic[] = { 0xff, 0xe2 }; /* jmp edx */
+    static const uint8_t side[] = { 0x72, 14, 0xbe, 0x78, 0x56, 0x34, 0x12 };
+    static const uint8_t destination[] = {
+        0x0f, 0x92, 0xc0, /* setb al */
+        0x0f, 0x94, 0xc3, /* sete bl */
+        0x0f, 0x9a, 0xc2, /* setp dl */
+        0x0f, 0x90, 0xc4, /* seto ah */
+        0x0f, 0x98, 0xc7, /* sets bh */
+    };
+    const size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    const size_t table_bytes = PW_X86_REENCODE_CHAIN_SLOTS * sizeof(PwX86IndirectTarget);
+    uint8_t *region = mmap(NULL, table_bytes + 2 * page, PROT_NONE,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *code = mmap(NULL, 2 * page, PROT_READ | PROT_WRITE | PROT_EXEC,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    PwX86IndirectTarget indirect = {0}, *table;
+    PwX86TranslateOptions options = {
+        .flat_low = low, .flat_high = low + SPAN, .no_counters = 1,
+        .indirect_targets = &indirect, .native_fp = 1,
+    };
+    assert(region != MAP_FAILED && code != MAP_FAILED);
+    assert(!mprotect(region + page, table_bytes, PROT_READ | PROT_WRITE));
+    table = (PwX86IndirectTarget *)(region + page);
+    options.chain_targets = table;
+    for (unsigned mode = 0; mode < 4; mode++) {
+        options.unbounded_chains = mode != 0;
+        options.call_stack = mode == 2;
+        options.superblocks = mode == 3;
+        for (unsigned t = 0; t < sizeof(targets) / sizeof(targets[0]); t++) {
+            const uint32_t target = targets[t], caller = target - 16;
+            PwX86Block callee, block;
+            PwX86IndirectTarget *slot = table + (target & (PW_X86_REENCODE_CHAIN_SLOTS - 1));
+            assert(pw_x86_reencode(destination, sizeof(destination), target,
+                                   code + page, page, &callee, &options) == PW_OK);
+            for (unsigned f = 0; f < 64; f++) {
+                unsigned flags = 0;
+                for (unsigned k = 0; k < sizeof(flag_bits) / sizeof(flag_bits[0]); k++)
+                    if (f & (1u << k)) flags |= flag_bits[k];
+                for (unsigned phase = 0; phase < (mode ? 3u : 4u); phase++) {
+                    PwX86State state;
+                    uint32_t expected[8];
+                    const unsigned incoming = flags | (mode == 3 ? 1u : 0u);
+                    const unsigned hit = phase < 2;
+                    const uint8_t *source = mode == 3 ? side : dynamic;
+                    const size_t bytes = mode == 3 ? sizeof(side) : sizeof(dynamic);
+                    /* Phase one reuses the linked side exit; a miss needs a
+                     * fresh caller so it cannot bypass the lookup. */
+                    if (phase != 1)
+                        assert(pw_x86_reencode(source, bytes, caller, code, page,
+                                               &block, &options) == PW_OK);
+                    slot->guest_pc = phase == 2 ? target ^ 1u : target;
+                    slot->chain_pc_negated = 0u - slot->guest_pc;
+                    slot->host_code = code + page + callee.chain_entry_offset;
+                    initial(&state);
+                    state.gpr[2] = target;
+                    state.eflags = 2 | incoming;
+                    state.chain_budget = phase == 3 ? 1 : 8;
+                    state.call_stack_top = (uintptr_t)call_stack_region +
+                        PW_X86_ENGINE_CALL_STACK_GUARD + CALL_STACK_BYTES;
+                    memcpy(expected, state.gpr, sizeof(expected));
+                    if (hit) {
+                        expected[0] = (expected[0] & 0xffff0000u) |
+                            ((incoming & 0x800) ? 0x100u : 0u) | (incoming & 1);
+                        expected[3] = (expected[3] & 0xffff0000u) |
+                            ((incoming & 0x80) ? 0x100u : 0u) | ((incoming & 0x40) != 0);
+                        expected[2] = (expected[2] & 0xffffff00u) | ((incoming & 4) != 0);
+                    }
+                    assert(pw_x86_run_block(&state, code) == 0);
+                    assert(!memcmp(state.gpr, expected, sizeof(expected)));
+                    assert(state.eip == target + (hit ? (uint32_t)sizeof(destination) : 0));
+                    assert((state.eflags & 0x8d5) == incoming);
+                    if (!mode) {
+                        const unsigned after_hit = target + (uint32_t)sizeof(destination) <= target ? 6u : 7u;
+                        assert(state.chain_budget == (phase == 2 ? 8u : phase == 3 ? 0u : after_hit));
+                    }
+                }
+            }
+            memset(slot, 0, sizeof(*slot));
+        }
+    }
+    assert(!munmap(code, 2 * page));
+    assert(!munmap(region, table_bytes + 2 * page));
+}
+
 /* Returns and indirect calls between re-encoded blocks enter their target's
  * chain entry with the guest state still pinned once the target is known
  * (the dispatcher records it in the chain table). */
@@ -966,6 +1059,7 @@ int main(void)
     test_bnd_branches();
     test_mixed_and_indirect();
     test_null_targets();
+    test_chain_tag_flags();
     test_return_targets();
     test_unbounded_chains();
     test_call_stack();

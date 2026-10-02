@@ -31,6 +31,7 @@ static void test_empty_chain_reset(void)
     assert(pw_x86_engine_set_counters(&engine,0)==PW_OK);
     assert(pw_x86_engine_set_flat_memory(&engine,0x1000,0x20000)==PW_OK);
     assert(pw_x86_engine_set_reencode(&engine,1)==PW_OK);
+    assert(engine.chain_targets[0].guest_pc==1 && engine.chain_targets[0].chain_pc_negated==0u-1u);
     assert(pw_x86_engine_set_unbounded_chains(&engine,1)==PW_OK);
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && state.eip==0);
     {
@@ -45,9 +46,10 @@ static void test_empty_chain_reset(void)
     source=(Source){0,body,sizeof(body)};
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
     assert(state.gpr[0]==1 && state.eip==1 && engine.chain_targets[0].host_code &&
-           engine.chain_targets[0].guest_pc==0);
+           engine.chain_targets[0].guest_pc==0 && engine.chain_targets[0].chain_pc_negated==0);
     for (uint64_t generation=2; generation<4; generation++) {
         assert(pw_x86_engine_reset(&engine,generation)==PW_OK);
+        assert(engine.chain_targets[0].guest_pc==1 && engine.chain_targets[0].chain_pc_negated==0u-1u);
         source=(Source){0x1000,jump,sizeof(jump)};
         state.eip=0x1000;
         assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && state.eip==0);
@@ -56,8 +58,34 @@ static void test_empty_chain_reset(void)
         source=(Source){0,body,sizeof(body)};
         assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && state.eip==1);
         assert(state.gpr[0]==generation && engine.chain_targets[0].host_code &&
-               engine.chain_targets[0].guest_pc==0);
+               engine.chain_targets[0].guest_pc==0 && engine.chain_targets[0].chain_pc_negated==0);
     }
+    assert(pw_x86_engine_destroy(&engine)==PW_OK);
+}
+
+static void test_chain_tag_publication(void)
+{
+    const uint8_t body[]={0x40};
+    Source source={0x1000,body,sizeof(body)};
+    PwVmBackend vm;PwX86Engine engine;PwX86CacheEntry entries[8];
+    PwX86State state={.eip=0x1000};PwX86StepReport step;
+    assert(pw_vm_posix_backend(&vm)==PW_OK);
+    assert(pw_x86_engine_init(&engine,&vm,entries,8,16384,1,source_view,&source)==PW_OK);
+    assert(pw_x86_engine_set_indirect(&engine,1)==PW_OK);
+    assert(pw_x86_engine_set_counters(&engine,0)==PW_OK);
+    assert(pw_x86_engine_set_flat_memory(&engine,0x1000,0x20000)==PW_OK);
+    assert(pw_x86_engine_set_reencode(&engine,1)==PW_OK);
+    for(unsigned i=0;i<3;i++) {
+        const uint32_t pc=i==1?0x11000u:0x1000u;
+        source=(Source){pc,body,sizeof(body)};state.eip=pc;
+        assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
+        assert(engine.chain_targets[0x1000].guest_pc==pc &&
+               engine.chain_targets[0x1000].chain_pc_negated==0u-pc &&
+               engine.chain_targets[0x1000].host_code);
+        assert(step.cache_hit==(i==2));
+    }
+    assert(pw_x86_engine_reset(&engine,2)==PW_OK);
+    assert(!engine.chain_targets[0x1000].chain_pc_negated && !engine.chain_targets[0x1000].host_code);
     assert(pw_x86_engine_destroy(&engine)==PW_OK);
 }
 
@@ -132,5 +160,6 @@ int main(void)
     assert(pw_x86_engine_destroy(&engine)==PW_OK);
     test_empty_chain_reset();
     test_guest_error_reporting();
+    test_chain_tag_publication();
     return 0;
 }
