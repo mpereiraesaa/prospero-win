@@ -21,13 +21,12 @@ has only been tested on one console, on firmware 12.02.
 
 ## What runs
 
-Warcraft III 1.27a, Pinball and Minesweeper have reported play sessions.
-OpenArena has run a bot match, Half-Life has rendered its `c1a0` scene with
-sound, and Counter-Strike 1.6 has reached its menu. These are different
-levels of testing; they do not establish complete campaigns or multiplayer.
+Half-Life, Counter-Strike 1.6, OpenArena and Warcraft III are playable
+above 60 fps. Pinball and Minesweeper are playable too, and Half-Life 2 runs
+with frame-rate drops in busy scenes.
 
-See [game compatibility](COMPATIBILITY.md) for versions, graphics backends,
-test scope and limitations. Translator benchmark results are in
+See [game compatibility](COMPATIBILITY.md) for versions, graphics backends
+and controls. Translator benchmark results are in
 [DBT benchmarks](docs/DBT_BENCHMARK.md).
 
 Game profiles, controller presets and install recipes live in

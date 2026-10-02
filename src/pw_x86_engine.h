@@ -195,6 +195,8 @@ int pw_x86_engine_step(PwX86Engine *,PwX86State *,PwX86StepReport *);
  * stride=1 times every invocation; larger strides sample approximately 1/N
  * invocations. execution_ns sums samples only. NULL disables clock reads.
  * Set only from the engine's owner thread. */
+/* Median batch mean including loop overhead; diagnostic only, not a correction. */
+int pw_x86_execution_clock_batch(PwX86ExecutionClock, void *opaque, uint64_t *mean_ns);
 int pw_x86_engine_set_execution_clock(PwX86Engine *, PwX86ExecutionClock, void *opaque, uint32_t stride);
 int pw_x86_engine_reset(PwX86Engine *,uint32_t);
 int pw_x86_engine_destroy(PwX86Engine *);
