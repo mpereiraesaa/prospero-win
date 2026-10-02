@@ -8,7 +8,8 @@
 # threads and libc) and its payload SDK, behind wine/ps5/pw_vulkan_radv.c's
 # two entry points. It writes PRX/libvulkan.shared.elf, the link log
 # PRX/libvulkan.link.log and PRX/sce_module/libvulkan.prx, and prints the
-# PS5_Mesa revision it linked.
+# PS5_Mesa revision it linked. RADV's sceVideoOutOpen is wrapped so
+# pw_vulkan_radv.c learns the output's handle for the hardware cursor.
 #
 # Usage: tools/link_radv_prx.sh RADV_CHECKOUT PRX_DIR NATIVE_TOOL PIE_SCRIPT
 set -euo pipefail
@@ -48,12 +49,13 @@ done
 "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$install/include" \
     -c "$root/wine/ps5/pw_vulkan_radv.c" -o "$work/obj/pw_vulkan_radv.o"
 python3 "$root/tools/gen_prx_descriptor.py" "$work/obj/libvulkan_desc.c" \
-    vkGetInstanceProcAddr vkGetDeviceProcAddr pw_videoout_idle pw_videoout_show_tiled
+    vkGetInstanceProcAddr vkGetDeviceProcAddr pw_videoout_idle pw_videoout_show_tiled pw_videoout_cursor
 "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
     -c "$work/obj/libvulkan_desc.c" -o "$work/obj/libvulkan_desc.o"
 
 "$sdk/bin/prospero-lld" --shared -Bsymbolic -T "$pie" -T "$root/wine/ps5/prx_eh_frame.ld" \
     --eh-frame-hdr -T "$work/build/mesa_optional_zero.ld" -soname libvulkan.prx -z defs \
+    --wrap=sceVideoOutOpen \
     --warn-unresolved-symbols -o "$prx/libvulkan.shared.elf" \
     "$work/obj/pw_vulkan_radv.o" "$work/obj/libvulkan_desc.o" \
     "$work/stubs/libSceAgc.so" "$work/stubs/libSceAgcDriver.so" \
