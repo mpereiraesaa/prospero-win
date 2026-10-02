@@ -11,7 +11,9 @@ waits for it, and puts everything back:
 - profiles.lst lists only the chosen game, so the script build opens it,
   and --arguments replaces the game's launch arguments for the run (a game
   that starts at its menu can start a map instead);
-- pw_script_keys holds the key presses (--key MS:KEY, any number);
+- pw_script_keys holds the key presses (--key MS:KEY, any number), and
+  --input FILE a recorded macro of keys, mouse buttons and motion
+  (<root>/pw_script_input, src/pw_script_input.h);
 - --append adds lines to files under the library root, such as a game's
   config (Counter-Strike's bot_quota), --timing turns on the WoW64
   timing report (pw_wow_timing), and --fps turns on Wine's fps channel in
@@ -28,7 +30,8 @@ behind is removed too.
 
 Usage:
     pw_gameplay_run.py SLUG --host IP [--port N] [--remote /data/prospero-win]
-        [--key MS:KEY ...] [--arguments ARGS] [--append PATH=LINE ...] [--timing] [--fps]
+        [--key MS:KEY ...] [--input FILE] [--arguments ARGS] [--append PATH=LINE ...]
+        [--timing] [--fps]
         [--wait SECONDS] [--save DIR] [--keep]
 """
 from __future__ import annotations
@@ -57,7 +60,7 @@ KEY_NAMES = {
 SESSIONS = 8  # native/pw_diagnostics.h: PW_DIAGNOSTICS_SESSIONS
 # The run's own trigger files: never kept after a run, even one that found a
 # stale copy left by an interrupted run.
-TRIGGERS = ("pw_script_keys", "pw_wow_timing")
+TRIGGERS = ("pw_script_keys", "pw_script_input", "pw_wow_timing")
 TITLE_WINEDEBUG = "err+all,+loaddll,+process"  # native/wine64_main.c: PW_WINE64_DEBUG
 # Below this, a Vulkan game is still loading: its loading screen draws a
 # frame now and then.
@@ -139,12 +142,20 @@ def summarize(text: str) -> list[str]:
     # win32u's vkQueuePresentKHR, about every 1.5 s with WINEDEBUG +fps.
     vulkan = [float(value) for value in re.findall(r":trace:fps:\S+ \S+ @ approx ([0-9.]+)fps", text)]
     keys = re.findall(r"PW_WINE64 script key=(0x[0-9a-f]+) status=(\S+)", text)
+    replayed = re.findall(r"PW_WINE64 script input replayed=(\d+) of (\d+)", text)
     # Busy guest threads only: the game's, not those that only wait.
     timing = [line.split("timing: ", 1)[1] for line in text.splitlines()
               if "wowprospero timing:" in line and
               float((re.search(r" run=([0-9.]+)%", line) or [0, "0"])[1]) >= 5]
     ending = re.findall(r"session_end reason=(\S+)", text)
-    lines = [f"keys sent: {len(keys)}" + (f" ({', '.join(f'{code}:{status}' for code, status in keys)})" if keys else "")]
+    macro = re.search(r"PW_WINE64 script input status=(\S+) events=(\d+) bad_line=(\d+)", text)
+    lines = []
+    if macro:
+        done = replayed[-1][0] if replayed else "0"
+        synced = "synced" if "PW_WINE64 script input synced" in text else "never synced"
+        lines.append(f"macro: {macro[1]}, {done} of {macro[2]} events replayed"
+                     + (f", refused at line {macro[3]}" if macro[3] != "0" else "") + f" ({synced})")
+    lines += [f"keys sent: {len(keys)}" + (f" ({', '.join(f'{code}:{status}' for code, status in keys)})" if keys else "")]
     if fps:
         # The first samples cover loading; the rest is the run itself.
         steady = fps[3:] or fps
@@ -216,6 +227,8 @@ class Run:
                 self.saved[trigger] = None
                 self.remove(trigger)
         self.replace("pw_script_keys", key_script(self.args.keys))
+        if self.args.input:
+            self.replace("pw_script_input", Path(self.args.input).read_bytes())
         if self.args.timing:
             self.replace("pw_wow_timing", b"timing\n")
         lines: dict[str, list[str]] = {}
@@ -227,6 +240,7 @@ class Run:
                 raise SystemExit(f"pw_gameplay_run: {path} is not on the console")
             self.replace(path, appended(original, added))
         log(f"prepared {slug}: {len(self.args.keys)} key presses, "
+            f"{'a recorded macro, ' if self.args.input else ''}"
             f"{sum(map(len, lines.values()))} appended lines, timing {'on' if self.args.timing else 'off'}")
 
     def restore(self) -> None:
@@ -266,6 +280,7 @@ def main(argv: list[str] | None = None, remote=None) -> int:
     parser.add_argument("--remote", default="/data/prospero-win", help="the library root on the console")
     parser.add_argument("--key", dest="keys", action="append", default=[], type=parse_key,
                         help="MS:KEY, a press MS milliseconds after the game starts (enter, esc, 2, f1, 0x0d...)")
+    parser.add_argument("--input", help="a recorded macro (src/pw_script_input.h) the script build replays")
     parser.add_argument("--arguments", help="the game's launch arguments for this run, in place of its profile's")
     parser.add_argument("--append", action="append", default=[], type=parse_append,
                         help="PATH=LINE, a line added to a file under the library root for the run")

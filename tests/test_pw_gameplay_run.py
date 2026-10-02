@@ -43,7 +43,7 @@ class Console:
         if path.endswith("logs/next.txt"):
             self.polls += 1
             if self.polls == 2:  # the run: snapshot what the title would see
-                for name in ("profiles/profiles.lst", "profiles/counter-strike-16.profile", "pw_script_keys", "pw_wow_timing",
+                for name in ("profiles/profiles.lst", "profiles/counter-strike-16.profile", "pw_script_keys", "pw_script_input", "pw_wow_timing",
                              "prefix/drive_c/Games/cs/listenserver.cfg"):
                     entry = self.root / name
                     self.during[name] = entry.read_bytes() if entry.exists() else None
@@ -165,6 +165,26 @@ with tempfile.TemporaryDirectory() as directory:
         b"[application]\narguments = +map c1a0\nid = cs16\nname = CS\n[debug]\nwinedebug = err+all,+loaddll,+process,+fps\n"
     assert (root / "profiles/counter-strike-16.profile").read_text() == "[application]\nid = cs16\nname = CS\n"
 
+# --input: the macro is on the console for the run only, and the summary
+# says how much of it was replayed.
+assert run.summarize("REC seq=1 t=1 PW_WINE64 script input status=ok events=3 bad_line=0 sync=a.log\n"
+                     "REC seq=2 t=2 PW_WINE64 script input synced at offset=10\n"
+                     "REC seq=3 t=3 PW_WINE64 script input replayed=3 of 3\n")[0] == \
+    "macro: ok, 3 of 3 events replayed (synced)"
+assert run.summarize("REC seq=1 t=1 PW_WINE64 script input status=malformed events=0 bad_line=7 sync=-\n")[0] == \
+    "macro: malformed, 0 of 0 events replayed, refused at line 7 (never synced)"
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    macro = Path(directory) / "macro.txt"
+    macro.write_bytes(b"sync logs/game.log loaded\n0 key 0x57 1\n500 move 5 0\n900 key 0x57 0\n")
+    console = Console(root)
+    code, output = main(console, "--input", str(macro))
+    assert code == 0, output
+    assert console.during["pw_script_input"] == macro.read_bytes()
+    assert not (root / "pw_script_input").exists()
+    assert "a recorded macro" in output
+
 # No run: the tool gives up after --wait and still restores the console.
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory) / "console"
@@ -220,4 +240,4 @@ with tempfile.TemporaryDirectory() as directory:
         assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
         assert not (root / "pw_script_keys").exists()
 
-print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, restore on success/timeout/refusal/signal, stale triggers, session by profile id, summary")
+print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, recorded macro, restore on success/timeout/refusal/signal, stale triggers, session by profile id, summary")

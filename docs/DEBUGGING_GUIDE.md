@@ -263,6 +263,16 @@ reports it and puts the console back as it was.
 - `--fps` turns on Wine's `fps` channel in the game's profile, for a game
   that draws with Vulkan through DXVK. OpenGL games log their frame rate
   without it (`PW_GL`).
+- `--input FILE` replays a recorded macro: keys held and released, mouse
+  buttons and relative mouse motion, through the same path a USB keyboard
+  and mouse take. One event per line, its time in milliseconds:
+  `<ms> key <virtual-key code> <1|0>`, `<ms> button <0|1|2> <1|0>` (left,
+  right, middle) or `<ms> move <dx> <dy>`. An optional first line
+  `sync <path under the library folder> <text>` starts the clock when that
+  text appears in what the file gains after the game starts. For Half-Life 2
+  that's its `-condebug` log, `hl2/console.log`, and `Redownloading all
+  lightmaps`, printed once a level has loaded. The summary says how many
+  events were replayed.
 
 Then start the script build on the console. When the game's session ends,
 the tool copies its saved log to `--save` and summarizes it, and it always

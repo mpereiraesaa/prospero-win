@@ -308,3 +308,6 @@ tools/check_setup.py
 native/pw_diagnostics.c
 native/pw_diagnostics.h
 tests/test_pw_diagnostics.c
+src/pw_script_input.c
+src/pw_script_input.h
+tests/test_pw_script_input.c
