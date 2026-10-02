@@ -23,5 +23,20 @@ int main(void)
     assert(pw_x86_cache_lookup(&cache,0x1000,&entry)==PW_ERR_NOT_FOUND);
     assert(pw_x86_cache_reset(&cache,8)==PW_ERR_PRECONDITION);
     assert(pw_x86_cache_publish(&cache,0x1000,&first,0,&entry)==PW_OK && entry->generation==8);
+    assert(cache.occupied==1);
+
+    /* Three quarters of the entries, then refused until a reset. */
+    PwX86CacheEntry many[8];
+    PwX86Block small={.source_bytes=1,.code_bytes=16,.instructions=1};
+    assert(pw_x86_cache_init(&cache,many,8,1024,1)==PW_OK && cache.occupied==0);
+    for(uint32_t i=0;i<6;i++)
+        assert(pw_x86_cache_publish(&cache,0x1000+i*0x10,&small,cache.cursor,&entry)==PW_OK);
+    assert(cache.occupied==6);
+    assert(pw_x86_cache_publish(&cache,0x2000,&small,cache.cursor,&entry)==PW_ERR_LIMIT);
+    assert(cache.occupied==6 && cache.publishes==6);
+    assert(pw_x86_cache_lookup(&cache,0x1050,&entry)==PW_OK);
+    assert(pw_x86_cache_lookup(&cache,0x2000,&entry)==PW_ERR_NOT_FOUND);
+    assert(pw_x86_cache_reset(&cache,2)==PW_OK && cache.occupied==0);
+    assert(pw_x86_cache_publish(&cache,0x2000,&small,0,&entry)==PW_OK && cache.occupied==1);
     return 0;
 }

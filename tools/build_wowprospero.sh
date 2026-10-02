@@ -16,13 +16,14 @@
 #   dlls/wowprospero/wowprospero.so
 #
 # Usage:
-#   tools/build_wowprospero.sh [--build DIR] [--source DIR] [--jobs N]
+#   tools/build_wowprospero.sh [--build DIR] [--source DIR] [--jobs N] [--output DIR]
 set -eu
 
 WINE_COMMIT=490f6d5dcbb2a5047345b8af88d114bbcaad69a8
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 build_dir=${PROSPERO_WINE_BUILD:-$root/.deps/wine/build}
 source_dir=${PROSPERO_WINE_SOURCE:-$root/.deps/wine/source}
+output_dir=
 jobs=$(nproc 2>/dev/null || echo 4)
 
 fail() { echo "build_wowprospero: $*" >&2; exit 1; }
@@ -32,6 +33,7 @@ while [ $# -gt 0 ]; do
     --build) build_dir=$2; shift 2 ;;
     --source) source_dir=$2; shift 2 ;;
     --jobs) jobs=$2; shift 2 ;;
+    --output) output_dir=$2; shift 2 ;;
     *) fail "unknown argument $1" ;;
     esac
 done
@@ -50,8 +52,9 @@ if [ ! -x "$build_dir/loader/wine" ] || [ ! -x "$build_dir/server/wineserver" ];
 fi
 
 module=$root/wine/wowprospero
-out=$build_dir/dlls/wowprospero
+out=${output_dir:-$build_dir/dlls/wowprospero}
 mkdir -p "$out/x86_64-windows"
+out=$(CDPATH= cd -- "$out" && pwd)
 
 dbt="src/pw_x86_engine.c src/pw_x86_block.c src/pw_x86_cache.c src/pw_x86_hostexec.c
      src/pw_x86_reencode.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c"
@@ -75,6 +78,13 @@ x86_64-w64-mingw32-gcc -c -o "$out/x86_64-windows/cpu.o" "$module/cpu.c" \
     dlls/ntdll/x86_64-windows/libntdll.a libs/winecrt0/x86_64-windows/libwinecrt0.a \
     dlls/ntdll/x86_64-windows/libntdll.a libs/compiler-rt/x86_64-windows/libcompiler-rt.a) ||
     fail "PE link failed"
+
+# Installed Wine resolves a builtin PE's Unix side under x86_64-unix.
+# Keep the build-tree layout too, and let WINEDLLPATH select isolated builds.
+if [ -n "$output_dir" ]; then
+    mkdir -p "$out/x86_64-unix"
+    ln -sf ../wowprospero.so "$out/x86_64-unix/wowprospero.so"
+fi
 
 echo "build_wowprospero: $out/x86_64-windows/wowprospero.dll"
 echo "build_wowprospero: $out/wowprospero.so"

@@ -542,6 +542,46 @@ run of the same build rated 1416 total at 29% of its native 4850, on a
 faster core. Getting 1383 on a 3.46 GHz Zen 2 core puts the console within
 the same ratio range.
 
+### Unmap notification correctness
+
+The WoW64 CPU backend captures the complete mapped-view or image extent
+before an unmap and invalidates that range after success. A failure anywhere
+in the region walk falls back to full invalidation; a partial extent could
+leave translated code from the remaining regions alive. Failed unmaps do
+not invalidate code.
+
+Before/after pairs retain their caller thread, original address and nested
+order. A failed query still reserves a pair so its completion cannot consume
+an older extent. The bounded 64-record bank falls back to full invalidation
+on saturation or ambiguous ordering until outstanding pairs drain. Queries
+and invalidation run outside the bank lock.
+
+`tests/test_wowprospero_unmap.py` compiles and executes the actual callback
+code with controlled VM replies, including multi-region views, partial query
+failure, nested/reentrant callbacks, eight concurrent threads, saturation
+and recovery, failed unmaps, and nonprogressing or overflowing regions.
+Both `make test` and `make sanitize` run it with their selected compiler and
+flags. These tests establish callback behavior; they do not establish a
+game performance improvement or console compatibility.
+
+A four-run PC comparison kept the chain-hash Unix adapter identical and
+changed only the PE unmap callbacks (scoped/global/global/scoped).
+Each completed all 5182 `hl2long` frames without detected DBT diagnostics
+or reported clock errors. Scoped unmaps took 85.529/84.582 demo seconds
+versus 87.372/89.721 for global unmaps, with inferred pre-demo intervals
+of 32.9/30.3 versus 136.2/131.9 seconds. Calibrated translated-invocation
+CPU estimates were 176.470/187.806 versus 179.022/182.948 seconds: the
+scoped candidate's median estimate was 0.64% worse. Faster loading does
+not establish the translated CPU-time target.
+
+These are diagnostic results: Remote Play consumed roughly 1100–1200%
+host CPU, local gate revalidation overlapped one baseline run, and a short
+FP-transfer microbenchmark overlapped the final candidate. Sampled counters
+have incomplete phase brackets and unsampled intervals; phase boundaries
+are inferred from the timedemo duration. They cannot establish a controlled
+causal gain. Runs used forced own-prefix cleanup after post-demo reports;
+clean shutdown remains unverified. Console measurements remain pending.
+
 [b]: https://box86.org/2022/03/box86-box64-vs-qemu-vs-fex-vs-rosetta2/
 
 ## Cache lookup diagnostics
@@ -572,3 +612,91 @@ publication walk and the engine's compile-time chain-patch walk are uncounted.
 They can also traverse long clusters, so these counters do not represent
 all probing work per compiled block. Apply identical diagnostics to both comparison builds, then
 repeat gameplay with diagnostics off to assess reporting overhead.
+## Thread-owned hotspot sampling
+
+On Linux, set `PW_WOW_PROFILE=1` to log each thread's top 20 translated
+blocks every five seconds. A filename instead writes `<filename>.<thread-id>`
+for each thread, replacing its previous window. `PW_WOW_TIMING=1` supplies
+the separate run/Unix/system-call timing split. The default fault-marker
+mode supplies the arena block map; sampling with fault markers disabled is
+refused explicitly.
+
+`wowprospero profile` reports the window duration, translated-arena samples,
+stub samples and histogram overflow. `wowprospero hotspot` names the guest
+PC and samples in re-encoded entry, body and exit code, or older emitted
+code. The process CPU timer fires every millisecond; these counts are
+statistical samples, not instruction counts or exact per-block timings.
+Per-thread histograms ignore signals outside translated arenas; cumulative
+`profile_process` tick and unattributed counts retain the process denominator.
+The per-thread `outside=0` does not imply
+that the process spent no time in native code. Compare identical workloads
+and use the timing split alongside these records.
+
+Each thread owns a bounded 4096-slot histogram. The signal handler resolves
+the interrupted PC immediately, before an arena reset can reuse its address.
+It uses no compiler TLS access, allocation, formatting or source-byte reads.
+Reporting snapshots and clears that thread's histogram with SIGPROF blocked;
+it does not scan another thread's cache. Overflow is reported without evicting
+rows, and makes the top-block list incomplete. Logs contain addresses and
+counts only; the former binary block dumps are no longer produced.
+
+The sample-aggregation code is portable and host-tested, including collisions,
+full capacity, arena boundaries and cache resets. On the console, create
+`/data/prospero-win/pw_wow_profile` before launching a fresh game process;
+remove it to disable sampling for subsequent processes. Records use Wine's
+normal output sink, and a timer installation failure disables sampling with
+a diagnostic. The pinned SDK exports `setitimer`. The exact f7ff5244 build produced nonzero
+main-thread samples on the PS5, completed route v6 and exited cleanly through
+the Kleiner lab with corrected-unmap PE4c8f7118. That validates the observed
+sampling and shutdown path; a console report with zero samples still cannot
+be used as a performance result. Updated cap builds require their own receipt.
+
+`wowprospero native` supplements translated-block records with a bounded,
+atomic process-wide histogram of PCs sampled outside translated arenas.
+These counts are cumulative, and `native_summary` reports overflow. Linux
+reports the current module/symbol when `dladdr` resolves the address; console
+addresses can be resolved against the exact linked ELF. Module attribution
+may change after an unload, so retain exact artifacts and loader records.
+No raw guest code is dumped. Use these records to distinguish translation
+or cache-reset work from execution of translated instructions.
+
+## Reset poisoning extent
+
+The engine now poisons only the published code extent when discarding its
+cache, and clears the corresponding block-map prefix. Previously every reset
+wrote `0xcc` across the entire reserved arena (128 MiB for the first WoW64
+thread), even when a loader flush had discarded only a few blocks. Native-PC
+sampling during HL2 with DXVK identified these writes as the dominant startup
+cost. Generation changes, cache metadata clearing, indirect-target clearing
+and poisoning of discarded instructions are preserved. Tests check that old
+code becomes traps, unused arena bytes remain untouched and execution after
+reset recompiles correctly. This removes reset overhead; the separate
+steady-workload HL2 translated-time target still requires measurement.
+
+## Empty chain-table targets
+
+An all-zero re-encoder chain table treated guest PC zero as a tag hit and
+jumped through its empty host pointer. Null indirect calls, jumps and
+returns could therefore fault at host RIP zero outside translated code,
+instead of returning to guest exception handling. Clear the table with a
+PC-one sentinel in slot zero at allocation and reset. PC one hashes to
+slot one, so this empty sentinel cannot match a requested target; a real
+translation at PC zero replaces it normally. No instruction is added to
+the generated lookup. A missing executable source span is also reported as
+a guest access violation at its EIP, rather than an internal DBT error;
+previous data-fault metadata is not reused for that instruction-fetch fault.
+
+Regressions execute null register and memory calls/jumps and a null return,
+checking dispatcher result, registers, flags and data against the emitter
+in ordinary, unbounded, call-stack and superblock modes. A lifecycle test
+also executes null lookups before and after reset and publishes real PC-zero
+code in each generation. The same reporting helper used by the Unix adapter
+is checked with the actual missing-source result and stale fault metadata,
+plus data faults, unsupported instructions, x87 traps and internal errors.
+An unmodified-engine negative control hits the host-null fault; the regression
+uses a fixed source PC so random mapping cannot hide it by filling slot zero.
+`make -j2 all audit check-whitespace` and `make -j2 sanitize` pass, including
+362 differential forms with zero mismatches (93 unsupported forms skipped).
+The PS5 SDK compiles and links the updated Unix adapter and engine. Console
+execution and clean-game validation remain pending; this correctness fix is
+not a performance result.

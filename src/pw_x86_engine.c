@@ -4,6 +4,15 @@
 #include "pw_guest_fp.h"
 #include <string.h>
 
+/* A zero tag would match guest PC zero and jump through an empty pointer.
+ * PC one hashes to slot one, so it cannot match any lookup in empty slot
+ * zero. A published PC zero replaces this sentinel normally. */
+static void clear_chain_targets(PwX86IndirectTarget *targets)
+{
+    memset(targets,0,PW_X86_REENCODE_CHAIN_SLOTS*sizeof(*targets));
+    targets[0].guest_pc=1;
+}
+
 #if defined(__clang__)
 __attribute__((no_sanitize("function")))
 #endif
@@ -138,7 +147,7 @@ int pw_x86_engine_set_reencode(PwX86Engine *engine, unsigned enabled)
             return status;
         }
         engine->chain_targets=engine->chain.write_base;
-        memset(engine->chain_targets,0,bytes);
+        clear_chain_targets(engine->chain_targets);
     }
     engine->reencode_enabled = enabled ? 1 : 0;
     return PW_OK;
@@ -300,26 +309,61 @@ static void map_block(PwX86Engine *engine, const PwX86CacheEntry *entry)
         if(!engine->block_map[g]) engine->block_map[g]=index;
 }
 
-uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *engine, uintptr_t rip)
+const PwX86CacheEntry *pw_x86_engine_host_block(const PwX86Engine *engine, uintptr_t rip)
 {
     const uintptr_t low = (uintptr_t)engine->code.exec_base;
     uint32_t index;
 
-    if(!engine->block_map || rip < low || rip >= low + engine->code.bytes) return 0;
+    if(!engine->block_map || rip < low || rip - low >= engine->code.bytes) return NULL;
     index = engine->block_map[(rip - low) / PW_X86_ENGINE_FAULT_GRANULE];
     while(index && index <= engine->cache.capacity) {
         const PwX86CacheEntry *e = &engine->cache.entries[index - 1];
         const uintptr_t start = low + e->code_offset;
-        if(rip < start) return 0;
-        if(rip < start + e->code_bytes) {
-            size_t path;
-            if(!e->fault_table_offset) return 0;
-            path = pw_x86_fault_table_path((const uint8_t *)start, e->fault_table_offset, rip - start);
-            return path ? start + path : 0;
-        }
+        if(!e->used || e->generation != engine->cache.generation || rip < start) return NULL;
+        if(rip - start < e->code_bytes) return e;
         index = e->arena_next;
     }
-    return 0;
+    return NULL;
+}
+
+void pw_x86_engine_sample(const PwX86Engine *engine, uintptr_t rip, PwX86HotspotProfile *profile)
+{
+    const uintptr_t base = (uintptr_t)engine->code.exec_base;
+    const PwX86CacheEntry *entry;
+    unsigned bucket;
+
+    profile->samples++;
+    if(rip < base || rip - base >= engine->code.bytes) { profile->outside++; return; }
+    entry = pw_x86_engine_host_block(engine, rip);
+    if(!entry) { profile->stubs++; return; }
+    bucket = (entry->guest_pc * 2654435761u) & (PW_X86_HOTSPOT_SLOTS - 1);
+    for(unsigned probe = 0; probe < PW_X86_HOTSPOT_SLOTS; probe++) {
+        PwX86Hotspot *row = &profile->slots[bucket];
+        if(!row->samples || row->guest_pc == entry->guest_pc) {
+            const size_t offset = rip - base - entry->code_offset;
+            row->guest_pc = entry->guest_pc;
+            row->samples++;
+            if(!pw_x86_reencoded(&entry->entry_contract) || !entry->exit_offset) row->emitted++;
+            else if(offset < entry->chain_entry_offset) row->entry++;
+            else if(offset < entry->exit_offset) row->body++;
+            else row->exit++;
+            return;
+        }
+        bucket = (bucket + 1) & (PW_X86_HOTSPOT_SLOTS - 1);
+    }
+    profile->overflow++;
+}
+
+uintptr_t pw_x86_engine_fault_redirect(const PwX86Engine *engine, uintptr_t rip)
+{
+    const PwX86CacheEntry *e = pw_x86_engine_host_block(engine, rip);
+    uintptr_t start;
+    size_t path;
+
+    if(!e || !e->fault_table_offset) return 0;
+    start = (uintptr_t)engine->code.exec_base + e->code_offset;
+    path = pw_x86_fault_table_path((const uint8_t *)start, e->fault_table_offset, rip - start);
+    return path ? start + path : 0;
 }
 
 int pw_x86_engine_set_counters(PwX86Engine *engine, unsigned enabled)
@@ -689,6 +733,7 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
 {
     if(!engine || !engine->initialized)return PW_ERR_PRECONDITION;
     unsigned was_sealed=engine->sealed;
+    const size_t discarded_bytes=engine->cache.cursor;
     if((engine->sealed || engine->failed) &&
        protection(engine,0,engine->code.bytes,PW_PROT_READ|PW_PROT_WRITE)!=PW_OK)
         return PW_ERR_VM;
@@ -708,14 +753,18 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
             engine->failed=1;
         return status;
     }
-    memset(engine->code.write_base,0xcc,engine->code.bytes);
+    /* Trap the discarded code, including its alignment padding. Unused arena
+     * pages have never held published entry points and need no reset writes.
+     * Poisoning the whole reserved arena made short flushes write 128 MiB. */
+    if(discarded_bytes) memset(engine->code.write_base,0xcc,discarded_bytes);
     /* Every indirect target pointed into the code just discarded. */
     if(engine->indirect_targets)
         memset(engine->indirect_targets,0,PW_X86_ENGINE_INDIRECT_SLOTS*sizeof(PwX86IndirectTarget));
     if(engine->chain_targets)
-        memset(engine->chain_targets,0,PW_X86_REENCODE_CHAIN_SLOTS*sizeof(PwX86IndirectTarget));
+        clear_chain_targets(engine->chain_targets);
     if(engine->block_map)
-        memset(engine->block_map,0,(engine->code.bytes/PW_X86_ENGINE_FAULT_GRANULE+1)*sizeof(uint32_t));
+        memset(engine->block_map,0,
+               ((discarded_bytes+PW_X86_ENGINE_FAULT_GRANULE-1)/PW_X86_ENGINE_FAULT_GRANULE)*sizeof(uint32_t));
     engine->last_published=0;
     engine->dispatches=0;engine->retired_instructions=0;engine->failed=0;
     return emit_return_stub(engine);
