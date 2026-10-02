@@ -24,6 +24,8 @@ static uint8_t *guest;
 static uint32_t low;
 static PwX86Engine *current;
 static unsigned redirected;
+static unsigned host_call_stack;
+static _Alignas(16) uint8_t call_memory[0x4000];
 
 static int view(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes)
 {
@@ -86,6 +88,10 @@ static Run run(const uint8_t *code, size_t bytes, unsigned markers)
     assert(pw_x86_engine_set_flat_memory(&engine, low, low + SPAN) == PW_OK);
     assert(pw_x86_engine_set_reencode(&engine, 1) == PW_OK);
     assert(pw_x86_engine_set_fault_markers(&engine, markers) == PW_OK);
+    if (host_call_stack) {
+        assert(pw_x86_engine_set_unbounded_chains(&engine, 1) == PW_OK);
+        assert(pw_x86_engine_set_call_stack(&engine, call_memory, sizeof(call_memory)) == PW_OK);
+    }
     current = &engine;
     redirected = 0;
     r.status = PW_OK;
@@ -327,6 +333,162 @@ static void test_profile_capacity(void)
         assert(profile.slots[i].guest_pc == i && profile.slots[i].samples == 1);
 }
 
+/* call, jmp and push through a memory operand load the operand before
+ * anything else, so a refused operand faults with esp, the guest stack and
+ * the flags as they were: no return address pushed. Each form below faults
+ * on the null page in both modes and reports the same EIP and fault; also
+ * a base plus displacement wrapping at 2^32, esp and edi (pinned to r12 and
+ * r13) as base and index, ebp without a displacement, an absolute address
+ * and a negative disp32, on both the guest and the host call stack. */
+static void test_indirect_operand_faults(void)
+{
+    static const struct { const char *name; uint8_t code[16]; uint8_t bytes, at; uint32_t address; } forms_[] = {
+        /* xor ebx, ebx; cmp ecx, edx; call [ebx+8] */
+        { "call [ebx+8]", { 0x31, 0xdb, 0x39, 0xd1, 0xff, 0x53, 0x08 }, 7, 4, 8 },
+        /* xor ebx, ebx; cmp ecx, edx; jmp [ebx+0x30] */
+        { "jmp [ebx+0x30]", { 0x31, 0xdb, 0x39, 0xd1, 0xff, 0x63, 0x30 }, 7, 4, 0x30 },
+        /* xor ebx, ebx; cmp ecx, edx; push [ebx+0x10]; ret */
+        { "push [ebx+0x10]", { 0x31, 0xdb, 0x39, 0xd1, 0xff, 0x73, 0x10, 0xc3 }, 8, 4, 0x10 },
+        /* mov ebx, -8; call [ebx+0x10]: 0xfffffff8 + 0x10 wraps to 8 */
+        { "call wraps", { 0xbb, 0xf8, 0xff, 0xff, 0xff, 0xff, 0x53, 0x10 }, 8, 5, 8 },
+        /* mov esp, 0x10; call [esp+4] */
+        { "call [esp+4]", { 0xbc, 0x10, 0x00, 0x00, 0x00, 0xff, 0x54, 0x24, 0x04 }, 9, 5, 0x14 },
+        /* mov esp, 0x10; push [esp+8]; ret */
+        { "push [esp+8]", { 0xbc, 0x10, 0x00, 0x00, 0x00, 0xff, 0x74, 0x24, 0x08, 0xc3 }, 10, 5, 0x18 },
+        /* xor ebp, ebp; call [ebp] */
+        { "call [ebp]", { 0x31, 0xed, 0xff, 0x55, 0x00 }, 5, 2, 0 },
+        /* mov edi, 1; call [edi*4+0x20] */
+        { "call [edi*4+0x20]", { 0xbf, 0x01, 0x00, 0x00, 0x00, 0xff, 0x14, 0xbd, 0x20, 0x00, 0x00, 0x00 }, 12, 5, 0x24 },
+        /* xor edi, edi; call [edi+0x28] */
+        { "call [edi+0x28]", { 0x31, 0xff, 0xff, 0x57, 0x28 }, 5, 2, 0x28 },
+        /* call [0x40] */
+        { "call [0x40]", { 0xff, 0x15, 0x40, 0x00, 0x00, 0x00 }, 6, 0, 0x40 },
+        /* mov ebx, 0x1000; call [ebx-0xff0] */
+        { "call [ebx-0xff0]", { 0xbb, 0x00, 0x10, 0x00, 0x00, 0xff, 0x93, 0x10, 0xf0, 0xff, 0xff }, 11, 5, 0x10 },
+    };
+    const uint32_t sentinel = 0x5a5a5a5au;
+
+    for (unsigned stack = 0; stack < 2; stack++) {
+        host_call_stack = stack;
+        for (unsigned f = 0; f < sizeof(forms_) / sizeof(forms_[0]); f++) {
+            Run marked;
+            uint32_t below;
+            compare(forms_[f].name, forms_[f].code, forms_[f].bytes, forms_[f].at, forms_[f].address, 0, -1);
+            memcpy(guest + STACK_TOP - 4, &sentinel, 4);
+            marked = run(forms_[f].code, forms_[f].bytes, 1);
+            memcpy(&below, guest + STACK_TOP - 4, 4);
+            assert(marked.state.fault_width == 4 && below == sentinel);
+            if (forms_[f].code[0] != 0xbc) assert(marked.state.gpr[4] == low + STACK_TOP);
+            else assert(marked.state.gpr[4] == 0x10);
+        }
+    }
+    host_call_stack = 0;
+}
+
+/* Vtable-style calls that succeed: [eax+disp8], [eax+disp32], [eax+edi*4],
+ * [ebp+0], [edi+disp8], an absolute operand and [esp+4], a push of [eax+disp]
+ * and of [esp], and a jmp through [eax+disp]; one callee adds CF, set before
+ * its call by a cmp. Both modes and both call stacks end with the same, expected,
+ * registers. */
+static void test_indirect_operand_calls(void)
+{
+    enum { F1 = 0x100, F2 = 0x110, F3 = 0x120, F4 = 0x130, F5 = 0x140, TABLE = 0x3c000 };
+    static const uint8_t program[] = {
+        0xb8, 0, 0, 0, 0,                       /* mov eax, table */
+        0xff, 0x50, 0x04,                       /* call [eax+4]: f1 */
+        0xff, 0x90, 0x74, 0x01, 0x00, 0x00,     /* call [eax+0x174]: f2 */
+        0xbf, 0x02, 0x00, 0x00, 0x00,           /* mov edi, 2 */
+        0xff, 0x14, 0xb8,                       /* call [eax+edi*4]: f3 */
+        0x39, 0xd1,                             /* cmp ecx, edx: CF */
+        0xff, 0x50, 0x0c,                       /* call [eax+0xc]: f4, adc */
+        0x89, 0xc5,                             /* mov ebp, eax */
+        0xff, 0x55, 0x00,                       /* call [ebp+0]: f1 */
+        0x89, 0xc7,                             /* mov edi, eax */
+        0xff, 0x57, 0x04,                       /* call [edi+4]: f1 */
+        0xff, 0x15, 0, 0, 0, 0,                 /* call [table+4]: f1 */
+        0x68, 0, 0, 0, 0,                       /* push f1 */
+        0x6a, 0x00,                             /* push 0 */
+        0xff, 0x54, 0x24, 0x04,                 /* call [esp+4]: f1 */
+        0x83, 0xc4, 0x08,                       /* add esp, 8 */
+        0xff, 0x70, 0x10,                       /* push [eax+0x10] */
+        0x5a,                                   /* pop edx */
+        0x68, 0x77, 0x66, 0x55, 0x44,           /* push 0x44556677 */
+        0xff, 0x34, 0x24,                       /* push [esp] */
+        0x5e, 0x59,                             /* pop esi; pop ecx */
+        0xff, 0x60, 0x14,                       /* jmp [eax+0x14]: f5, returns */
+    };
+    static const uint8_t f1[] = { 0x83, 0xc3, 0x01, 0xc3 };                         /* add ebx, 1 */
+    static const uint8_t f2[] = { 0x83, 0xc3, 0x10, 0xc3 };                         /* add ebx, 0x10 */
+    static const uint8_t f3[] = { 0x81, 0xc3, 0x00, 0x01, 0x00, 0x00, 0xc3 };       /* add ebx, 0x100 */
+    static const uint8_t f4[] = { 0x81, 0xd3, 0x00, 0x10, 0x00, 0x00, 0xc3 };       /* adc ebx, 0x1000 */
+    static const uint8_t f5[] = { 0x81, 0xc3, 0x00, 0x00, 0x01, 0x00, 0xc3 };       /* add ebx, 0x10000 */
+    const uint32_t table = low + TABLE, code = low + CODE;
+    const uint32_t entries[][2] = {
+        { 0, code + F1 }, { 1, code + F1 }, { 2, code + F3 }, { 3, code + F4 }, { 4, 0x1234abcdu },
+        { 5, code + F5 }, { 0x174 / 4, code + F2 },
+    };
+    uint8_t image[0x150];
+    Run r[4];
+
+    memset(image, 0xcc, sizeof(image));
+    memcpy(image, program, sizeof(program));
+    memcpy(image + 1, &table, 4);
+    memcpy(image + 39, &(uint32_t){ table + 4 }, 4);
+    memcpy(image + 44, &(uint32_t){ code + F1 }, 4);
+    memcpy(image + F1, f1, sizeof(f1));
+    memcpy(image + F2, f2, sizeof(f2));
+    memcpy(image + F3, f3, sizeof(f3));
+    memcpy(image + F4, f4, sizeof(f4));
+    memcpy(image + F5, f5, sizeof(f5));
+    for (unsigned m = 0; m < 4; m++) {
+        memset(guest + TABLE, 0, 0x200);
+        for (unsigned e = 0; e < sizeof(entries) / sizeof(entries[0]); e++)
+            memcpy(guest + TABLE + 4 * entries[e][0], &entries[e][1], 4);
+        host_call_stack = m >> 1;
+        r[m] = run(image, sizeof(image), m & 1);
+        assert(r[m].status == PW_OK && r[m].reencoded && !r[m].redirected);
+        assert(r[m].state.eip == 0xdead0000u && r[m].state.gpr[4] == low + STACK_TOP + 4);
+        assert(r[m].state.gpr[3] == 0x06060606u + 5 + 0x10 + 0x100 + 0x1001 + 0x10000);
+        assert(r[m].state.gpr[2] == 0x1234abcdu);
+        assert(r[m].state.gpr[6] == 0x44556677u && r[m].state.gpr[1] == 0x44556677u);
+        assert(r[m].state.gpr[5] == table && r[m].state.gpr[7] == table);
+        for (unsigned g = 0; g < 8; g++) assert(r[m].state.gpr[g] == r[0].state.gpr[g]);
+        assert((r[m].state.eflags & 0x8d5) == (r[0].state.eflags & 0x8d5));
+    }
+    host_call_stack = 0;
+}
+
+/* With fault markers, the memory operand of call, jmp and push is one load
+ * into r10d through the guest's own 32-bit address, the block's first
+ * instruction and the access its fault table lists. */
+static void test_indirect_operand_bytes(void)
+{
+    static const struct { uint8_t source[6], bytes; uint8_t load[9], load_bytes; } forms_[] = {
+        { { 0xff, 0x50, 0x04 }, 3, { 0x67, 0x44, 0x8b, 0x54, 0x20, 0x04 }, 6 },           /* call [eax+4] */
+        { { 0xff, 0x90, 0x74, 0x01, 0x00, 0x00 }, 6,
+          { 0x67, 0x44, 0x8b, 0x94, 0x20, 0x74, 0x01, 0x00, 0x00 }, 9 },                   /* call [eax+0x174] */
+        { { 0xff, 0x54, 0x24, 0x04 }, 4, { 0x67, 0x45, 0x8b, 0x54, 0x24, 0x04 }, 6 },     /* call [esp+4] */
+        { { 0xff, 0x14, 0xb8 }, 3, { 0x67, 0x46, 0x8b, 0x14, 0xa8 }, 5 },                 /* call [eax+edi*4] */
+        { { 0xff, 0x55, 0x00 }, 3, { 0x67, 0x44, 0x8b, 0x54, 0x25, 0x00 }, 6 },           /* call [ebp] */
+        { { 0xff, 0x15, 0x40, 0, 0, 0 }, 6, { 0x67, 0x44, 0x8b, 0x14, 0x25, 0x40, 0, 0, 0 }, 9 }, /* call [0x40] */
+        { { 0xff, 0x63, 0x30 }, 3, { 0x67, 0x44, 0x8b, 0x54, 0x23, 0x30 }, 6 },           /* jmp [ebx+0x30] */
+        { { 0xff, 0x77, 0x08 }, 3, { 0x67, 0x45, 0x8b, 0x54, 0x25, 0x08 }, 6 },           /* push [edi+8] */
+    };
+    const PwX86TranslateOptions options = {
+        .flat_low = low, .flat_high = low + SPAN, .no_counters = 1, .fault_markers = 1,
+    };
+    static uint8_t out[4096];
+
+    for (unsigned f = 0; f < sizeof(forms_) / sizeof(forms_[0]); f++) {
+        PwX86Block block;
+        assert(pw_x86_reencode(forms_[f].source, forms_[f].bytes, low + CODE, out, sizeof(out),
+                               &block, &options) == PW_OK);
+        assert(block.instructions == 1 && block.fault_table_offset);
+        assert(!memcmp(out + block.chain_entry_offset, forms_[f].load, forms_[f].load_bytes));
+        assert(pw_x86_fault_table_path(out, block.fault_table_offset, (uint16_t)block.chain_entry_offset));
+    }
+}
+
 static void test_fault_table(void)
 {
     /* Three rows: sites 0x10, 0x30 and 0x2345 with their paths. */
@@ -385,6 +547,9 @@ int main(void)
     test_engine_lookup();
     test_profile_capacity();
     test_fault_table();
+    test_indirect_operand_faults();
+    test_indirect_operand_calls();
+    test_indirect_operand_bytes();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
            "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
            "and stack form matches the guard; the engine finds each access's path and nothing else\n");

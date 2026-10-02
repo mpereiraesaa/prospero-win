@@ -713,40 +713,38 @@ static void emit_rm(Ctx *c, const Inst *in)
     for (unsigned k = 0; k < in->imm_len; k++) b(o, in->imm[k]);
 }
 
-/* With fault markers: the instruction itself, its memory operand addressed
- * with the guest's 32-bit arithmetic (0x67: the 32-bit effective address,
- * zero-extended, is the guest address), recorded in the fault table. */
-static void emit_rm_direct(Ctx *c, const Inst *in)
+/* With fault markers: the fault table's row for the access emitted next,
+ * which addresses ea itself; its refused-access path recomputes ea. */
+static int direct_site(Ctx *c, const Ea *e, unsigned width, unsigned write)
 {
-    Out *o = &c->o;
-    const Ea *e = &in->ea;
+    Cold *cold;
+
+    if (c->cold_count >= MAX_COLD) { c->o.failed = 1; return 0; }
+    cold = &c->cold[c->cold_count++];
+    memset(cold, 0, sizeof(*cold));
+    cold->site = c->o.n;
+    cold->pc = c->here;
+    cold->width = (uint8_t)width; cold->write = (uint8_t)write;
+    cold->direct = 1; cold->ea = *e;
+    return 1;
+}
+
+/* The REX bits (X, B) that [ea] needs for its index and base. */
+static uint8_t ea_rex(const Ea *e)
+{
+    const int hb = e->base >= 0 ? host_of[e->base] : -1, hi = e->index >= 0 ? host_of[e->index] : -1;
+    return (uint8_t)((hi >= 8 ? 2 : 0) | (hb >= 8 ? 1 : 0));
+}
+
+/* ModRM, SIB and displacement of [ea], with regf (three bits) in ModRM's
+ * reg field. Under 0x67 the 32-bit effective address, zero-extended, is
+ * the guest address. */
+static void ea_modrm(Out *o, unsigned regf, const Ea *e)
+{
     const int hb = e->base >= 0 ? host_of[e->base] : -1, hi = e->index >= 0 ? host_of[e->index] : -1;
     const unsigned index = hi >= 0 ? (unsigned)hi & 7 : 4;
     const int32_t disp = (int32_t)e->disp;
-    unsigned regf = in->reg;
-    uint8_t rex = 0;
-    Cold *cold;
 
-    if (c->cold_count >= MAX_COLD) { o->failed = 1; return; }
-    cold = &c->cold[c->cold_count++];
-    memset(cold, 0, sizeof(*cold));
-    cold->site = o->n;
-    cold->pc = c->here;
-    cold->width = in->width; cold->write = in->write;
-    cold->direct = 1; cold->ea = *e;
-
-    if (in->lock) b(o, 0xf0);
-    if (in->opsize16) b(o, 0x66);
-    if (in->rep) b(o, in->rep);
-    b(o, 0x67);
-    if (in->reg_kind == REG32) {
-        if (host_of[in->reg] >= 8) rex |= 4;
-        regf = host_of[in->reg] & 7;
-    }
-    if (hi >= 8) rex |= 2;
-    if (hb >= 8) rex |= 1;
-    if (rex) b(o, (uint8_t)(0x40 | rex));
-    for (unsigned k = 0; k < in->op_len; k++) b(o, in->op[k]);
     if (hb < 0) {
         b(o, (uint8_t)(regf << 3 | 4));
         b(o, (uint8_t)(e->scale << 6 | index << 3 | 5));
@@ -763,6 +761,28 @@ static void emit_rm_direct(Ctx *c, const Inst *in)
         b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
         w32(o, e->disp);
     }
+}
+
+/* With fault markers: the instruction itself, its memory operand addressed
+ * with the guest's 32-bit arithmetic, recorded in the fault table. */
+static void emit_rm_direct(Ctx *c, const Inst *in)
+{
+    Out *o = &c->o;
+    unsigned regf = in->reg;
+    uint8_t rex = ea_rex(&in->ea);
+
+    if (!direct_site(c, &in->ea, in->width, in->write)) return;
+    if (in->lock) b(o, 0xf0);
+    if (in->opsize16) b(o, 0x66);
+    if (in->rep) b(o, in->rep);
+    b(o, 0x67);
+    if (in->reg_kind == REG32) {
+        if (host_of[in->reg] >= 8) rex |= 4;
+        regf = host_of[in->reg] & 7;
+    }
+    if (rex) b(o, (uint8_t)(0x40 | rex));
+    for (unsigned k = 0; k < in->op_len; k++) b(o, in->op[k]);
+    ea_modrm(o, regf, &in->ea);
     for (unsigned k = 0; k < in->imm_len; k++) b(o, in->imm[k]);
 }
 
@@ -819,12 +839,26 @@ static void emit_push(Ctx *c, int src, uint32_t imm, unsigned keep)
 }
 /* r10d = [r11] */
 static void load_r10(Out *o) { b(o, 0x45); b(o, 0x8b); b(o, 0x13); }
-/* r10d = the r/m operand of in (a register or memory, guarded). */
+/* r10d = the r/m operand of in (a register or memory, guarded). With
+ * fault markers the load addresses the guest's operand itself, one
+ * instruction where an address in r11 would take two; before anything
+ * else of the call, jmp or push, so a fault leaves esp as it was. The
+ * decoder refuses fs on these, so the operand is flat. */
 static void operand_r10(Ctx *c, const Inst *in, unsigned keep)
 {
-    if (in->mod == 3) { rr(&c->o, 0x89, 0, R10, host_of[in->rm]); return; }
+    Out *o = &c->o;
+
+    if (in->mod == 3) { rr(o, 0x89, 0, R10, host_of[in->rm]); return; }
+    if (c->fault_markers) {
+        if (!direct_site(c, &in->ea, 4, 0)) return;
+        b(o, 0x67);
+        b(o, (uint8_t)(0x44 | ea_rex(&in->ea)));                     /* REX.R: r10 */
+        b(o, 0x8b);                                                 /* mov r10d, [ea] */
+        ea_modrm(o, R10 & 7, &in->ea);
+        return;
+    }
     guard(c, &in->ea, 4, 0, keep);
-    load_r10(&c->o);
+    load_r10(o);
 }
 
 typedef struct ExitSlots {
