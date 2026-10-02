@@ -121,10 +121,11 @@ size_t pw_script_input_lines(const char *text, size_t length)
 int pw_script_input_parse(const char *text, size_t length, PwScriptInputEvent *storage, size_t capacity,
                           PwScriptInput *out, size_t *bad_line)
 {
-    const char *at = text, *end = text + length;
+    const char *at = text, *end;
     size_t line = 0;
 
     if (!text || !out || (capacity && !storage)) return PW_ERR_PRECONDITION;
+    end = text + length;
     memset(out, 0, sizeof(*out));
     out->events = storage;
     if (bad_line) *bad_line = 0;
