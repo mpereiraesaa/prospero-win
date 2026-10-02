@@ -58,6 +58,7 @@ struct pw_thread
     PwX86State state;
     uint64_t generation;     /* code_generation this cache was built for */
     uint32_t cache_epoch;    /* engine generation, bumped on every reset */
+    uint64_t cache_publishes_at_reset, cache_report_id;
     uint32_t trace;          /* PW_WOW_TRACE: quantum 1 and an EIP ring */
     uint32_t prefer_host;    /* PW_WOW_HOSTEXEC_ALL: reference execution */
     uint32_t ring[64], ring_pos;
@@ -77,12 +78,13 @@ struct pw_thread
     uint32_t n_unix, n_sys, n_other, n_unix_long, n_resets, n_flushes, last_reason;
     PwX86HotspotProfile *profile;
     uint64_t profile_last_dump;
-    uint64_t execution_clock_cost;
+    uint64_t execution_clock_cost, execution_clock_resolution;
 };
 
 C_ASSERT( sizeof(((I386_CONTEXT *)0)->ExtendedRegisters) == PW_GUEST_FXSAVE_BYTES );
 
 static __thread struct pw_thread *self;
+static uint64_t next_cache_report_id;
 
 /* Fault markers (pw_x86_block.h): re-encoded blocks do not check their
  * accesses against the guest range; an access outside it faults on the
@@ -241,25 +243,6 @@ static uint64_t execution_clock( void *opaque )
     return now.tv_sec * 1000000000ull + now.tv_nsec;
 }
 
-static uint64_t execution_calibrate(void)
-{
-    uint64_t pairs[32];
-    for (unsigned i = 0; i < 32; i++)
-    {
-        uint64_t begin = execution_clock( NULL ), end = execution_clock( NULL );
-        if (!begin || !end || end < begin) return 0;
-        pairs[i] = end - begin;
-        /* Sort this small array without another allocation or comparator. */
-        for (unsigned j = i; j && pairs[j] < pairs[j - 1]; j--)
-        {
-            uint64_t temporary = pairs[j];
-            pairs[j] = pairs[j - 1];
-            pairs[j - 1] = temporary;
-        }
-    }
-    return pairs[16];
-}
-
 static void execution_report( struct pw_thread *thread )
 {
     if (thread->engine.dispatch_profile)
@@ -269,13 +252,14 @@ static void execution_report( struct pw_thread *thread )
                  (unsigned long long)thread->engine.dispatch_chain_empty,
                  (unsigned long long)thread->engine.dispatch_chain_collisions );
     if (!thread->engine.execution_clock) return;
-    fprintf( stderr, "wowprospero execution: tid=%04x cumulative=1 sample_cpu_ns=%llu calls=%llu samples=%llu stride=%u clock_read_ns=%llu clock_errors=%llu\n",
+    fprintf( stderr, "wowprospero execution: tid=%04x cumulative=1 sample_cpu_ns=%llu calls=%llu samples=%llu stride=%u clock_batch_read_ns=%llu clock_resolution_ns=%llu clock_errors=%llu\n",
              (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
              (unsigned long long)thread->engine.execution_ns,
              (unsigned long long)thread->engine.execution_calls,
              (unsigned long long)thread->engine.execution_samples,
              thread->engine.execution_stride,
              (unsigned long long)thread->execution_clock_cost,
+             (unsigned long long)thread->execution_clock_resolution,
              (unsigned long long)thread->engine.execution_clock_errors );
 }
 
@@ -402,6 +386,7 @@ static struct pw_thread *get_thread(void)
                  (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
                  thread->engine.call_stack_base != NULL && thread->engine.unbounded_chains );
     thread->cache_epoch = (uint32_t)code_generation;
+    thread->cache_report_id = __atomic_add_fetch( &next_cache_report_id, 1, __ATOMIC_RELAXED );
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
     {
@@ -421,7 +406,10 @@ static struct pw_thread *get_thread(void)
             const char *option = getenv( "PW_WOW_EXEC_STRIDE" );
             unsigned long stride = option ? strtoul( option, NULL, 10 ) : 64;
             if (!stride || stride > UINT32_MAX) stride = 64;
-            if ((thread->execution_clock_cost = execution_calibrate()))
+            struct timespec resolution;
+            if (!clock_getres( CLOCK_THREAD_CPUTIME_ID, &resolution ))
+                thread->execution_clock_resolution = resolution.tv_sec * 1000000000ull + resolution.tv_nsec;
+            if (pw_x86_execution_clock_batch( execution_clock, NULL, &thread->execution_clock_cost ) == PW_OK)
                 pw_x86_engine_set_execution_clock( &thread->engine, execution_clock, NULL, (uint32_t)stride );
             else fprintf( stderr, "wowprospero execution: unavailable thread CPU clock; timing disabled\n" );
         }
@@ -905,6 +893,25 @@ static void timing_init(void)
 #endif
 }
 
+/* Owner-thread counters only: no table walk, signal-handler work or extra
+ * per-lookup accounting. Publishes survive reset; occupancy does not. */
+static void cache_report( struct pw_thread *thread, uint64_t wall, unsigned final )
+{
+    const PwX86Cache *cache = &thread->engine.cache;
+
+    fprintf( stderr, "wowprospero cache: tid=%04x instance=%llu cumulative=1 time_ns=%llu final=%u "
+             "generation=%u capacity=%u occupied=%llu arena_used=%zu arena_bytes=%zu "
+             "hits=%llu misses=%llu probes=%llu max_probe=%u publishes=%llu resets=%llu\n",
+             (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+             (unsigned long long)thread->cache_report_id, (unsigned long long)wall, final,
+             cache->generation, cache->capacity,
+             (unsigned long long)(cache->publishes - thread->cache_publishes_at_reset),
+             cache->cursor, cache->arena_bytes, (unsigned long long)cache->hits,
+             (unsigned long long)cache->misses, (unsigned long long)cache->lookup_probes,
+             cache->max_probe, (unsigned long long)cache->publishes,
+             (unsigned long long)cache->resets );
+}
+
 static void timing_report( struct pw_thread *thread, uint64_t tsc )
 {
     uint64_t wall = timing_now_ns();
@@ -914,6 +921,7 @@ static void timing_report( struct pw_thread *thread, uint64_t tsc )
 
     execution_report( thread );
 
+    cache_report( thread, wall, 0 );
     if (thread->n_unix + thread->n_sys > 1000)
         fprintf( stderr, "wowprospero timing: tid=%04x run=%.1f%% unix=%.1f%% (%.0f/s %.2fus) "
                  "sys=%.1f%% (%.0f/s %.2fus) other=%.1f%% (%u) unix_over_1ms=%.1f%% (%u) resets=%u flushes=%u\n",
@@ -970,6 +978,15 @@ static void timing_leave( struct pw_thread *thread, uint32_t reason )
     if (tsc - thread->t_window > (1ull << 34)) timing_report( thread, tsc );
 }
 
+static void reset_thread_engine( struct pw_thread *thread )
+{
+    uint64_t resets = thread->engine.cache.resets;
+
+    pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
+    if (thread->engine.cache.resets != resets)
+        thread->cache_publishes_at_reset = thread->engine.cache.publishes;
+}
+
 static NTSTATUS run( void *args )
 {
     struct pw_wow_run_params *params = args;
@@ -994,7 +1011,7 @@ static NTSTATUS run( void *args )
     {
         thread->n_flushes++;
         thread->generation = generation;
-        pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
+        reset_thread_engine( thread );
         pw_x86_hostexec_reset( &thread->hostexec );
     }
     load_state( state, ctx, params->teb32 );
@@ -1037,16 +1054,10 @@ static NTSTATUS run( void *args )
         {
             thread->n_resets++;
             pw_x86_engine_fp_sync( &thread->engine, state );
-            pw_x86_engine_reset( &thread->engine, ++thread->cache_epoch );
+            reset_thread_engine( thread );
             continue;
         }
-        params->status = status;
-        params->fault_address = state->fault_address;
-        params->fault_write = state->fault_write;
-        if (status == PW_ERR_VM) params->reason = PW_WOW_FAULT;
-        else if (status == PW_ERR_UNSUPPORTED) params->reason = PW_WOW_UNSUPPORTED;
-        else if (status == PW_ERR_X87_TRAP) params->reason = PW_WOW_X87_TRAP;
-        else params->reason = PW_WOW_ERROR;
+        pw_wow_report_error(params, status, state->eip, state->fault_address, state->fault_write);
         break;
     }
     pw_x86_commit_canonical_flags( state );
@@ -1104,6 +1115,7 @@ static NTSTATUS thread_term( void *args )
 
     if (!thread) return STATUS_SUCCESS;
     execution_report( thread );
+    if (timing_enabled > 0) cache_report( thread, timing_now_ns(), 1 );
     self = NULL;
     if (thread->engine.fault_markers) register_arena( thread, 0 );
     free(thread->profile);

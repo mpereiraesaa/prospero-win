@@ -23,35 +23,20 @@ int main(void)
     assert(pw_x86_cache_lookup(&cache,0x1000,&entry)==PW_ERR_NOT_FOUND);
     assert(pw_x86_cache_reset(&cache,8)==PW_ERR_PRECONDITION);
     assert(pw_x86_cache_publish(&cache,0x1000,&first,0,&entry)==PW_OK && entry->generation==8);
-    {
-        PwX86CacheEntry sparse[8];
-        assert(pw_x86_cache_init(&cache,sparse,8,128,1)==PW_OK);
-        assert(pw_x86_cache_publish(&cache,0x1000,&first,0,&entry)==PW_OK);
-        uint32_t bucket=((uint32_t)(entry-sparse)+1)%8;
-        pw_x86_cache_touch(&cache,bucket);
-        uint32_t head=cache.reset_head;
-        pw_x86_cache_touch(&cache,bucket);
-        assert(cache.reset_head==head); /* Duplicate registration cannot cycle. */
-        sparse[bucket].pending_head=123;
-        assert(!sparse[bucket].used);
-        uint32_t pc=1;
-        for(;;pc++) {
-            uint32_t hash=pc*2654435761u;hash^=hash>>16;
-            if(hash%8==bucket)break;
-        }
-        uint32_t next=sparse[bucket].reset_next;
-        assert(pw_x86_cache_publish(&cache,pc,&first,32,&entry)==PW_OK);
-        assert(entry==&sparse[bucket] && entry->pending_head==123);
-        assert(cache.reset_head==head && entry->reset_next==next);
-        uint32_t unpublished=(bucket+1)%8;
-        pw_x86_cache_touch(&cache,unpublished);
-        sparse[unpublished].pending_head=456;
-        assert(!sparse[unpublished].used);
-        assert(pw_x86_cache_reset(&cache,2)==PW_OK && !cache.reset_head);
-        for(unsigned i=0;i<8;i++)
-            assert(!sparse[i].used && !sparse[i].pending_head && !sparse[i].reset_tracked && !sparse[i].reset_next);
-        assert(pw_x86_cache_publish(&cache,0x1000,&first,0,&entry)==PW_OK);
-        assert(entry->generation==2);
-    }
+    assert(cache.occupied==1);
+
+    /* Three quarters of the entries, then refused until a reset. */
+    PwX86CacheEntry many[8];
+    PwX86Block small={.source_bytes=1,.code_bytes=16,.instructions=1};
+    assert(pw_x86_cache_init(&cache,many,8,1024,1)==PW_OK && cache.occupied==0);
+    for(uint32_t i=0;i<6;i++)
+        assert(pw_x86_cache_publish(&cache,0x1000+i*0x10,&small,cache.cursor,&entry)==PW_OK);
+    assert(cache.occupied==6);
+    assert(pw_x86_cache_publish(&cache,0x2000,&small,cache.cursor,&entry)==PW_ERR_LIMIT);
+    assert(cache.occupied==6 && cache.publishes==6);
+    assert(pw_x86_cache_lookup(&cache,0x1050,&entry)==PW_OK);
+    assert(pw_x86_cache_lookup(&cache,0x2000,&entry)==PW_ERR_NOT_FOUND);
+    assert(pw_x86_cache_reset(&cache,2)==PW_OK && cache.occupied==0);
+    assert(pw_x86_cache_publish(&cache,0x2000,&small,0,&entry)==PW_OK && cache.occupied==1);
     return 0;
 }
