@@ -542,6 +542,46 @@ run of the same build rated 1416 total at 29% of its native 4850, on a
 faster core. Getting 1383 on a 3.46 GHz Zen 2 core puts the console within
 the same ratio range.
 
+### Unmap notification correctness
+
+The WoW64 CPU backend captures the complete mapped-view or image extent
+before an unmap and invalidates that range after success. A failure anywhere
+in the region walk falls back to full invalidation; a partial extent could
+leave translated code from the remaining regions alive. Failed unmaps do
+not invalidate code.
+
+Before/after pairs retain their caller thread, original address and nested
+order. A failed query still reserves a pair so its completion cannot consume
+an older extent. The bounded 64-record bank falls back to full invalidation
+on saturation or ambiguous ordering until outstanding pairs drain. Queries
+and invalidation run outside the bank lock.
+
+`tests/test_wowprospero_unmap.py` compiles and executes the actual callback
+code with controlled VM replies, including multi-region views, partial query
+failure, nested/reentrant callbacks, eight concurrent threads, saturation
+and recovery, failed unmaps, and nonprogressing or overflowing regions.
+Both `make test` and `make sanitize` run it with their selected compiler and
+flags. These tests establish callback behavior; they do not establish a
+game performance improvement or console compatibility.
+
+A four-run PC comparison kept the chain-hash Unix adapter identical and
+changed only the PE unmap callbacks (scoped/global/global/scoped).
+Each completed all 5182 `hl2long` frames without detected DBT diagnostics
+or reported clock errors. Scoped unmaps took 85.529/84.582 demo seconds
+versus 87.372/89.721 for global unmaps, with inferred pre-demo intervals
+of 32.9/30.3 versus 136.2/131.9 seconds. Calibrated translated-invocation
+CPU estimates were 176.470/187.806 versus 179.022/182.948 seconds: the
+scoped candidate's median estimate was 0.64% worse. Faster loading does
+not establish the translated CPU-time target.
+
+These are diagnostic results: Remote Play consumed roughly 1100–1200%
+host CPU, local gate revalidation overlapped one baseline run, and a short
+FP-transfer microbenchmark overlapped the final candidate. Sampled counters
+have incomplete phase brackets and unsampled intervals; phase boundaries
+are inferred from the timedemo duration. They cannot establish a controlled
+causal gain. Runs used forced own-prefix cleanup after post-demo reports;
+clean shutdown remains unverified. Console measurements remain pending.
+
 [b]: https://box86.org/2022/03/box86-box64-vs-qemu-vs-fex-vs-rosetta2/
 
 ## Thread-owned hotspot sampling
@@ -577,9 +617,11 @@ full capacity, arena boundaries and cache resets. On the console, create
 `/data/prospero-win/pw_wow_profile` before launching a fresh game process;
 remove it to disable sampling for subsequent processes. Records use Wine's
 normal output sink, and a timer installation failure disables sampling with
-a diagnostic. The pinned SDK exports `setitimer`, but console signal delivery
-is not yet validated; do not treat a console report with zero samples as a
-performance result.
+a diagnostic. The pinned SDK exports `setitimer`. The exact f7ff5244 build produced nonzero
+main-thread samples on the PS5, completed route v6 and exited cleanly through
+the Kleiner lab with corrected-unmap PE4c8f7118. That validates the observed
+sampling and shutdown path; a console report with zero samples still cannot
+be used as a performance result. Updated cap builds require their own receipt.
 
 `wowprospero native` supplements translated-block records with a bounded,
 atomic process-wide histogram of PCs sampled outside translated arenas.
@@ -603,15 +645,6 @@ code becomes traps, unused arena bytes remain untouched and execution after
 reset recompiles correctly. This removes reset overhead; the separate
 steady-workload HL2 translated-time target still requires measurement.
 
-Cache metadata now tracks the slots changed since the previous reset. Reset
-clears those slots and counts their linked exits, rather than scanning and
-clearing the entire reserved table. Pending-link buckets are tracked even
-when they contain no compiled block; publishing into a tracked bucket preserves
-its list membership. Every touched entry is physically zeroed, preserving
-lookup and generation behavior. Tests cover unpublished pending buckets,
-duplicate registration and reuse after reset. This targets loading flushes;
-it does not establish a gain in steady translated-code execution.
-
 ## Execution CPU timing
 
 `PW_WOW_EXEC_TIMING=1` enables an optional owner-thread CPU clock around each
@@ -629,13 +662,15 @@ sampled mode, `delta(sample_cpu_ns) * delta(calls) / delta(samples)` estimates
 the total; it is not an exact time. Repeat workloads and report sample counts
 and uncertainty; a short run with few samples cannot certify a speedup.
 
-Each thread also reports `clock_read_ns`, the startup median of 32
-back-to-back clock intervals. It estimates the clock-read cost included in
-each measured interval. A corrected estimate subtracts
-`delta(samples) * clock_read_ns` from `delta(sample_cpu_ns)` before scaling.
-Report both raw and corrected results; calibration is approximate, can vary
-under load, and a nonpositive corrected interval is unusable. It does not
-remove the CPU overhead of instrumentation from the running game.
+Each thread separately reports `clock_resolution_ns` from `clock_getres`,
+and `clock_batch_read_ns`, the median of eight batch means, each spanning
+1024 consecutive clock reads. The batch mean includes loop and validation
+work, so it is a diagnostic estimate, not an exact read cost. A valid zero
+batch mean does not disable timing. Report raw sampled CPU and sample counts
+as the primary comparison; do not subtract a per-sample calibration value.
+The old median of adjacent read pairs was resolution-limited on the PS5 and
+its 1000 ns result did not establish 1000 ns of read overhead. Earlier
+calibration-subtracted estimates cannot certify a speedup.
 
 This clock excludes compilation, cache reset, dispatcher work and time when
 the thread is descheduled. It includes generated entry/exit code and the FP
@@ -769,3 +804,34 @@ DLL/config were restored after each run. This is exit after an assertion
 acknowledgement, not unattended clean shutdown; the assertion's cause and
 console startup/shutdown validation remain outstanding. Normal/sanitizer
 test suites and all three differential modes pass (zero mismatches).
+## Empty chain-table targets
+
+An all-zero re-encoder chain table treated guest PC zero as a tag hit and
+jumped through its empty host pointer. Null indirect calls, jumps and
+returns could therefore fault at host RIP zero outside translated code,
+instead of returning to guest exception handling. Clear the table with a
+PC-one sentinel in slot zero at allocation and reset. PC one hashes to
+slot one, so this empty sentinel cannot match a requested target; a real
+translation at PC zero replaces it normally. No instruction is added to
+the generated lookup. A missing executable source span is also reported as
+a guest access violation at its EIP, rather than an internal DBT error;
+previous data-fault metadata is not reused for that instruction-fetch fault.
+
+Regressions execute null register and memory calls/jumps and a null return,
+checking dispatcher result, registers, flags and data against the emitter
+in ordinary, unbounded, call-stack and superblock modes. A lifecycle test
+also executes null lookups before and after reset and publishes real PC-zero
+code in each generation. The same reporting helper used by the Unix adapter
+is checked with the actual missing-source result and stale fault metadata,
+plus data faults, unsupported instructions, x87 traps and internal errors.
+An unmodified-engine negative control hits the host-null fault; the regression
+uses a fixed source PC so random mapping cannot hide it by filling slot zero.
+`make -j2 all audit check-whitespace` and `make -j2 sanitize` pass, including
+362 differential forms with zero mismatches (93 unsupported forms skipped).
+The PS5 SDK compiles and links the updated Unix adapter and engine. Console
+execution and clean-game validation remain pending; this correctness fix is
+not a performance result.
+
+PR288 is independent of the touched-slot reset trial (#287); its console
+baseline retains the merged occupancy cap, profiler and null-target fix.
+Use identical timing code on both sides of each speedup comparison.

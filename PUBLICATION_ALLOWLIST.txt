@@ -137,6 +137,7 @@ tools/pw_x86_decode_probe.c
 assets/prospero-win-logo.svg
 assets/prospero-win-banner.svg
 tests/test_wowprospero_contract.py
+tests/test_wowprospero_unmap.py
 wine/wowprospero/code_pages.h
 wine/wowprospero/thread_budget.h
 wine/wowprospero/host_memory.h
@@ -210,6 +211,8 @@ wine/patches/0720-opengl32-batch-immediate-mode-calls.patch
 wine/patches/0721-win32u-ps5-log-opengl-frame-rate.patch
 wine/patches/0722-win32u-ps5-opengl-refresh-rate.patch
 wine/patches/0723-win32u-ps5-opengl-cursor.patch
+wine/patches/0730-server-ps5-anonymous-mappings-in-shared-memory.patch
+wine/patches/0740-win32u-ps5-vulkan-hardware-cursor.patch
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
@@ -308,3 +311,6 @@ tools/check_setup.py
 native/pw_diagnostics.c
 native/pw_diagnostics.h
 tests/test_pw_diagnostics.c
+src/pw_script_input.c
+src/pw_script_input.h
+tests/test_pw_script_input.c
