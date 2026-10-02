@@ -761,3 +761,18 @@ The alternating-target regression checks that later targets preserve guest
 behavior through the fallback and leave the first prediction in place.
 It also resets the arena and changes code at the same guest PC to check
 that the discarded host pointer cannot survive a generation change.
+
+The four-run same-binary comparison (off/on/on/off) completed all 5,182
+frames per run. Estimated calibrated translated CPU seconds were
+161.993/170.819/166.673/179.345; timedemo seconds were
+81.526/80.114/80.096/82.786. Median estimated CPU time fell only 1.13%, and
+frame time fell 2.50%. This does not demonstrate the 30% target. Sparse
+reports produced 18–23 quality issues per run (including missing phase
+brackets), the phase start was inferred, and RemotePlay used about eleven
+CPU cores; these results remain diagnostic. The option stays off by default.
+
+The final disabled run also logged an untranslatable instruction during
+shutdown at `steam_api.dll + 0x2051`, beginning with six `66` prefixes and
+`2e 0f`. The other runs required forced shutdown. This comparison therefore
+does not certify error-free shutdown; the instruction needs a separate
+correctness fix and complete rerun. Original prefix DLL/config were restored.
