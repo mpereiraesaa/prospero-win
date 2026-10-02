@@ -5,9 +5,11 @@
 #include <stdio.h>
 #include <string.h>
 
+static PwScriptInputEvent storage[8192];
+
 static int parse(const char *text, PwScriptInput *out, size_t *bad)
 {
-    return pw_script_input_parse(text, strlen(text), out, bad);
+    return pw_script_input_parse(text, strlen(text), storage, 64, out, bad);
 }
 
 int main(void)
@@ -31,12 +33,10 @@ int main(void)
            in.events[1].at_ms == 16);
     assert(in.events[2].kind == PW_SCRIPT_INPUT_BUTTON && in.events[2].code == 0 && in.events[2].down == 1);
     assert(in.events[4].at_ms == 1200 && in.events[4].code == 87 && in.events[4].down == 0);
-    pw_script_input_free(&in);
-    assert(!in.events && !in.count);
+    assert(pw_script_input_lines("a\nb\nc", 5) == 3 && pw_script_input_lines("", 0) == 0);
 
     /* No sync line: the replay starts with the game. */
     assert(parse("5 key 0x0d 1\n6 key 0x0d 0\n", &in, &bad) == PW_OK && !in.sync_path[0] && in.count == 2);
-    pw_script_input_free(&in);
     assert(parse("", &in, &bad) == PW_OK && in.count == 0);
 
     /* Refused, with the line: time going back, unknown kinds, out-of-range
@@ -63,18 +63,28 @@ int main(void)
     for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
         assert(parse(refused[i].text, &in, &bad) == PW_ERR_MALFORMED);
         assert(bad == refused[i].line);
-        assert(!in.events && !in.count);
+        assert(!in.count && !in.sync_path[0]);
     }
-    assert(pw_script_input_parse(NULL, 0, &in, &bad) == PW_ERR_PRECONDITION);
+    assert(pw_script_input_parse(NULL, 0, storage, 1, &in, &bad) == PW_ERR_PRECONDITION);
+    assert(pw_script_input_parse("1 key 0x41 1", 12, NULL, 1, &in, &bad) == PW_ERR_PRECONDITION);
+    /* Past the caller's storage: refused with the line, not overrun. */
+    assert(pw_script_input_parse("1 key 0x41 1\n2 key 0x41 0\n3 move 1 1\n", 39, storage, 2, &in, &bad) ==
+           PW_ERR_LIMIT && bad == 3 && in.count == 0);
+    /* Numbers: decimal, hexadecimal, negative; junk and overflow refused. */
+    assert(parse("1 move -32768 0x7fff\n", &in, &bad) == PW_OK && in.events[0].dx == -32768 &&
+           in.events[0].dy == 32767);
+    assert(parse("99999999999999999999999 key 0x41 1\n", &in, &bad) == PW_ERR_MALFORMED);
+    assert(parse("1 key 0x 1\n", &in, &bad) == PW_ERR_MALFORMED);
+    assert(parse("1 key 0x4g 1\n", &in, &bad) == PW_ERR_MALFORMED);
 
-    /* Many events grow the table. */
+    /* Many events. */
     {
         static char big[64 * 5000];
         size_t at = 0;
         for (int i = 0; i < 5000; i++) at += (size_t)sprintf(big + at, "%d move 1 -1\n", i);
-        assert(pw_script_input_parse(big, at, &in, &bad) == PW_OK && in.count == 5000);
-        assert(in.events[4999].at_ms == 4999);
-        pw_script_input_free(&in);
+        assert(pw_script_input_lines(big, at) == 5001);
+        assert(pw_script_input_parse(big, at, storage, 8192, &in, &bad) == PW_OK && in.count == 5000);
+        assert(in.events[4999].at_ms == 4999 && in.events == storage);
     }
 
     /* Sync: found in one chunk, across chunks, after a false start, never. */
@@ -90,6 +100,6 @@ int main(void)
         sync = (PwScriptInputSync){ "loaded", 0 };
         assert(!pw_script_input_sync_feed(&sync, "load", 4) && !pw_script_input_sync_feed(&sync, "ing...", 6));
     }
-    printf("pw_script_input passed: every kind, sync line, refusals with their line, growth, chunked sync search\n");
+    printf("pw_script_input passed: every kind, sync line, refusals with their line, the caller's capacity, numbers, chunked sync search\n");
     return 0;
 }

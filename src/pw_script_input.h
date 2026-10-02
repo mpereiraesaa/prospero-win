@@ -33,20 +33,22 @@ typedef struct PwScriptInputEvent {
     uint32_t down;  /* KEY, BUTTON */
 } PwScriptInputEvent;
 
-enum { PW_SCRIPT_INPUT_MAX_EVENTS = 1u << 20 };
-
 typedef struct PwScriptInput {
-    PwScriptInputEvent *events; /* malloc'd; pw_script_input_free */
+    PwScriptInputEvent *events; /* the caller's storage */
     size_t count;
     char sync_path[256]; /* empty: start with the game */
     char sync_text[128];
 } PwScriptInput;
 
-/* Parses text (length bytes, not necessarily NUL-terminated) into out.
- * PW_OK, PW_ERR_MALFORMED with *bad_line set to the 1-based line refused,
- * PW_ERR_LIMIT past PW_SCRIPT_INPUT_MAX_EVENTS or without memory. */
-int pw_script_input_parse(const char *text, size_t length, PwScriptInput *out, size_t *bad_line);
-void pw_script_input_free(PwScriptInput *input);
+/* Lines of text, an upper bound on its events: size the storage with it. */
+size_t pw_script_input_lines(const char *text, size_t length);
+
+/* Parses text (length bytes, not necessarily NUL-terminated) into out,
+ * whose events go to the caller's storage of capacity entries. PW_OK,
+ * PW_ERR_MALFORMED with *bad_line set to the 1-based line refused,
+ * PW_ERR_LIMIT past capacity. */
+int pw_script_input_parse(const char *text, size_t length, PwScriptInputEvent *storage, size_t capacity,
+                          PwScriptInput *out, size_t *bad_line);
 
 /* Searches a growing file for the sync text without rereading it: feed each
  * new chunk in order; returns 1 once the text has appeared, across chunk

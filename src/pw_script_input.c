@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_script_input.h"
 
-#include <stdlib.h>
+#include <limits.h>
+
 #include <string.h>
 
 static const char *skip_space(const char *at, const char *end)
@@ -24,13 +25,27 @@ static const char *word(const char *at, const char *end, char *out, size_t capac
     return n ? at : NULL;
 }
 
+/* A decimal or 0x-hexadecimal integer, optionally negative, in [low, high]. */
 static int number(const char *text, long long low, long long high, long long *value)
 {
-    char *stop;
-    long long v = strtoll(text, &stop, 0);
+    int negative = *text == '-', base = 10, digits = 0;
+    unsigned long long v = 0;
 
-    if (stop == text || *stop || v < low || v > high) return -1;
-    *value = v;
+    if (negative) text++;
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        base = 16;
+        text += 2;
+    }
+    for (; *text; text++, digits++) {
+        int d = *text >= '0' && *text <= '9' ? *text - '0' :
+                base == 16 && *text >= 'a' && *text <= 'f' ? *text - 'a' + 10 :
+                base == 16 && *text >= 'A' && *text <= 'F' ? *text - 'A' + 10 : -1;
+        if (d < 0 || v > (ULLONG_MAX - (unsigned)d) / (unsigned)base) return -1;
+        v = v * (unsigned)base + (unsigned)d;
+    }
+    if (!digits || v > (unsigned long long)LLONG_MAX) return -1;
+    *value = negative ? -(long long)v : (long long)v;
+    if (*value < low || *value > high) return -1;
     return 0;
 }
 
@@ -48,7 +63,7 @@ static int safe_path(const char *path)
     return 1;
 }
 
-static int parse_line(const char *at, const char *end, PwScriptInput *out, size_t *capacity)
+static int parse_line(const char *at, const char *end, PwScriptInput *out, size_t capacity)
 {
     char first[32], kind[16], a[32], b[32];
     long long ms, x, y;
@@ -90,26 +105,28 @@ static int parse_line(const char *at, const char *end, PwScriptInput *out, size_
         return -1;
     }
     if (out->count && event.at_ms < out->events[out->count - 1].at_ms) return -1;
-    if (out->count == *capacity) {
-        size_t grown = *capacity ? *capacity * 2 : 1024;
-        PwScriptInputEvent *events;
-
-        if (grown > PW_SCRIPT_INPUT_MAX_EVENTS) grown = PW_SCRIPT_INPUT_MAX_EVENTS;
-        if (out->count == grown || !(events = realloc(out->events, grown * sizeof(*events)))) return -2;
-        out->events = events;
-        *capacity = grown;
-    }
+    if (out->count == capacity) return -2;
     out->events[out->count++] = event;
     return 0;
 }
 
-int pw_script_input_parse(const char *text, size_t length, PwScriptInput *out, size_t *bad_line)
+size_t pw_script_input_lines(const char *text, size_t length)
+{
+    size_t lines = length ? 1 : 0;
+
+    for (size_t i = 0; text && i < length; i++) lines += text[i] == '\n';
+    return lines;
+}
+
+int pw_script_input_parse(const char *text, size_t length, PwScriptInputEvent *storage, size_t capacity,
+                          PwScriptInput *out, size_t *bad_line)
 {
     const char *at = text, *end = text + length;
-    size_t capacity = 0, line = 0;
+    size_t line = 0;
 
-    if (!text || !out) return PW_ERR_PRECONDITION;
+    if (!text || !out || (capacity && !storage)) return PW_ERR_PRECONDITION;
     memset(out, 0, sizeof(*out));
+    out->events = storage;
     if (bad_line) *bad_line = 0;
     while (at < end) {
         const char *next = memchr(at, '\n', (size_t)(end - at)), *stop = next ? next : end;
@@ -118,22 +135,16 @@ int pw_script_input_parse(const char *text, size_t length, PwScriptInput *out, s
 
         line++;
         if (stop > content && stop[-1] == '\r') stop--;
-        status = content == stop || *content == '#' ? 0 : parse_line(content, stop, out, &capacity);
+        status = content == stop || *content == '#' ? 0 : parse_line(content, stop, out, capacity);
         if (status) {
             if (bad_line) *bad_line = line;
-            pw_script_input_free(out);
+            out->count = 0;
+            out->sync_path[0] = out->sync_text[0] = 0;
             return status == -2 ? PW_ERR_LIMIT : PW_ERR_MALFORMED;
         }
         at = next ? next + 1 : end;
     }
     return PW_OK;
-}
-
-void pw_script_input_free(PwScriptInput *input)
-{
-    if (!input) return;
-    free(input->events);
-    memset(input, 0, sizeof(*input));
 }
 
 int pw_script_input_sync_feed(PwScriptInputSync *sync, const char *chunk, size_t length)

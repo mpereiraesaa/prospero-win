@@ -131,21 +131,35 @@ static void script_input_load(const char *root)
 {
     char path[512];
     FILE *file;
-    long length;
-    char *text = NULL;
-    size_t bad = 0;
+    long length = -1;
+    char *text = MAP_FAILED;
+    size_t bad = 0, capacity = 0, text_bytes = 0, storage_bytes = 0;
+    PwScriptInputEvent *storage = MAP_FAILED;
     int status = PW_ERR_TRUNCATED; /* read short */
 
-    pw_script_input_free(&script_input);
+    memset(&script_input, 0, sizeof(script_input));
     script_input_next = 0;
     script_input_start_ns = 0;
     snprintf(path, sizeof(path), "%s/pw_script_input", root);
     if (!(file = fopen(path, "rb"))) return;
-    if (!fseek(file, 0, SEEK_END) && (length = ftell(file)) >= 0 && !fseek(file, 0, SEEK_SET) &&
-        (text = malloc((size_t)length + 1)) && fread(text, 1, (size_t)length, file) == (size_t)length)
-        status = pw_script_input_parse(text, (size_t)length, &script_input, &bad);
+    /* The title's heap is small: the text and the events get pages of their own. */
+    if (!fseek(file, 0, SEEK_END) && (length = ftell(file)) > 0 && !fseek(file, 0, SEEK_SET)) {
+        text_bytes = (size_t)length;
+        text = mmap(NULL, text_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (text != MAP_FAILED && fread(text, 1, text_bytes, file) == text_bytes) {
+            capacity = pw_script_input_lines(text, text_bytes);
+            storage_bytes = capacity * sizeof(*storage);
+            storage = mmap(NULL, storage_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+            status = storage == MAP_FAILED ? PW_ERR_VM :
+                     pw_script_input_parse(text, text_bytes, storage, capacity, &script_input, &bad);
+        }
+    }
     fclose(file);
-    free(text);
+    if (text != MAP_FAILED) munmap(text, text_bytes);
+    if (status != PW_OK && storage != MAP_FAILED) {
+        munmap(storage, storage_bytes);
+        memset(&script_input, 0, sizeof(script_input));
+    }
     if (script_input.sync_path[0]) {
         snprintf(script_input_sync_file, sizeof(script_input_sync_file), "%s/%s", root, script_input.sync_path);
         script_input_sync = (PwScriptInputSync){ script_input.sync_text, 0 };
