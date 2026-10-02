@@ -12,9 +12,12 @@
  * Every i386 thread has its own DBT, in memory Wine allocates for it
  * (host_memory.h), which on the console is direct memory: committed as soon
  * as it is allocated, out of up to 12 GiB. The first thread, which runs a
- * game's startup and main loop, gets a 128 MiB arena and 65536 entries;
+ * game's startup and main loop, gets a 128 MiB arena and 131072 entries
+ * (46 MiB): a game's hot code must fit in three quarters of them, or the
+ * cache resets, recompiles and stutters every minute or so (Half-Life 2
+ * runs about 50000-60000 blocks);
  * later threads, which run far less code (an audio mixer, a loader), get a
- * quarter of that, so tens of threads fit. A thread whose allocation is
+ * 32 MiB arena and 16384 entries, so tens of threads fit. A thread whose allocation is
  * refused tries again with everything halved, down to a floor. A full arena
  * is not fatal: the engine is reset and translation continues. */
 typedef struct PwWowThreadBudget {
@@ -24,7 +27,7 @@ typedef struct PwWowThreadBudget {
 } PwWowThreadBudget;
 
 enum {
-    PW_WOW_FIRST_ENTRIES = 65536,
+    PW_WOW_FIRST_ENTRIES = 131072,
     PW_WOW_OTHER_ENTRIES = 16384,
     PW_WOW_MIN_ENTRIES = 1024,
 };
