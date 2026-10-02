@@ -32,8 +32,8 @@ class Console:
     """The library root as the tool sees it over FTP; the title's run happens
     when the tool first polls for it."""
 
-    def __init__(self, root: Path, finish: bool = True):
-        self.root, self.finish, self.polls, self.during = root, finish, 0, {}
+    def __init__(self, root: Path, finish: bool = True, stop: bool = False):
+        self.root, self.finish, self.stop, self.polls, self.during = root, finish, stop, 0, {}
 
     def _path(self, path: str) -> Path:
         return self.root / path.lstrip("/").removeprefix("data/prospero-win/")
@@ -43,10 +43,12 @@ class Console:
         if path.endswith("logs/next.txt"):
             self.polls += 1
             if self.polls == 2:  # the run: snapshot what the title would see
-                for name in ("profiles/profiles.lst", "profiles/counter-strike-16.profile", "pw_script_keys", "pw_wow_timing",
+                for name in ("profiles/profiles.lst", "profiles/counter-strike-16.profile", "pw_script_keys", "pw_script_input", "pw_wow_timing",
                              "prefix/drive_c/Games/cs/listenserver.cfg"):
                     entry = self.root / name
                     self.during[name] = entry.read_bytes() if entry.exists() else None
+                if self.stop:  # SIGTERM while the game runs (exit_on_signal)
+                    raise SystemExit(143)
                 if self.finish:
                     (self.root / "logs/session-3.log").write_text("PW_REPORT/1 build=abc profile=launcher\n"
                                                                   "REC seq=1 t=1 PW_WINE64 session_end reason=launcher\n")
@@ -101,6 +103,21 @@ profile = b"[application]\nid = cs16\narguments = -game cstrike\nname = CS\n"
 assert run.with_arguments(profile, "-game cstrike +map de_dust2") == \
     b"[application]\nid = cs16\narguments = -game cstrike +map de_dust2\nname = CS\n"
 assert run.with_arguments(b"[application]\r\nid = x\r\n", "+map a") == b"[application]\r\narguments = +map a\nid = x\r\n"
+# --fps: Wine's fps channel joins the profile's own channels, or the title's.
+assert run.with_fps_channel(b"[application]\nid = x\n") == \
+    b"[application]\nid = x\n[debug]\nwinedebug = err+all,+loaddll,+process,+fps\n"
+assert run.with_fps_channel(b"[debug]\r\nwinedebug = +seh ; one run\r\n") == b"[debug]\r\nwinedebug = +seh,+fps ; one run\r\n"
+assert run.with_fps_channel(b"[debug]\nwinedebug = -all,+fps\n") == b"[debug]\nwinedebug = -all,+fps\n"
+
+# A Vulkan game's samples: those before the first at 20 fps or more are loading.
+VULKAN = "\n".join(f"REC seq={i} t={i}.0 WINE 0024:trace:fps:win32u_vkQueuePresentKHR 0x7f00 @ approx {v}fps, total 1.00fps"
+                   for i, v in enumerate(["0.10", "0.70", "59.90", "48.00", "60.01"]))
+summary = run.summarize(VULKAN)
+assert "fps (Vulkan, 5 samples): 0.1 0.7 59.9 48.0 60.0" in summary
+assert "fps after loading: average 56.0, minimum 48.0, at 59 or more 2/3" in summary
+assert "fps after loading: none (never 20 or more)" in run.summarize(VULKAN.split("\n", 1)[0])
+assert "fps: no PW_GL or Wine fps records (it never presented, or ran without --fps)" in run.summarize("")
+
 for bad in ("noequals", "/abs=x", "a/../b=x"):
     try:
         run.parse_append(bad)
@@ -137,6 +154,37 @@ with tempfile.TemporaryDirectory() as directory:
     assert "timing: tid=0024 run=40.0%" in output and "tid=0030" not in output
     assert "ended: close-timeout" in output
 
+# --fps with --arguments: both reach the profile for the run, which is put back.
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    console = Console(root)
+    code, output = main(console, "--fps", "--arguments", "+map c1a0")
+    assert code == 0, output
+    assert console.during["profiles/counter-strike-16.profile"] == \
+        b"[application]\narguments = +map c1a0\nid = cs16\nname = CS\n[debug]\nwinedebug = err+all,+loaddll,+process,+fps\n"
+    assert (root / "profiles/counter-strike-16.profile").read_text() == "[application]\nid = cs16\nname = CS\n"
+
+# --input: the macro is on the console for the run only, and the summary
+# says how much of it was replayed.
+assert run.summarize("REC seq=1 t=1 PW_WINE64 script input status=ok events=3 bad_line=0 sync=a.log\n"
+                     "REC seq=2 t=2 PW_WINE64 script input synced at offset=10\n"
+                     "REC seq=3 t=3 PW_WINE64 script input replayed=3 of 3\n")[0] == \
+    "macro: ok, 3 of 3 events replayed (synced)"
+assert run.summarize("REC seq=1 t=1 PW_WINE64 script input status=malformed events=0 bad_line=7 sync=-\n")[0] == \
+    "macro: malformed, 0 of 0 events replayed, refused at line 7 (never synced)"
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    macro = Path(directory) / "macro.txt"
+    macro.write_bytes(b"sync logs/game.log loaded\n0 key 0x57 1\n500 move 5 0\n900 key 0x57 0\n")
+    console = Console(root)
+    code, output = main(console, "--input", str(macro))
+    assert code == 0, output
+    assert console.during["pw_script_input"] == macro.read_bytes()
+    assert not (root / "pw_script_input").exists()
+    assert "a recorded macro" in output
+
 # No run: the tool gives up after --wait and still restores the console.
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory) / "console"
@@ -145,6 +193,39 @@ with tempfile.TemporaryDirectory() as directory:
     assert code == 1 and "no finished counter-strike-16 session" in output
     assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
     assert not (root / "pw_script_keys").exists()
+
+# Stale triggers from an interrupted run are removed, not kept for the next
+# run (a leftover pw_wow_timing slowed every game down).
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    (root / "pw_wow_timing").write_text("timing\n")
+    (root / "pw_script_keys").write_text("0 0x0d\n")
+    console = Console(root)
+    code, output = main(console, "--key", "1:esc")
+    assert code == 0, output
+    assert "removing a stale pw_wow_timing (an interrupted run left it)" in output
+    assert "removing a stale pw_script_keys" in output
+    assert console.during["pw_wow_timing"] is None and console.during["pw_script_keys"] == b"1 0x1b\n"
+    assert not (root / "pw_wow_timing").exists() and not (root / "pw_script_keys").exists()
+
+# SIGTERM or SIGHUP mid-run: the run is put back as after Ctrl-C.
+try:
+    run.exit_on_signal(15, None)
+    raise AssertionError("no exit")
+except SystemExit as stop:
+    assert stop.code == 143
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    try:
+        main(Console(root, stop=True), "--key", "1:enter", "--timing", "--fps")
+        raise AssertionError("no exit")
+    except SystemExit as stop:
+        assert stop.code == 143
+    assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
+    assert (root / "profiles/counter-strike-16.profile").read_text() == "[application]\nid = cs16\nname = CS\n"
+    assert not (root / "pw_script_keys").exists() and not (root / "pw_wow_timing").exists()
 
 # A missing game or config file stops before anything is changed for good.
 with tempfile.TemporaryDirectory() as directory:
@@ -159,4 +240,4 @@ with tempfile.TemporaryDirectory() as directory:
         assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
         assert not (root / "pw_script_keys").exists()
 
-print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, restore on success/timeout/refusal, session by profile id, summary")
+print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, recorded macro, restore on success/timeout/refusal/signal, stale triggers, session by profile id, summary")
