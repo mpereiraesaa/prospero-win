@@ -76,6 +76,8 @@ static unsigned call_stack, call_stack_faults;
 /* run() with superblocks, whose side exits rewrite their own code: the
  * engine's code stays writable (and executable) while it runs. */
 static unsigned superblocks;
+/* run() with pw_x86_engine_set_call_predict, which needs superblocks' writable code. */
+static unsigned call_predict;
 static PwVmBackend posix;
 
 static int writable_commit(void *context, const PwVmRegion *region, size_t offset, size_t bytes, unsigned protection)
@@ -135,6 +137,7 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
     assert(pw_x86_engine_set_reencode(&engine, reencode) == PW_OK);
     assert(pw_x86_engine_set_unbounded_chains(&engine, unbounded || call_stack || superblocks) == PW_OK);
     assert(pw_x86_engine_set_superblocks(&engine, superblocks) == PW_OK);
+    assert(pw_x86_engine_set_call_predict(&engine, call_predict && superblocks) == PW_OK);
     assert(pw_x86_engine_set_native_fp(&engine, native_fp && reencode) == PW_OK);
     if (call_stack && reencode)
         assert(pw_x86_engine_set_call_stack(&engine, call_stack_region + PW_X86_ENGINE_CALL_STACK_GUARD,
@@ -611,6 +614,169 @@ static void test_call_stack(void)
     assert(call_stack_faults >= 1);
 }
 
+/* A predicted call site (PwX86TranslateOptions.call_predict), run as one
+ * block against a chain table. call edx is looked up until the table finds
+ * its target, then jumps to that first target directly: with the target's
+ * entry missing from the table the call still reaches it. Another target
+ * keeps the lookup without replacing the first, and a missing one returns
+ * to the dispatcher. Untrained, target 0 is looked up and trains nothing.
+ * The callee's SETcc observe the caller's flags on every path. */
+static void test_call_predict_site(void)
+{
+    static const unsigned flags[] = { 0, 0x8d5, 0x41, 0x894 };
+    static const uint8_t caller[] = { 0xff, 0xd2 }; /* call edx */
+    static const uint8_t destination[] = {
+        0x0f, 0x92, 0xc0, /* setb al */
+        0x0f, 0x94, 0xc3, /* sete bl */
+        0x0f, 0x9a, 0xc2, /* setp dl */
+        0x0f, 0x90, 0xc4, /* seto ah */
+        0x0f, 0x98, 0xc7, /* sets bh */
+    };
+    const size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    const size_t table_bytes = PW_X86_REENCODE_CHAIN_SLOTS * sizeof(PwX86IndirectTarget);
+    uint8_t *region = mmap(NULL, table_bytes + 2 * page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *code = mmap(NULL, 3 * page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    const uint32_t pc = low + CODE, a = low + CODE + 0x100, other = low + CODE + 0x200;
+    const uint32_t ends[2] = { a + (uint32_t)sizeof(destination), other + (uint32_t)sizeof(destination) };
+    PwX86IndirectTarget indirect = {0}, *table, *slot_a, *slot_other;
+    PwX86TranslateOptions options = {
+        .flat_low = low, .flat_high = low + SPAN, .no_counters = 1, .indirect_targets = &indirect,
+        .native_fp = 1, .unbounded_chains = 1, .call_stack = 1, .call_predict = 1,
+    };
+    PwX86Block block, callee;
+
+    assert(region != MAP_FAILED && code != MAP_FAILED);
+    assert(!mprotect(region + page, table_bytes, PROT_READ | PROT_WRITE));
+    table = (PwX86IndirectTarget *)(region + page);
+    options.chain_targets = table;
+    /* The empty slot 0 must not match target 0 (its entry has no code). */
+    table[0].guest_pc = 1;
+    slot_a = table + (a & 0xffffu);          /* the chain table index */
+    slot_other = table + (other & 0xffffu);
+    assert(slot_a != slot_other && slot_a != table && slot_other != table);
+    assert(pw_x86_reencode(destination, sizeof(destination), a, code + page, page, &callee, &options) == PW_OK);
+    slot_a->host_code = code + page + callee.chain_entry_offset;
+    assert(pw_x86_reencode(destination, sizeof(destination), other, code + 2 * page, page, &callee, &options) == PW_OK);
+    slot_other->host_code = code + 2 * page + callee.chain_entry_offset;
+
+    /* Each step: the target, whether its slot holds it, where the run ends
+     * (0: at the target, in the dispatcher; 1/2: past a or other's code). */
+    static const struct { unsigned target; unsigned listed; unsigned reached; } steps[] = {
+        { 0, 0, 0 },    /* a missing: looked up, missed */
+        { 0, 1, 1 },    /* a listed: looked up, trains */
+        { 0, 0, 1 },    /* a missing: predicted */
+        { 1, 1, 2 },    /* other listed: looked up */
+        { 0, 0, 1 },    /* a missing: still predicted */
+        { 1, 0, 0 },    /* other missing: looked up, missed */
+    };
+    for (unsigned f = 0; f < sizeof(flags) / sizeof(flags[0]); f++) {
+        assert(pw_x86_reencode(caller, sizeof(caller), pc, code, page, &block, &options) == PW_OK);
+        for (unsigned k = 0; k < sizeof(steps) / sizeof(steps[0]); k++) {
+            const uint32_t target = steps[k].target ? other : a;
+            PwX86IndirectTarget *slot = steps[k].target ? slot_other : slot_a;
+            PwX86State state;
+            uint32_t expected[8];
+            slot->guest_pc = steps[k].listed ? target : target ^ 1u;
+            initial(&state);
+            state.gpr[2] = target;
+            state.eflags = 2 | flags[f];
+            state.chain_budget = 8;
+            state.call_stack_top = (uintptr_t)call_stack_region + PW_X86_ENGINE_CALL_STACK_GUARD + CALL_STACK_BYTES;
+            memcpy(expected, state.gpr, sizeof(expected));
+            expected[4] -= 4;
+            if (steps[k].reached) {
+                expected[0] = (expected[0] & 0xffff0000u) |
+                    ((flags[f] & 0x800) ? 0x100u : 0u) | (flags[f] & 1);
+                expected[3] = (expected[3] & 0xffff0000u) |
+                    ((flags[f] & 0x80) ? 0x100u : 0u) | ((flags[f] & 0x40) != 0);
+                expected[2] = (expected[2] & 0xffffff00u) | ((flags[f] & 4) != 0);
+            }
+            assert(pw_x86_run_block(&state, code) == 0);
+            if (state.eip != (steps[k].reached ? ends[steps[k].reached - 1] : target))
+                fprintf(stderr, "call predict: flags %03x step %u eip %08x\n", flags[f], k, state.eip);
+            assert(state.eip == (steps[k].reached ? ends[steps[k].reached - 1] : target));
+            assert(!memcmp(state.gpr, expected, sizeof(expected)));
+            assert((state.eflags & 0x8d5) == flags[f]);
+            {
+                uint32_t pushed;
+                memcpy(&pushed, guest + STACK_TOP - 4, 4);
+                assert(pushed == pc + (uint32_t)sizeof(caller));
+            }
+        }
+        slot_a->guest_pc = a;
+        slot_other->guest_pc = other;
+    }
+    /* Untrained, target 0 goes to the lookup, which misses, and trains
+     * nothing: a afterwards, missing, is looked up too. */
+    assert(pw_x86_reencode(caller, sizeof(caller), pc, code, page, &block, &options) == PW_OK);
+    for (unsigned k = 0; k < 2; k++) {
+        PwX86State state;
+        initial(&state);
+        state.gpr[2] = k ? a : 0;
+        state.chain_budget = 8;
+        state.call_stack_top = (uintptr_t)call_stack_region + PW_X86_ENGINE_CALL_STACK_GUARD + CALL_STACK_BYTES;
+        slot_a->guest_pc = a ^ 1u;
+        assert(pw_x86_run_block(&state, code) == 0);
+        assert(state.eip == (k ? a : 0u));
+    }
+    assert(!munmap(code, 3 * page));
+    assert(!munmap(region, table_bytes + 2 * page));
+}
+
+/* Predicted calls in the engine, whose code learns its targets in place: a
+ * monomorphic call through memory, a site alternating between two
+ * targets, a callee reading the CF its caller set, and a callee that
+ * returns past its call (the return's own lookup), a hundred times each.
+ * The result matches the emitter's and the re-encoder's without
+ * prediction. */
+static void test_call_predict_engine(void)
+{
+    enum { F1 = 0x80, F2 = 0x90, F3 = 0xa0, F4 = 0xb0, TABLE = 0x30000 };
+    static const uint8_t program[] = {
+        0xb8, 0, 0, 0, 0,                   /* 00 mov eax, table */
+        0xb9, 100, 0, 0, 0,                 /* 05 mov ecx, 100 */
+        0x31, 0xf6,                         /* 0a xor esi, esi */
+        0xff, 0x50, 0x04,                   /* 0c loop: call [eax+4]: f1 */
+        0xff, 0x14, 0xb0,                   /* 0f call [eax+esi*4]: f2, f1, ... */
+        0x83, 0xf6, 0x01,                   /* 12 xor esi, 1 */
+        0x83, 0xf9, 0x32,                   /* 15 cmp ecx, 50 */
+        0xff, 0x50, 0x08,                   /* 18 call [eax+8]: f3, adc */
+        0xff, 0x50, 0x0c,                   /* 1b call [eax+0xc]: f4, returns to 21 */
+        0xcc, 0xcc, 0xcc,                   /* 1e */
+        0x49,                               /* 21 dec ecx */
+        0x75, 0xe8,                         /* 22 jnz loop */
+        0xc3,                               /* 24 ret */
+    };
+    static const uint8_t f1[] = { 0x83, 0xc3, 0x01, 0xc3 };             /* add ebx, 1 */
+    static const uint8_t f2[] = { 0x83, 0xc7, 0x03, 0xc3 };             /* add edi, 3 */
+    static const uint8_t f3[] = { 0x83, 0xd5, 0x00, 0xc3 };             /* adc ebp, 0 */
+    static const uint8_t f4[] = { 0x83, 0x04, 0x24, 0x03, 0xc3 };       /* add dword [esp], 3 */
+    const uint32_t code = low + CODE, table = low + TABLE;
+    const uint32_t targets[4] = { code + F2, code + F1, code + F3, code + F4 };
+    uint8_t image[0xc0];
+    Run emitter, plain, predicted;
+
+    memset(image, 0xcc, sizeof(image));
+    memcpy(image, program, sizeof(program));
+    memcpy(image + 1, &table, 4);
+    memcpy(image + F1, f1, sizeof(f1));
+    memcpy(image + F2, f2, sizeof(f2));
+    memcpy(image + F3, f3, sizeof(f3));
+    memcpy(image + F4, f4, sizeof(f4));
+    memcpy(guest + TABLE, targets, sizeof(targets));
+    emitter = run(image, sizeof(image), 0);
+    plain = run_superblocks(image, sizeof(image));
+    call_predict = 1;
+    predicted = run_superblocks(image, sizeof(image));
+    call_predict = 0;
+    assert(emitter.status == PW_OK && emitter.state.eip == 0xdead0000u);
+    assert(emitter.state.gpr[3] == 0x44444444u + 150 && emitter.state.gpr[7] == low + DATA + 0x100 + 150);
+    assert(emitter.state.gpr[5] == 0x66666666u + 49 && emitter.state.gpr[1] == 0 && emitter.state.gpr[6] == 0);
+    same(&plain, &emitter);
+    same(&predicted, &emitter);
+    assert(predicted.reencoded && plain.reencoded);
+}
+
 /* A branchy loop whose side exits are taken on alternate iterations, and
  * one taken from the fallthrough of another: with superblocks the result
  * matches the emitter, and once each side exit has linked itself the loop
@@ -970,6 +1136,8 @@ int main(void)
     test_unbounded_chains();
     test_call_stack();
     test_superblocks();
+    test_call_predict_site();
+    test_call_predict_engine();
     test_strings();
     test_native_fp();
     test_native_fp_forms();
@@ -977,6 +1145,6 @@ int main(void)
     test_native_fp_emitter();
     test_fault();
     printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
-           "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, strings, native FP, fault state\n");
+           "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, predicted calls, strings, native FP, fault state\n");
     return 0;
 }

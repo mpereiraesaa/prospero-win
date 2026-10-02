@@ -234,6 +234,12 @@ typedef struct PwX86TranslateOptions {
      * engine then never links re-encoded and emitted blocks to each other:
      * the emitter keeps that state in memory and uses xmm as scratch. */
     unsigned native_fp;
+    /* With call_stack: each call through a register or memory learns its
+     * first target that the chain table finds and from then on jumps to it
+     * directly when the target matches, by rewriting its own code once. So
+     * the caller's code must stay writable while it runs, as with
+     * superblocks. Other targets keep the lookup. */
+    unsigned call_predict;
 } PwX86TranslateOptions;
 
 /* The fault table of a re-encoded block with fault markers, at

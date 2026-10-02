@@ -622,6 +622,7 @@ typedef struct Ctx {
     uint32_t block_pc;
     unsigned bounded;  /* chains spend the budget (!unbounded_chains) */
     unsigned call_stack;
+    unsigned call_predict;  /* PwX86TranslateOptions.call_predict, with call_stack */
     /* Side exits (PwX86TranslateOptions.superblocks): each jcc's rel32 and
      * target. */
     unsigned side_count;
@@ -897,8 +898,10 @@ static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots, size_t jc
 }
 
 /* The dynamic exit to the guest EIP in r10d: the indirect table when the
- * translation has one, otherwise back to the dispatcher. */
-static void emit_dynamic_exit(Ctx *c)
+ * translation has one, otherwise back to the dispatcher. With hook, a chain
+ * table hit goes through a jmp rel32 before entering the target (r11), and
+ * *hook is that rel32, for the caller to point and later clear. */
+static void emit_dynamic_exit_hooked(Ctx *c, size_t *hook)
 {
     Out *o = &c->o;
 
@@ -930,6 +933,7 @@ static void emit_dynamic_exit(Ctx *c)
         }
         mov_rcx_r9(o);
         b(o, 0x4d); b(o, 0x8b); b(o, 0x5b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, host_code));
+        if (hook) *hook = jump32(o);
         b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
         if (c->bounded) {
             land8(o, to_spent);
@@ -963,6 +967,79 @@ static void emit_dynamic_exit(Ctx *c)
     b(o, 0x31); b(o, 0xc0); b(o, 0xc3);
 }
 
+static void emit_dynamic_exit(Ctx *c)
+{
+    emit_dynamic_exit_hooked(c, NULL);
+}
+
+/* r8 = the address of the code at offset at, wherever the block lands. */
+static void lea_r8_code(Out *o, size_t at)
+{
+    b(o, 0x4c); b(o, 0x8d); b(o, 0x05);                             /* lea r8, [rip+rel] */
+    w32(o, (uint32_t)(at - (o->n + 4)));
+}
+
+/* The callee of a dynamic call on the call stack, predicted at the call
+ * site (PwX86TranslateOptions.call_predict); call_rel is the host call's
+ * rel32. The site compares the guest target in r10d with the target it
+ * learned and, when they match, jumps straight to that target's chain
+ * entry, all without flags:
+ *
+ *     hit:  mov rcx, r9; jmp learned's chain entry
+ *     site: mov r9, rcx; lea ecx, [r10 - learned]; jrcxz hit; mov rcx, r9
+ *           (the chain table lookup of r10d)
+ *
+ * The hit comes first, which nothing falls into, so the jrcxz reaches it
+ * over any lookup. Untrained, learned is 0 and the hit's jump goes to the
+ * lookup, so every target, 0 included, is looked up. The lookup's first hit
+ * trains the site: its hook runs the training path once, which writes the
+ * target, then the jump, then clears the hook (rel32 0: on to jmp r11), so
+ * each state between the writes still sends every target where it belongs;
+ * an entry without code trains nothing. The site is the thread's own code
+ * and goes with its arena generation; a target that differs later keeps the
+ * lookup without rewriting anything. */
+static void emit_predicted_call(Ctx *c, size_t call_rel)
+{
+    Out *o = &c->o;
+    size_t hit, link, learned, hook, to_skip;
+    ptrdiff_t back;
+
+    hit = o->n;
+    mov_rcx_r9(o);
+    link = jump32(o);                                               /* jmp learned */
+    land32(o, call_rel);
+    mov_r9_rcx(o);
+    b(o, 0x41); b(o, 0x8d); b(o, 0x8a); learned = o->n; w32(o, 0);  /* lea ecx, [r10+0] */
+    back = (ptrdiff_t)hit - (ptrdiff_t)(o->n + 2);
+    if (back < -128) o->failed = 1;
+    b(o, 0xe3); b(o, (uint8_t)(int8_t)back);                        /* jrcxz hit */
+    mov_rcx_r9(o);
+    land32(o, link);                                                /* untrained: the lookup */
+    emit_dynamic_exit_hooked(c, &hook);
+    /* The training path, with the hit's chain entry in r11. */
+    land32(o, hook);
+    mov_r9_rcx(o);
+    rr(o, 0x89, 1, 1, R11);                                         /* mov rcx, r11 */
+    to_skip = jump8(o, 0xe3);                                       /* jrcxz skip: no code */
+    mov_rcx_r9(o);
+    lea_r8_code(o, learned);
+    rr(o, 0x89, 0, R9, R10);                                        /* mov r9d, r10d */
+    b(o, 0x41); b(o, 0xf7); b(o, 0xd1);                             /* not r9d */
+    b(o, 0x45); b(o, 0x8d); b(o, 0x49); b(o, 1);                    /* lea r9d, [r9+1]: -target */
+    b(o, 0x45); b(o, 0x89); b(o, 0x08);                             /* mov [r8], r9d */
+    lea_r8_code(o, link);
+    b(o, 0x4d); b(o, 0x8d); b(o, 0x48); b(o, 4);                    /* lea r9, [r8+4] */
+    b(o, 0x49); b(o, 0xf7); b(o, 0xd1);                             /* not r9 */
+    b(o, 0x4f); b(o, 0x8d); b(o, 0x4c); b(o, 0x0b); b(o, 1);        /* lea r9, [r11+r9+1] */
+    b(o, 0x45); b(o, 0x89); b(o, 0x08);                             /* mov [r8], r9d */
+    lea_r8_code(o, hook);
+    b(o, 0x41); b(o, 0xc7); b(o, 0x00); w32(o, 0);                  /* mov dword [r8], 0 */
+    b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
+    land8(o, to_skip);
+    mov_rcx_r9(o);
+    b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
+}
+
 /* A guest call on the call stack: the guest's return address pushed, then a
  * host call, to the callee's link (direct) or to the lookup of r10d
  * (dynamic). The callee's ret comes back right after it, with the guest's
@@ -987,7 +1064,10 @@ static void emit_call(Ctx *c, PwX86Block *block, uint32_t next, uint32_t target,
     emit_chain_exit(c, next, &rest, rest_rel);
     memset(&callee, 0, sizeof(callee));
     if (!dynamic) emit_chain_exit(c, target, &callee, call_rel);
+    else if (c->call_predict) emit_predicted_call(c, call_rel);
     else land32(o, call_rel);
+    /* With a predicted callee the return's lookup is its own, so a changed
+     * return address never trains the call site. */
     land32(o, to_lookup);
     emit_dynamic_exit(c);
 
@@ -1200,6 +1280,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     c.block_pc = pc;
     c.bounded = !options->unbounded_chains;
     c.call_stack = options->unbounded_chains && options->call_stack && c.chain_table;
+    c.call_predict = c.call_stack && options->call_predict;
 
     block->entry_contract.resident_mask = 0xff;
     for (unsigned g = 0; g < 8; g++)

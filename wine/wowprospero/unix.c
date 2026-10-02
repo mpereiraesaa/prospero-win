@@ -347,6 +347,18 @@ static struct pw_thread *get_thread(void)
                                  (!getenv( "PW_WOW_NATIVE_FP" ) || strcmp( getenv( "PW_WOW_NATIVE_FP" ), "0" )) );
     pw_x86_engine_set_superblocks( &thread->engine, thread->engine.unbounded_chains &&
                                    (!getenv( "PW_WOW_SUPERBLOCKS" ) || strcmp( getenv( "PW_WOW_SUPERBLOCKS" ), "0" )) );
+    /* Calls through a register or memory learn their target in the same
+     * writable code, as side exits do; off unless PW_WOW_CALL_PREDICT=1 or,
+     * on the console, /data/prospero-win/pw_wow_call_predict exists. */
+    {
+        int predict = getenv( "PW_WOW_CALL_PREDICT" ) && !strcmp( getenv( "PW_WOW_CALL_PREDICT" ), "1" );
+#ifdef __PROSPERO__
+        struct stat predict_st;
+
+        if (!stat( "/data/prospero-win/pw_wow_call_predict", &predict_st )) predict = 1;
+#endif
+        pw_x86_engine_set_call_predict( &thread->engine, thread->engine.superblocks && predict );
+    }
     /* Calls and returns on a call stack, so the host predicts the returns
      * (PW_WOW_CALL_STACK=0 keeps the lookup); its guard sends a call that
      * runs out of it to redirect_fault. */
@@ -367,6 +379,11 @@ static struct pw_thread *get_thread(void)
             thread->call_stack = NULL;
         }
     }
+    /* Predicted calls need the call stack; say per thread whether they run. */
+    if (thread->engine.call_predict)
+        fprintf( stderr, "wowprospero call_predict: tid=%04x active=%u\n",
+                 (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+                 thread->engine.call_stack_base != NULL );
     thread->cache_epoch = (uint32_t)code_generation;
     thread->cache_report_id = __atomic_add_fetch( &next_cache_report_id, 1, __ATOMIC_RELAXED );
     pw_guest_fp_init( &thread->state.fp );
