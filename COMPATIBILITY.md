@@ -8,15 +8,24 @@ Profiles, controller presets and install recipes live in
 
 ## Games
 
-| Game | Status | Graphics | Controls |
-| --- | --- | --- | --- |
-| Half-Life | Playable, above 60 fps | OpenGL | USB keyboard/mouse |
-| Counter-Strike 1.6 | Playable, above 60 fps | OpenGL | USB keyboard/mouse |
-| OpenArena 0.8.8 | Playable, above 60 fps | OpenGL | USB keyboard/mouse |
-| Warcraft III: Reign of Chaos 1.27a | Playable, above 60 fps | DXVK / RADV | DualSense, USB keyboard/mouse |
-| Space Cadet Pinball | Playable | GDI | DualSense |
-| Wine Minesweeper | Playable | GDI | DualSense |
-| Half-Life 2 | Playable at 60 fps from the train through Kleiner's lab; an automated run reached the canals at 60 fps. The menu logo shows an apostrophe instead of its ² | DXVK / RADV | DualSense, USB keyboard/mouse |
+| Game | Status | Code | Graphics | Controls |
+| --- | --- | --- | --- | --- |
+| Half-Life | Playable, above 60 fps | 32-bit | OpenGL | USB keyboard/mouse |
+| Counter-Strike 1.6 | Playable, above 60 fps | 32-bit | OpenGL | USB keyboard/mouse |
+| OpenArena 0.8.8 | Playable, above 60 fps | 32-bit | OpenGL | USB keyboard/mouse |
+| Warcraft III: Reign of Chaos 1.27a | Playable, above 60 fps | 32-bit | DXVK / RADV | DualSense, USB keyboard/mouse |
+| Half-Life 2 | Playable, 60 fps at High settings | 32-bit | DXVK / RADV | DualSense, USB keyboard/mouse |
+| Space Cadet Pinball | Playable | 32-bit | GDI | DualSense |
+| Wine Minesweeper | Playable | 64-bit, native | GDI | DualSense |
+
+64-bit programs run natively on the console's x86-64 CPU; 32-bit ones run
+through prospero-win's x86 translator.
+
+Half-Life 2 was played from the train through Kleiner's lab with the
+DualSense, and an automated run reached the canals; both held 60 fps, which
+is the console's 60 Hz output, with High texture, model and water detail, 4x
+MSAA, 16x anisotropic filtering and HDR. One known issue: the menu logo shows
+an apostrophe where its ² should be.
 
 OpenGL games need a runtime built with the optional PS5 OpenGL SDK; see
 [the OpenGL build notes](docs/WINE_PS5_BUILD.md#opengl).

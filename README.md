@@ -10,8 +10,9 @@
 </p>
 
 **prospero-win runs Windows games on a jailbroken PS5.** It's a homebrew app
-that carries its own copy of [Wine](https://www.winehq.org/). 32-bit Windows
-code goes through our own x86 translator, and Direct3D goes through
+that carries its own copy of [Wine](https://www.winehq.org/). 64-bit Windows
+programs run natively on the console's x86-64 CPU, 32-bit ones go through our
+own x86 translator, and Direct3D goes through
 [DXVK](https://github.com/doitsujin/dxvk) on the console's Vulkan. You pick a
 game from its launcher and play it with a DualSense, or with a USB keyboard
 and mouse.
@@ -22,9 +23,10 @@ has only been tested on one console, on firmware 12.02.
 ## What runs
 
 Half-Life, Counter-Strike 1.6, OpenArena and Warcraft III are playable
-above 60 fps. Pinball and Minesweeper are playable too, and Half-Life 2 runs
-at 60 fps from the train to the canals, with the DualSense or a keyboard and
-mouse; chapters after that haven't been tested yet.
+above 60 fps. Half-Life 2 is playable at 60 fps, the console's refresh rate,
+at High settings with the DualSense or a keyboard and mouse. Pinball and
+Minesweeper are playable too. Minesweeper is a 64-bit program and runs
+natively; the others are 32-bit and run through the translator.
 
 See [game compatibility](COMPATIBILITY.md) for versions, graphics backends
 and controls. Translator benchmark results are in
@@ -62,6 +64,7 @@ missing.
 ```text
 Windows game (.exe)
   └─ Wine: its Windows DLLs, its Unix side and its server, all inside the PS5 app
+       ├─ 64-bit code ─► runs natively on the PS5's x86-64 CPU
        ├─ 32-bit code ─► prospero-win's x86 translator (Wine's WoW64 CPU)
        ├─ Direct3D 8–11 ─► DXVK ─► Vulkan (RADV) ─► the TV
        ├─ 2D drawing (GDI), movies ─► the app's own display path ─► the TV
