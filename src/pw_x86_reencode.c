@@ -760,15 +760,18 @@ static void emit_rm_direct(Ctx *c, const Inst *in)
         b(o, (uint8_t)(e->scale << 6 | index << 3 | 5));
         w32(o, e->disp);
     } else if (!disp && (hb & 7) != 5) {
-        b(o, (uint8_t)(regf << 3 | 4));
-        b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
+        const unsigned sib = hi >= 0 || (hb & 7) == 4;
+        b(o, (uint8_t)(regf << 3 | (sib ? 4 : (unsigned)hb & 7)));
+        if (sib) b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
     } else if (disp >= -128 && disp <= 127) {
-        b(o, (uint8_t)(0x40 | regf << 3 | 4));
-        b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
+        const unsigned sib = hi >= 0 || (hb & 7) == 4;
+        b(o, (uint8_t)(0x40 | regf << 3 | (sib ? 4 : (unsigned)hb & 7)));
+        if (sib) b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
         b(o, (uint8_t)disp);
     } else {
-        b(o, (uint8_t)(0x80 | regf << 3 | 4));
-        b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
+        const unsigned sib = hi >= 0 || (hb & 7) == 4;
+        b(o, (uint8_t)(0x80 | regf << 3 | (sib ? 4 : (unsigned)hb & 7)));
+        if (sib) b(o, (uint8_t)(e->scale << 6 | index << 3 | ((unsigned)hb & 7)));
         w32(o, e->disp);
     }
     for (unsigned k = 0; k < in->imm_len; k++) b(o, in->imm[k]);

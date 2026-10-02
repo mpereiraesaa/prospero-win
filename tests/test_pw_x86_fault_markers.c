@@ -198,6 +198,61 @@ static void patch_forms(uint8_t *code)
  * every stack form (push of a register, esp, memory and an immediate, pop
  * of a register and of esp, leave, call, ret and ret imm16) runs exactly as
  * with the guard: same registers, flags and memory. */
+/* All eight guest bases, including the host's R12/R13 mappings, with
+ * no displacement and both displacement widths. Large displacements make
+ * the base wrap in 32 bits; the marked access must retain that arithmetic.
+ * Exercise both successful accesses and each access's precise fault path. */
+static void test_base_displacements(void)
+{
+    static const int32_t displacements[] = { 0, 127, -128, 128, -129, INT32_MAX, INT32_MIN };
+    for (unsigned stack = 0; stack < 2; stack++) {
+        host_call_stack = stack;
+        for (unsigned base = 0; base < 8; base++) {
+            for (unsigned d = 0; d < sizeof(displacements) / sizeof(displacements[0]); d++) {
+                for (unsigned bad = 0; bad < 2; bad++) {
+                    const int32_t disp = displacements[d];
+                    const uint32_t address = bad ? 8 : low + DATA + 0x100;
+                    const uint32_t pointer = address - (uint32_t)disp;
+                    uint8_t code[32] = { 0x31, 0xd2, 0x83, 0xfa, 0x01 }; /* xor edx,edx; cmp edx,1 */
+                    size_t n = 5;
+                    code[n++] = (uint8_t)(0xb8 + base);
+                    memcpy(code + n, &pointer, 4); n += 4;
+                    const size_t fault_at = n;
+                    const unsigned mod = !disp && base != 5 ? 0 :
+                                         disp >= -128 && disp <= 127 ? 1 : 2;
+                    code[n++] = 0x8b; /* mov ecx,[base+disp] */
+                    code[n++] = (uint8_t)(mod << 6 | 1 << 3 | base);
+                    if (base == 4) code[n++] = 0x24;
+                    if (mod == 1) code[n++] = (uint8_t)disp;
+                    else if (mod == 2) { memcpy(code + n, &disp, 4); n += 4; }
+                    /* The comparison consumes flags across the access. Reset
+                     * esp before ret even when it was the addressing base. */
+                    code[n++] = 0x83; code[n++] = 0xd2; code[n++] = 0;
+                    code[n++] = 0xbc;
+                    const uint32_t top = low + STACK_TOP;
+                    memcpy(code + n, &top, 4); n += 4;
+                    code[n++] = 0xc3;
+                    if (bad) {
+                        compare("base displacement", code, n, (uint32_t)fault_at, address, 0, -1);
+                    } else {
+                        const uint32_t value = 0x76543210;
+                        memcpy(guest + DATA + 0x100, &value, 4);
+                        Run guarded = run(code, n, 0), marked = run(code, n, 1);
+                        if (guarded.status != PW_OK || marked.status != PW_OK) fprintf(stderr, "base=%u disp=%d stack=%u guarded=%d eip=%x marked=%d eip=%x\n", base, disp, stack, guarded.status, guarded.state.eip, marked.status, marked.state.eip);
+                        assert(guarded.status == PW_OK && marked.status == PW_OK);
+                        assert(guarded.reencoded && marked.reencoded && !marked.redirected);
+                        assert(marked.state.eip == 0xdead0000u && guarded.state.eip == marked.state.eip);
+                        assert(marked.state.gpr[1] == value);
+                        for (unsigned g = 0; g < 8; g++) assert(marked.state.gpr[g] == guarded.state.gpr[g]);
+                        assert((marked.state.eflags & 0x8d5) == (guarded.state.eflags & 0x8d5));
+                    }
+                }
+            }
+        }
+    }
+    host_call_stack = 0;
+}
+
 static void test_memory_forms(void)
 {
     uint8_t code[sizeof(forms)];
@@ -418,6 +473,7 @@ int main(void)
         assert(marked.state.eip == 0xdead0000u && marked.state.gpr[0] == guarded.state.gpr[0]);
     }
     test_memory_forms();
+    test_base_displacements();
     test_engine_lookup();
     test_profile_capacity();
     test_fault_table();

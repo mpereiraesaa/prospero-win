@@ -854,3 +854,23 @@ acknowledgement. This establishes an intermittent shutdown ordering problem,
 not an unattended-shutdown fix or proof of a translator correctness defect.
 Suspend counts and prefix DLL/config were restored. Private captures and
 the inspection helper remain outside Git; no vendor binaries were changed.
+
+## Compact direct memory operands
+
+With fault markers, a memory operand uses the guest's 32-bit effective
+address directly. Simple base-plus-displacement operands previously always
+carried a SIB byte, even when the encoding did not require one. Omit that
+byte when there is no index and the mapped host base is not R12. Keep the
+32-bit address-size prefix, the SIB required for R12 and absolute/indexed
+forms, and the zero displacement required for RBP/R13. This saves one byte
+per eligible memory operand without changing its instruction count.
+
+Regressions execute loads through all eight guest bases with zero, signed
+8-bit and signed 32-bit displacement boundaries, including 32-bit wrapping
+of the base-plus-displacement sum. Successful and faulting accesses are
+compared with guarded execution, with and without the host call stack,
+checking registers, flags and precise fault metadata. Existing tests cover
+indexed and absolute operands, stores, atomic operations and other widths.
+`make all` and ASan/UBSan pass, including all three differential modes.
+HL2 CPU comparisons and console/CS/WC3 validation remain pending; code-size
+reduction alone does not establish the translated-time target.
