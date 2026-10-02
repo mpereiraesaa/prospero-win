@@ -83,9 +83,12 @@ typedef struct PwX86State {
      * them to the guest (its thread context), which segment-register stores
      * and pushes must match: WoW64 compares a restored context's SS with its
      * own (wow64's ss32_sel), and the host decides the values (0x2b data on
-     * Linux, others on the PS5). 0 leaves Windows' own values. Last in the
-     * structure: the emitter addresses the fields above by offset. */
+     * Linux, others on the PS5). 0 leaves Windows' own values. Appended after
+     * the compact emitter fields to retain their generated offsets. */
     uint16_t selector[6];
+    /* Per-invocation staging for lazy native FP restoration. */
+    void *native_fp_image;
+    unsigned native_fp_active;
 } PwX86State;
 
 uint32_t pw_x86_compute_canonical_flags(const PwX86DeferredFlags *df, uint32_t prev_eflags);
@@ -242,6 +245,9 @@ typedef struct PwX86TranslateOptions {
      * engine then never links re-encoded and emitted blocks to each other:
      * the emitter keeps that state in memory and uses xmm as scratch. */
     unsigned native_fp;
+    /* With the lazy wrapper: restore the staged image at the first FP/SIMD
+     * instruction reached, preserving arithmetic flags and pinned GPRs. */
+    unsigned lazy_native_fp;
 } PwX86TranslateOptions;
 
 /* The fault table of a re-encoded block with fault markers, at
@@ -298,6 +304,9 @@ int pw_x86_run_block(PwX86State *state, const void *entry);
 /* pw_x86_run_block with fxsave_image (512 bytes, 16-byte aligned) loaded
  * into the host FPU for the block and saved back after it. */
 int pw_x86_run_block_fp(PwX86State *state, const void *entry, void *fxsave_image);
+/* State staging is initialized by the caller. Saves the image only if a
+ * generated FP prepare path set *active; host cleanup is unchanged. */
+int pw_x86_run_block_fp_lazy(PwX86State *state, const void *entry, void *fxsave_image, unsigned *active);
 
 int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t guest_pc,
                           uint8_t *output, size_t capacity, PwX86Block *block,

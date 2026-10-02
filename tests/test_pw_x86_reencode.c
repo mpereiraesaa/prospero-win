@@ -678,6 +678,36 @@ static void test_strings(void)
     assert(r.state.gpr[6] == low + DATA + 40);                          /* esi went back one */
 }
 
+static void test_lazy_native_fp(void)
+{
+    static const uint8_t integer[] = {0xb8,10,0,0,0,0xc3};
+    static const uint8_t flags[] = {
+        0xb8,0xff,0xff,0xff,0xff, 0x05,1,0,0,0,
+        0x0f,0x28,0xc1,                 /* movaps xmm0,xmm1: first FP prepare */
+        0x0f,0x92,0xc2, 0x0f,0x94,0xc0, 0xc3,
+    };
+    static const uint8_t skipped[] = {
+        0x31,0xc0, 0x74,3, 0x0f,0x28,0xc1, 0xc3,
+    };
+    Run r;
+    PwGuestFp expected;
+    pw_guest_fp_init(&expected);
+    native_fp = 1;
+    r = run(integer,sizeof(integer),1);
+    assert(r.status==PW_OK && r.state.eip==0xdead0000u);
+    assert(r.state.gpr[0]==10 && !r.state.native_fp_active);
+    assert(r.state.fp.x87_control==expected.x87_control && r.state.fp.mxcsr==expected.mxcsr);
+    r = run(flags,sizeof(flags),1);
+    assert(r.status==PW_OK && r.state.eip==0xdead0000u);
+    assert(r.state.native_fp_active && r.state.gpr[0]==1 && (r.state.gpr[2]&255)==1);
+    r = run_superblocks(skipped,sizeof(skipped));
+    assert(r.status==PW_OK && r.state.eip==0xdead0000u && !r.state.native_fp_active);
+    hostexec_fallback = 1;
+    compare(flags,sizeof(flags));
+    hostexec_fallback = 0;
+    native_fp = 0;
+}
+
 static void test_native_fp(void)
 {
     static const uint8_t code[] = {
@@ -966,6 +996,7 @@ int main(void)
     test_call_stack();
     test_superblocks();
     test_strings();
+    test_lazy_native_fp();
     test_native_fp();
     test_native_fp_forms();
     test_native_fp_gpr();

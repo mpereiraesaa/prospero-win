@@ -2,6 +2,39 @@
 #include "../src/pw_x86_engine.h"
 #include "../src/pw_vm_posix.h"
 #include <assert.h>
+#include <string.h>
+
+static int integer_entry(PwX86State *state)
+{
+    state->gpr[0]++;
+    return 0;
+}
+
+static void test_lazy_fp_host_contract(void)
+{
+    _Alignas(16) uint8_t image[512], before[512], host[512];
+    PwX86State state={0};
+    PwGuestFp fp;
+    unsigned active=0;
+    uint16_t old_cw, selected_cw, actual_cw;
+    uint32_t old_mxcsr, selected_mxcsr, actual_mxcsr;
+    pw_guest_fp_init(&fp);
+    fp.x87_control=0x77f;
+    fp.mxcsr=0x3f80;
+    memset(fp.xmm,0x5a,sizeof(fp.xmm));
+    pw_guest_fp_to_fxsave(&fp,image);
+    memcpy(before,image,sizeof(image));
+    __asm__ volatile("fnstcw %0; stmxcsr %1" : "=m"(old_cw), "=m"(old_mxcsr));
+    selected_cw=(old_cw & ~0xc00u) | 0x800u;
+    selected_mxcsr=(old_mxcsr & ~0x6000u) | 0x4000u;
+    __asm__ volatile("fldcw %0; ldmxcsr %1; fld1" :: "m"(selected_cw), "m"(selected_mxcsr));
+    assert(pw_x86_run_block_fp_lazy(&state,integer_entry,image,&active)==0);
+    __asm__ volatile("fnstcw %0; stmxcsr %1; fxsave %2" : "=m"(actual_cw), "=m"(actual_mxcsr), "=m"(host));
+    __asm__ volatile("fldcw %0; ldmxcsr %1" :: "m"(old_cw), "m"(old_mxcsr));
+    assert(!active && state.gpr[0]==1 && !memcmp(image,before,sizeof(image)));
+    assert(actual_cw==selected_cw && actual_mxcsr==selected_mxcsr);
+    assert(host[4]==0 && !(host[2] | host[3])); /* empty tags, reset status/TOP */
+}
 
 static uint64_t clock_now;
 static unsigned clock_reads, clock_failed;
@@ -152,5 +185,6 @@ int main(void)
     assert(engine.execution_ns==10*(engine.execution_samples-1)); /* Failed clock sample excluded. */
     assert(pw_x86_engine_destroy(&engine)==PW_OK);
     test_dispatch_profile();
+    test_lazy_fp_host_contract();
     return 0;
 }

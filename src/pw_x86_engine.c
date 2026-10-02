@@ -418,7 +418,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         engine->reencode_enabled ? engine->chain_targets : NULL,
         engine->residency_enabled ? engine->global_resident : (uint8_t)0,
         engine->fault_markers, engine->unbounded_chains, engine->call_stack_base != NULL,
-        engine->superblocks, engine->native_fp };
+        engine->superblocks, engine->native_fp, engine->native_fp };
     int last = PW_ERR_UNSUPPORTED;
     if (engine->reencode_enabled) {
         last = pw_x86_reencode(source, available, pc, scratch, sizeof(scratch), &best, &options);
@@ -693,7 +693,9 @@ dispatch:;
         }
         if(timed)
             execution_begin=engine->execution_clock(engine->execution_clock_opaque);
-        invoked=pw_x86_run_block_fp(state,code_entry,image);
+        state->native_fp_image=image;
+        state->native_fp_active=0;
+        invoked=pw_x86_run_block_fp_lazy(state,code_entry,image,&state->native_fp_active);
     } else {
         /* Emitter blocks work on state->fp. */
         pw_x86_engine_fp_sync(engine,state);

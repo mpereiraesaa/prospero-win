@@ -735,3 +735,35 @@ time was 238.4 s versus 225.8 s; both runs were forcibly stopped after their
 results, so they do not certify clean shutdown. A reversed-order four-run
 comparison with timestamped execution reports and sampling profiles remains
 in progress; console measurements remain pending.
+
+### Lazy native FP trial
+
+The engine stages its guest FP image before a re-encoded invocation. Generated
+code restores that image immediately before the first FP/SIMD instruction
+reached, once per invocation; an integer-only invocation neither restores nor
+saves the image. The prepare path preserves arithmetic flags and pinned GPRs
+and precedes the instruction's fault site. A skipped FP superblock path does
+not activate the image. After returning, the wrapper saves an active image
+and always retains the existing empty host x87 stack, reset status/TOP,
+control-word and MXCSR cleanup contract.
+
+Focused regressions cover integer-only and skipped FP paths, CF/ZF across
+the first SIMD restore, existing x87/MMX/SSE mixed chains and canonical sync,
+and nondefault host control-word/MXCSR restoration with empty tags/status.
+A private E-core wrapper microbenchmark measured roughly 506 ns for eager
+image restore/save versus 99 ns when no image is used. This measures neither
+HL2 nor PS5 and is only motivation for the trial. Full regressions, sanitizers,
+application comparisons and console receipts remain required. The full
+`make test` gate, including all three differential modes, passes; the
+sanitizer gate and isolated adapter build are in progress.
+
+The preceding chain-hash four-run timing experiment produced calibrated
+phase estimates of 200.7/207.3 CPU-seconds for the previous build and
+196.8/185.8 for the candidate, a 6.2% median estimated reduction. These sum
+thread CPU time around generated invocations and the FP wrapper, excluding
+compilation, reset and dispatcher work. They use stride-64 samples and infer
+the measured interval backwards from the observed timedemo result. Low-call
+threads have unsampled intervals or lack a post-phase counter bracket, and
+Remote Play was observed consuming about ten host CPUs during one run.
+The temporal bounds do not cover sampling/calibration uncertainty. These
+results do not establish the 30% target or a controlled causal improvement.

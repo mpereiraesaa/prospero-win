@@ -160,6 +160,7 @@ enum { REG8 = 1, REG32, EXT };      /* what the ModRM reg field names */
 enum { RM8 = 1, RMW, RMRAW };       /* what a register-form rm names (RMRAW: xmm, mm, st, as is) */
 
 typedef struct Inst {
+    uint8_t native_fp_touch;
     Kind kind;
     uint8_t len, opsize16;
     uint8_t op[3], op_len;
@@ -358,6 +359,7 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
         in->kind = K_PLAIN;                       /* sahf, lahf: ah is the guest's */
         if (op == 0x9e) in->def = 0x0d5; else in->use = 0x0d5;
     } else if (op == 0x9b && native_fp) {
+        in->native_fp_touch = 1;
         in->kind = K_PLAIN;                       /* fwait, as in fstsw = fwait; fnstsw */
     } else if (op >= 0xa0 && op <= 0xa3) {
         static const uint8_t as[4] = { 0x8a, 0x8b, 0x88, 0x89 };
@@ -481,6 +483,7 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
             /* MMX, SSE to SSE4.1 on the guest's own registers: xmm0-7 and
              * mm0-7 are the host's while re-encoded code runs (native FP). */
             if (!native_fp) return 0;
+            in->native_fp_touch = 1;
             const unsigned p = in->rep ? in->rep : in->opsize16 ? 0x66 : 0;
             unsigned regk = EXT, rmk = RMRAW, imm = 0, store = 0, width = 16, def = 0, mem_only = 0, reg_only = 0;
             if (x == 0x38 || x == 0x3a) {
@@ -554,6 +557,7 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
         done:;
         }
     } else if (op >= 0xd8 && op <= 0xdf && native_fp) {
+        in->native_fp_touch = 1;
         /* x87 on the guest's own stack (native FP): register forms as they
          * are, memory forms with the guest's address. */
         static const uint8_t widths[8][8] = {
@@ -896,6 +900,24 @@ static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots, size_t jc
     b(o, 0x41); b(o, 0xff); b(o, 0x23);
 }
 
+/* Restore once per invocation, on the first reached FP/SIMD block. This
+ * must precede its faulting access and preserve all guest arithmetic flags. */
+static void emit_fp_prepare(Out *o)
+{
+    size_t to_prepare, to_done;
+    mov_r9_rcx(o);
+    load_state(o, 1, offsetof(PwX86State, native_fp_active));
+    to_prepare = jump8(o, 0xe3);                         /* jrcxz prepare */
+    mov_rcx_r9(o);
+    to_done = jump8(o, 0xeb);
+    land8(o, to_prepare);
+    mov_rcx_r9(o);
+    b(o, 0x4c); b(o, 0x8b); b(o, 0x9f); w32(o, offsetof(PwX86State, native_fp_image)); /* mov r11,[rdi+image] */
+    b(o, 0x41); b(o, 0x0f); b(o, 0xae); b(o, 0x0b);     /* fxrstor [r11] */
+    store_state_imm(o, offsetof(PwX86State, native_fp_active), 1);
+    land8(o, to_done);
+}
+
 /* pw_x86_chain_slot(r10d), retaining guest arithmetic flags. Dynamic
  * exits and superblock side exits share this published-table index. */
 static void emit_chain_slot(Out *o)
@@ -1221,6 +1243,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     emit_enter(&c.o, c.call_stack);
     block->chain_entry_offset = c.o.n;
 
+    unsigned fp_prepared = 0;
     cursor = 0;
     for (unsigned k = 0; k < count; k++) {
         const Inst *in = &insts[k];
@@ -1234,6 +1257,10 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
          * before the access. */
         c.here = here;
         if (k == count - 1) block->exit_offset = o->n;
+        if (options->lazy_native_fp && in->native_fp_touch && !fp_prepared) {
+            emit_fp_prepare(o);
+            fp_prepared = 1;
+        }
         if (!c.fault_markers && can_fault(in)) store_state_imm(o, offsetof(PwX86State, eip), here);
         switch (in->kind) {
         case K_RM:

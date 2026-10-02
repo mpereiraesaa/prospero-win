@@ -393,7 +393,42 @@ __asm__(
     "    pop %rbp\n"
     "    pop %rbx\n"
     "    ret\n"
-    ".size pw_x86_run_block_fp,.-pw_x86_run_block_fp\n");
+    ".size pw_x86_run_block_fp,.-pw_x86_run_block_fp\n"
+    /* Lazy guest FP loads happen in generated code. Always retain the host
+     * empty-stack/control-word/MXCSR cleanup contract, even for integer work. */
+    ".globl pw_x86_run_block_fp_lazy\n"
+    ".type pw_x86_run_block_fp_lazy,@function\n"
+    "pw_x86_run_block_fp_lazy:\n"
+    "    push %rbx\n"
+    "    push %rbp\n"
+    "    push %r12\n"
+    "    push %r13\n"
+    "    push %r14\n"
+    "    push %r15\n"
+    "    sub $40, %rsp\n"
+    "    mov %rdx, (%rsp)\n"
+    "    mov %rcx, 8(%rsp)\n"
+    "    stmxcsr 16(%rsp)\n"
+    "    fnstcw 20(%rsp)\n"
+    "    call *%rsi\n"
+    "    mov 8(%rsp), %rcx\n"
+    "    cmpl $0, (%rcx)\n"
+    "    je 1f\n"
+    "    mov (%rsp), %rdx\n"
+    "    fxsave (%rdx)\n"
+    "1:\n"
+    "    fninit\n"
+    "    fldcw 20(%rsp)\n"
+    "    ldmxcsr 16(%rsp)\n"
+    "    add $40, %rsp\n"
+    "    pop %r15\n"
+    "    pop %r14\n"
+    "    pop %r13\n"
+    "    pop %r12\n"
+    "    pop %rbp\n"
+    "    pop %rbx\n"
+    "    ret\n"
+    ".size pw_x86_run_block_fp_lazy,.-pw_x86_run_block_fp_lazy\n");
 
 static inline int get_resident_host_reg(const PwX86RegContract *c, unsigned gpr)
 {
@@ -1584,7 +1619,9 @@ int pw_x86_translate_ext(const uint8_t *source, size_t bytes, uint32_t pc,
                          uint8_t *output, size_t capacity, PwX86Block *block,
                          unsigned residency_enabled, unsigned lazy_flags_enabled)
 {
-    const PwX86TranslateOptions options = { residency_enabled, lazy_flags_enabled, NULL, 0, 0, 0, 0, NULL, 0, 0, 0, 0, 0, 0 };
+    const PwX86TranslateOptions options = {
+        .residency_enabled = residency_enabled, .lazy_flags_enabled = lazy_flags_enabled
+    };
 
     return pw_x86_translate_opts(source, bytes, pc, output, capacity, block, &options);
 }
