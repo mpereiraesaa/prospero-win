@@ -662,13 +662,15 @@ sampled mode, `delta(sample_cpu_ns) * delta(calls) / delta(samples)` estimates
 the total; it is not an exact time. Repeat workloads and report sample counts
 and uncertainty; a short run with few samples cannot certify a speedup.
 
-Each thread also reports `clock_read_ns`, the startup median of 32
-back-to-back clock intervals. It estimates the clock-read cost included in
-each measured interval. A corrected estimate subtracts
-`delta(samples) * clock_read_ns` from `delta(sample_cpu_ns)` before scaling.
-Report both raw and corrected results; calibration is approximate, can vary
-under load, and a nonpositive corrected interval is unusable. It does not
-remove the CPU overhead of instrumentation from the running game.
+Each thread separately reports `clock_resolution_ns` from `clock_getres`,
+and `clock_batch_read_ns`, the median of eight batch means, each spanning
+1024 consecutive clock reads. The batch mean includes loop and validation
+work, so it is a diagnostic estimate, not an exact read cost. A valid zero
+batch mean does not disable timing. Report raw sampled CPU and sample counts
+as the primary comparison; do not subtract a per-sample calibration value.
+The old median of adjacent read pairs was resolution-limited on the PS5 and
+its 1000 ns result did not establish 1000 ns of read overhead. Earlier
+calibration-subtracted estimates cannot certify a speedup.
 
 This clock excludes compilation, cache reset, dispatcher work and time when
 the thread is descheduled. It includes generated entry/exit code and the FP

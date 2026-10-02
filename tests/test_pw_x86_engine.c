@@ -26,6 +26,37 @@ static int source_view(void *opaque,uint32_t pc,const uint8_t **data,size_t *byt
     size_t offset=pc-s->base;*data=s->data+offset;*bytes=s->bytes-offset;return PW_OK;
 }
 
+typedef struct BatchClock {
+    uint64_t now,step,quantum;
+    unsigned reads,fail_at,backwards_at;
+} BatchClock;
+static uint64_t batch_clock(void *opaque)
+{
+    BatchClock *clock=opaque;
+    clock->reads++;
+    clock->now+=clock->step;
+    if(clock->reads==clock->fail_at)return 0;
+    if(clock->reads==clock->backwards_at)return 1;
+    return clock->now/clock->quantum*clock->quantum;
+}
+static void test_execution_clock_batch(void)
+{
+    uint64_t mean=123;
+    assert(pw_x86_execution_clock_batch(NULL,NULL,&mean)==PW_ERR_PRECONDITION);
+    BatchClock clock={.now=1000000,.step=10,.quantum=1};
+    assert(pw_x86_execution_clock_batch(batch_clock,&clock,NULL)==PW_ERR_PRECONDITION);
+    assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_OK && mean==10);
+    /* 1 us granularity must not turn a 3 ns read into a 1000 ns correction. */
+    clock=(BatchClock){.now=1000000,.step=3,.quantum=1000};
+    assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_OK && mean==3);
+    clock=(BatchClock){.now=1000000,.quantum=1000};
+    assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_OK && mean==0);
+    clock=(BatchClock){.now=1000000,.step=10,.quantum=1,.fail_at=513};
+    assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_ERR_VM && mean==0);
+    clock=(BatchClock){.now=1000000,.step=10,.quantum=1,.backwards_at=513};
+    assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_ERR_VM && mean==0);
+}
+
 static void test_empty_chain_reset(void)
 {
     const uint8_t jump[]={0xff,0xe2}; /* jmp edx, which is zero */
@@ -173,5 +204,6 @@ int main(void)
     assert(pw_x86_engine_destroy(&engine)==PW_OK);
     test_empty_chain_reset();
     test_guest_error_reporting();
+    test_execution_clock_batch();
     return 0;
 }

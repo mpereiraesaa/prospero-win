@@ -747,6 +747,28 @@ dispatch:;
     return invoked==PW_ERR_X87_TRAP?PW_ERR_X87_TRAP:invoked?PW_ERR_VM:PW_OK;
 }
 
+int pw_x86_execution_clock_batch(PwX86ExecutionClock clock, void *opaque, uint64_t *mean_ns)
+{
+    if(!clock || !mean_ns)return PW_ERR_PRECONDITION;
+    *mean_ns=0;
+    uint64_t means[8];
+    for(unsigned i=0;i<8;i++) {
+        uint64_t begin=clock(opaque),last=begin;
+        if(!begin)return PW_ERR_VM;
+        for(unsigned read=0;read<1024;read++) {
+            uint64_t now=clock(opaque);
+            if(!now || now<last)return PW_ERR_VM;
+            last=now;
+        }
+        means[i]=(last-begin)/1024;
+        for(unsigned j=i;j && means[j]<means[j-1];j--) {
+            uint64_t temporary=means[j];means[j]=means[j-1];means[j-1]=temporary;
+        }
+    }
+    *mean_ns=means[4];
+    return PW_OK; /* A valid fast/quantized clock can have a zero batch mean. */
+}
+
 int pw_x86_engine_set_execution_clock(PwX86Engine *engine, PwX86ExecutionClock clock, void *opaque, uint32_t stride)
 {
     if(!engine || !engine->initialized || (clock && !stride))return PW_ERR_PRECONDITION;
