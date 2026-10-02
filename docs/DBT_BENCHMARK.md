@@ -792,8 +792,8 @@ loads, with fault markers and the host call stack enabled, measured:
 | 32 | 4,112 | 2,221 | 46.0% |
 
 These are emitted-code sizes, not execution-time improvements. The intended
-benefit is a smaller translated working set; there is no CPU speedup claim
-before fixed-workload timing and console validation. The regression faults
+benefit is a smaller translated working set; the qualified PC comparison
+below measures execution time, while console validation remains pending. The regression faults
 each of fifteen loads in a single block, with preceding ADC operations that
 change registers and consume flags, through both guarded and native-fault
 paths, with and without the host call stack. Every path must report the
@@ -817,3 +817,16 @@ The candidate remains draft pending console measurements, CS/WC3 regression
 runs and review. Console PRX source `bd21f71` was handed immediately to
 `claude-wc3`; its SHA-256 is
 `e52815b39b1dd2ba29becb3ff6bfc401736b0f7f19dbfb90b3d5c223f0360ff6`.
+
+Three additional native-backend shutdown controls completed all 5,182
+frames in 33.037, 33.238 and 33.034 seconds. Loader diagnostics verified
+`wow64cpu.dll` present and `wowprospero.dll` absent in each run. The same
+private game prefix, demo, affinity and ten-second post-result close delay
+were used, with execution sampling and SIGPROF disabled. All three exited
+with status zero without forced cleanup or an observed worker assertion;
+the original CPU-backend registry value, prefix DLL and config were
+restored. Together with the earlier native control, four native runs exited
+without acknowledgement, while three of the four DBT comparison runs above
+needed acknowledgement. This establishes a repeatable difference in these
+controls, not whether translator behavior or the slower execution triggers
+the assertion. Unattended DBT shutdown remains unresolved.
