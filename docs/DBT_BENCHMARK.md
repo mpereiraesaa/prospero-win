@@ -798,3 +798,22 @@ each of fifteen loads in a single block, with preceding ADC operations that
 change registers and consume flags, through both guarded and native-fault
 paths, with and without the host call stack. Every path must report the
 same EIP, guest registers/flags and fault metadata as before.
+
+The baseline/candidate/candidate/baseline HL2 comparison completed all
+5,182 frames per run without DBT or guest-exception diagnostics. Estimated
+calibrated translated CPU seconds were 176.684/168.896/167.837/181.142;
+timedemo seconds were 84.404/81.899/82.572/84.527. Median estimated CPU time
+fell 5.89%, and frame time fell 2.64%. Both builds used the identical
+corrected-unmap PE, private prefix/config, CPUs 0–11 and stride-64 thread CPU
+clock sampling. Sparse reports produced 20–22 quality issues per run,
+including incomplete phase brackets; phase start was inferred from demo
+duration, and RemotePlay used about eleven CPU cores. This is a diagnostic
+result, not proof of the 30% target.
+
+All processes exited with status zero; runs 0, 1 and 3 acknowledged a
+recorded Source worker-thread assertion, while candidate run 2 exited
+without an acknowledgement. The original prefix DLL/config were restored.
+The candidate remains draft pending console measurements, CS/WC3 regression
+runs and review. Console PRX source `bd21f71` was handed immediately to
+`claude-wc3`; its SHA-256 is
+`e52815b39b1dd2ba29becb3ff6bfc401736b0f7f19dbfb90b3d5c223f0360ff6`.
