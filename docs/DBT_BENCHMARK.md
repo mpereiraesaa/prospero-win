@@ -617,9 +617,11 @@ full capacity, arena boundaries and cache resets. On the console, create
 `/data/prospero-win/pw_wow_profile` before launching a fresh game process;
 remove it to disable sampling for subsequent processes. Records use Wine's
 normal output sink, and a timer installation failure disables sampling with
-a diagnostic. The pinned SDK exports `setitimer`, but console signal delivery
-is not yet validated; do not treat a console report with zero samples as a
-performance result.
+a diagnostic. The pinned SDK exports `setitimer`. The exact f7ff5244 build produced nonzero
+main-thread samples on the PS5, completed route v6 and exited cleanly through
+the Kleiner lab with corrected-unmap PE4c8f7118. That validates the observed
+sampling and shutdown path; a console report with zero samples still cannot
+be used as a performance result. Updated cap builds require their own receipt.
 
 `wowprospero native` supplements translated-block records with a bounded,
 atomic process-wide histogram of PCs sampled outside translated arenas.
