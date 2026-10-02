@@ -77,6 +77,7 @@ struct pw_thread
     uint32_t n_unix, n_sys, n_other, n_unix_long, n_resets, n_flushes, last_reason;
     PwX86HotspotProfile *profile;
     uint64_t profile_last_dump;
+    uint64_t execution_clock_cost, execution_clock_resolution;
 };
 
 C_ASSERT( sizeof(((I386_CONTEXT *)0)->ExtendedRegisters) == PW_GUEST_FXSAVE_BYTES );
@@ -232,6 +233,28 @@ static int setup_thread( void *context, const PwWowThreadBudget *budget )
     return -1;
 }
 
+static uint64_t execution_clock( void *opaque )
+{
+    struct timespec now;
+    (void)opaque;
+    if (clock_gettime( CLOCK_THREAD_CPUTIME_ID, &now )) return 0;
+    return now.tv_sec * 1000000000ull + now.tv_nsec;
+}
+
+static void execution_report( struct pw_thread *thread )
+{
+    if (!thread->engine.execution_clock) return;
+    fprintf( stderr, "wowprospero execution: tid=%04x cumulative=1 sample_cpu_ns=%llu calls=%llu samples=%llu stride=%u clock_batch_read_ns=%llu clock_resolution_ns=%llu clock_errors=%llu\n",
+             (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+             (unsigned long long)thread->engine.execution_ns,
+             (unsigned long long)thread->engine.execution_calls,
+             (unsigned long long)thread->engine.execution_samples,
+             thread->engine.execution_stride,
+             (unsigned long long)thread->execution_clock_cost,
+             (unsigned long long)thread->execution_clock_resolution,
+             (unsigned long long)thread->engine.execution_clock_errors );
+}
+
 static struct pw_thread *get_thread(void)
 {
     struct pw_thread *thread = self;
@@ -345,6 +368,25 @@ static struct pw_thread *get_thread(void)
     thread->cache_epoch = (uint32_t)code_generation;
     pw_guest_fp_init( &thread->state.fp );
     thread->generation = code_generation;
+    {
+        int enabled = getenv( "PW_WOW_EXEC_TIMING" ) != NULL;
+#ifdef __PROSPERO__
+        struct stat st;
+        if (!stat( "/data/prospero-win/pw_wow_exec_timing", &st )) enabled = 1;
+#endif
+        if (enabled)
+        {
+            const char *option = getenv( "PW_WOW_EXEC_STRIDE" );
+            unsigned long stride = option ? strtoul( option, NULL, 10 ) : 64;
+            if (!stride || stride > UINT32_MAX) stride = 64;
+            struct timespec resolution;
+            if (!clock_getres( CLOCK_THREAD_CPUTIME_ID, &resolution ))
+                thread->execution_clock_resolution = resolution.tv_sec * 1000000000ull + resolution.tv_nsec;
+            if (pw_x86_execution_clock_batch( execution_clock, NULL, &thread->execution_clock_cost ) == PW_OK)
+                pw_x86_engine_set_execution_clock( &thread->engine, execution_clock, NULL, (uint32_t)stride );
+            else fprintf( stderr, "wowprospero execution: unavailable thread CPU clock; timing disabled\n" );
+        }
+    }
     profile_add_thread( thread );
     return self = thread;
 }
@@ -811,12 +853,13 @@ static uint64_t timing_now_ns(void)
 
 static void timing_init(void)
 {
-    timing_enabled = getenv( "PW_WOW_TIMING" ) != NULL;
+    timing_enabled = getenv( "PW_WOW_TIMING" ) != NULL || getenv( "PW_WOW_EXEC_TIMING" ) != NULL;
 #ifdef PW_WOW_TIMING_TRIGGER
     {
         struct stat st;  /* access() is refused to a title */
 
         if (!stat( PW_WOW_TIMING_TRIGGER, &st )) timing_enabled = 1;
+        if (!stat( "/data/prospero-win/pw_wow_exec_timing", &st )) timing_enabled = 1;
     }
 #endif
 }
@@ -827,6 +870,8 @@ static void timing_report( struct pw_thread *thread, uint64_t tsc )
     double cycles = (double)(tsc - thread->t_window);
     double seconds = (wall - thread->wall_window) / 1e9;
     double per_us = cycles / seconds / 1e6;
+
+    execution_report( thread );
 
     if (thread->n_unix + thread->n_sys > 1000)
         fprintf( stderr, "wowprospero timing: tid=%04x run=%.1f%% unix=%.1f%% (%.0f/s %.2fus) "
@@ -1011,6 +1056,7 @@ static NTSTATUS thread_term( void *args )
     struct pw_thread *thread = self;
 
     if (!thread) return STATUS_SUCCESS;
+    execution_report( thread );
     self = NULL;
     if (thread->engine.fault_markers) register_arena( thread, 0 );
     free(thread->profile);

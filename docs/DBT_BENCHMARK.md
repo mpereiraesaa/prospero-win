@@ -653,6 +653,73 @@ its list membership. Every touched entry is physically zeroed, preserving
 lookup and generation behavior. Tests cover unpublished pending buckets,
 duplicate registration and reuse after reset. This targets loading flushes;
 it does not establish a gain in steady translated-code execution.
+## Execution CPU timing
+
+`PW_WOW_EXEC_TIMING=1` enables an optional owner-thread CPU clock around each
+sampled generated-code invocation. On PS5, use the separate
+`/data/prospero-win/pw_wow_exec_timing` trigger. This also enables periodic
+timing reports. `wowprospero execution` records cumulative `sample_cpu_ns`,
+invocation `calls`, measured `samples`, `stride` and `clock_errors`; totals
+survive cache resets and are reported again
+at thread termination. Subtract two records from the same thread and process
+to measure a fixed workload. Do not sum cumulative windows. The default
+stride is 64: a pseudorandom sequence selects roughly one invocation in 64,
+avoiding a fixed periodic sampling pattern. `PW_WOW_EXEC_STRIDE=1` measures
+every invocation; it can substantially slow dispatch-heavy workloads. For
+sampled mode, `delta(sample_cpu_ns) * delta(calls) / delta(samples)` estimates
+the total; it is not an exact time. Repeat workloads and report sample counts
+and uncertainty; a short run with few samples cannot certify a speedup.
+
+Each thread separately reports `clock_resolution_ns` from `clock_getres`,
+and `clock_batch_read_ns`, the median of eight batch means, each spanning
+1024 consecutive clock reads. The batch mean includes loop and validation
+work, so it is a diagnostic estimate, not an exact read cost. A valid zero
+batch mean does not disable timing. Report raw sampled CPU and sample counts
+as the primary comparison; do not subtract a per-sample calibration value.
+The old median of adjacent read pairs was resolution-limited on the PS5 and
+its 1000 ns result did not establish 1000 ns of read overhead. Earlier
+calibration-subtracted estimates cannot certify a speedup.
+
+This clock excludes compilation, cache reset, dispatcher work and time when
+the thread is descheduled. It includes generated entry/exit code and the FP
+invocation wrapper, plus any signal-handler CPU work interrupting an invocation.
+Two thread-clock reads per sample add overhead, including a clock-read cost
+in the measured interval; compare identical builds
+with timing enabled, and check FPS with timing disabled too. Use a timedemo to
+avoid counting frame-pacing spin loops, repeat short demos and exclude loading.
+The clock is optional and defaults off; it is not used in the signal handler.
+Unavailable clocks disable timing explicitly, and nonzero `clock_errors` make
+a measurement invalid. Console clock operation still needs hardware validation.
+
+### HL2 host check (2026-10-02)
+
+A short `d1_trainstation_01` timedemo was run twice per build, interleaved
+baseline/candidate/baseline/candidate. Both used the same Wine, game prefix,
+DXVK, demo and sampled execution clock (stride 64, with calibration). The
+baseline precedes both reset optimizations and has the same timing code
+applied privately; the candidate includes bounded poisoning and touched-slot
+metadata reset. Each completed timedemo measured only 158 frames after the
+engine's warmup, so these results are too short to certify a performance gain.
+
+| Build | First run | Second run | Median frame time |
+|---|---|---|---|
+| Before reset optimizations | 1.789 s, 88.31 FPS | 1.734 s, 91.12 FPS | 11.15 ms |
+| With reset optimizations | 1.869 s, 84.53 FPS | 1.755 s, 90.03 FPS | 11.47 ms |
+
+The candidate's median frame time was 2.9% longer. This does not reproduce
+an earlier improvement from a single pair of runs and does not establish a
+steady-gameplay speedup. Median launch-to-result time fell from 146.1 s to
+49.8 s, consistent with the reset changes targeting loading. Launch time
+includes Wine startup, map loading, demo warmup and the measured frames;
+it is not translated-code execution time.
+
+All four timedemos completed with no DBT fault diagnostics and no execution
+clock errors. The harness stopped its own Wine prefix after obtaining each
+result; these runs do not establish clean game shutdown. Execution counters
+include loading, and their periodic reports do not isolate the short measured
+frame interval. A longer fixed workload with explicit timing boundaries,
+console measurements and Counter-Strike/Warcraft III regression runs remain
+required before claiming the HL2 translated-time target.
 ## Empty chain-table targets
 
 An all-zero re-encoder chain table treated guest PC zero as a tag hit and
@@ -680,3 +747,7 @@ uses a fixed source PC so random mapping cannot hide it by filling slot zero.
 The PS5 SDK compiles and links the updated Unix adapter and engine. Console
 execution and clean-game validation remain pending; this correctness fix is
 not a performance result.
+
+PR288 is independent of the touched-slot reset trial (#287); its console
+baseline retains the merged occupancy cap, profiler and null-target fix.
+Use identical timing code on both sides of each speedup comparison.
