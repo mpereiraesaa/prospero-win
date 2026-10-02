@@ -733,8 +733,8 @@ ran candidate first and reduced measured frame time by 5.9%. It does not
 measure translated CPU time or establish the 30% target. Launch-to-result
 time was 238.4 s versus 225.8 s; both runs were forcibly stopped after their
 results, so they do not certify clean shutdown. A reversed-order four-run
-comparison with timestamped execution reports and sampling profiles remains
-in progress; console measurements remain pending.
+comparison with timestamped execution reports and sampling profiles completed,
+as qualified below; console measurements remain pending.
 
 ### Lazy native FP trial
 
@@ -758,8 +758,8 @@ image restore/save versus 99 ns when no image is used. This measures neither
 HL2 nor PS5 and is only motivation for the trial. Full regressions, sanitizers,
 application comparisons and console receipts remain required. The full
 `make test` gate, including all three differential modes, passes; the
-initial sanitizer gate and isolated adapter build pass. After adding explicit
-native-FP fault cases, both complete gates are being rerun. The isolated PC
+sanitizer gate and isolated adapter build pass. Both complete gates also pass
+with the added native-FP fault cases. The isolated PC
 adapter completes all 5182 `hl2long` frames with no detected DBT diagnostics.
 Its 99.327 s/52.17 FPS result ran with concurrent Remote Play activity, so it
 is a runtime receipt rather than a performance comparison. Forced shutdown
