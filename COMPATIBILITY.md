@@ -16,7 +16,7 @@ Profiles, controller presets and install recipes live in
 | Warcraft III: Reign of Chaos 1.27a | Playable, above 60 fps | DXVK / RADV | DualSense, USB keyboard/mouse |
 | Space Cadet Pinball | Playable | GDI | DualSense |
 | Wine Minesweeper | Playable | GDI | DualSense |
-| Half-Life 2 | Runs; frame rate drops in busy scenes | DXVK / RADV | USB keyboard/mouse |
+| Half-Life 2 | Runs at 60 fps; tested through the train station | DXVK / RADV | USB keyboard/mouse |
 
 OpenGL games need a runtime built with the optional PS5 OpenGL SDK; see
 [the OpenGL build notes](docs/WINE_PS5_BUILD.md#opengl).
