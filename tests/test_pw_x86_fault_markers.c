@@ -23,7 +23,7 @@ enum { SPAN = 0x40000, CODE = 0x1000, DATA = 0x20000, STACK_TOP = 0x3f000 };
 static uint8_t *guest;
 static uint32_t low;
 static PwX86Engine *current;
-static unsigned redirected;
+static unsigned redirected, native_fp;
 
 static int view(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes)
 {
@@ -77,6 +77,7 @@ static Run run(const uint8_t *code, size_t bytes, unsigned markers)
     for (unsigned g = 0; g < 8; g++) r.state.gpr[g] = 0x01010101u * (g + 3);
     r.state.gpr[4] = low + STACK_TOP;
     r.state.eflags = 0x2;
+    if(native_fp) { pw_guest_fp_init(&r.state.fp); memset(r.state.fp.xmm,0x5a,sizeof(r.state.fp.xmm)); }
     memcpy(guest + STACK_TOP, &(uint32_t){ 0xdead0000u }, 4);
     assert(pw_vm_posix_backend(&vm) == PW_OK);
     assert(pw_x86_engine_init(&engine, &vm, entries, 512, 1u << 20, 1, view, NULL) == PW_OK);
@@ -86,12 +87,14 @@ static Run run(const uint8_t *code, size_t bytes, unsigned markers)
     assert(pw_x86_engine_set_flat_memory(&engine, low, low + SPAN) == PW_OK);
     assert(pw_x86_engine_set_reencode(&engine, 1) == PW_OK);
     assert(pw_x86_engine_set_fault_markers(&engine, markers) == PW_OK);
+    assert(pw_x86_engine_set_native_fp(&engine,native_fp)==PW_OK);
     current = &engine;
     redirected = 0;
     r.status = PW_OK;
     for (unsigned i = 0; i < 1000 && r.state.eip != 0xdead0000u; i++)
         if ((r.status = pw_x86_engine_step(&engine, &r.state, &step)) != PW_OK) break;
     current = NULL;
+    pw_x86_engine_fp_sync(&engine,&r.state);
     r.reencoded = engine.reencoded_blocks;
     r.redirected = redirected;
     if (engine.fault_markers) {
@@ -155,6 +158,34 @@ static void compare(const char *name, const uint8_t *code, size_t bytes, uint32_
     }
     assert(marked.state.fault_address == address && marked.state.fault_write == write);
     assert(marked.state.fault_width == guarded.state.fault_width);
+}
+
+/* A fault at the first SIMD access and one after SIMD changed the image:
+ * the lazy prepare path must not change guest flags or lose guest FP state. */
+static void test_lazy_fp_faults(void)
+{
+    static const uint8_t first[] = {
+        0xb8,0xff,0xff,0xff,0xff, 0x05,1,0,0,0,
+        0x0f,0x10,0x05,0x10,0,0,0, /* movups xmm0,[0x10] */
+        0x0f,0x92,0xc2,0xc3,
+    };
+    static const uint8_t later[] = {
+        0x66,0x0f,0xef,0xc0, /* pxor xmm0,xmm0 */
+        0xb8,0xff,0xff,0xff,0xff, 0x05,1,0,0,0,
+        0x89,0x05,0x10,0,0,0,0x0f,0x92,0xc2,0xc3,
+    };
+    native_fp=1;
+    compare("lazy first SIMD fault",first,sizeof(first),10,0x10,0,0x55);
+    compare("lazy post SIMD fault",later,sizeof(later),14,0x10,1,0x55);
+    for(unsigned k=0;k<2;k++) {
+        Run a=run(k?later:first,k?sizeof(later):sizeof(first),0);
+        Run b=run(k?later:first,k?sizeof(later):sizeof(first),1);
+        assert(a.state.native_fp_active && b.state.native_fp_active);
+        assert(a.state.fp.x87_control==b.state.fp.x87_control && a.state.fp.mxcsr==b.state.fp.mxcsr);
+        assert(!memcmp(a.state.fp.xmm,b.state.fp.xmm,sizeof(a.state.fp.xmm)));
+        for(unsigned i=0;i<16;i++) assert(b.state.fp.xmm[0][i]==(k?0:0x5a));
+    }
+    native_fp=0;
 }
 
 /* The program test_memory_forms runs: every addressing and stack form. */
@@ -381,6 +412,7 @@ int main(void)
         assert(guarded.status == PW_OK && marked.status == PW_OK && !marked.redirected);
         assert(marked.state.eip == 0xdead0000u && marked.state.gpr[0] == guarded.state.gpr[0]);
     }
+    test_lazy_fp_faults();
     test_memory_forms();
     test_engine_lookup();
     test_profile_capacity();

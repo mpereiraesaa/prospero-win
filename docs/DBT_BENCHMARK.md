@@ -750,12 +750,20 @@ control-word and MXCSR cleanup contract.
 Focused regressions cover integer-only and skipped FP paths, CF/ZF across
 the first SIMD restore, existing x87/MMX/SSE mixed chains and canonical sync,
 and nondefault host control-word/MXCSR restoration with empty tags/status.
+Guarded and SIGSEGV marker paths agree on EIP, registers, flags and canonical
+XMM state when the first SIMD access faults and when a later integer access
+faults after SIMD modified the staged image.
 A private E-core wrapper microbenchmark measured roughly 506 ns for eager
 image restore/save versus 99 ns when no image is used. This measures neither
 HL2 nor PS5 and is only motivation for the trial. Full regressions, sanitizers,
 application comparisons and console receipts remain required. The full
 `make test` gate, including all three differential modes, passes; the
-sanitizer gate and isolated adapter build are in progress.
+initial sanitizer gate and isolated adapter build pass. After adding explicit
+native-FP fault cases, both complete gates are being rerun. The isolated PC
+adapter completes all 5182 `hl2long` frames with no detected DBT diagnostics.
+Its 99.327 s/52.17 FPS result ran with concurrent Remote Play activity, so it
+is a runtime receipt rather than a performance comparison. Forced shutdown
+after the result does not certify clean game shutdown.
 
 The preceding chain-hash four-run timing experiment produced calibrated
 phase estimates of 200.7/207.3 CPU-seconds for the previous build and
