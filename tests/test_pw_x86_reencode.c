@@ -18,10 +18,18 @@ enum { SPAN = 0x40000, CODE = 0x1000, DATA = 0x20000, STACK_TOP = 0x3f000 };
 
 static uint8_t *guest;          /* identity-mapped: guest address == host address */
 static uint32_t low, fs_offset;  /* fs base: low + fs_offset, or 0 */
+static uint32_t source_pc;       /* optional synthetic code PC, data stays mapped */
 
 static int view(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes)
 {
     (void)opaque;
+    if (source_pc) {
+        const uint32_t offset = pc - source_pc;
+        if (offset >= DATA - CODE) return PW_ERR_NOT_FOUND;
+        *data = guest + CODE + offset;
+        *bytes = DATA - CODE - offset;
+        return PW_OK;
+    }
     if (pc < low + CODE || pc >= low + DATA) return PW_ERR_NOT_FOUND;
     *data = (const uint8_t *)(uintptr_t)pc;
     *bytes = low + DATA - pc;
@@ -31,7 +39,7 @@ static int view(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes)
 static void initial(PwX86State *s)
 {
     memset(s, 0, sizeof(*s));
-    s->eip = low + CODE;
+    s->eip = source_pc ? source_pc : low + CODE;
     s->stack_low = low;
     s->stack_high = low + SPAN;
     s->memory_count = 1;
@@ -453,6 +461,41 @@ static void test_mixed_and_indirect(void)
     uint32_t f = low + CODE + 0x1f;
     memcpy(code + 0x12, &f, 4);
     compare(code, sizeof(code));
+}
+
+/* Invalid null targets return to the dispatcher as the emitter does; they
+ * must not jump to host NULL, including a ret through the empty call stack. */
+static void test_null_targets(void)
+{
+    static uint8_t sources[][8] = {
+        {0xb8,0,0,0,0,0xff,0xd0},       /* mov eax,0; call eax */
+        {0xb8,0,0,0,0,0xff,0xe0},       /* mov eax,0; jmp eax */
+        {0xc7,0x06,0,0,0,0,0xff,0x16},  /* mov dword [esi],0; call [esi] */
+        {0xc7,0x06,0,0,0,0,0xff,0x26},  /* mov dword [esi],0; jmp [esi] */
+        {0xc7,0x04,0x24,0,0,0,0,0xc3}, /* mov dword [esp],0; ret */
+        {0x0f,0x84,0,0,0,0,0x90,0xc3}, /* jz 0; nop; ret (side exit) */
+    };
+    static const size_t bytes[] = {7,7,8,8,8,8};
+    /* The caller must not occupy slot zero itself: a randomized low mapping
+     * can otherwise hide the empty-slot bug by publishing a nonzero tag. */
+    source_pc = 0x12341000;
+    const uint32_t relative = 0u - (source_pc + 6);
+    memcpy(sources[5] + 2, &relative, sizeof(relative));
+    for (unsigned k = 0; k < sizeof(bytes) / sizeof(bytes[0]); k++) {
+        Run reference = run(sources[k], bytes[k], 0);
+        Run ordinary = run(sources[k], bytes[k], 1);
+        Run stacked = run_call_stack(sources[k], bytes[k]);
+        Run super = run_superblocks(sources[k], bytes[k]);
+        assert(reference.status == PW_ERR_NOT_FOUND && reference.state.eip == 0);
+        same(&reference, &ordinary);
+        same(&reference, &stacked);
+        same(&reference, &super);
+        unbounded = 1;
+        ordinary = run(sources[k], bytes[k], 1);
+        unbounded = 0;
+        same(&reference, &ordinary);
+    }
+    source_pc = 0;
 }
 
 /* Returns and indirect calls between re-encoded blocks enter their target's
@@ -1023,6 +1066,7 @@ int main(void)
     test_bnd_branches();
     test_mixed_and_indirect();
     test_chain_hash_flags();
+    test_null_targets();
     test_return_targets();
     test_unbounded_chains();
     test_call_stack();

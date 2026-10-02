@@ -176,9 +176,120 @@ void WINAPI BTCpuNotifyMemoryProtect( void *addr, SIZE_T size, ULONG prot, BOOL 
     if (is_after && !status) flush( addr, size );
 }
 
+/* Wine tells the backend only the address of a view being unmapped, and a
+ * flush with no size discards every thread's translations. A 32-bit DXVK
+ * maps and unmaps windows of its texture memory thousands of times while a
+ * game loads (Half-Life 2: about 12,000 times for its first map), so the
+ * extent of each view is taken just before the unmap and only that range is
+ * flushed after it. A view whose extent could not be kept is still flushed
+ * whole. */
+struct pending_unmap
+{
+    ULONG_PTR thread, address, base;
+    SIZE_T size;
+    ULONGLONG serial;
+};
+static struct pending_unmap pending_unmaps[64];
+static RTL_SRWLOCK pending_lock = RTL_SRWLOCK_INIT;
+static unsigned int pending_count;
+static ULONGLONG pending_serial;
+static BOOL pending_fallback;
+
+/* A failed query anywhere in the walk means the complete extent is unknown.
+ * In particular, never report a prefix of a multi-region mapped view. */
+static SIZE_T view_extent( void *addr, ULONG_PTR *base )
+{
+    MEMORY_BASIC_INFORMATION info;
+    ULONG_PTR start, end, region, next;
+
+    if (NtQueryVirtualMemory( GetCurrentProcess(), addr, MemoryBasicInformation, &info, sizeof(info), NULL ) ||
+        info.State == MEM_FREE || (info.Type != MEM_MAPPED && info.Type != MEM_IMAGE))
+        return 0;
+    start = end = (ULONG_PTR)info.AllocationBase;
+    for (;;)
+    {
+        if (NtQueryVirtualMemory( GetCurrentProcess(), (void *)end, MemoryBasicInformation,
+                                  &info, sizeof(info), NULL )) return 0;
+        if (info.State == MEM_FREE || (ULONG_PTR)info.AllocationBase != start) break;
+        region = (ULONG_PTR)info.BaseAddress;
+        if (region > end || !info.RegionSize || info.RegionSize > ~(ULONG_PTR)0 - region) return 0;
+        next = region + info.RegionSize;
+        if (next <= end) return 0;
+        end = next;
+    }
+    if (end == start) return 0;
+    *base = start;
+    return end - start;
+}
+
 void WINAPI BTCpuNotifyUnmapViewOfSection( void *addr, BOOL is_after, NTSTATUS status )
 {
-    if (is_after && !status) flush( addr, 0 );
+    ULONG_PTR at = (ULONG_PTR)addr, thread = (ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, base = 0;
+    SIZE_T size = 0;
+    ULONGLONG serial = 0;
+    unsigned int i, slot = ARRAY_SIZE(pending_unmaps);
+
+    if (!is_after)
+    {
+        /* Reserve before querying: a nested notification must be newer even
+         * if the query itself permits a user callback. Failed queries also
+         * need a record, so their after notification cannot consume an older
+         * successful query for the same thread/address. */
+        RtlAcquireSRWLockExclusive( &pending_lock );
+        pending_count++;
+        if (!pending_fallback && thread)
+        {
+            for (i = 0; i < ARRAY_SIZE(pending_unmaps); i++)
+                if (!pending_unmaps[i].thread) { slot = i; break; }
+            if (slot != ARRAY_SIZE(pending_unmaps) && (serial = ++pending_serial))
+                pending_unmaps[slot] = (struct pending_unmap){ thread, at, 0, 0, serial };
+            else pending_fallback = TRUE;
+        }
+        else pending_fallback = TRUE;
+        RtlReleaseSRWLockExclusive( &pending_lock );
+        if (!serial) return;
+        size = view_extent( addr, &base );
+        RtlAcquireSRWLockExclusive( &pending_lock );
+        if (!pending_fallback && pending_unmaps[slot].serial == serial)
+        {
+            pending_unmaps[slot].base = base;
+            pending_unmaps[slot].size = size;
+        }
+        RtlReleaseSRWLockExclusive( &pending_lock );
+        return;
+    }
+    RtlAcquireSRWLockExclusive( &pending_lock );
+    if (pending_count && !pending_fallback)
+    {
+        /* Notifications nest synchronously on each thread. Match its newest
+         * record, rather than any other thread's overlapping address range. */
+        for (i = 0; i < ARRAY_SIZE(pending_unmaps); i++)
+            if (pending_unmaps[i].thread == thread && pending_unmaps[i].serial > serial)
+            {
+                serial = pending_unmaps[i].serial;
+                slot = i;
+            }
+        if (slot != ARRAY_SIZE(pending_unmaps) && pending_unmaps[slot].address == at)
+        {
+            base = pending_unmaps[slot].base;
+            size = pending_unmaps[slot].size;
+            pending_unmaps[slot].thread = 0;
+        }
+        else pending_fallback = TRUE;
+    }
+    if (pending_count) pending_count--;
+    /* Saturation or an unpaired callback makes all active pairs uncertain.
+     * Flush wholly until they drain; only then reuse the bounded bank. */
+    if (!pending_count)
+    {
+        if (pending_fallback) memset( pending_unmaps, 0, sizeof(pending_unmaps) );
+        pending_fallback = FALSE;
+        pending_serial = 0;
+    }
+    RtlReleaseSRWLockExclusive( &pending_lock );
+    if (status) return;
+    if (size) flush( (void *)base, size );
+    else flush( addr, 0 );
 }
 
 static void raise_guest_exception( I386_CONTEXT *ctx, DWORD code, UINT address, UINT write )
