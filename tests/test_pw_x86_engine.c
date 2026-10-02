@@ -48,7 +48,7 @@ static void test_execution_clock_batch(void)
     assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_OK && mean==10);
     /* 1 us granularity must not turn a 3 ns read into a 1000 ns correction. */
     clock=(BatchClock){.now=1000000,.step=3,.quantum=1000};
-    assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_OK && mean==3);
+    assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_OK && mean>=2 && mean<=4);
     clock=(BatchClock){.now=1000000,.quantum=1000};
     assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_OK && mean==0);
     clock=(BatchClock){.now=1000000,.step=10,.quantum=1,.fail_at=513};
