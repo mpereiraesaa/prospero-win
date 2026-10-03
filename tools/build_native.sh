@@ -19,6 +19,7 @@
 #   PW_WINE64_WAIT_WATCHDOG 1 turns on Wine's wait watchdog (patch 0680) in
 #                          every game: a snapshot of the server's waits every
 #                          two seconds, for diagnosing stalls (default 0)
+#   Lapy helper             fetched from the latest published GitHub release
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -32,6 +33,7 @@ wine64_script=${PW_WINE64_SCRIPT:-0}
 wine64_seconds=${PW_WINE64_SECONDS:-0}
 wine64_cycles=${PW_WINE64_SCRIPT_CYCLES:-2}
 wine64_watchdog=${PW_WINE64_WAIT_WATCHDOG:-0}
+title_id=PPSA99995
 
 [[ $native_mode == wine64 ]] || {
     echo "PW_NATIVE_MODE must be wine64: the direct Win32 runtime was removed" >&2; exit 2; }
@@ -45,6 +47,29 @@ wine64_watchdog=${PW_WINE64_WAIT_WATCHDOG:-0}
     echo "PW_OUTPUT_SUFFIX must contain only letters, digits, '_' or '-'" >&2
     exit 2
 }
+helper_download=$(mktemp -d "${TMPDIR:-/tmp}/prospero-lapy-helper.XXXXXX")
+trap 'rm -rf -- "$helper_download"' EXIT
+python3 "$root/tools/fetch_lapy_helper.py" \
+    --repo mpereiraesaa/PS5-Lapy-JB-Daemon --out "$helper_download"
+lapy_helper_elf="$helper_download/lapy.elf"
+helper_magic=$(od -An -tx1 -N4 "$lapy_helper_elf" | tr -d ' \n')
+[[ $helper_magic == 7f454c46 ]] || {
+    echo "latest Lapy release helper is not an ELF file" >&2
+    exit 2
+}
+python3 - "$root" "$lapy_helper_elf" "$helper_download/lapy-manifest.json" \
+    "$title_id" "$root/native/lapy_elevation_protocol.h" <<'PY'
+import json, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from tools.fetch_lapy_helper import validate_helper_manifest
+elf = pathlib.Path(sys.argv[2])
+manifest = json.loads(pathlib.Path(sys.argv[3]).read_text())
+protocol = pathlib.Path(sys.argv[5])
+try:
+    validate_helper_manifest(manifest, elf, protocol, sys.argv[4])
+except ValueError as error:
+    raise SystemExit(str(error))
+PY
 
 if [[ ! -e $foundation/.git ]]; then
     mkdir -p -- "$(dirname -- "$foundation")"
@@ -100,11 +125,12 @@ fi
     exit 2
 }
 
-title_id=PPSA99995
 build="$root/build/native$output_suffix"
 dist="$root/dist/$title_id$output_suffix"
 rm -rf -- "$build" "$dist"
 mkdir -p "$build/obj" "$build/import-stubs" "$dist/sce_sys" "$dist/sce_module"
+cp "$helper_download/release.json" "$build/lapy-helper-release.json"
+cp "$helper_download/lapy-manifest.json" "$build/lapy-helper-manifest.json"
 
 cc=(env PS5_PAYLOAD_SDK="$sdk" sh "$foundation/tooling/prospero-clang18")
 # A source archive has no Git metadata; its builds report "unknown".
@@ -122,6 +148,7 @@ common=(-DPW_BUILD_ID=\""$build_id"\" -O2 -Wall -Wextra -Werror -ffunction-secti
 sources=(
     native/wine64_main.c native/pw_diagnostics.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c
     native/pw_agc_submit_lifecycle.c native/pw_videoout_ps5.c native/pw_data_mount.c
+    native/pw_lapy_elevation.c
     native/pw_wine_display.c native/pw_wine_library.c native/pw_hid_ps5.c native/pw_wine_prefix.c
     src/pw_result.c src/pw_wine_start.c src/pw_wine_launch.c src/pw_game_profile.c src/pw_prefix_temp.c
     src/pw_app_profile.c src/pw_profile_catalog.c src/pw_launcher_render.c src/pw_present.c
@@ -170,6 +197,7 @@ objects+=("$build/obj/ps5log.o" "$build/obj/ps5log_ps5_net.o")
 [[ -f $root/sce_sys/icon0.png ]] || python3 "$root/tools/make_icon.py"
 cp "$root/sce_sys/param.json" "$root/sce_sys/icon0.png" "$dist/sce_sys/"
 cp "$foundation/runtime/libc.prx" "$dist/sce_module/libc.prx"
+cp "$lapy_helper_elf" "$dist/lapy.elf"
 if [[ -f $dev_conf ]]; then
     cp "$dev_conf" "$dist/dev.conf"
 fi

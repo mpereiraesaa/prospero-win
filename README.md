@@ -69,12 +69,12 @@ If you get a game running, a profile there is the best way to share it.
 ## Try it
 
 You need a PS5 that can run homebrew: an FTP server and ELF loader
-(for example from [ps5-payload-dev](https://github.com/ps5-payload-dev)), a
-loader that installs apps from `/data/homebrew` (such as
-[ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)), and the
-[Lapy JB daemon](https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon), which
-gives the app access to `/data` where your games live. You also need your own
-copy of the game, and a Linux PC to install it on.
+(for example from [ps5-payload-dev](https://github.com/ps5-payload-dev)) with
+elfldr listening on local port 9021, and a loader that installs apps from
+`/data/homebrew` (such as [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)).
+The app bundles its one-shot Lapy helper and requests `/data` during startup;
+there is no resident Lapy daemon to install. You also need your own copy of
+the game, and a Linux PC to install it on.
 
 The app itself is a zip on the [Releases page](https://github.com/mpereiraesaa/prospero-win/releases).
 [Getting started](docs/GETTING_STARTED.md) walks through the whole setup, and
@@ -84,8 +84,8 @@ The app itself is a zip on the [Releases page](https://github.com/mpereiraesaa/p
 
 Everything so far was tested on firmware 12.02. The app itself doesn't use
 firmware-specific offsets. The parts that depend on firmware are the
-jailbreak, the loader and the Lapy JB daemon (which lists 3.00–12.00). If you
-try another firmware, please open an issue saying what worked and what
+jailbreak, the loader and the bundled Lapy helper's runtime layout checks. If
+you try another firmware, please open an issue saying what worked and what
 didn't, with the firmware version. That's exactly the information we're
 missing.
 

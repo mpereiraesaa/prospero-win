@@ -94,9 +94,11 @@ $(eval $(call test_rule,test_pw_agc_submit_lifecycle,tests/test_pw_agc_submit_li
 $(eval $(call test_rule,test_pw_videoout_layout,tests/test_pw_videoout_layout.c,))
 $(eval $(call test_rule,test_pw_videoout_tile,tests/test_pw_videoout_tile.c src/pw_present.c,))
 $(eval $(call test_rule,test_pw_pad_ps5,tests/test_pw_pad_ps5.c native/pw_pad_ps5.c src/pw_pad.c,-DPW_PAD_PS5_HOST_TEST))
-$(eval $(call test_rule,test_pw_data_mount,tests/test_pw_data_mount.c native/pw_data_mount.c,))
-PW_DATA_MOUNT_TEST_FLAGS := -DPW_DATA_MOUNT_REQUEST_PATH='"/tmp/pw_dm_req"' -DPW_DATA_MOUNT_REQUEST_TEMP='"/tmp/pw_dm_req_tmp."' -DPW_DATA_MOUNT_PATH='"/tmp/pw_dm_data"' -DPW_DATA_MOUNT_WAIT_MS=200 -DPW_DATA_MOUNT_POLL_MS=50
+$(eval $(call test_rule,test_pw_data_mount,tests/test_pw_data_mount.c native/pw_data_mount.c,-DPW_DATA_MOUNT_HOST_TEST))
+PW_DATA_MOUNT_TEST_FLAGS := -DPW_DATA_MOUNT_HOST_TEST -DPW_DATA_MOUNT_PATH='"/tmp/pw_dm_data"' -DPW_DATA_MOUNT_WAIT_MS=200 -DPW_DATA_MOUNT_POLL_MS=50
 $(eval $(call test_rule,test_pw_data_mount_native,tests/test_pw_data_mount_native.c native/pw_data_mount.c,$(PW_DATA_MOUNT_TEST_FLAGS)))
+PW_LAPY_ELEVATION_TEST_FLAGS := -DPW_LAPY_HELPER_PATH='"/tmp/pw_lapy_test_helper"'
+$(eval $(call test_rule,test_pw_lapy_elevation,tests/test_pw_lapy_elevation.c native/pw_lapy_elevation.c,$(PW_LAPY_ELEVATION_TEST_FLAGS)))
 $(eval $(call test_rule,classify_x86,tools/classify_x86.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c,))
 $(eval $(call test_rule,dbt_differential,tools/dbt_differential.c src/pw_x86_hostexec.c src/pw_x86_engine.c src/pw_x86_cache.c src/pw_x86_block.c src/pw_x86_reencode.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,))
 $(eval $(call test_rule,bench_dynarec,tools/bench_dynarec.c src/pw_x86_engine.c src/pw_x86_cache.c src/pw_x86_block.c src/pw_x86_reencode.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,-lm))
@@ -121,7 +123,7 @@ TESTS := test_pw_diagnostics test_pw_x86_hostexec test_pw_app_profile test_pw_pr
 	test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_global_residency test_pw_x86_reencode test_pw_x86_fault_markers test_pw_x86_lazyflags \
 	test_pw_guest_call test_pw_x87 test_pw_x87_native test_pw_audio_ps5 test_pw_audio_mix test_pw_agc_submit_lifecycle \
 	test_pw_videoout_layout test_pw_videoout_tile test_pw_pad_ps5 test_pw_data_mount \
-	test_pw_data_mount_native
+	test_pw_data_mount_native test_pw_lapy_elevation
 
 # The Python suites drive the built DBT tools and check the contracts the
 # host compiler cannot.
@@ -131,6 +133,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_icon.py
 	python3 tests/test_docs_links.py
 	python3 tests/test_native_contract.py
+	python3 tests/test_fetch_lapy_helper.py
 	python3 tests/test_package_release.py
 	python3 tests/test_publish_release.py
 	python3 tests/test_x86_differential.py

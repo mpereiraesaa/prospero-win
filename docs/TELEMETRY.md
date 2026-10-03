@@ -15,7 +15,7 @@ Every record the title writes starts with `PW_WINE64`:
 | Record | Carries |
 | --- | --- |
 | `args` | argument count, mode (`launcher`, `game`, `sync`), profile, cycle, refusal |
-| `data_mount` | the `/data` request: present before, request written, errno, present after, wait |
+| `data_mount` | helper completion/error, `/data` before and after, wait, settle delay |
 | `library` / `profile refused` | profiles listed (by index or scan, with the scan errno), games, the library's root; each refused profile and why |
 | `mirror` | the library copy for the launcher: target, status, errno |
 | `launcher` / `launcher chose` | VideoOut and pad status, games, cycle; the chosen game or `sync` |

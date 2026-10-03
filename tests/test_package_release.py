@@ -25,6 +25,7 @@ def main() -> int:
         root = Path(directory)
         title, ps5, host = root / "title", root / "wine-ps5", root / "usr"
         write(title / "eboot.bin", "eboot")
+        write(title / "lapy.elf", "helper")
         write(title / "sce_sys" / "param.json", "{}")
         write(title / "sce_module" / "libc.prx", "libc")
         write(title / "dev.conf", "DEV_SERVER=builder-pc")
@@ -48,6 +49,7 @@ def main() -> int:
         share = app / "win" / "wine" / "share" / "wine"
         # The title, without the builder's log destination.
         assert (app / "eboot.bin").read_text() == "eboot"
+        assert (app / "lapy.elf").read_text() == "helper"
         assert (app / "sce_sys" / "param.json").exists() and (app / "sce_module" / "libc.prx").exists()
         assert not (app / "dev.conf").exists()
         # Wine's PE modules, less import libraries and PC-only drivers; the
@@ -64,7 +66,7 @@ def main() -> int:
         assert sorted(p.name for p in (lib / "x86_64-unix").iterdir()) == \
             ["libvulkan.prx", "ntdll.prx", "win32u.prx"]
         assert (share / "nls" / "locale.nls").exists() and (share / "fonts" / "tahoma.ttf").exists()
-        assert "PPSA99995: 15 files" in result.stdout, result.stdout
+        assert "PPSA99995: 16 files" in result.stdout, result.stdout
 
         # A second run replaces the folder rather than merging into it.
         write(app / "stale.txt")
