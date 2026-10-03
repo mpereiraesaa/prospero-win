@@ -34,7 +34,8 @@
 
 /* The contract every re-encoded block has: all eight guest GPRs resident,
  * with guest_to_host holding 16 + the host register number. */
-enum { PW_X86_REENCODE_HOST_BASE = 16, PW_X86_REENCODE_CHAIN_SLOTS = 65536 };
+enum { PW_X86_REENCODE_HOST_BASE = 16, PW_X86_REENCODE_CHAIN_SLOTS = 65536,
+       PW_X86_REENCODE_CHAIN_ENTRIES = 2 * PW_X86_REENCODE_CHAIN_SLOTS };
 
 /* Whether a translated block came from this backend. */
 static inline int pw_x86_reencoded(const PwX86RegContract *contract)

@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 #include <ucontext.h>
 #include <unistd.h>
@@ -161,7 +162,7 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
     memcpy(r.data, guest + DATA, sizeof(r.data));
     r.reencoded = engine.reencoded_blocks;
     r.chain_slots = 0;
-    for (unsigned k = 0; engine.chain_targets && k < PW_X86_REENCODE_CHAIN_SLOTS; k++)
+    for (unsigned k = 0; engine.chain_targets && k < PW_X86_REENCODE_CHAIN_ENTRIES; k++)
         r.chain_slots += engine.chain_targets[k].host_code != NULL;
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
     return r;
@@ -542,6 +543,39 @@ static void test_chain_hash_flags(void)
     assert(captured.data[0]==1);
 }
 
+/* Two colliding callees must retain both entries and incoming flags. */
+static void test_two_way_calls(void)
+{
+    uint8_t *code=calloc(1, DATA-CODE);
+    uint8_t caller[]={
+        0xb9,64,0,0,0, 0xbb,0,0,0,0, 0xb8,0,0,0,0,
+        0x39,0xc9,                         /* L: cmp ecx,ecx: clear CF */
+        0xff,0xd3,                         /* call ebx */
+        0x81,0xf3,0,0,0,0,                /* xor ebx,F^G */
+        0x49,0x75,0xf3,                    /* dec ecx; jnz L */
+        0x3d,128,0,0,0, 0xc3,
+    };
+    const uint8_t fcode[]={0x83,0xd0,1,0xc3}, gcode[]={0x83,0xd0,3,0xc3};
+    uint32_t f=low+CODE+0x100, g=0, mask;
+    Run captured;
+    assert(code);
+    for(uint32_t candidate=f+16; candidate<low+DATA-16; candidate++)
+        if(pw_x86_chain_slot(candidate)==pw_x86_chain_slot(f)) {g=candidate;break;}
+    assert(g && g!=f);
+    mask=f^g;
+    memcpy(caller+6,&f,4);memcpy(caller+21,&mask,4);
+    memcpy(code,caller,sizeof(caller));
+    memcpy(code+f-low-CODE,fcode,sizeof(fcode));
+    memcpy(code+g-low-CODE,gcode,sizeof(gcode));
+    compare(code,DATA-CODE);
+    unbounded=1;captured=run(code,DATA-CODE,1);unbounded=0;
+    assert(captured.status==PW_OK && captured.state.eip==0xdead0000u);
+    assert(captured.state.gpr[0]==128 && captured.state.gpr[1]==0);
+    assert(captured.state.eflags & 0x40);
+    assert(captured.steps<12); /* Cold publication, then both banks chain. */
+    free(code);
+}
+
 static void test_return_targets(void)
 {
     uint8_t code[] = {
@@ -671,7 +705,7 @@ static void test_call_predict_site(void)
         0x0f, 0x98, 0xc7, /* sets bh */
     };
     const size_t page = (size_t)sysconf(_SC_PAGESIZE);
-    const size_t table_bytes = PW_X86_REENCODE_CHAIN_SLOTS * sizeof(PwX86IndirectTarget);
+    const size_t table_bytes = PW_X86_REENCODE_CHAIN_ENTRIES * sizeof(PwX86IndirectTarget);
     uint8_t *region = mmap(NULL, table_bytes + 2 * page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uint8_t *code = mmap(NULL, 3 * page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     const uint32_t pc = low + CODE, a = low + CODE + 0x100, other = low + CODE + 0x200;
@@ -688,8 +722,8 @@ static void test_call_predict_site(void)
     table = (PwX86IndirectTarget *)(region + page);
     options.chain_targets = table;
     /* The empty slot 0 must not match target 0 (its entry has no code). */
-    table[0].guest_pc = 1;
-    slot_a = table + pw_x86_chain_slot(a);   /* the chain table index */
+    table[0].guest_pc = table[PW_X86_REENCODE_CHAIN_SLOTS].guest_pc = 1;
+    slot_a = table + pw_x86_chain_slot(a);          /* the chain table index */
     slot_other = table + pw_x86_chain_slot(other);
     assert(slot_a != slot_other && slot_a != table && slot_other != table);
     assert(pw_x86_reencode(destination, sizeof(destination), a, code + page, page, &callee, &options) == PW_OK);
@@ -1196,6 +1230,7 @@ int main(void)
     test_control();
     test_bnd_branches();
     test_mixed_and_indirect();
+    test_two_way_calls();
     test_null_targets();
     test_chain_hash_flags();
     test_return_targets();

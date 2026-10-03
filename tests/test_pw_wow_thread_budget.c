@@ -4,6 +4,7 @@
 #include "../wine/wowprospero/thread_budget.h"
 #include "../wine/wowprospero/host_memory.h"
 #include "../src/pw_x86_engine.h"
+#include "../src/pw_x86_reencode.h"
 #include "../src/pw_x86_hostexec.h"
 #include "../src/pw_vm_posix.h"
 #include <assert.h>
@@ -238,6 +239,14 @@ static void *guest_thread(void *opaque)
     assert(pw_x86_engine_set_counters(&t.engine, 0) == PW_OK);
     assert(pw_x86_engine_set_flat_memory(&t.engine, low, low + SPAN) == PW_OK);
     assert(pw_x86_engine_set_reencode(&t.engine, 1) == PW_OK);
+    /* The second bank crosses Wine's lazy-allocation threshold. Its last
+     * entry must be accessible and zeroed, then cleared on generation reset. */
+    assert(t.engine.chain.bytes >= PW_X86_REENCODE_CHAIN_ENTRIES*sizeof(PwX86IndirectTarget));
+    PwX86IndirectTarget *last=&t.engine.chain_targets[PW_X86_REENCODE_CHAIN_ENTRIES-1];
+    assert(!last->host_code && !last->guest_pc);
+    last->guest_pc=0x1234;last->host_code=(const void *)(uintptr_t)1;
+    assert(pw_x86_engine_reset(&t.engine, 2)==PW_OK);
+    assert(!last->host_code && !last->guest_pc);
     memset(&state, 0, sizeof(state));
     state.eip = low + CODE;
     state.gpr[4] = low + STACK_TOP;

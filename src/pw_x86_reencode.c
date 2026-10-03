@@ -915,6 +915,19 @@ static void emit_chain_slot(Out *o)
     b(o, 0x45); b(o, 0x0f); b(o, 0xb7); b(o, 0xdb);                /* movzx r11d, r11w */
 }
 
+/* Probe the second bank only after a primary PC mismatch. R9 still holds
+ * the guest ECX; every instruction here preserves guest arithmetic flags. */
+static size_t emit_second_chain_probe(Out *o)
+{
+    _Static_assert(sizeof(PwX86IndirectTarget)==16, "generated chain entry ABI");
+    b(o, 0x4d); b(o, 0x8d); b(o, 0x9b);
+    w32(o, PW_X86_REENCODE_CHAIN_SLOTS * sizeof(PwX86IndirectTarget)); /* lea r11,[r11+bank] */
+    b(o, 0x41); b(o, 0x8b); b(o, 0x0b);                            /* mov ecx,[r11] */
+    b(o, 0xf7); b(o, 0xd1);                                        /* not ecx */
+    b(o, 0x42); b(o, 0x8d); b(o, 0x4c); b(o, 0x11); b(o, 1);
+    return jump8(o, 0xe3);                                        /* jrcxz hit */
+}
+
 /* The dynamic exit to the guest EIP in r10d: the indirect table when the
  * translation has one, otherwise back to the dispatcher. With hook, a chain
  * table hit goes through a jmp rel32 before entering the target (r11), and
@@ -929,7 +942,7 @@ static void emit_dynamic_exit_hooked(Ctx *c, size_t *hook)
          * PC compared as not(slot) + pc + 1 == 0, all without flags. */
         const size_t budget = offsetof(PwX86State, chain_budget);
         uint64_t base = (uint64_t)(uintptr_t)c->chain_table;
-        size_t to_hit, to_miss, to_spent = 0;
+        size_t to_hit, second_hit, to_miss, to_spent = 0;
         emit_chain_slot(o);
         b(o, 0x4e); b(o, 0x8d); b(o, 0x1c); b(o, 0xdd); w32(o, 0);      /* lea r11, [r11*8] */
         b(o, 0x4f); b(o, 0x8d); b(o, 0x1c); b(o, 0x1b);                 /* lea r11, [r11+r11] */
@@ -940,9 +953,11 @@ static void emit_dynamic_exit_hooked(Ctx *c, size_t *hook)
         b(o, 0xf7); b(o, 0xd1);                                         /* not ecx */
         b(o, 0x42); b(o, 0x8d); b(o, 0x4c); b(o, 0x11); b(o, 1);        /* lea ecx, [rcx+r10+1] */
         to_hit = jump8(o, 0xe3);                                        /* jrcxz hit */
+        second_hit = emit_second_chain_probe(o);
         mov_rcx_r9(o);
         to_miss = jump8(o, 0xeb);
         land8(o, to_hit);
+        land8(o, second_hit);
         if (c->bounded) {
             load_state(o, 1, budget);                                   /* mov ecx, budget */
             b(o, 0x8d); b(o, 0x49); b(o, 0xff);                         /* lea ecx, [rcx-1] */
@@ -1167,7 +1182,7 @@ static void emit_string(Ctx *c, const Inst *in)
 static void emit_side_exits(Ctx *c)
 {
     Out *o = &c->o;
-    size_t to_common[MAX_INSTS], to_hit, to_miss;
+    size_t to_common[MAX_INSTS], to_hit, second_hit, to_miss;
     uint64_t base = (uint64_t)(uintptr_t)c->chain_table;
 
     if (!c->side_count) return;
@@ -1189,9 +1204,11 @@ static void emit_side_exits(Ctx *c)
     b(o, 0xf7); b(o, 0xd1);                                         /* not ecx */
     b(o, 0x42); b(o, 0x8d); b(o, 0x4c); b(o, 0x11); b(o, 1);        /* lea ecx, [rcx+r10+1] */
     to_hit = jump8(o, 0xe3);                                        /* jrcxz hit */
+    second_hit = emit_second_chain_probe(o);
     mov_rcx_r9(o);
     to_miss = jump8(o, 0xeb);
     land8(o, to_hit);
+    land8(o, second_hit);
     mov_rcx_r9(o);
     b(o, 0x4d); b(o, 0x8b); b(o, 0x5b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, host_code));
     b(o, 0x4d); b(o, 0x8d); b(o, 0x48); b(o, 4);                    /* lea r9, [r8+4] */

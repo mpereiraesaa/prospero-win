@@ -912,3 +912,33 @@ hash landed. The two changes were then combined on the console, played
 through the opening of `d1_trainstation_01` with the route controller and
 quit from the game: 59.9 fps throughout (minimum 59.9), no translator or
 guest exceptions, and a normal Wine exit.
+
+### Second chain-table bank
+
+Even with the full-PC hash, two hot targets can still land in the same
+chain slot and keep evicting each other. The chain table now has a second
+bank of 65,536 slots behind the first. When a newly published PC collides
+with a different PC in its primary slot, the old entry moves into the same
+slot of the second bank instead of being dropped. Generated dynamic exits
+and superblock side exits check the primary slot first and probe the second
+bank only on a mismatch; the probe uses LEA, MOV, NOT and JRCXZ, so guest
+flags survive, and guest ECX is restored from R9 on a miss. Both banks get
+the null-target sentinel, are cleared on reset, and are counted by the
+dispatcher residency profile. The table grows from 1 MiB to 2 MiB per
+translating thread.
+
+On the PS5, with the full-PC hash and the shared fault exit already in main,
+the `hl2long` timedemo was alternated between main and this change (5,182
+frames at 59.8 fps either way, execution clock on):
+
+| Build | Main thread | Busiest worker |
+| --- | ---: | ---: |
+| main `f2b0379` (three runs) | 96.5–97.9 s | 71.3–71.6 s |
+| second chain bank (two runs) | 94.0, 95.9 s | 69.3, 69.0 s |
+
+Both runs came in below every main run on both threads: roughly 2% less
+translated CPU on the main thread and 3% less on the worker. The opening of
+`d1_trainstation_01` was then played through with the route controller and
+quit from the game: 59.9 fps on average (minimum 59.2), no translator or
+guest exceptions, and a normal Wine exit.
+
