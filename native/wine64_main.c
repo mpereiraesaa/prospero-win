@@ -122,6 +122,9 @@ static void script_keys_load(const char *root)
  * replayed through the path a USB keyboard and mouse take. */
 static PwScriptInput script_input;
 static size_t script_input_next;
+/* What its pad and stick events hold: the game's XInput controller 0 adds
+ * it to the DualSense's state every frame (xinput mode only). */
+static PwScriptPad script_pad;
 static uint64_t script_input_start_ns; /* 0 until its sync text appeared */
 static PwScriptInputSync script_input_sync;
 static long script_input_sync_offset;
@@ -138,6 +141,7 @@ static void script_input_load(const char *root)
     int status = PW_ERR_TRUNCATED; /* read short */
 
     memset(&script_input, 0, sizeof(script_input));
+    memset(&script_pad, 0, sizeof(script_pad));
     script_input_next = 0;
     script_input_start_ns = 0;
     snprintf(path, sizeof(path), "%s/pw_script_input", root);
@@ -172,9 +176,9 @@ static void script_input_load(const char *root)
             fclose(file);
         }
     }
-    PS5LOG_LOG("PW_WINE64 script input status=%s events=%u bad_line=%u sync=%s", pw_result_name(status),
-               (unsigned)script_input.count, (unsigned)bad,
-               script_input.sync_path[0] ? script_input.sync_path : "-");
+    PS5LOG_LOG("PW_WINE64 script input status=%s events=%u bad_line=%u sync=%s pad_events=%u",
+               pw_result_name(status), (unsigned)script_input.count, (unsigned)bad,
+               script_input.sync_path[0] ? script_input.sync_path : "-", (unsigned)script_input.pad_events);
 }
 
 /* With a sync line, reads what the file gained since the last look; the
@@ -1069,6 +1073,8 @@ int main(int argc, char **argv)
     const uint64_t script_start_ns = now_ns();
     script_keys_load(library_root);
     script_input_load(library_root);
+    if (script_input.pad_events && !set_pad)
+        PS5LOG_LOG("PW_WINE64 script pad events ignored: the profile's [input] mode is not xinput");
 #endif
     for (uint64_t tick = 1; status == PW_OK; tick++) {
         uint64_t now = now_ns();
@@ -1111,22 +1117,48 @@ int main(int argc, char **argv)
             script_key_next++;
         }
         if (post_input && script_input_next < script_input.count) {
+            uint16_t pad_changed = 0; /* a button changes at most once a frame */
+
             if (!script_input_start_ns && tick % (PW_WINE64_TICKS_PER_S / 2) == 0) script_input_poll_sync(now);
             while (script_input_start_ns && script_input_next < script_input.count &&
                    now - script_input_start_ns >= (uint64_t)script_input.events[script_input_next].at_ms * 1000000u) {
-                const PwScriptInputEvent *event = &script_input.events[script_input_next++];
-                PwWineInput input = { event->kind == PW_SCRIPT_INPUT_KEY ? PW_WINE_INPUT_KEY :
-                                      event->kind == PW_SCRIPT_INPUT_BUTTON ? PW_WINE_INPUT_MOUSE_BUTTON :
-                                      PW_WINE_INPUT_MOUSE_MOVE, event->code, event->dx, event->dy, event->down };
-                if (post_input(&input) == 0) posted++;
-                else refused++;
+                const PwScriptInputEvent *event = &script_input.events[script_input_next];
+                uint16_t held = script_pad.buttons;
+                int pad_event = pw_script_pad_apply(&script_pad, event, &pad_changed);
+
+                if (pad_event < 0) break; /* next frame, after the game saw this one */
+                script_input_next++;
+                if (pad_event) {
+                    if (held != script_pad.buttons)
+                        PS5LOG_LOG("PW_WINE64 script pad buttons=%#x at_ms=%u", (unsigned)script_pad.buttons,
+                                   (unsigned)event->at_ms);
+                } else {
+                    PwWineInput input = { event->kind == PW_SCRIPT_INPUT_KEY ? PW_WINE_INPUT_KEY :
+                                          event->kind == PW_SCRIPT_INPUT_BUTTON ? PW_WINE_INPUT_MOUSE_BUTTON :
+                                          PW_WINE_INPUT_MOUSE_MOVE, event->code, event->dx, event->dy, event->down };
+                    if (post_input(&input) == 0) posted++;
+                    else refused++;
+                }
                 if (script_input_next == script_input.count || script_input_next % 2000 == 0)
                     PS5LOG_LOG("PW_WINE64 script input replayed=%u of %u", (unsigned)script_input_next,
                                (unsigned)script_input.count);
             }
         }
 #endif
-        if (pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK) {
+        int pad_read = pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK;
+        /* XInput controller 0: the DualSense, and in a script build the
+         * macro's controller added to it, every frame, so a scripted press
+         * stays down until its release. */
+        if (set_pad) {
+            PwWinePad state;
+            int connected = pw_wine_game_pad(pad_read ? &pad : NULL, &state), scripted = 0;
+#if PW_WINE64_SCRIPT
+            scripted = script_input.pad_events != 0;
+            connected = pw_wine_script_pad(&state, connected, &script_pad, scripted);
+#endif
+            if (pad_read || scripted) set_pad(connected ? &state : NULL);
+        }
+        if (pad_read) {
             size_t count = pw_wine_game_inputs(&game_input, pad.core.pressed_edges,
                                                pad.core.released_edges, events,
                                                sizeof(events) / sizeof(events[0]) - 1);
@@ -1140,10 +1172,6 @@ int main(int argc, char **argv)
             for (size_t i = 0; i < count; i++) {
                 if (post_input(&events[i]) == 0) posted++;
                 else refused++;
-            }
-            if (set_pad) {
-                PwWinePad state;
-                set_pad(pw_wine_game_pad(&pad, &state) ? &state : NULL);
             }
             /* The rumble the game asked for: XInput's left motor is the
              * DualSense's large one, speeds 0..65535 become 0..255. */

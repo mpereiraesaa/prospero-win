@@ -792,8 +792,13 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   `<milliseconds after the game starts> <Windows virtual-key code>` per line,
   each sent as a press and a release. For example, `30000 0x0d` presses
   ENTER 30 seconds in, which lets an unattended run get past a game's menus
-  and into gameplay. `tools/pw_gameplay_run.py` sets up such a run and reports
-  it ([debugging guide](DEBUGGING_GUIDE.md#9-automated-gameplay-runs)).
+  and into gameplay. It also replays a macro from
+  `/data/prospero-win/pw_script_input` (`src/pw_script_input.h`): keys and
+  the mouse through the USB keyboard's path, and controller buttons and
+  sticks added to the DualSense's state as XInput controller 0 every frame,
+  held until the macro releases them. `tools/pw_gameplay_run.py` sets up
+  such a run and reports it
+  ([debugging guide](DEBUGGING_GUIDE.md#9-automated-gameplay-runs)).
 
 In a game, the title works as follows:
 

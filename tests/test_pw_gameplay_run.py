@@ -194,6 +194,70 @@ with tempfile.TemporaryDirectory() as directory:
     assert not (root / "pw_script_input").exists()
     assert "a recorded macro" in output
 
+# --pad: names (any case), masks and hold times; malformed ones refused.
+assert run.parse_pad("45000:a") == (45000, "a", 150)
+assert run.parse_pad("0:START:300") == (0, "start", 300) and run.parse_pad("5:lb:0") == (5, "lb", 0)
+assert run.parse_pad("5:0x1010") == (5, "0x1010", 150) and run.parse_pad("5:0X1") == (5, "0x0001", 150)
+assert {run.parse_pad(f"1:{name}")[1] for name in run.PAD_BUTTONS} == set(run.PAD_BUTTONS)
+for bad in ("a", "x:a", "10:", "10:select", "10:a:", "10:a:-5", "10:a:1:2", "10:0x0800", "10:0x0",
+            "10:0x10000", "10:4096", "-1:a"):
+    try:
+        run.parse_pad(bad)
+        raise AssertionError(bad)
+    except ValueError:
+        pass
+# The macro: a press and a release per --pad, merged with --input's events
+# by time, the sync line first; without --pad the macro goes as it is.
+assert run.macro_script(None, [(45000, "a", 150)]) == b"45000 pad a 1\n45150 pad a 0\n"
+assert run.macro_script(b"0 key 0x57 1\n", []) == b"0 key 0x57 1\n"
+assert run.macro_script(None, [(900, "b", 150), (100, "a", 1000)]) == \
+    b"100 pad a 1\n900 pad b 1\n1050 pad b 0\n1100 pad a 0\n"
+assert run.macro_script(b"sync logs/game.log loaded\r\n# W held\r\n0 key 0x57 1\r\n\r\n"
+                        b"500  move 5 0\r\n900 key 0x57 0\r\n", [(500, "start", 0), (100, "0x1010", 400)]) == \
+    (b"sync logs/game.log loaded\n0 key 0x57 1\n100 pad 0x1010 1\n500 move 5 0\n"
+     b"500 pad 0x1010 0\n500 pad start 1\n500 pad start 0\n900 key 0x57 0\n")
+for bad_macro in (b"0 key 0x57 1\nsync a.log t\n", b"jump 1\n"):
+    try:
+        run.macro_script(bad_macro, [(1, "a", 150)])
+        raise AssertionError(bad_macro)
+    except SystemExit:
+        pass
+# The summary: the controller buttons the title held, and a profile that
+# can't take them.
+summary = run.summarize("REC seq=1 t=1 PW_WINE64 script input status=ok events=2 bad_line=0 sync=- pad_events=2\n"
+                        "REC seq=2 t=2 PW_WINE64 script pad buttons=0x1000 at_ms=45000\n"
+                        "REC seq=3 t=3 PW_WINE64 script pad buttons=0 at_ms=45150\n"
+                        "REC seq=4 t=4 PW_WINE64 script input replayed=2 of 2\n")
+assert summary[0] == "macro: ok, 2 of 2 events replayed (never synced)"
+assert summary[1] == "pad buttons held: 2 changes (0x1000 at 45000 ms, 0 at 45150 ms)"
+assert "pad: ignored, the game's profile does not use [input] mode = xinput" in \
+    run.summarize("REC seq=1 t=1 PW_WINE64 script pad events ignored: the profile's [input] mode is not xinput\n")
+assert not any(line.startswith("pad") for line in run.summarize(GAME))
+# A run with --pad alone, and with --input: the merged macro is on the
+# console for the run only.
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    console = Console(root)
+    code, output = main(console, "--pad", "45000:a", "--pad", "50000:start:300")
+    assert code == 0, output
+    assert console.during["pw_script_input"] == b"45000 pad a 1\n45150 pad a 0\n50000 pad start 1\n50300 pad start 0\n"
+    assert console.during["pw_script_keys"] == b""
+    assert not (root / "pw_script_input").exists()
+    assert "2 pad presses" in output and "a recorded macro" not in output
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    macro = Path(directory) / "macro.txt"
+    macro.write_bytes(b"0 key 0x57 1\n900 key 0x57 0\n")
+    console = Console(root)
+    code, output = main(console, "--input", str(macro), "--pad", "500:x:100", "--key", "1000:enter")
+    assert code == 0, output
+    assert console.during["pw_script_input"] == b"0 key 0x57 1\n500 pad x 1\n600 pad x 0\n900 key 0x57 0\n"
+    assert console.during["pw_script_keys"] == b"1000 0x0d\n"
+    assert not (root / "pw_script_input").exists()
+    assert "a recorded macro, 1 pad presses" in output
+
 # No run: the tool gives up after --wait and still restores the console.
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory) / "console"
@@ -320,4 +384,4 @@ with tempfile.TemporaryDirectory() as directory:
         assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
         assert not (root / "pw_script_keys").exists()
 
-print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, recorded macro, profilers, another translator, fetched files, restore on success/timeout/refusal/signal, stale triggers, session by profile id, summary")
+print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, recorded macro, pad presses merged into it, profilers, another translator, fetched files, restore on success/timeout/refusal/signal, stale triggers, session by profile id, summary")

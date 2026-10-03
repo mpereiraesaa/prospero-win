@@ -4,16 +4,18 @@
 
 A script build of the title (PW_WINE64_SCRIPT=1, docs/DEBUGGING_GUIDE.md,
 "Automated gameplay runs") opens the library's first game by itself, presses
-the keys listed in <root>/pw_script_keys at set times, and closes the game
-after PW_WINE64_SECONDS. This tool prepares the console for one such run,
+the keys listed in <root>/pw_script_keys at set times, replays the macro in
+<root>/pw_script_input, and closes the game after PW_WINE64_SECONDS. This tool prepares the console for one such run,
 waits for it, and puts everything back:
 
 - profiles.lst lists only the chosen game, so the script build opens it,
   and --arguments replaces the game's launch arguments for the run (a game
   that starts at its menu can start a map instead);
 - pw_script_keys holds the key presses (--key MS:KEY, any number), and
-  --input FILE a recorded macro of keys, mouse buttons and motion
-  (<root>/pw_script_input, src/pw_script_input.h);
+  --input FILE a recorded macro of keys, mouse buttons, motion and
+  controller input (<root>/pw_script_input, src/pw_script_input.h);
+  --pad MS:BUTTON[:HOLDMS] adds controller button presses to that macro,
+  each held HOLDMS (150 unless given), for menus that ignore keys;
 - --append adds lines to files under the library root, such as a game's
   config (Counter-Strike's bot_quota), --timing turns on the WoW64
   timing report (pw_wow_timing), --profiler turns on one of the
@@ -37,7 +39,7 @@ behind is removed too.
 
 Usage:
     pw_gameplay_run.py SLUG --host IP [--port N] [--remote /data/prospero-win]
-        [--key MS:KEY ...] [--input FILE] [--arguments ARGS] [--append PATH=LINE ...]
+        [--key MS:KEY ...] [--input FILE] [--pad MS:BUTTON[:HOLDMS] ...] [--arguments ARGS] [--append PATH=LINE ...]
         [--timing] [--profiler NAME ...] [--fps]
         [--runtime wowprospero.prx --app /data/homebrew/FOLDER]
         [--wait SECONDS] [--save DIR] [--fetch PATH ...] [--keep]
@@ -66,6 +68,14 @@ KEY_NAMES = {
     **{chr(letter): letter - 32 for letter in range(ord("a"), ord("z") + 1)},
     **{f"f{number}": 0x6F + number for number in range(1, 13)},
 }
+# XInput's buttons, as the macro names them (src/pw_script_input.h).
+PAD_BUTTONS = {
+    "up": 0x0001, "down": 0x0002, "left": 0x0004, "right": 0x0008, "start": 0x0010, "back": 0x0020,
+    "ls": 0x0040, "rs": 0x0080, "lb": 0x0100, "rb": 0x0200, "guide": 0x0400,
+    "a": 0x1000, "b": 0x2000, "x": 0x4000, "y": 0x8000,
+}
+PAD_MASK = 0xF7FF  # every button above: 0x0800 is no XInput button
+PAD_HOLD_MS = 150  # long enough for a game that samples its controller once a frame
 SESSIONS = 8  # native/pw_diagnostics.h: PW_DIAGNOSTICS_SESSIONS
 # The translator's profilers: a file in the library root turns each on for
 # the games started while it exists (wine/wowprospero/unix.c).
@@ -111,6 +121,47 @@ def parse_key(spec: str) -> tuple[int, int]:
 def key_script(keys: list[tuple[int, int]]) -> bytes:
     """pw_script_keys: one '<ms> 0x<vk>' line per press, in time order."""
     return "".join(f"{ms} 0x{code:02x}\n" for ms, code in sorted(keys)).encode()
+
+
+def parse_pad(spec: str) -> tuple[int, str, int]:
+    """'45000:a', '45000:start:300' or '45000:0x1010' -> (milliseconds, button, hold milliseconds)."""
+    parts = spec.split(":")
+    if len(parts) not in (2, 3) or not parts[0].isdigit() or not parts[1] or \
+            (len(parts) == 3 and not parts[2].isdigit()):
+        raise ValueError(f"pad {spec!r}: expected MILLISECONDS:BUTTON or MILLISECONDS:BUTTON:HOLDMS")
+    button = parts[1].lower()
+    if button not in PAD_BUTTONS:
+        mask = int(button, 16) if re.fullmatch(r"0x[0-9a-f]{1,4}", button) else 0
+        if not mask or mask & ~PAD_MASK:
+            raise ValueError(f"pad {spec!r}: unknown button {parts[1]!r} "
+                             f"({', '.join(PAD_BUTTONS)}, or an XInput mask such as 0x1000)")
+        button = f"0x{mask:04x}"
+    return int(parts[0]), button, int(parts[2]) if len(parts) == 3 else PAD_HOLD_MS
+
+
+def macro_script(macro: bytes | None, pads: list[tuple[int, str, int]]) -> bytes:
+    """pw_script_input: the --input macro with a press and a release for each
+    --pad merged in by time (at the same time, the macro's events first,
+    then the presses in time order). A macro's sync line stays first; its
+    comments and blank lines go."""
+    if not pads:
+        return macro or b""
+    sync: list[str] = []
+    events: list[tuple[int, str]] = []
+    for number, line in enumerate((macro or b"").decode().splitlines(), 1):
+        words = line.split()
+        if not words or words[0].startswith("#"):
+            continue
+        if words[0] == "sync" and not sync and not events:
+            sync.append(line.strip())
+        elif words[0].isdigit():
+            events.append((int(words[0]), " ".join(words)))
+        else:
+            raise SystemExit(f"pw_gameplay_run: --input line {number} is not a macro event: {line.strip()!r}")
+    for ms, button, hold in sorted(pads):
+        events += [(ms, f"{ms} pad {button} 1"), (ms + hold, f"{ms + hold} pad {button} 0")]
+    events.sort(key=lambda event: event[0])  # stable: same-time events keep their order
+    return "".join(f"{line}\n" for line in sync + [line for _, line in events]).encode()
 
 
 def parse_append(spec: str) -> tuple[str, str]:
@@ -171,6 +222,7 @@ def summarize(text: str) -> list[str]:
     vulkan = [float(value) for value in re.findall(r":trace:fps:\S+ \S+ @ approx ([0-9.]+)fps", text)]
     keys = re.findall(r"PW_WINE64 script key=(0x[0-9a-f]+) status=(\S+)", text)
     replayed = re.findall(r"PW_WINE64 script input replayed=(\d+) of (\d+)", text)
+    pad = re.findall(r"PW_WINE64 script pad buttons=(\S+) at_ms=(\d+)", text)
     # Busy guest threads only: the game's, not those that only wait.
     timing = [line.split("timing: ", 1)[1] for line in text.splitlines()
               if "wowprospero timing:" in line and
@@ -183,6 +235,12 @@ def summarize(text: str) -> list[str]:
         synced = "synced" if "PW_WINE64 script input synced" in text else "never synced"
         lines.append(f"macro: {macro[1]}, {done} of {macro[2]} events replayed"
                      + (f", refused at line {macro[3]}" if macro[3] != "0" else "") + f" ({synced})")
+    if pad:
+        lines.append(f"pad buttons held: {len(pad)} changes ("
+                     + ", ".join(f"{buttons} at {ms} ms" for buttons, ms in pad[:20])
+                     + (", ..." if len(pad) > 20 else "") + ")")
+    if "PW_WINE64 script pad events ignored" in text:
+        lines.append("pad: ignored, the game's profile does not use [input] mode = xinput")
     lines += [f"keys sent: {len(keys)}" + (f" ({', '.join(f'{code}:{status}' for code, status in keys)})" if keys else "")]
     if fps:
         # The first samples cover loading; the rest is the run itself.
@@ -272,8 +330,9 @@ class Run:
                 self.saved[trigger] = None
                 self.remove(trigger)
         self.replace("pw_script_keys", key_script(self.args.keys))
-        if self.args.input:
-            self.replace("pw_script_input", Path(self.args.input).read_bytes())
+        if self.args.input or self.args.pads:
+            macro = Path(self.args.input).read_bytes() if self.args.input else None
+            self.replace("pw_script_input", macro_script(macro, self.args.pads))
         for name in self.args.profilers:
             self.replace(PROFILERS[name], name.encode() + b"\n")
         lines: dict[str, list[str]] = {}
@@ -288,6 +347,7 @@ class Run:
             self.install_runtime()
         log(f"prepared {slug}: {len(self.args.keys)} key presses, "
             f"{'a recorded macro, ' if self.args.input else ''}"
+            f"{f'{len(self.args.pads)} pad presses, ' if self.args.pads else ''}"
             f"{sum(map(len, lines.values()))} appended lines, "
             f"profilers: {', '.join(self.args.profilers) or 'none'}"
             + (f", translator {Path(self.args.runtime).name}" if self.args.runtime else ""))
@@ -344,6 +404,10 @@ def main(argv: list[str] | None = None, remote=None) -> int:
     parser.add_argument("--key", dest="keys", action="append", default=[], type=parse_key,
                         help="MS:KEY, a press MS milliseconds after the game starts (enter, esc, 2, f1, 0x0d...)")
     parser.add_argument("--input", help="a recorded macro (src/pw_script_input.h) the script build replays")
+    parser.add_argument("--pad", dest="pads", action="append", default=[], type=parse_pad,
+                        help="MS:BUTTON[:HOLDMS], a controller button held HOLDMS (default 150) from MS "
+                             "milliseconds (a b x y start back lb rb ls rs up down left right guide, or 0xNNNN); "
+                             "joins --input's macro, timed like it; needs [input] mode = xinput")
     parser.add_argument("--arguments", help="the game's launch arguments for this run, in place of its profile's")
     parser.add_argument("--append", action="append", default=[], type=parse_append,
                         help="PATH=LINE, a line added to a file under the library root for the run")

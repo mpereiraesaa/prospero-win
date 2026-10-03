@@ -58,7 +58,7 @@ $(eval $(call test_rule,test_pw_wine_library,tests/test_pw_wine_library.c native
 $(eval $(call test_rule,test_pw_hid,tests/test_pw_hid.c src/pw_hid.c,))
 $(eval $(call test_rule,test_pw_spinner,tests/test_pw_spinner.c src/pw_spinner.c,))
 $(eval $(call test_rule,test_pw_hid_ps5,tests/test_pw_hid_ps5.c native/pw_hid_ps5.c src/pw_hid.c,-DPW_HID_PS5_HOST_TEST))
-$(eval $(call test_rule,test_pw_wine_display,tests/test_pw_wine_display.c native/pw_wine_display.c src/pw_game_profile.c src/pw_app_profile.c,-pthread))
+$(eval $(call test_rule,test_pw_wine_display,tests/test_pw_wine_display.c native/pw_wine_display.c src/pw_game_profile.c src/pw_app_profile.c src/pw_script_input.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_dl,tests/test_pw_wine_dl.c wine/ps5/pw_wine_dl.c wine/ps5/pw_wine_prx.c,-pthread))
 # The modules and the test are linked with --wrap for every __wrap_ name
 # the virtual working directory defines; the test turns fortify off, since

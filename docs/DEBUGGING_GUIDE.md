@@ -226,7 +226,8 @@ where the thread was.
 ## 9. Automated gameplay runs
 
 Most games stop at a menu: a message of the day, a team choice, "press any
-key". A script build of the app can press those keys itself, so a run reaches
+key". A script build of the app can press those keys, or controller buttons,
+itself, so a run reaches
 real gameplay with nobody at the TV, and the same run can be repeated after
 every change. `tools/pw_gameplay_run.py` sets such a run up, waits for it,
 reports it and puts the console back as it was.
@@ -275,14 +276,37 @@ reports it and puts the console back as it was.
   without it (`PW_GL`).
 - `--input FILE` replays a recorded macro: keys held and released, mouse
   buttons and relative mouse motion, through the same path a USB keyboard
-  and mouse take. One event per line, its time in milliseconds:
-  `<ms> key <virtual-key code> <1|0>`, `<ms> button <0|1|2> <1|0>` (left,
-  right, middle) or `<ms> move <dx> <dy>`. An optional first line
-  `sync <path under the library folder> <text>` starts the clock when that
-  text appears in what the file gains after the game starts. For Half-Life 2
-  that's its `-condebug` log, `hl2/console.log`, and `Redownloading all
-  lightmaps`, printed once a level has loaded. The summary says how many
-  events were replayed.
+  and mouse take, and controller buttons and sticks. One event per line, its
+  time in milliseconds:
+  - `<ms> key <virtual-key code> <1|0>` (1 presses, 0 releases);
+  - `<ms> button <0|1|2> <1|0>` (left, right or middle mouse button);
+  - `<ms> move <dx> <dy>` (mouse motion);
+  - `<ms> pad <button> <1|0>`, a controller button: `a`, `b`, `x`, `y`,
+    `start`, `back`, `lb`, `rb`, `ls`, `rs` (stick clicks), `up`, `down`,
+    `left`, `right` (the d-pad), `guide`, or an XInput button mask such as
+    `0x1010` for A and Start together;
+  - `<ms> stick <l|r> <x> <y>`, a stick held at a position from -32768 to
+    32767 (y points up); `stick l 0 0` lets it go.
+
+  A controller button stays down, and a stick where it was put, until a
+  later line changes it. The game sees this controller as its first Xbox
+  controller, so it only works for games whose profile has
+  `[input] mode = xinput`. It's added to the real DualSense rather than
+  replacing it, so you can still play during the run: buttons from either
+  count as pressed, and a stick the macro holds off centre takes over from
+  yours until it lets go.
+
+  An optional first line `sync <path under the library folder> <text>`
+  starts the clock when that text appears in what the file gains after the
+  game starts. For Half-Life 2 that's its `-condebug` log,
+  `hl2/console.log`, and `Redownloading all lightmaps`, printed once a level
+  has loaded. The summary says how many events were replayed.
+- `--pad MS:BUTTON[:HOLDMS]` presses a controller button MS milliseconds
+  after the game starts and holds it for HOLDMS milliseconds (150 if you
+  leave it out), using the button names above. It writes the press and the
+  release into the macro, merged with `--input`'s lines by time if you give
+  both; with a `sync` line, MS counts from the sync instead. The summary
+  lists when the game's controller buttons changed.
 
 Then start the script build on the console. When the game's session ends,
 the tool copies its saved log to `--save` and summarizes it. It always puts
@@ -326,6 +350,20 @@ script build asked the game to close and closed it when it didn't.
   seconds, since loading is slower on the console.
 - **Press the keys twice** a few seconds apart when a menu's timing varies,
   and pick keys that are harmless if the menu is already gone.
+- **Use the controller when a menu ignores keys.** Some menus don't respond
+  well to keys. On the console, an ENTER from `--key` (a press and a release
+  in the same instant) only sometimes chose PLAY in GTA IV's episode
+  selector, while the DualSense's Cross button worked every time. For a
+  game in xinput mode, press its controller button instead:
+
+  ```sh
+  PS5_HOST=<PS5 IP> python3 tools/pw_gameplay_run.py gtaiv --pad 45000:a --save runs/
+  ```
+
+  Hold a button for at least a few frames; the default 150 ms suits a game
+  that checks its controller once a frame. The script build keeps even a
+  zero-length press down for one of its own frames, but a game that checks
+  less often can still miss a press that short.
 - **A helper program can't press the keys.** Wine on the console runs one
   process and can't start a second, so a launcher `.exe` that starts the game
   and sends keys fails; the script build has to do it.

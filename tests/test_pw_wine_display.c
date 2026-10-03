@@ -225,6 +225,80 @@ static void test_pad(void)
     assert(xinput.thumb_lx == 64 * 32767 / 127 && xinput.thumb_ly == 64 * 32767 / 128);
 }
 
+/* A script build's controller added to the DualSense's. */
+static void test_script_pad(void)
+{
+    PwPadPs5 pad;
+    PwWinePad xinput;
+    PwScriptPad script = { 0 };
+
+    memset(&pad, 0, sizeof(pad));
+    pad.core.connected = 1;
+    pad.core.previous_buttons = 0x2000u;                /* circle: B */
+    pad.left_stick = (PwPadPs5Stick){ 0xff, 0x80 };     /* full right */
+    pad.right_stick = (PwPadPs5Stick){ 0x80, 0x00 };    /* full up */
+    pad.r2 = 200;
+
+    /* Nothing scripted: the real controller as it is. */
+    assert(pw_wine_game_pad(&pad, &xinput) == 1);
+    assert(pw_wine_script_pad(&xinput, 1, &script, 1) == 1);
+    assert(xinput.buttons == 0x2000u && xinput.thumb_lx == 32767 && xinput.thumb_ly == 0 &&
+           xinput.thumb_ry == 32767 && xinput.right_trigger == 200);
+
+    /* Buttons join; a stick held off centre replaces the real one, and
+     * only that stick. */
+    script.buttons = 0x1000u | 0x2000u;                 /* A, and B both ways */
+    script.stick[0][0] = -16000;
+    script.stick[0][1] = 0;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1);
+    assert(pw_wine_script_pad(&xinput, 1, &script, 1) == 1);
+    assert(xinput.connected == 1 && xinput.buttons == 0x3000u);
+    assert(xinput.thumb_lx == -16000 && xinput.thumb_ly == 0);
+    assert(xinput.thumb_rx == 0 && xinput.thumb_ry == 32767 && xinput.right_trigger == 200);
+    script.stick[0][0] = 0;
+    script.stick[1][1] = -1;                            /* any off-centre value counts */
+    assert(pw_wine_game_pad(&pad, &xinput) == 1);
+    assert(pw_wine_script_pad(&xinput, 1, &script, 1) == 1);
+    assert(xinput.thumb_lx == 32767 && xinput.thumb_rx == 0 && xinput.thumb_ry == -1);
+
+    /* No DualSense: the script's controller alone, still connected while it
+     * holds nothing. */
+    pad.core.connected = 0;
+    memset(&script, 0, sizeof(script));
+    assert(pw_wine_game_pad(&pad, &xinput) == 0);
+    assert(pw_wine_script_pad(&xinput, 0, &script, 1) == 1);
+    assert(xinput.connected == 1 && !xinput.buttons && !xinput.thumb_lx && !xinput.right_trigger);
+    script.buttons = 0x0010u;
+    memset(&xinput, 0x5a, sizeof(xinput));              /* stale: cleared when not connected */
+    assert(pw_wine_script_pad(&xinput, 0, &script, 1) == 1);
+    assert(xinput.buttons == 0x0010u && !xinput.thumb_lx && !xinput.left_trigger && !xinput.packet);
+
+    /* A macro without pad events leaves controller 0 to the DualSense. */
+    assert(pw_wine_script_pad(&xinput, 0, &script, 0) == 0 && !xinput.connected && !xinput.buttons);
+    pad.core.connected = 1;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1);
+    assert(pw_wine_script_pad(&xinput, 1, &script, 0) == 1 && xinput.buttons == 0x2000u);
+    assert(pw_wine_script_pad(&xinput, 1, NULL, 1) == 1 && xinput.buttons == 0x2000u);
+    assert(pw_wine_script_pad(NULL, 1, &script, 1) == 0);
+
+    /* From a parsed macro, through the scripted controller, to XInput. */
+    {
+        static PwScriptInputEvent storage[4];
+        static const char macro[] = "0 pad a 1\n0 stick l 0 32767\n";
+        PwScriptInput in;
+        size_t bad;
+        uint16_t changed = 0;
+
+        memset(&script, 0, sizeof(script));
+        assert(pw_script_input_parse(macro, sizeof(macro) - 1, storage, 4, &in, &bad) == PW_OK);
+        for (size_t i = 0; i < in.count; i++) assert(pw_script_pad_apply(&script, &in.events[i], &changed) == 1);
+        pad.core.connected = 0;
+        assert(pw_wine_game_pad(&pad, &xinput) == 0);
+        assert(pw_wine_script_pad(&xinput, 0, &script, in.pad_events != 0) == 1);
+        assert(xinput.buttons == 0x1000u && xinput.thumb_lx == 0 && xinput.thumb_ly == 32767);
+    }
+}
+
 int main(void)
 {
     test_frames();
@@ -233,8 +307,9 @@ int main(void)
     test_pointer();
     test_pointer_fraction();
     test_pad();
+    test_script_pad();
     printf("wine display passed: frame box copy, newest frame, refusals, concurrent put/take, "
            "profile bindings to keys and mouse buttons, stick pointer, resized frames, "
-           "DualSense as XInput\n");
+           "DualSense as XInput, scripted controller added to it\n");
     return 0;
 }

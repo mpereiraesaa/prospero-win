@@ -128,6 +128,24 @@ int pw_wine_game_pad(const PwPadPs5 *pad, PwWinePad *out)
     return 1;
 }
 
+int pw_wine_script_pad(PwWinePad *pad, int connected, const PwScriptPad *script, int scripted)
+{
+    if (!pad) return 0;
+    if (!connected) memset(pad, 0, sizeof(*pad));
+    if (!script || !scripted) return connected ? 1 : 0;
+    pad->connected = 1;
+    pad->buttons |= script->buttons;
+    if (script->stick[0][0] || script->stick[0][1]) {
+        pad->thumb_lx = script->stick[0][0];
+        pad->thumb_ly = script->stick[0][1];
+    }
+    if (script->stick[1][0] || script->stick[1][1]) {
+        pad->thumb_rx = script->stick[1][0];
+        pad->thumb_ry = script->stick[1][1];
+    }
+    return 1;
+}
+
 /* Signed 1/65536-pixel travel of one axis. */
 static int64_t travel(uint8_t stick, uint32_t speed, uint32_t elapsed_us)
 {

@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include "../src/pw_present.h"
 #include "../src/pw_game_profile.h"
+#include "../src/pw_script_input.h"
 #include "../wine/ps5/pw_wine_sink.h"
 #include "pw_pad_ps5.h"
 
@@ -58,6 +59,15 @@ size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t 
  * is connected; 0 and a neutral state otherwise. The sink numbers the
  * packets. */
 int pw_wine_game_pad(const PwPadPs5 *pad, PwWinePad *out);
+
+/* A script build's scripted controller (src/pw_script_input.h) added to
+ * the real one in pad, which pw_wine_game_pad filled (connected says
+ * whether it is): the scripted buttons join the held ones, and each stick
+ * the script holds off centre takes the real stick's place. With scripted
+ * set (the macro drives a controller), controller 0 stays connected
+ * without a DualSense. Returns whether it is connected; a neutral pad
+ * when not. */
+int pw_wine_script_pad(PwWinePad *pad, int connected, const PwScriptPad *script, int scripted);
 
 /* A stick's pointer motion not yet sent, in 1/65536 pixels. Wine keeps
  * the pointer's position: the title sends only motion, as a mouse does

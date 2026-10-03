@@ -63,9 +63,28 @@ static int safe_path(const char *path)
     return 1;
 }
 
+/* XInput's button names (XINPUT_GAMEPAD_*). */
+static const struct { const char *name; uint16_t mask; } pad_names[] = {
+    { "up", 0x0001 }, { "down", 0x0002 }, { "left", 0x0004 }, { "right", 0x0008 },
+    { "start", 0x0010 }, { "back", 0x0020 }, { "ls", 0x0040 }, { "rs", 0x0080 },
+    { "lb", 0x0100 }, { "rb", 0x0200 }, { "guide", 0x0400 },
+    { "a", 0x1000 }, { "b", 0x2000 }, { "x", 0x4000 }, { "y", 0x8000 },
+};
+
+/* A button name, or a mask of the buttons XInput has. */
+static int pad_buttons(const char *text, long long *mask)
+{
+    for (size_t i = 0; i < sizeof(pad_names) / sizeof(pad_names[0]); i++)
+        if (!strcmp(text, pad_names[i].name)) {
+            *mask = pad_names[i].mask;
+            return 0;
+        }
+    return number(text, 1, 0xffff, mask) || (*mask & ~(long long)PW_SCRIPT_PAD_BUTTONS) ? -1 : 0;
+}
+
 static int parse_line(const char *at, const char *end, PwScriptInput *out, size_t capacity)
 {
-    char first[32], kind[16], a[32], b[32];
+    char first[32], kind[16], a[32], b[32], c[32] = "";
     long long ms, x, y;
     PwScriptInputEvent event = { 0 };
 
@@ -85,9 +104,11 @@ static int parse_line(const char *at, const char *end, PwScriptInput *out, size_
         return 0;
     }
     if (number(first, 0, UINT32_MAX, &ms) || !(at = word(at, end, kind, sizeof(kind))) ||
-        !(at = word(at, end, a, sizeof(a))) || !(at = word(at, end, b, sizeof(b))) ||
-        skip_space(at, end) != end)
+        !(at = word(at, end, a, sizeof(a))) || !(at = word(at, end, b, sizeof(b))))
         return -1;
+    /* stick takes a third value; every other kind two. */
+    if (!strcmp(kind, "stick") && !(at = word(at, end, c, sizeof(c)))) return -1;
+    if (skip_space(at, end) != end) return -1;
     event.at_ms = (uint32_t)ms;
     if (!strcmp(kind, "key") && !number(a, 1, 0xfe, &x) && !number(b, 0, 1, &y)) {
         event.kind = PW_SCRIPT_INPUT_KEY;
@@ -101,12 +122,23 @@ static int parse_line(const char *at, const char *end, PwScriptInput *out, size_
         event.kind = PW_SCRIPT_INPUT_MOVE;
         event.dx = (int32_t)x;
         event.dy = (int32_t)y;
+    } else if (!strcmp(kind, "pad") && !pad_buttons(a, &x) && !number(b, 0, 1, &y)) {
+        event.kind = PW_SCRIPT_INPUT_PAD;
+        event.code = (uint32_t)x;
+        event.down = (uint32_t)y;
+    } else if (!strcmp(kind, "stick") && (!strcmp(a, "l") || !strcmp(a, "r")) &&
+               !number(b, -32768, 32767, &x) && !number(c, -32768, 32767, &y)) {
+        event.kind = PW_SCRIPT_INPUT_STICK;
+        event.code = a[0] == 'r';
+        event.dx = (int32_t)x;
+        event.dy = (int32_t)y;
     } else {
         return -1;
     }
     if (out->count && event.at_ms < out->events[out->count - 1].at_ms) return -1;
     if (out->count == capacity) return -2;
     out->events[out->count++] = event;
+    if (event.kind == PW_SCRIPT_INPUT_PAD || event.kind == PW_SCRIPT_INPUT_STICK) out->pad_events++;
     return 0;
 }
 
@@ -139,13 +171,35 @@ int pw_script_input_parse(const char *text, size_t length, PwScriptInputEvent *s
         status = content == stop || *content == '#' ? 0 : parse_line(content, stop, out, capacity);
         if (status) {
             if (bad_line) *bad_line = line;
-            out->count = 0;
+            out->count = out->pad_events = 0;
             out->sync_path[0] = out->sync_text[0] = 0;
             return status == -2 ? PW_ERR_LIMIT : PW_ERR_MALFORMED;
         }
         at = next ? next + 1 : end;
     }
     return PW_OK;
+}
+
+int pw_script_pad_apply(PwScriptPad *pad, const PwScriptInputEvent *event, uint16_t *tick_changed)
+{
+    uint16_t mask, held;
+
+    if (!pad || !event) return 0;
+    if (event->kind == PW_SCRIPT_INPUT_STICK) {
+        pad->stick[event->code ? 1 : 0][0] = (int16_t)event->dx;
+        pad->stick[event->code ? 1 : 0][1] = (int16_t)event->dy;
+        return 1;
+    }
+    if (event->kind != PW_SCRIPT_INPUT_PAD) return 0;
+    mask = (uint16_t)event->code;
+    held = event->down ? (uint16_t)(pad->buttons | mask) : (uint16_t)(pad->buttons & ~mask);
+    if (tick_changed) {
+        uint16_t changed = (uint16_t)(held ^ pad->buttons);
+        if (changed & *tick_changed) return -1;
+        *tick_changed |= changed;
+    }
+    pad->buttons = held;
+    return 1;
 }
 
 int pw_script_input_sync_feed(PwScriptInputSync *sync, const char *chunk, size_t length)
