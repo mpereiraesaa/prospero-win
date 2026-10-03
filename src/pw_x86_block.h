@@ -240,6 +240,12 @@ typedef struct PwX86TranslateOptions {
      * the caller's code must stay writable while it runs, as with
      * superblocks. Other targets keep the lookup. */
     unsigned call_predict;
+    /* Opt-in first-target call-site cache for unbounded host-call-stack chains.
+     * Overrides call_predict at dynamic callee sites when both are enabled;
+     * other targets retain the lookup without retraining. Return lookups never
+     * train this cache. Executable code
+     * must also be writable, as with self-linking side exits. */
+    unsigned call_inline_cache;
 } PwX86TranslateOptions;
 
 /* The fault table of a re-encoded block with fault markers, at

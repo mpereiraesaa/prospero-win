@@ -365,6 +365,14 @@ static struct pw_thread *get_thread(void)
 #endif
         pw_x86_engine_set_call_predict( &thread->engine, thread->engine.superblocks && predict );
     }
+    {
+        int call_cache = getenv( "PW_WOW_CALL_IC" ) && !strcmp( getenv( "PW_WOW_CALL_IC" ), "1" );
+#ifdef __PROSPERO__
+        struct stat call_cache_st;
+        if (!stat( "/data/prospero-win/pw_wow_call_ic", &call_cache_st )) call_cache = 1;
+#endif
+        pw_x86_engine_set_call_inline_cache( &thread->engine, thread->engine.superblocks && call_cache );
+    }
     /* Calls and returns on a call stack, so the host predicts the returns
      * (PW_WOW_CALL_STACK=0 keeps the lookup); its guard sends a call that
      * runs out of it to redirect_fault. */
@@ -389,7 +397,11 @@ static struct pw_thread *get_thread(void)
     if (thread->engine.call_predict)
         fprintf( stderr, "wowprospero call_predict: tid=%04x active=%u\n",
                  (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
-                 thread->engine.call_stack_base != NULL );
+                 thread->engine.call_stack_base != NULL && !thread->engine.call_inline_cache );
+    if (thread->engine.call_inline_cache)
+        fprintf( stderr, "wowprospero call_ic: tid=%04x enabled=%u\n",
+                 (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+                 thread->engine.call_stack_base != NULL && thread->engine.unbounded_chains );
     thread->cache_epoch = (uint32_t)code_generation;
     thread->cache_report_id = __atomic_add_fetch( &next_cache_report_id, 1, __ATOMIC_RELAXED );
     pw_guest_fp_init( &thread->state.fp );

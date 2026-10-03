@@ -631,6 +631,7 @@ typedef struct Ctx {
     unsigned bounded;  /* chains spend the budget (!unbounded_chains) */
     unsigned call_stack;
     unsigned call_predict;  /* PwX86TranslateOptions.call_predict, with call_stack */
+    unsigned call_inline_cache;
     /* Side exits (PwX86TranslateOptions.superblocks): each jcc's rel32 and
      * target. */
     unsigned side_count;
@@ -909,9 +910,29 @@ static void emit_chain_exit(Ctx *c, uint32_t target, ExitSlots *slots, size_t jc
  * translation has one, otherwise back to the dispatcher. With hook, a chain
  * table hit goes through a jmp rel32 before entering the target (r11), and
  * *hook is that rel32, for the caller to point and later clear. */
-static void emit_dynamic_exit_hooked(Ctx *c, size_t *hook)
+static void emit_dynamic_exit_hooked(Ctx *c, size_t *hook, unsigned cache_call)
 {
     Out *o = &c->o;
+    size_t cache_host = 0, cache_pc = 0, empty_target = 0;
+
+    if (cache_call && c->call_inline_cache && c->call_stack && !c->bounded && c->chain_table) {
+        size_t empty, hit, slow;
+        /* The pointer gate makes every guest PC, including zero, safe in an
+         * untrained site. All instructions retain guest arithmetic flags. */
+        b(o, 0x49); b(o, 0xbb); cache_host = o->n; w64(o, 0);
+        mov_r9_rcx(o);
+        rr(o, 0x89, 1, 1, R11);                                 /* mov rcx, r11 */
+        empty = jump8(o, 0xe3);
+        b(o, 0x41); b(o, 0x8d); b(o, 0x8a); cache_pc = o->n; w32(o, 0);
+        hit = jump8(o, 0xe3);                                   /* target PC matches */
+        land8(o, empty);
+        mov_rcx_r9(o);
+        slow = jump32(o);
+        land8(o, hit);
+        mov_rcx_r9(o);
+        b(o, 0x41); b(o, 0xff); b(o, 0xe3);                      /* cached chain entry */
+        land32(o, slow);
+    }
 
     if (c->chain_table) {
         /* A re-encoded target is entered at its chain entry with the guest
@@ -941,6 +962,34 @@ static void emit_dynamic_exit_hooked(Ctx *c, size_t *hook)
         }
         mov_rcx_r9(o);
         b(o, 0x4d); b(o, 0x8b); b(o, 0x5b); b(o, (uint8_t)offsetof(PwX86IndirectTarget, host_code));
+        if (cache_host) {
+            size_t patch, train, trained;
+            mov_r9_rcx(o);
+            rr(o, 0x89, 1, 1, R11);
+            empty_target = jump8(o, 0xe3);
+            mov_rcx_r9(o);
+            /* RIP-relative patch addresses survive copying the translation
+             * scratch buffer into its final arena. Sites are thread-owned
+             * and discarded together with their arena generation. */
+            b(o, 0x4c); b(o, 0x8d); b(o, 0x05);
+            patch = o->n; w32(o, (uint32_t)(cache_host - (patch + 4)));
+            /* Only the first successful target trains a site. Alternating
+             * targets use the full table without repeatedly modifying the
+             * executable cache literals. Preserve guest RCX and flags. */
+            mov_r9_rcx(o);
+            b(o, 0x49); b(o, 0x8b); b(o, 0x08);                 /* mov rcx, [r8] */
+            train = jump8(o, 0xe3);
+            mov_rcx_r9(o);
+            trained = jump8(o, 0xeb);
+            land8(o, train);
+            mov_rcx_r9(o);
+            b(o, 0x4d); b(o, 0x89); b(o, 0x18);                  /* mov [r8], r11 */
+            rr(o, 0x89, 0, R9, R10);
+            b(o, 0x41); b(o, 0xf7); b(o, 0xd1);                  /* not r9d */
+            b(o, 0x45); b(o, 0x8d); b(o, 0x49); b(o, 1);         /* lea r9d, [r9+1] */
+            b(o, 0x45); b(o, 0x89); b(o, 0x48); b(o, (uint8_t)(cache_pc - cache_host));
+            land8(o, trained);
+        }
         if (hook) *hook = jump32(o);
         b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
         if (c->bounded) {
@@ -948,6 +997,7 @@ static void emit_dynamic_exit_hooked(Ctx *c, size_t *hook)
             mov_rcx_r9(o);
         }
         land8(o, to_miss);
+        if (empty_target) { land8(o, empty_target); mov_rcx_r9(o); }
     }
     store_state(o, R10, offsetof(PwX86State, eip));
     emit_leave(o, c->call_stack);
@@ -977,7 +1027,7 @@ static void emit_dynamic_exit_hooked(Ctx *c, size_t *hook)
 
 static void emit_dynamic_exit(Ctx *c)
 {
-    emit_dynamic_exit_hooked(c, NULL);
+    emit_dynamic_exit_hooked(c, NULL, 0);
 }
 
 /* r8 = the address of the code at offset at, wherever the block lands. */
@@ -1023,7 +1073,7 @@ static void emit_predicted_call(Ctx *c, size_t call_rel)
     b(o, 0xe3); b(o, (uint8_t)(int8_t)back);                        /* jrcxz hit */
     mov_rcx_r9(o);
     land32(o, link);                                                /* untrained: the lookup */
-    emit_dynamic_exit_hooked(c, &hook);
+    emit_dynamic_exit_hooked(c, &hook, 0);
     /* The training path, with the hit's chain entry in r11. */
     land32(o, hook);
     mov_r9_rcx(o);
@@ -1072,6 +1122,10 @@ static void emit_call(Ctx *c, PwX86Block *block, uint32_t next, uint32_t target,
     emit_chain_exit(c, next, &rest, rest_rel);
     memset(&callee, 0, sizeof(callee));
     if (!dynamic) emit_chain_exit(c, target, &callee, call_rel);
+    else if (c->call_inline_cache) {
+        land32(o, call_rel);
+        emit_dynamic_exit_hooked(c, NULL, 1);
+    }
     else if (c->call_predict) emit_predicted_call(c, call_rel);
     else land32(o, call_rel);
     /* With a predicted callee the return's lookup is its own, so a changed
@@ -1289,6 +1343,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     c.bounded = !options->unbounded_chains;
     c.call_stack = options->unbounded_chains && options->call_stack && c.chain_table;
     c.call_predict = c.call_stack && options->call_predict;
+    c.call_inline_cache = options->call_inline_cache;
 
     block->entry_contract.resident_mask = 0xff;
     for (unsigned g = 0; g < 8; g++)

@@ -276,6 +276,13 @@ int pw_x86_engine_set_native_fp(PwX86Engine *engine, unsigned enabled)
     return PW_OK;
 }
 
+int pw_x86_engine_set_call_inline_cache(PwX86Engine *engine, unsigned enabled)
+{
+    if(!engine || !engine->initialized || engine->cache.cursor) return PW_ERR_PRECONDITION;
+    engine->call_inline_cache = enabled ? 1 : 0;
+    return PW_OK;
+}
+
 /* With native FP, re-encoded and emitted blocks meet only through C, which
  * moves the guest's FP state between the host FPU and memory. */
 static int may_link(const PwX86Engine *engine, const PwX86RegContract *from, const PwX86RegContract *to)
@@ -427,7 +434,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         engine->reencode_enabled ? engine->chain_targets : NULL,
         engine->residency_enabled ? engine->global_resident : (uint8_t)0,
         engine->fault_markers, engine->unbounded_chains, engine->call_stack_base != NULL,
-        engine->superblocks, engine->native_fp, engine->call_predict };
+        engine->superblocks, engine->native_fp, engine->call_predict, engine->call_inline_cache };
     int last = PW_ERR_UNSUPPORTED;
     if (engine->reencode_enabled) {
         last = pw_x86_reencode(source, available, pc, scratch, sizeof(scratch), &best, &options);
