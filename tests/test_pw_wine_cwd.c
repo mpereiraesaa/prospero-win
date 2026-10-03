@@ -18,6 +18,7 @@
 int __real_open(const char *path, int flags, ...);
 int __real_close(int fd);
 int __real_lstat(const char *path, struct stat *st);
+int __real_unlink(const char *path);
 ssize_t __real_readlink(const char *path, char *buffer, size_t size);
 
 static char root[64];
@@ -34,6 +35,100 @@ static const char *at_root(const char *name)
     static char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/%s", root, name);
     return path;
+}
+
+/* Write a link table as another module (or pw_prefix.py) would have. */
+static void write_table(const char *directory, const char *text)
+{
+    char path[PATH_MAX];
+    int fd;
+
+    snprintf(path, sizeof(path), "%s/%s/" PW_CWD_LINK_TABLE, root, directory);
+    assert((fd = __real_open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644)) >= 0);
+    assert(write(fd, text, strlen(text)) == (ssize_t)strlen(text) && !__real_close(fd));
+}
+
+static void remove_table(const char *directory)
+{
+    char path[PATH_MAX];
+
+    snprintf(path, sizeof(path), "%s/%s/" PW_CWD_LINK_TABLE, root, directory);
+    assert(!__real_unlink(path));
+}
+
+/* A game's log sent elsewhere by a link of its folder's table that nothing
+ * has looked up yet: the game opens it to append, creating it if missing,
+ * through the c: drive as Wine names it. The table is read before anything is
+ * created in the folder, and a folder without one is not read again. */
+static void test_links_on_create(void)
+{
+    char table[PATH_MAX * 2], line[8];
+    struct stat st, sink;
+    FILE *file;
+    int fd;
+
+    assert((fd = __real_open(at_root("sink"), O_CREAT | O_WRONLY | O_TRUNC, 0644)) >= 0 && !__real_close(fd));
+    assert(!mkdir(at_root("prefix/drive_c/game"), 0777));
+    snprintf(table, sizeof(table), "game.log\t%s\nnull.log\t/dev/null\n", at_root("sink"));
+    write_table("prefix/drive_c/game", table);
+
+    /* Created through the link, not beside the table. */
+    assert((fd = open(at_root("prefix/dosdevices/c:/game/game.log"), O_WRONLY | O_CREAT | O_APPEND, 0644)) >= 0);
+    assert(write(fd, "log1", 4) == 4 && !close(fd));
+    assert(!stat(at_root("sink"), &sink) && sink.st_size == 4);
+    errno = 0;
+    assert(__real_lstat(at_root("prefix/drive_c/game/game.log"), &st) == -1 && errno == ENOENT);
+    assert(!lstat(at_root("prefix/drive_c/game/game.log"), &st) && S_ISLNK(st.st_mode));
+    assert((file = fopen(at_root("prefix/dosdevices/c:/game/game.log"), "a")));
+    assert(fputs("log2", file) >= 0 && !fclose(file));
+    assert(!stat(at_root("sink"), &sink) && sink.st_size == 8);
+    /* An absolute target outside the prefix: a character device, opened to
+     * append and create as Wine's server opens an OPEN_ALWAYS file. */
+    assert((fd = open(at_root("prefix/dosdevices/c:/game/null.log"), O_WRONLY | O_CREAT | O_APPEND | O_NONBLOCK,
+                      0644)) >= 0);
+    assert(!fstat(fd, &st) && S_ISCHR(st.st_mode) && write(fd, "gone", 4) == 4 && !close(fd));
+    assert((fd = openat(AT_FDCWD, at_root("prefix/drive_c/game/null.log"), O_WRONLY | O_CREAT | O_TRUNC,
+                        0644)) >= 0 && !close(fd));
+    errno = 0;
+    assert(__real_lstat(at_root("prefix/drive_c/game/null.log"), &st) == -1 && errno == ENOENT);
+    errno = 0;
+    assert(open(at_root("prefix/drive_c/game/null.log"), O_WRONLY | O_CREAT | O_EXCL, 0644) == -1 &&
+           errno == EEXIST);
+
+    /* Wine looks a name up before it creates it: stat() and access() of the
+     * missing name see the target, from a table not read before. */
+    assert(!mkdir(at_root("prefix/drive_c/game2"), 0777));
+    snprintf(table, sizeof(table), "seen.log\t../../../sink\nnull.log\t/dev/null\n");
+    write_table("prefix/drive_c/game2", table);
+    assert(!stat(at_root("prefix/dosdevices/c:/game2/seen.log"), &st) && st.st_ino == sink.st_ino);
+    assert(!access(at_root("prefix/dosdevices/c:/game2/null.log"), W_OK));
+    assert(!fstatat(AT_FDCWD, at_root("prefix/dosdevices/c:/game2/null.log"), &st, 0) && S_ISCHR(st.st_mode));
+    assert((file = fopen(at_root("prefix/drive_c/game2/seen.log"), "r")) && fgets(line, sizeof(line), file));
+    assert(!strcmp(line, "log1log") && !fclose(file));
+
+    /* No table: the file is created, and the folder is not read again, so a
+     * table that appears later changes nothing in this module. */
+    assert(!mkdir(at_root("prefix/drive_c/plain"), 0777));
+    assert((fd = open(at_root("prefix/dosdevices/c:/plain/a.log"), O_WRONLY | O_CREAT | O_APPEND, 0644)) >= 0);
+    assert(!close(fd) && !__real_lstat(at_root("prefix/drive_c/plain/a.log"), &st) && S_ISREG(st.st_mode));
+    snprintf(table, sizeof(table), "b.log\t%s\n", at_root("sink"));
+    write_table("prefix/drive_c/plain", table);
+    assert((fd = open(at_root("prefix/dosdevices/c:/plain/b.log"), O_WRONLY | O_CREAT, 0644)) >= 0 && !close(fd));
+    assert(!__real_lstat(at_root("prefix/drive_c/plain/b.log"), &st) && S_ISREG(st.st_mode));
+    assert(pw_cwd_probe_directory(at_root("prefix/drive_c/plain")) == 0);
+    /* Nor is a folder a table was already read from. */
+    assert(pw_cwd_probe_directory(at_root("prefix/drive_c/game")) == 0);
+
+    assert(!unlink(at_root("prefix/drive_c/plain/a.log")) && !unlink(at_root("prefix/drive_c/plain/b.log")));
+    remove_table("prefix/drive_c/plain");
+    assert(!rmdir(at_root("prefix/drive_c/plain")));
+    /* unlink() of a link forgets it and rewrites the table, which goes once
+     * the folder has no link left. */
+    assert(!unlink(at_root("prefix/drive_c/game/game.log")) && !unlink(at_root("prefix/drive_c/game/null.log")));
+    assert(__real_lstat(at_root("prefix/drive_c/game/" PW_CWD_LINK_TABLE), &st) == -1 && errno == ENOENT);
+    assert(!rmdir(at_root("prefix/drive_c/game")));
+    assert(!unlink(at_root("prefix/drive_c/game2/seen.log")) && !unlink(at_root("prefix/drive_c/game2/null.log")));
+    assert(!rmdir(at_root("prefix/drive_c/game2")) && !__real_unlink(at_root("sink")));
 }
 
 static void test_fold(void)
@@ -364,6 +459,8 @@ int main(void)
         assert(!rmdir(at_root("other")));
     }
 
+    test_links_on_create();
+
     /* chdir() refusals and getcwd() buffers. */
     errno = 0;
     assert(chdir("missing") == -1 && errno == ENOENT);
@@ -389,7 +486,7 @@ int main(void)
     assert(!rmdir("prefix/dosdevices"));
     assert(!close(dir_fd) && !rmdir("prefix") && !rmdir(root));
     printf("wine cwd passed: fold, link table, prefix set-up, virtual symlinks and their saved "
-           "table, access, fchdir, *at, stale and untracked descriptors, getcwd buffers, process "
-           "directory unchanged\n");
+           "table, links read before a file is created, access, fchdir, *at, stale and untracked "
+           "descriptors, getcwd buffers, process directory unchanged\n");
     return 0;
 }

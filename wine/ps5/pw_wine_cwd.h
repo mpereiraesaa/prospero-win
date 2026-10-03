@@ -21,8 +21,11 @@
  * only, and a system call from title code kills the process (FW 12.02,
  * PPRBUG-22859). Wine needs two, dosdevices/c: -> ../drive_c and z: -> /, so
  * links are virtual: kept here, followed by every wrapped call, and saved in
- * a PW_CWD_LINK_TABLE file in the link's directory, which is read the first
- * time a lookup below that directory fails.
+ * a PW_CWD_LINK_TABLE file in the link's directory. Each module reads a
+ * directory's table once: the first time a lookup below that directory
+ * fails, or before the first file is created in it (an open with O_CREAT of
+ * a missing name fails no lookup). A table's target may leave the prefix:
+ * "game.log<TAB>/dev/null" sends a game's log nowhere instead of creating it.
  */
 #include <stddef.h>
 #include <sys/types.h>
@@ -77,7 +80,7 @@ ssize_t pw_cwd_link_target(const char *absolute, char *out, size_t size);
  * unchanged. 0, or -1 with errno ELOOP or ENAMETOOLONG. */
 int pw_cwd_follow(const char *absolute, int follow_last, char *out, size_t size);
 /* 1 the first time a directory is asked about (its table should be read), 0
- * after that. */
+ * after that, whether or not it had one. */
 int pw_cwd_probe_directory(const char *absolute);
 /* The table of the links in directory, one "name<TAB>target" line each;
  * its length, or -1 with errno ENAMETOOLONG. */

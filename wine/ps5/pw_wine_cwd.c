@@ -314,11 +314,29 @@ static size_t hash_path(const char *text)
     return hash;
 }
 
+/* The slot holding absolute, or -1. */
+static int find_probed_locked(const char *absolute, size_t slot)
+{
+    size_t tries;
+
+    for (tries = 0; tries < PW_CWD_MAX_PROBED && probed[slot]; tries++) {
+        if (!strcmp(probed[slot], absolute)) return (int)slot;
+        slot = (slot + 1) % PW_CWD_MAX_PROBED;
+    }
+    return -1;
+}
+
 int pw_cwd_probe_directory(const char *absolute)
 {
     size_t slot = hash_path(absolute) % PW_CWD_MAX_PROBED, tries;
     int needed = 1;
 
+    /* Every file a game creates asks about its directory: a known one takes
+     * only the shared lock. */
+    pthread_rwlock_rdlock(&cwd_lock);
+    if (find_probed_locked(absolute, slot) >= 0) needed = 0;
+    pthread_rwlock_unlock(&cwd_lock);
+    if (!needed) return 0;
     pthread_rwlock_wrlock(&cwd_lock);
     for (tries = 0; tries < PW_CWD_MAX_PROBED; tries++, slot = (slot + 1) % PW_CWD_MAX_PROBED) {
         if (!probed[slot]) { probed[slot] = strdup(absolute); break; }  /* NULL: probe again */

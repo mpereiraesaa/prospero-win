@@ -12,7 +12,9 @@
  * readlink(), link() and statfs() live, is not given to a title, and a
  * system call from title code kills it. The *at calls resolve to an absolute
  * path and use the libkernel call by path; symbolic links are virtual
- * (pw_wine_cwd.h); link() is EPERM and statfs() ENOSYS, as fstatfs() is in
+ * (pw_wine_cwd.h), and the calls that create a file (open() and openat()
+ * with O_CREAT, fopen() to write or append) read the link table of its
+ * directory first; link() is EPERM and statfs() ENOSYS, as fstatfs() is in
  * pw_wine_compat. */
 #include "pw_wine_cwd.h"
 #include <dirent.h>
@@ -81,29 +83,57 @@ static void table_of(const char *directory, char *out, size_t size)
     snprintf(out, size, "%s/%s", strcmp(directory, "/") ? directory : "", PW_CWD_LINK_TABLE);
 }
 
-/* Read the link table of every directory on the way to path not yet looked
- * at; how many links were new. */
+/* Read the link table of a directory (folded, with no link in it) the first
+ * time it is asked about; how many links were new. A directory without one
+ * is remembered too, so asking again costs no system call. */
+static int load_table(const char *directory)
+{
+    char table[PW_CWD_PATH_MAX + sizeof(PW_CWD_LINK_TABLE)], text[4096];
+    ssize_t got;
+    int fd;
+
+    if (!pw_cwd_probe_directory(directory)) return 0;
+    table_of(directory, table, sizeof(table));
+    if ((fd = __real_open(table, O_RDONLY)) < 0) return 0;
+    got = read(fd, text, sizeof(text));
+    __real_close(fd);
+    return got > 0 ? pw_cwd_links_parse(directory, text, (size_t)got) : 0;
+}
+
+/* Read the tables of every directory on the way to path. Each directory is
+ * looked at where it really is, after the links before it (and the tables
+ * read so far) are followed: a table below dosdevices/c: is in drive_c, which
+ * the kernel knows, and its links are kept under that name, the one
+ * pw_cwd_follow() meets. How many links were new. */
 static int load_tables(const char *path)
 {
-    char directory[PW_CWD_PATH_MAX], table[PW_CWD_PATH_MAX + sizeof(PW_CWD_LINK_TABLE)], text[4096];
+    char directory[PW_CWD_PATH_MAX], resolved[PW_CWD_PATH_MAX], folded[PW_CWD_PATH_MAX];
     const char *slash = path;
     int added = 0;
 
     while ((slash = strchr(slash + 1, '/'))) {
-        size_t length = slash == path ? 1 : (size_t)(slash - path);
-        ssize_t got;
-        int fd;
+        size_t length = (size_t)(slash - path);
 
         memcpy(directory, path, length);
         directory[length] = 0;
-        if (!pw_cwd_probe_directory(directory)) continue;
-        table_of(directory, table, sizeof(table));
-        if ((fd = __real_open(table, O_RDONLY)) < 0) continue;
-        got = read(fd, text, sizeof(text));
-        __real_close(fd);
-        if (got > 0) added += pw_cwd_links_parse(directory, text, (size_t)got);
+        if (!pw_cwd_follow(directory, 1, resolved, sizeof(resolved)) &&
+            !pw_cwd_fold(resolved, folded, sizeof(folded)))
+            added += load_table(folded);
     }
     return added;
+}
+
+/* Before a call that may create r's last name: a missing name is no failed
+ * lookup, so read the table of the directory it would be made in (once per
+ * directory) and follow a link it names. 0, or -1 with errno. */
+static int load_parent_table(struct resolved *r)
+{
+    char folded[PW_CWD_PATH_MAX], directory[PW_CWD_PATH_MAX];
+
+    if (pw_cwd_fold(r->full, folded, sizeof(folded))) return -1;
+    parent_of(folded, directory);
+    if (!load_table(directory)) return 0;
+    return pw_cwd_follow(r->logical, r->follow_last, r->full, sizeof(r->full));
 }
 
 /* After a lookup failed for want of a directory, read the tables on the way
@@ -237,6 +267,7 @@ static int open_resolved(struct resolved *r, int flags, mode_t mode)
 {
     int fd;
 
+    if ((flags & O_CREAT) && load_parent_table(r)) return -1;
     while ((fd = __real_open(r->full, flags, mode)) < 0 && reload(r)) {}
     if (fd >= 0) pw_cwd_track(fd, r->full);
     return fd;
@@ -278,6 +309,7 @@ FILE *__wrap_fopen(const char *path, const char *mode)
     FILE *file;
 
     if (resolve(&r, path, 1)) return NULL;
+    if (mode && strpbrk(mode, "wa") && load_parent_table(&r)) return NULL;
     while (!(file = __real_fopen(r.full, mode)) && reload(&r)) {}
     return file;
 }
