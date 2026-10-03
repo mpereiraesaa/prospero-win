@@ -72,9 +72,8 @@ You need a PS5 that can run homebrew: an FTP server and ELF loader
 (for example from [ps5-payload-dev](https://github.com/ps5-payload-dev)) with
 elfldr listening on local port 9021, and a loader that installs apps from
 `/data/homebrew` (such as [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)).
-The app bundles its one-shot Lapy helper and requests `/data` during startup;
-there is no resident Lapy daemon to install. You also need your own copy of
-the game, and a Linux PC to install it on.
+The app bundles its one-shot Lapy helper and requests `/data` during startup.
+You also need your own copy of the game, and a Linux PC to install it on.
 
 The app itself is a zip on the [Releases page](https://github.com/mpereiraesaa/prospero-win/releases).
 [Getting started](docs/GETTING_STARTED.md) walks through the whole setup, and
