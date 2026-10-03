@@ -859,6 +859,17 @@ The runtime is staged beside the title:
   Wine has no GStreamer, which Wine's own splitters are built on);
 - Wine's NLS files under `win/wine/share/wine/nls`.
 
+Patch 0760 reduces repeated registry work in the Windows `ws2_32.dll`
+computer-name helper. It retrieves a fresh wide name once, then converts it
+with the same `CP_ACP` settings as the ANSI API. In the pinned Wine source,
+the common path needs two Hostname/Domain registry lookups rather than eight.
+It caches neither the name nor a failed resolution, and leaves resolver
+results and diagnostics unchanged. Rebuild the Windows DLL to use it;
+rebuilding only the Unix `ws2_32.prx` does not include this helper.
+Host tests verify the operation reduction; console benefit remains unmeasured.
+`PROSPERO_WINE_SOURCE=/path/to/pinned/wine python3 tests/test_ws2_fqdn.py`
+also executes the actual ANSI/wide registry functions from that source.
+
 ## Console bring-up
 
 The runtime and the prefix used for the integrated runs:

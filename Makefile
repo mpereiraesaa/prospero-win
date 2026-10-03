@@ -150,6 +150,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_wowprospero_contract.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wowprospero_unmap.py
 	python3 tests/test_build_wine_ps5.py
+	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_ws2_fqdn.py
 	python3 tests/test_pw_install.py
 	python3 tests/test_pw_prefix.py
 	python3 tests/test_pw_gameplay_run.py

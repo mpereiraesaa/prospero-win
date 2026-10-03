@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 3 Oct 2026 22:45:00 +0200
+Subject: [PATCH] ws2_32: Read a fresh fully qualified computer name once
+
+get_fqdn probes GetComputerNameExA and then calls it again for the data.
+Each ANSI call retrieves the wide name twice; each fully qualified wide
+lookup reads Hostname and Domain from the registry. Use one fresh wide
+lookup and the same CP_ACP conversion instead. Retry once with the API's
+required capacity for unusually long names; check allocation arithmetic
+and free the temporary buffer on every path. Resolver/fallback behavior
+and repeated-name diagnostics are unchanged. No hostname or failure cache.
+
+This reduces registry work on the common path; it does not establish a
+console performance benefit or resolve a title's loading stall.
+---
+
+diff --git a/dlls/ws2_32/protocol.c b/dlls/ws2_32/protocol.c
+--- a/dlls/ws2_32/protocol.c
++++ b/dlls/ws2_32/protocol.c
+@@ -31,17 +31,32 @@
+ 
+ static char *get_fqdn(void)
+ {
+-    char *ret;
+-    DWORD size = 0;
+-
+-    GetComputerNameExA( ComputerNamePhysicalDnsFullyQualified, NULL, &size );
+-    if (GetLastError() != ERROR_MORE_DATA) return NULL;
+-    if (!(ret = malloc( size ))) return NULL;
+-    if (!GetComputerNameExA( ComputerNamePhysicalDnsFullyQualified, ret, &size ))
++    WCHAR local[256], *wide = local;
++    DWORD size = ARRAY_SIZE(local);
++    char *ret = NULL;
++    int count;
++
++    /* A fresh wide lookup avoids the ANSI size probe's duplicate registry
++     * queries. Do not cache the name: it can change during the process. */
++    if (!GetComputerNameExW( ComputerNamePhysicalDnsFullyQualified, wide, &size ))
++    {
++        SIZE_T bytes = (SIZE_T)size * sizeof(*wide);
++
++        if (GetLastError() != ERROR_MORE_DATA || size <= ARRAY_SIZE(local) ||
++            bytes / sizeof(*wide) != size) return NULL;
++        if (!(wide = malloc( bytes ))) return NULL;
++        if (!GetComputerNameExW( ComputerNamePhysicalDnsFullyQualified, wide, &size )) goto done;
++    }
++    count = WideCharToMultiByte( CP_ACP, 0, wide, -1, NULL, 0, NULL, NULL );
++    if (!count || !(ret = malloc( count ))) goto done;
++    if (!WideCharToMultiByte( CP_ACP, 0, wide, -1, ret, count, NULL, NULL ))
+     {
+         free( ret );
+-        return NULL;
+-    }
++        ret = NULL;
++    }
++
++done:
++    if (wide != local) free( wide );
+     return ret;
+ }
+ 
