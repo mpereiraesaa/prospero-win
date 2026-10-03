@@ -16,23 +16,31 @@ waits for it, and puts everything back:
   (<root>/pw_script_input, src/pw_script_input.h);
 - --append adds lines to files under the library root, such as a game's
   config (Counter-Strike's bot_quota), --timing turns on the WoW64
-  timing report (pw_wow_timing), and --fps turns on Wine's fps channel in
-  the game's profile, for a game that presents with Vulkan (DXVK);
+  timing report (pw_wow_timing), --profiler turns on one of the
+  translator's other profilers (see PROFILERS), and --fps turns on Wine's
+  fps channel in the game's profile, for a game that presents with Vulkan
+  (DXVK);
+- --runtime installs another build of the translator (wowprospero.prx)
+  in the app's folder (--app) for the run, to compare it with the one the
+  app has;
 - when the run's saved session (logs/session-N.log, with profile=SLUG)
   ends, it is copied to --save and summarized: frame rate (PW_GL, or
-  Wine's fps channel), the keys sent, timing lines and how the session
-  ended.
+  Wine's fps channel), the keys sent, timing lines, the CPU time each
+  busy thread spent in translated code (pw_exec_cpu.py) and how the
+  session ended. --fetch copies other files from the library, such as the
+  game's own benchmark result, next to it.
 
-The original profiles.lst and appended files are restored, and the key
-script and timing trigger removed, even when the run fails, times out or is
+The original profiles.lst, appended files and translator are restored, and
+the key script and profiler triggers removed, even when the run fails, times out or is
 stopped with SIGTERM or SIGHUP; a stale trigger an interrupted run left
 behind is removed too.
 
 Usage:
     pw_gameplay_run.py SLUG --host IP [--port N] [--remote /data/prospero-win]
         [--key MS:KEY ...] [--input FILE] [--arguments ARGS] [--append PATH=LINE ...]
-        [--timing] [--fps]
-        [--wait SECONDS] [--save DIR] [--keep]
+        [--timing] [--profiler NAME ...] [--fps]
+        [--runtime wowprospero.prx --app /data/homebrew/FOLDER]
+        [--wait SECONDS] [--save DIR] [--fetch PATH ...] [--keep]
 """
 from __future__ import annotations
 
@@ -46,6 +54,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pw_exec_cpu import busiest, describe, estimates  # noqa: E402
 from pw_prefix import FtpRemote  # noqa: E402
 
 # Windows virtual-key codes for the keys a menu usually needs.
@@ -58,9 +67,20 @@ KEY_NAMES = {
     **{f"f{number}": 0x6F + number for number in range(1, 13)},
 }
 SESSIONS = 8  # native/pw_diagnostics.h: PW_DIAGNOSTICS_SESSIONS
+# The translator's profilers: a file in the library root turns each on for
+# the games started while it exists (wine/wowprospero/unix.c).
+PROFILERS = {
+    "timing": "pw_wow_timing",                      # time split: translated code, host libraries, system calls
+    "exec-timing": "pw_wow_exec_timing",            # CPU time in translated code, per thread
+    "profile": "pw_wow_profile",                    # each thread's busiest translated blocks
+    "dispatch-profile": "pw_wow_dispatch_profile",  # chain-table hits, empty slots and collisions
+}
 # The run's own trigger files: never kept after a run, even one that found a
 # stale copy left by an interrupted run.
-TRIGGERS = ("pw_script_keys", "pw_script_input", "pw_wow_timing")
+TRIGGERS = ("pw_script_keys", "pw_script_input", *PROFILERS.values())
+# The translator's Unix side, under the app's folder.
+RUNTIME = "win/wine/lib/wine/x86_64-unix/wowprospero.prx"
+SIGNED_SELF = bytes.fromhex("4f153d1d")  # the console loads only signed modules
 TITLE_WINEDEBUG = "err+all,+loaddll,+process"  # native/wine64_main.c: PW_WINE64_DEBUG
 # Below this, a Vulkan game is still loading: its loading screen draws a
 # frame now and then.
@@ -96,6 +116,12 @@ def parse_append(spec: str) -> tuple[str, str]:
     if not sep or not path or path.startswith("/") or ".." in path.split("/"):
         raise ValueError(f"append {spec!r}: expected RELATIVE/PATH=LINE under the library root")
     return path, line
+
+
+def parse_fetch(path: str) -> str:
+    if not path or path.startswith("/") or ".." in path.split("/"):
+        raise ValueError(f"fetch {path!r}: expected a relative path under the library root")
+    return path
 
 
 def appended(original: bytes, lines: list[str]) -> bytes:
@@ -174,6 +200,9 @@ def summarize(text: str) -> list[str]:
     else:
         lines.append("fps: no PW_GL or Wine fps records (it never presented, or ran without --fps)")
     lines += [f"timing: {line}" for line in timing[-3:]]
+    threads = estimates(text)
+    if threads:
+        lines.append("translated CPU: " + "; ".join(describe(thread) for thread in busiest(threads, 3)))
     lines.append(f"ended: {ending[-1] if ending else 'no session_end (the run is still going or crashed)'}")
     return lines
 
@@ -183,6 +212,7 @@ class Run:
         self.args, self.remote = args, remote
         self.root = args.remote.rstrip("/")
         self.saved: dict[str, bytes | None] = {}
+        self.runtime: tuple[str, bytes] | None = None
         self.profile_id = args.slug
 
     def path(self, relative: str) -> str:
@@ -198,6 +228,19 @@ class Run:
         if relative not in self.saved:
             self.saved[relative] = self.read(relative)
         self.remote.write(self.path(relative), data)
+
+    def install_runtime(self) -> None:
+        """The candidate translator in place of the app's own, for the run."""
+        candidate = Path(self.args.runtime).read_bytes()
+        if not candidate.startswith(SIGNED_SELF):
+            raise SystemExit(f"pw_gameplay_run: {self.args.runtime} is not a signed module "
+                             "(build it with tools/build_wine_ps5.sh); the app would not start")
+        target = f"{self.args.app.rstrip('/')}/{RUNTIME}"
+        try:
+            self.runtime = (target, self.remote.read(target))
+        except ftplib.all_errors:
+            raise SystemExit(f"pw_gameplay_run: no {target} on the console (check --app)")
+        self.remote.write(target, candidate)
 
     def remove(self, relative: str) -> None:
         try:
@@ -229,8 +272,8 @@ class Run:
         self.replace("pw_script_keys", key_script(self.args.keys))
         if self.args.input:
             self.replace("pw_script_input", Path(self.args.input).read_bytes())
-        if self.args.timing:
-            self.replace("pw_wow_timing", b"timing\n")
+        for name in self.args.profilers:
+            self.replace(PROFILERS[name], name.encode() + b"\n")
         lines: dict[str, list[str]] = {}
         for path, line in self.args.append:
             lines.setdefault(path, []).append(line)
@@ -239,18 +282,36 @@ class Run:
             if original is None:
                 raise SystemExit(f"pw_gameplay_run: {path} is not on the console")
             self.replace(path, appended(original, added))
+        if self.args.runtime:
+            self.install_runtime()
         log(f"prepared {slug}: {len(self.args.keys)} key presses, "
             f"{'a recorded macro, ' if self.args.input else ''}"
-            f"{sum(map(len, lines.values()))} appended lines, timing {'on' if self.args.timing else 'off'}")
+            f"{sum(map(len, lines.values()))} appended lines, "
+            f"profilers: {', '.join(self.args.profilers) or 'none'}"
+            + (f", translator {Path(self.args.runtime).name}" if self.args.runtime else ""))
 
     def restore(self) -> None:
+        if self.runtime:
+            self.remote.write(*self.runtime)
+            log("restored the app's own translator")
         for relative, original in self.saved.items():
             if original is None:
                 self.remove(relative)
             else:
                 self.remote.write(self.path(relative), original)
         log("restored profiles.lst and the appended files; removed the key script"
-            + (" and the timing trigger" if self.args.timing else ""))
+            + (" and the profiler triggers" if self.args.profilers else ""))
+
+    def fetch(self, target: Path, stem: str) -> None:
+        """Copies of --fetch files, read after the game ended."""
+        for relative in self.args.fetch:
+            data = self.read(relative)
+            if data is None:
+                log(f"could not fetch {relative}: not on the console")
+                continue
+            copy = target / f"{stem}-{Path(relative).name}"
+            copy.write_bytes(data)
+            log(f"saved {copy}")
 
     def next_session(self) -> int:
         data = self.read("logs/next.txt")
@@ -284,7 +345,13 @@ def main(argv: list[str] | None = None, remote=None) -> int:
     parser.add_argument("--arguments", help="the game's launch arguments for this run, in place of its profile's")
     parser.add_argument("--append", action="append", default=[], type=parse_append,
                         help="PATH=LINE, a line added to a file under the library root for the run")
-    parser.add_argument("--timing", action="store_true", help="turn on the WoW64 timing report for the run")
+    parser.add_argument("--timing", action="store_true", help="turn on the WoW64 timing report (--profiler timing)")
+    parser.add_argument("--profiler", dest="profilers", action="append", default=[], choices=sorted(PROFILERS),
+                        help="turn on one of the translator's profilers for the run (any number)")
+    parser.add_argument("--runtime", help="a signed wowprospero.prx to run the game with, in place of the app's")
+    parser.add_argument("--app", help="the app's folder on the console, for --runtime: /data/homebrew/ and its name")
+    parser.add_argument("--fetch", action="append", default=[], type=parse_fetch,
+                        help="PATH under the library root to copy into --save after the run (any number)")
     parser.add_argument("--fps", action="store_true",
                         help="turn on Wine's fps channel in the profile, to report a Vulkan (DXVK) game's frame rate")
     parser.add_argument("--wait", type=int, default=600, help="seconds to wait for the run (default 600)")
@@ -292,6 +359,12 @@ def main(argv: list[str] | None = None, remote=None) -> int:
     parser.add_argument("--save", help="directory to copy the run's saved session log into")
     parser.add_argument("--keep", action="store_true", help="leave the run's settings on the console")
     args = parser.parse_args(argv)
+    if args.timing and "timing" not in args.profilers:
+        args.profilers.append("timing")
+    if args.runtime and not args.app:
+        parser.error("--runtime needs --app, the app's folder on the console")
+    if args.fetch and not args.save:
+        parser.error("--fetch needs --save")
     if remote is None:
         if not args.host:
             parser.error("--host (or PS5_HOST) is required")
@@ -314,6 +387,7 @@ def main(argv: list[str] | None = None, remote=None) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
         log(f"saved {target}")
+        run.fetch(target.parent, target.stem)
     for line in summarize(text):
         log(line)
     return 0

@@ -265,7 +265,11 @@ reports it and puts the console back as it was.
   profile starts at its menu;
 - `--append PATH=LINE` adds a line to a file under the library folder, such as
   a game's config;
-- `--timing` turns on the [timing report](#8-when-a-game-is-slow-time-it-first);
+- `--timing` turns on the [timing report](#8-when-a-game-is-slow-time-it-first),
+  and `--profiler` the translator's other profilers;
+- `--runtime` runs the game with another build of the translator, put back
+  afterwards, and `--fetch` copies a file such as the game's own benchmark
+  log into `--save` (both in [profiling on the PS5](#10-profiling-on-the-ps5));
 - `--fps` turns on Wine's `fps` channel in the game's profile, for a game
   that draws with Vulkan through DXVK. OpenGL games log their frame rate
   without it (`PW_GL`).
@@ -281,9 +285,9 @@ reports it and puts the console back as it was.
   events were replayed.
 
 Then start the script build on the console. When the game's session ends,
-the tool copies its saved log to `--save` and summarizes it, and it always
-puts back `profiles.lst`, the profile and the files it appended to, and
-removes the key script and the timing trigger.
+the tool copies its saved log to `--save` and summarizes it. It always puts
+back `profiles.lst`, the profile, the files it appended to and the app's own
+translator, and removes the key script and any profiler files.
 
 Counter-Strike 1.6 with nine bots, joining the counter-terrorists:
 
@@ -334,99 +338,189 @@ script build asked the game to close and closed it when it didn't.
 
 ## 10. Profiling on the PS5
 
-Every profiler the translator has also runs on the console, turned on by an
-empty file in the library folder (`/data/prospero-win/`) and reported through
-the same ps5log stream as everything else. Nothing runs on the PC except the
-log receiver, so you can find where a game's time goes, and check whether a
-change helps, on the hardware that matters. This is how the Half-Life 2
-translator speed-ups (the full-PC chain hash, the shared fault exit and the
-second chain-table bank) were found and accepted.
+Every profiler in the translator also runs on the console. You can find out
+where a game spends its time, and check whether a change to the translator
+makes it faster, on the PS5 itself, without running the game in Wine on a PC.
+None of this is specific to one game: it works for any 32-bit Windows game
+the app runs, because every one of them runs through the translator. (A
+64-bit game runs natively and doesn't use the translator, so these profilers
+have nothing to report for it.)
 
-### The switches
+The steps below use two tools that run on your PC and talk to the console
+over FTP: `tools/pw_gameplay_run.py`, which sets up one unattended run and
+puts everything back afterwards ([section 9](#9-automated-gameplay-runs)),
+and `tools/pw_exec_cpu.py`, which reads the saved logs and compares builds.
 
-Create the file before starting the game and delete it afterwards; the
-translator checks for it as the game starts, not while it runs.
+### What you need
 
-| File | What it reports |
-| --- | --- |
-| `pw_wow_timing` | Where each thread's time goes: translated code, host libraries, system calls ([section 8](#8-when-a-game-is-slow-time-it-first)) |
-| `pw_wow_exec_timing` | CPU time spent inside translated code, per thread (below) |
-| `pw_wow_profile` | The 20 translated blocks each thread spends the most samples in, every five seconds |
-| `pw_wow_dispatch_profile` | How often a jump between blocks finds its target in the chain table, finds it empty, or finds another block there |
+- The app installed on the PS5, with FTP access to the console, as in
+  [Getting started](GETTING_STARTED.md).
+- A **script build** of the app, so a run starts the game and ends it
+  without anyone at the TV
+  ([the pieces](#the-pieces)). Set `PW_WINE64_SECONDS` long enough for the
+  game to load and finish what you are measuring.
+- To compare translator changes, **two builds of the translator**. Each
+  build of the runtime (`tools/build_wine_ps5.sh`) writes the signed module
+  as `prx/sce_module/wowprospero.prx` in its work directory
+  (`.deps/wine-ps5/` by default). Build `main`, copy that file aside as
+  the baseline, then build your change and copy that one aside too.
 
-`pw_wow_profile` samples with a one-millisecond process CPU timer and resolves
-each sample to a guest address right away:
+### The profilers
+
+Each profiler is switched on by a file in the library folder
+(`/data/prospero-win/`) that the translator looks for when a game starts.
+`pw_gameplay_run.py --profiler NAME` creates the file for one run and removes
+it afterwards; you can name more than one.
+
+| `--profiler` | File | What it reports |
+| --- | --- | --- |
+| `timing` | `pw_wow_timing` | Where each thread's time goes: translated code, host libraries, system calls ([section 8](#8-when-a-game-is-slow-time-it-first)) |
+| `exec-timing` | `pw_wow_exec_timing` | CPU time spent inside translated code, per thread |
+| `profile` | `pw_wow_profile` | The 20 translated blocks each thread spends the most samples in, every five seconds |
+| `dispatch-profile` | `pw_wow_dispatch_profile` | How often a jump between blocks finds its target in the translator's chain table, finds the slot empty, or finds another block there |
+
+They report through the game's log, which the console saves after every run
+and `pw_gameplay_run.py --save DIR` copies to your PC. If you start a game
+by hand instead, you can create and delete the files over FTP yourself;
+leave nothing behind, since some of them slow every game down.
+
+### Step 1: find where the time goes
+
+Start with `--profiler timing`. If most of a busy thread's time is in `unix`
+or `sys`, the translator is not the problem; read
+[section 8](#8-when-a-game-is-slow-time-it-first). If it's in `run`, add
+`--profiler profile` to see which code:
 
 ```
 wowprospero profile: tid=0024 interval_ms=6405 samples=123 outside=0 stubs=9 overflow=0
 wowprospero hotspot: tid=0024 pc=7a7b3c33 samples=6 entry=0 body=0 exit=6 emitted=0
 ```
 
-`pc` is the guest address of the block, which you can look up in the game's
-DLLs, and `entry`, `body` and `exit` say which part of the translated block
-the samples landed in: samples in `exit` are time spent getting to the next
-block. For Half-Life 2, the dispatcher profile's `table_collisions` showed
-blocks evicting each other from the chain table, which led to the full-PC
-hash and the second bank. The caveat about signals at the end of
-[section 8](#8-when-a-game-is-slow-time-it-first) still applies to samples
-that land outside translated code, so read these as where translated time
-goes, not as a whole-process profile.
+`pc` is the guest address of a translated block, which you can look up in
+the game's DLLs. `entry`, `body` and `exit` say which part of the translated
+block the samples landed in; samples in `exit` are time spent getting to the
+next block, and `--profiler dispatch-profile` then shows whether blocks are
+evicting each other from the chain table (`table_collisions`). These are
+statistical samples, not exact timings, and they only cover translated code:
+the caveat about signals at the end of
+[section 8](#8-when-a-game-is-slow-time-it-first) applies to the rest.
 
-### Measuring CPU, not frame rate
+### Step 2: choose a workload that repeats exactly
 
-Most games on the console are held at 60 fps by the display. A change that
-makes the translator faster leaves the frame rate at 60 and shows up as spare
-CPU instead, so compare CPU time. With `pw_wow_exec_timing`, each translating
-thread reports a cumulative line:
+A comparison is only as good as its workload. Use something the game does
+the same way every time:
+
+- **A built-in benchmark.** Many engines can play back a recorded demo and
+  report how long it took. In Source and GoldSrc games (Half-Life 2,
+  Half-Life, Counter-Strike), record a demo of the stretch you care about in
+  the game's console (`record <name>`, play, `stop`), then start the run
+  with `--arguments` set to the game's usual launch arguments plus
+  `-condebug +timedemo <name>`. `-condebug` makes the game write its
+  console, result included, to a log in its game folder (`console.log` in
+  Source games, `qconsole.log` in GoldSrc ones), which you copy back with
+  `--fetch` and its path under the library folder, such as
+  `prefix/drive_c/Games/<game>/<mod>/console.log`. Quake III engine games such as OpenArena have
+  the same idea as `timedemo 1` followed by `demo <name>`.
+- **A recorded macro.** Otherwise, record the inputs that play through one
+  stretch of the game (`--input`, [running one](#running-one)) and replay
+  the same file every time, with the same settings.
+
+Keep the game's settings, resolution and launch arguments identical for
+every run you compare.
+
+### Step 3: compare two builds
+
+Most games on the console are held at 60 fps by the display, so a faster
+translator usually doesn't raise the frame rate: it leaves spare CPU. That
+is why the comparison measures CPU time with `--profiler exec-timing`.
+
+Run the baseline and your change in turn: baseline, change, baseline,
+change, baseline. Runs drift by about 1%, and alternating stops the drift
+from favoring one side. `--runtime` installs a translator build for the run
+and puts the app's own back afterwards; `--app` is the app's folder on the
+console, `/data/homebrew/` followed by the folder name you uploaded. For a
+game whose profile is `my-game` with a recorded demo `mydemo`:
+
+```sh
+export PS5_HOST=<PS5 IP>
+for build in baseline change baseline change baseline; do
+  python3 tools/pw_gameplay_run.py my-game \
+    --arguments '<the game arguments> -condebug +timedemo mydemo' \
+    --fetch 'prefix/drive_c/Games/<game>/<mod>/console.log' \
+    --runtime prx/$build/wowprospero.prx --app /data/homebrew/<app folder> \
+    --profiler exec-timing --save runs/$build/
+done
+python3 tools/pw_exec_cpu.py --baseline runs/baseline/*.log --candidate runs/change/*.log
+```
+
+Start the script build on the console each time the tool says it's ready.
+The comparison prints one line per busy thread:
+
+```
+tid=0024: baseline 96.5, 97.9, 97.2 s; candidate 94.0, 95.9 s; median -2.4%: faster
+tid=00b0: baseline 71.3, 71.6, 71.5 s; candidate 69.3, 69.0 s; median -3.3%: faster
+```
+
+The seconds are an estimate of the CPU each thread spent in translated code
+during the whole run. Each thread logs a line like this one:
 
 ```
 wowprospero execution: tid=0024 cumulative=1 sample_cpu_ns=1508594000 calls=32265545 samples=504504 stride=64 clock_batch_read_ns=852 clock_resolution_ns=1000 clock_errors=0
 ```
 
-It times about one call into translated code in 64. The estimated CPU time
-in translated code is `sample_cpu_ns / samples * calls`, here
-1.508594 s / 504,504 × 32,265,545 ≈ 96.5 s. Use each thread's last line
-of the session. A failed clock read is counted in `clock_errors`; one or two
-among hundreds of thousands of samples don't change the estimate, but a
-run with many is not usable.
+Only about one call into translated code in 64 is timed, so the total is
+`sample_cpu_ns / samples * calls`: here 1.508594 s / 504,504 × 32,265,545,
+about 96.5 s. `pw_gameplay_run.py` also prints the busiest threads' totals
+after every run, as `translated CPU:`.
 
-### A fair comparison
+How to read the verdict:
 
-- **Use a workload the game repeats exactly.** Half-Life 2's
-  `+timedemo hl2long` (added to the profile's launch arguments for the run)
-  plays the same 5,182 frames every time and writes its result to the game's
-  `-condebug` log. Gameplay driven by a macro (section 9) is good for
-  checking that a build plays well, but varies too much from run to run to
-  measure a few percent.
-- **Alternate the builds:** main, candidate, main, candidate, main. Runs
-  drift by about 1%; alternating keeps the drift from favoring one side. Keep
-  the same switches on for both.
-- **Build each candidate as main plus only its own change.** Two of our
-  candidate branches had merged other experiments, and every one of them
-  showed the same large gain, which came from one shared commit. Rebuilding
-  each one on its own showed which change the gain belonged to.
-- **Accept a gain only outside the spread.** Two candidate runs that both
-  beat every main run, on the threads that matter, count; a candidate
-  inside main's range is no gain, however good its average looks. For
-  Half-Life 2, thread `0024` is the game's main thread and the busiest
-  worker is usually `00b0`.
-- **Then play it and quit.** A timedemo doesn't cover everything. Before
-  merging, play the build through a section of real gameplay with the
-  macro, quit from the game's menu, and check that the session ends with
-  `session_end reason=wine-exit` and no translator errors.
+- **faster** or **slower** means every run of one build beat every run of
+  the other. Anything in between is **no clear difference**, however good
+  the average looks; that is a result too, and worth writing down.
+- Compare thread by thread. Thread numbers (`tid`) are usually the same from
+  run to run for a game's busiest threads; the tool only compares threads
+  that appear in every run.
+- `clock_errors` counts failed clock reads. One or two among hundreds of
+  thousands of samples don't matter; the tool marks a run with more as
+  unreliable.
+- Build each change on `main` by itself. A branch that also carries other
+  experiments measures all of them at once. Once, several candidate branches
+  all showed the same large gain, and it came from a single commit they
+  shared.
 
-The Half-Life 2 numbers, and the candidates that didn't make it, are in the
+### Step 4: play it, and quit
+
+A benchmark doesn't exercise everything. Before you call a change done, play
+through a real stretch of the game with it (a recorded macro is fine), quit
+from the game's own menu, and check the summary: `ended: wine-exit` means
+the game and Wine exited normally. `close-timeout` means the script build
+had to close the game, so the quit wasn't tested. Look through the saved log
+for translator errors too.
+
+### Example: Half-Life 2
+
+The three Half-Life 2 speed-ups merged in October 2026 (the full-PC chain
+hash, the shared fault exit and the second chain-table bank) were found and
+accepted this way. The workload was a long demo recorded in
+`d1_trainstation_01`, played with `+timedemo` (5,182 frames, at 59.8 fps on
+every build because of the 60 Hz cap). `-condebug` in the launch arguments
+makes the game write its console, including the timedemo result, to
+`hl2/console.log`. The dispatch profile showed blocks evicting each other
+from the chain table, which is what the first and third changes address,
+and the comparisons were then run as in step 3, followed by a macro playing
+from the train to Barney's monitor and quitting. The full numbers, and the
+candidates that showed no gain, are in the
 [DBT benchmark notes](DBT_BENCHMARK.md).
 
 ### Put the console back
 
-Profiling runs swap the runtime, add switch files and change launch
-arguments. Afterwards, check that the console has the release build again,
-that the switch files are gone, that the game's profile matches the
-published one, and that the game itself didn't save anything from the run:
-Half-Life 2, started without a gamepad, writes `joystick "0"` into
-`hl2/cfg/config.cfg`, and the next person to play finds their controller
-dead.
+`pw_gameplay_run.py` restores the files it changes, even when a run fails or
+is interrupted: the game list, the profile, the translator and the profiler
+files. It can't undo what the game itself saved during the run. Check the
+game's own settings afterwards: Half-Life 2, for example, writes
+`joystick "0"` into `hl2/cfg/config.cfg` when it starts without a gamepad,
+and the next person to play finds their controller dead.
 
 ## Symptoms we've seen
 

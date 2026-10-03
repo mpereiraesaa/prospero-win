@@ -26,6 +26,10 @@ REC seq=8 t=8.0 WINESERVER wowprospero timing: tid=0024 run=40.0% unix=50.0% (1/
 REC seq=9 t=9.0 WINESERVER wowprospero timing: tid=0030 run=0.8% unix=0.0% (0/s 0.0us) sys=99.2%
 REC seq=10 t=10.0 PW_WINE64 session_end reason=close-timeout
 """
+APP = "data/homebrew/APP"  # the app's folder, as the fake console stores it
+SIGNED = bytes.fromhex("4f153d1d") + b"candidate translator"
+EXECUTION = ("REC seq=9 t=9.5 WINESERVER wowprospero execution: tid=0024 cumulative=1 sample_cpu_ns=1508594000 "
+             "calls=32265545 samples=504504 stride=64 clock_batch_read_ns=852 clock_resolution_ns=1000 clock_errors=0\n")
 
 
 class Console:
@@ -44,12 +48,14 @@ class Console:
             self.polls += 1
             if self.polls == 2:  # the run: snapshot what the title would see
                 for name in ("profiles/profiles.lst", "profiles/counter-strike-16.profile", "pw_script_keys", "pw_script_input", "pw_wow_timing",
-                             "prefix/drive_c/Games/cs/listenserver.cfg"):
+                             "pw_wow_exec_timing", "pw_wow_profile", "pw_wow_dispatch_profile",
+                             "prefix/drive_c/Games/cs/listenserver.cfg", APP + "/" + run.RUNTIME):
                     entry = self.root / name
                     self.during[name] = entry.read_bytes() if entry.exists() else None
                 if self.stop:  # SIGTERM while the game runs (exit_on_signal)
                     raise SystemExit(143)
                 if self.finish:
+                    (self.root / "prefix/drive_c/Games/cs/demo.log").write_text("5182 frames 86.6 seconds 59.8 fps\n")
                     (self.root / "logs/session-3.log").write_text("PW_REPORT/1 build=abc profile=launcher\n"
                                                                   "REC seq=1 t=1 PW_WINE64 session_end reason=launcher\n")
                     (self.root / "logs/session-4.log").write_text(GAME)
@@ -77,6 +83,8 @@ def library(root: Path) -> None:
     (root / "logs/next.txt").write_text("3\n")
     (root / "prefix/drive_c/Games/cs").mkdir(parents=True)
     (root / "prefix/drive_c/Games/cs/listenserver.cfg").write_bytes(b"sv_cheats 0\r\nexec x.cfg\r\n")
+    (root / APP / run.RUNTIME).parent.mkdir(parents=True)
+    (root / APP / run.RUNTIME).write_bytes(b"the app's own translator")
 
 
 def main(console, *args) -> tuple[int, str]:
@@ -209,6 +217,74 @@ with tempfile.TemporaryDirectory() as directory:
     assert console.during["pw_wow_timing"] is None and console.during["pw_script_keys"] == b"1 0x1b\n"
     assert not (root / "pw_wow_timing").exists() and not (root / "pw_script_keys").exists()
 
+# Profilers and another translator: all on the console for the run only;
+# the summary estimates translated CPU, and --fetch copies the game's own
+# result next to the saved session.
+assert run.summarize(EXECUTION)[-2] == "translated CPU: tid=0024 96.5 s"
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    candidate = Path(directory) / "wowprospero.prx"
+    candidate.write_bytes(SIGNED)
+    saved = Path(directory) / "saved"
+    console = Console(root)
+    code, output = main(console, "--profiler", "exec-timing", "--profiler", "dispatch-profile", "--timing",
+                        "--runtime", str(candidate), "--app", "/" + APP + "/",
+                        "--fetch", "prefix/drive_c/Games/cs/demo.log", "--save", str(saved))
+    assert code == 0, output
+    during = console.during
+    assert during["pw_wow_exec_timing"] == b"exec-timing\n" and during["pw_wow_dispatch_profile"] == b"dispatch-profile\n"
+    assert during["pw_wow_timing"] == b"timing\n" and during["pw_wow_profile"] is None
+    assert during[APP + "/" + run.RUNTIME] == SIGNED
+    assert (root / APP / run.RUNTIME).read_bytes() == b"the app's own translator"
+    for trigger in run.PROFILERS.values():
+        assert not (root / trigger).exists(), trigger
+    assert "profilers: exec-timing, dispatch-profile, timing, translator wowprospero.prx" in output
+    assert "restored the app's own translator" in output and "removed the key script and the profiler triggers" in output
+    assert (saved / "counter-strike-16-1790000000-demo.log").read_text() == "5182 frames 86.6 seconds 59.8 fps\n"
+
+# A translator the console can't load, a wrong app folder or a missing
+# --app is refused, and nothing stays changed.
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    raw = Path(directory) / "raw.prx"
+    raw.write_bytes(b"\x7fELF unsigned")
+    signed = Path(directory) / "signed.prx"
+    signed.write_bytes(SIGNED)
+    for args, message in ((["--runtime", str(raw), "--app", "/" + APP], "is not a signed module"),
+                          (["--runtime", str(signed), "--app", "/data/homebrew/OTHER"], "check --app")):
+        try:
+            main(Console(root), "--profiler", "exec-timing", *args)
+            raise AssertionError(args)
+        except SystemExit as stop:
+            assert message in str(stop), stop
+        assert (root / APP / run.RUNTIME).read_bytes() == b"the app's own translator"
+        assert not (root / "pw_wow_exec_timing").exists()
+        assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
+    for args in (["--runtime", str(signed)], ["--fetch", "x.log"], ["--fetch", "/abs.log", "--save", directory],
+                 ["--profiler", "nosuch"]):
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                main(Console(root), *args)
+            raise AssertionError(args)
+        except SystemExit:
+            pass
+
+# A stopped run with another translator puts the app's own back.
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    candidate = Path(directory) / "wowprospero.prx"
+    candidate.write_bytes(SIGNED)
+    try:
+        main(Console(root, stop=True), "--runtime", str(candidate), "--app", "/" + APP, "--profiler", "profile")
+        raise AssertionError("no exit")
+    except SystemExit as stop:
+        assert stop.code == 143
+    assert (root / APP / run.RUNTIME).read_bytes() == b"the app's own translator"
+    assert not (root / "pw_wow_profile").exists()
+
 # SIGTERM or SIGHUP mid-run: the run is put back as after Ctrl-C.
 try:
     run.exit_on_signal(15, None)
@@ -240,4 +316,4 @@ with tempfile.TemporaryDirectory() as directory:
         assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
         assert not (root / "pw_script_keys").exists()
 
-print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, recorded macro, restore on success/timeout/refusal/signal, stale triggers, session by profile id, summary")
+print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, recorded macro, profilers, another translator, fetched files, restore on success/timeout/refusal/signal, stale triggers, session by profile id, summary")
