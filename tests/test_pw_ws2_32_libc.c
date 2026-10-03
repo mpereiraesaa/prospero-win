@@ -128,11 +128,9 @@ static void test_local_names(void)
     assert(count(info) == 1 && !strcmp(text(info), "127.0.0.1"));
     freeaddrinfo(info);
 
-    /* A single-label name is this machine too: a prefix made on a PC asks
-     * for the PC's computer name. */
-    assert(!getaddrinfo("some-pc", "1", &hints, &info));
-    assert(count(info) == 1 && !strcmp(text(info), "127.0.0.1"));
-    freeaddrinfo(info);
+    /* Other single-label names are not this machine: a prefix made on a PC
+     * asks for the PC's computer name, and the game must see that fail. */
+    assert(getaddrinfo("some-pc", "1", &hints, &info) == EAI_NONAME && !info);
 
     /* Names are not resolved by number only, or at all otherwise. */
     hints = hints_of(AF_UNSPEC, 0, 0, AI_NUMERICHOST);

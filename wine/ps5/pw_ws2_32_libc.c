@@ -7,13 +7,13 @@
  * h_errno are in no stub at all.
  *
  * A title has no DNS either, so these answer what needs no name server:
- * numeric addresses, the wildcard and loopback addresses, and the names of
- * this machine as loopback: "localhost", the console's own host name, and
- * any other single-label name. Without DNS or a local name service a
- * single label can only mean this machine, and a prefix made on a PC carries
- * the PC's computer name, which Wine looks up for the game (GetComputerNameEx);
- * answering it saves a failed lookup and an error line per call. A name with
- * a dot is EAI_NONAME. There is no services database, so a service must be a port
+ * numeric addresses, the wildcard and loopback addresses, and "localhost"
+ * and the console's own host name, both loopback. Any other name is
+ * EAI_NONAME, including the computer name a prefix made on a PC carries:
+ * resolving that name made GTA IV believe it was online and wait forever on
+ * "Starting a new game" (measured), while the failure Wine reports for it
+ * (one "Failed to resolve your host name IP" line per lookup) is what lets
+ * the game carry on offline. There is no services database, so a service must be a port
  * number. gethostname, inet_pton and inet_ntop are the title's own.
  *
  * The host test builds this file with these names prefixed (Makefile), so
@@ -79,13 +79,12 @@ static socklen_t pw_sockaddr(struct sockaddr_storage *storage, const struct pw_a
     return sizeof(*in6);
 }
 
-/* "localhost", the name gethostname reports, or any single-label name (no dot,
- * and no colon: that would be an IPv6 address). */
+/* "localhost" or the name gethostname reports. */
 static int pw_is_local_name(const char *name)
 {
     char own[256];
 
-    if (!strcasecmp(name, "localhost") || (name[0] && !strpbrk(name, ".:")))
+    if (!strcasecmp(name, "localhost"))
         return 1;
     if (gethostname(own, sizeof(own)))
         return 0;
