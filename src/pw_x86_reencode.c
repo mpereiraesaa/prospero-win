@@ -1208,7 +1208,7 @@ static void emit_side_exits(Ctx *c)
 static void emit_cold_paths(Ctx *c, PwX86Block *block)
 {
     Out *o = &c->o;
-    size_t starts[MAX_COLD];
+    size_t starts[MAX_COLD], exits[MAX_COLD];
 
     for (unsigned k = 0; k < c->cold_count; k++) {
         const Cold *cold = &c->cold[k];
@@ -1221,6 +1221,13 @@ static void emit_cold_paths(Ctx *c, PwX86Block *block)
         store_state(o, R11, offsetof(PwX86State, fault_address));
         store_state_imm(o, offsetof(PwX86State, fault_width), cold->width);
         store_state_imm(o, offsetof(PwX86State, fault_write), cold->write);
+        /* Each access retains its own EIP/metadata prefix. Only the
+         * register/flag save and return are shared; jumping is flag-free.
+         * The last path falls through, so a single path adds no jump. */
+        exits[k] = k + 1 < c->cold_count ? jump32(o) : 0;
+    }
+    if (c->cold_count) {
+        for (unsigned k = 0; k + 1 < c->cold_count; k++) land32(o, exits[k]);
         emit_leave(o, c->call_stack);
         b(o, 0xb8); w32(o, 0xffffffffu); b(o, 0xc3);                /* mov eax, -1; ret */
     }

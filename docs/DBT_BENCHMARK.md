@@ -862,3 +862,53 @@ The change was also played through the opening of `d1_trainstation_01` on
 the console with the route controller, from the train to Barney's monitor,
 and then quit from the game. It held 59.9 fps throughout (minimum 59.9),
 reported no translator or guest exceptions, and Wine exited normally.
+
+### Shared fault-exit epilogue
+
+Every memory access in a re-encoded block has a cold path that runs if the
+access faults. Each of those paths used to end with its own copy of the
+register and flag save plus the return to the dispatcher. They now share a
+single copy. Each fault site still stores its own guest EIP, restores any
+saved flags and records its own fault address, width and write flag, then
+takes a flag-free jump to the common epilogue; the last site simply falls
+through. Fault-table entries keep pointing at each site's own prefix, so
+fault reporting is unchanged. A block with one fault site gains no jump,
+and a block with none gains no epilogue.
+
+The saving grows with the number of accesses. In a size probe of identical
+blocks of absolute dword loads, with fault markers and the host call stack
+enabled, the emitted code shrank as follows:
+
+| Memory accesses | Before (bytes) | After (bytes) | Reduction |
+| --- | ---: | ---: | ---: |
+| 1 | 361 | 361 | 0% |
+| 2 | 482 | 421 | 12.7% |
+| 4 | 724 | 541 | 25.3% |
+| 8 | 1,208 | 781 | 35.3% |
+| 16 | 2,176 | 1,261 | 42.0% |
+| 32 | 4,112 | 2,221 | 46.0% |
+
+The regression test faults each of fifteen loads in one block, after ADC
+instructions that change registers and consume flags, through both guarded
+and native-fault paths, with and without the host call stack. Each path
+must report the same EIP, registers, flags and fault metadata as before.
+
+On the PS5, the `hl2long` timedemo (5,182 frames, vsync-bound at 59.8 fps
+either way) was run with the execution clock enabled, alternating main and
+this change. Each figure is the estimated CPU time spent in translated code
+over the whole session, from `sample_cpu_ns / samples * calls`:
+
+| Build | Main thread | Busiest worker |
+| --- | ---: | ---: |
+| main `a620f92` (three runs) | 106.5–107.2 s | 92.1–92.9 s |
+| shared fault exit (two runs) | 102.1, 102.6 s | 90.3, 89.9 s |
+
+That is about 4% less translated CPU on the main thread and about 2.5% less
+on the busiest worker, consistent with a smaller translated working set.
+The frame rate does not move because the demo is capped at 60 Hz.
+
+These timedemo figures were measured against main before the full-PC chain
+hash landed. The two changes were then combined on the console, played
+through the opening of `d1_trainstation_01` with the route controller and
+quit from the game: 59.9 fps throughout (minimum 59.9), no translator or
+guest exceptions, and a normal Wine exit.
