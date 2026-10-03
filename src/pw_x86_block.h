@@ -179,6 +179,14 @@ static inline uint32_t pw_x86_indirect_slot(uint32_t guest_pc, uint32_t mask)
     return (guest_pc ^ (guest_pc >> 12)) & mask;
 }
 
+/* Full-PC mixing for the 65536-slot re-encoded chain table. The generated
+ * lookup uses MOV/BSWAP/LEA/MOVZX so the guest arithmetic flags survive. */
+static inline uint32_t pw_x86_chain_slot(uint32_t pc)
+{
+    uint32_t reversed=(pc>>24)|((pc>>8)&0xff00u)|((pc<<8)&0xff0000u)|(pc<<24);
+    return (pc+reversed)&0xffffu;
+}
+
 typedef struct PwX86TranslateOptions {
     unsigned residency_enabled;
     unsigned lazy_flags_enabled;
@@ -194,7 +202,7 @@ typedef struct PwX86TranslateOptions {
      * and the engine's transition and register totals stay zero. */
     unsigned no_counters;
     /* The re-encoder's own indirect targets (pw_x86_reencode.h): 65536
-     * slots indexed by the low 16 bits of the guest PC, pointing at chain
+     * slots indexed by pw_x86_chain_slot(), pointing at chain
      * entries, so a return between re-encoded blocks stays pinned. NULL:
      * dynamic exits use indirect_targets only. */
     const PwX86IndirectTarget *chain_targets;

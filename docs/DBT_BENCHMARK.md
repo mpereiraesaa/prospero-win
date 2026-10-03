@@ -823,5 +823,37 @@ arrivals also follow native calls, safepoints and emitted blocks. A collision
 at arrival is evidence of table aliasing, not proof that a collision caused
 that return. Compare these counts with the FP-wrapper/native samples before
 changing the chain table hash or size. Tests execute two compiled PCs sharing
-the low 16 bits, verify replacement and cache-hit execution, and check reset
+a chain slot, verify replacement and cache-hit execution, and check reset
 and disabled collection. Console reports remain unvalidated.
+
+### Full-PC chain hash
+
+The chain table used to be indexed by the low 16 bits of the guest PC, so
+any two targets 64 KiB apart landed in the same slot and evicted each other.
+It is now indexed by `(pc + bswap32(pc)) & 0xffff`, which mixes every byte
+of the PC into the slot number. Publication, the dispatcher's residency
+profile, generated dynamic exits and superblock side exits all use the same
+`pw_x86_chain_slot()` index. The generated lookup computes it with MOV,
+BSWAP, LEA and MOVZX, none of which change the guest's arithmetic flags.
+The emitted-block indirect table keeps its own hash.
+
+PC one still maps to slot one, so the empty-table sentinel from the null
+target fix cannot match a real request. Tests cover slot replacement under
+the new hash, cache hits, reset, indirect calls and returns that preserve
+carry, zero, parity, sign and overflow, and superblock side-exit linking.
+
+On the PS5, the `hl2long` timedemo (5,182 frames, vsync-bound at 59.8 fps
+either way) was run with the execution clock enabled, alternating main and
+this change. Each figure below is the estimated CPU time spent in translated
+code over the whole session, from `sample_cpu_ns / samples * calls`:
+
+| Build | Main thread | Busiest worker |
+| --- | ---: | ---: |
+| main `a620f92` (three runs) | 106.5–107.2 s | 92.1–92.9 s |
+| full-PC chain hash (two runs) | 102.0, 102.8 s | 73.8, 74.6 s |
+
+That is about 4% less translated CPU on the game's main thread and about 20%
+less on its busiest worker. The frame rate does not move because the demo is
+capped at the display's 60 Hz; the gain is headroom. A few threads reported
+a single failed clock read out of hundreds of thousands of samples, which
+does not change these totals in any meaningful way.
