@@ -80,7 +80,9 @@ PROFILERS = {
 TRIGGERS = ("pw_script_keys", "pw_script_input", *PROFILERS.values())
 # The translator's Unix side, under the app's folder.
 RUNTIME = "win/wine/lib/wine/x86_64-unix/wowprospero.prx"
-SIGNED_SELF = bytes.fromhex("4f153d1d")  # the console loads only signed modules
+# A signed module (what tools/build_wine_ps5.sh writes to prx/sce_module/);
+# the console loads nothing else.
+SIGNED_MODULE = bytes.fromhex("5414f5ee")
 TITLE_WINEDEBUG = "err+all,+loaddll,+process"  # native/wine64_main.c: PW_WINE64_DEBUG
 # Below this, a Vulkan game is still loading: its loading screen draws a
 # frame now and then.
@@ -232,9 +234,9 @@ class Run:
     def install_runtime(self) -> None:
         """The candidate translator in place of the app's own, for the run."""
         candidate = Path(self.args.runtime).read_bytes()
-        if not candidate.startswith(SIGNED_SELF):
-            raise SystemExit(f"pw_gameplay_run: {self.args.runtime} is not a signed module "
-                             "(build it with tools/build_wine_ps5.sh); the app would not start")
+        if not candidate.startswith(SIGNED_MODULE):
+            raise SystemExit(f"pw_gameplay_run: {self.args.runtime} is not a signed module: use the "
+                             "prx/sce_module/wowprospero.prx that tools/build_wine_ps5.sh writes")
         target = f"{self.args.app.rstrip('/')}/{RUNTIME}"
         try:
             self.runtime = (target, self.remote.read(target))

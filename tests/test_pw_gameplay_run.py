@@ -27,7 +27,8 @@ REC seq=9 t=9.0 WINESERVER wowprospero timing: tid=0030 run=0.8% unix=0.0% (0/s 
 REC seq=10 t=10.0 PW_WINE64 session_end reason=close-timeout
 """
 APP = "data/homebrew/APP"  # the app's folder, as the fake console stores it
-SIGNED = bytes.fromhex("4f153d1d") + b"candidate translator"
+SIGNED = bytes.fromhex("5414f5ee") + b"candidate translator"  # a signed module
+APP_BINARY = bytes.fromhex("4f153d1d") + b"an eboot, not a module"
 EXECUTION = ("REC seq=9 t=9.5 WINESERVER wowprospero execution: tid=0024 cumulative=1 sample_cpu_ns=1508594000 "
              "calls=32265545 samples=504504 stride=64 clock_batch_read_ns=852 clock_resolution_ns=1000 clock_errors=0\n")
 
@@ -250,9 +251,12 @@ with tempfile.TemporaryDirectory() as directory:
     library(root)
     raw = Path(directory) / "raw.prx"
     raw.write_bytes(b"\x7fELF unsigned")
+    eboot = Path(directory) / "eboot.bin"
+    eboot.write_bytes(APP_BINARY)
     signed = Path(directory) / "signed.prx"
     signed.write_bytes(SIGNED)
     for args, message in ((["--runtime", str(raw), "--app", "/" + APP], "is not a signed module"),
+                          (["--runtime", str(eboot), "--app", "/" + APP], "is not a signed module"),
                           (["--runtime", str(signed), "--app", "/data/homebrew/OTHER"], "check --app")):
         try:
             main(Console(root), "--profiler", "exec-timing", *args)
