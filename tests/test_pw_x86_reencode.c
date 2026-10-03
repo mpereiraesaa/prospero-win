@@ -273,6 +273,31 @@ static void test_registers(void)
     compare(ok, sizeof(ok));
 }
 
+/* TZCNT/LZCNT (DXVK's bit iteration): register and memory forms, zero and
+ * nonzero sources, with CF and ZF captured by setcc before cmp redefines
+ * every flag. */
+static void test_bit_counts(void)
+{
+    static const uint8_t ok[] = {
+        0xb8, 0x00, 0x10, 0x00, 0x00,       /* mov eax, 0x1000 */
+        0xf3, 0x0f, 0xbc, 0xf8,             /* tzcnt edi, eax */
+        0xf3, 0x0f, 0xbd, 0xe8,             /* lzcnt ebp, eax */
+        0x31, 0xc0,                         /* xor eax, eax */
+        0xf3, 0x0f, 0xbc, 0xd0,             /* tzcnt edx, eax: 32, CF */
+        0x0f, 0x92, 0xc1,                   /* setc cl */
+        0xf3, 0x0f, 0xbd, 0xf0,             /* lzcnt esi, eax: 32, CF */
+        0x0f, 0x92, 0xc5,                   /* setc ch */
+        0xb8, 0x01, 0x00, 0x00, 0x80,       /* mov eax, 0x80000001 */
+        0xf3, 0x0f, 0xbc, 0xd8,             /* tzcnt ebx, eax: 0, ZF */
+        0x0f, 0x94, 0xc4,                   /* setz ah */
+        0xf3, 0x0f, 0xbc, 0x1c, 0x24,       /* tzcnt ebx, [esp] */
+        0xf3, 0x0f, 0xbd, 0x04, 0x24,       /* lzcnt eax, [esp] */
+        0x39, 0xd8,                         /* cmp eax, ebx */
+        0xc3,
+    };
+    compare(ok, sizeof(ok));
+}
+
 /* xchg between registers, which only the re-encoder takes. */
 static void test_xchg(void)
 {
@@ -1224,6 +1249,7 @@ int main(void)
     test_options();
     test_prefixed_padding();
     test_registers();
+    test_bit_counts();
     test_xchg();
     test_atomic_and_segments();
     test_memory();

@@ -1298,6 +1298,8 @@ static void sse_and_scan_tests(void)
     const uint8_t bsr[]={0x0f,0xbd,0xca};
     const uint8_t bsf[]={0x0f,0xbc,0xca};
     const uint8_t bsr16[]={0x66,0x0f,0xbd,0xc2};
+    const uint8_t tzcnt[]={0xf3,0x0f,0xbc,0xca};          /* tzcnt ecx,edx */
+    const uint8_t lzcnt[]={0xf3,0x0f,0xbd,0xca};          /* lzcnt ecx,edx */
     const uint8_t shr16[]={0x66,0xd1,0xea};               /* shr dx,1 */
     const uint8_t shl16_imm[]={0x66,0xc1,0xe0,0x04};      /* shl ax,4 */
     const uint8_t shr16_cl[]={0x66,0xd3,0xe8};            /* shr ax,cl */
@@ -1380,6 +1382,23 @@ static void sse_and_scan_tests(void)
     state.gpr[2]=0x8000;state.gpr[0]=0xffffffff;state.eflags=0x202;
     assert(run(bsr16,sizeof(bsr16),0x8130)==0);
     assert(state.gpr[0]==0xffff000f);
+    /* TZCNT/LZCNT: a count rather than an index, defined for a zero source
+     * (32, with CF set), and ZF reports a zero count, not a zero source. */
+    state.gpr[2]=0x1000;state.gpr[1]=0xffffffff;state.eflags=0x202|0x41;
+    assert(run(tzcnt,sizeof(tzcnt),0x8132)==0);
+    assert(state.gpr[1]==12 && (state.eflags&0x41)==0);
+    assert(run(lzcnt,sizeof(lzcnt),0x8134)==0);
+    assert(state.gpr[1]==19 && (state.eflags&0x41)==0);
+    state.gpr[2]=0;state.gpr[1]=0x55;state.eflags=0x202;
+    assert(run(tzcnt,sizeof(tzcnt),0x8136)==0);
+    assert(state.gpr[1]==32 && (state.eflags&0x41)==0x01);
+    assert(run(lzcnt,sizeof(lzcnt),0x8138)==0);
+    assert(state.gpr[1]==32 && (state.eflags&0x41)==0x01);
+    state.gpr[2]=0x80000001;state.eflags=0x202;
+    assert(run(tzcnt,sizeof(tzcnt),0x813a)==0);
+    assert(state.gpr[1]==0 && (state.eflags&0x41)==0x40);
+    assert(run(lzcnt,sizeof(lzcnt),0x813c)==0);
+    assert(state.gpr[1]==0 && (state.eflags&0x41)==0x40);
     /* The 16-bit shift group: only the low word changes, the count is masked
      * to five bits, and a masked-zero count preserves every flag. */
     state.gpr[2]=0x00070008;state.eflags=0x202|1;
@@ -1475,6 +1494,9 @@ static void sse_and_scan_tests(void)
             state.gpr[2]=0x40;state.gpr[1]=0;
             assert(run_mode(bsr,sizeof(bsr),0x8220,residency,lazy)==0);
             assert(state.gpr[1]==6 && (state.eflags&0x40)==0);
+            state.gpr[2]=0;state.gpr[1]=0;
+            assert(run_mode(tzcnt,sizeof(tzcnt),0x8224,residency,lazy)==0);
+            assert(state.gpr[1]==32 && (state.eflags&0x41)==0x01);
             /* The packed-integer forms write no flags at all: whatever was
              * live before them must survive every mode combination. */
             {

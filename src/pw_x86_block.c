@@ -1361,6 +1361,7 @@ typedef struct DecodedInst {
     unsigned bswap_reg;
     uint8_t bit_scan_opcode;
     unsigned bit_scan_word;         /* the 0x66 (16-bit) form */
+    unsigned bit_scan_count;        /* f3 0f bc/bd: TZCNT or LZCNT */
     unsigned shift_word;            /* 0x66 shift/rotate group */
     unsigned lea_prefixed;          /* a segment override on LEA */
     unsigned fs_call;               /* 64 ff 15: call through fs:[disp32] */
@@ -1650,7 +1651,7 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
         unsigned cmov=0,cmov_condition=0;
         unsigned sse_kind=PW_SSE_NONE,sse_mem_bytes=0,sse_has_imm=0;
         uint8_t sse_prefix=0,sse_opcode=0,sse_imm=0;
-        unsigned bit_scan=0,bit_scan_word=0;
+        unsigned bit_scan=0,bit_scan_word=0,bit_scan_count=0;
         unsigned bswap=0,bswap_reg=0;
         unsigned fs_call=0;
         uint8_t bit_scan_opcode=0;
@@ -1938,6 +1939,26 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
             can_fault=(operand.mod!=3);
         } else if(op==0x66 && source[cursor+1]==0x0f) {
             DECODE_FAIL(PW_ERR_TRUNCATED);
+        } else if(op==0xf3 && bytes-cursor>=3 && source[cursor+1]==0x0f &&
+                  (source[cursor+2]==0xbc || source[cursor+2]==0xbd)) {
+            /*
+             * TZCNT/LZCNT, the counting forms of BSF/BSR. DXVK's bit
+             * iteration runs TZCNT on every set bit of its dirty masks, so a
+             * refusal here sent each one through the one-instruction host
+             * fallback. Unlike BSF/BSR the result is defined for a zero
+             * source (the operand width), CF reports that zero source and ZF
+             * a zero result. The other flags are architecturally undefined;
+             * they take the host's values, as in re-encoded code, so both
+             * backends leave the same flags.
+             */
+            int result=decode_operand(source+cursor+3,bytes-cursor-3,&operand);
+            if(result!=PW_OK)DECODE_FAIL(result);
+            bit_scan=1;
+            bit_scan_count=1;
+            bit_scan_opcode=source[cursor+2];
+            length=3+operand.bytes;
+            can_fault=(operand.mod!=3);
+            flags_def=0x8d5;
         } else if((op==0xf2 || op==0xf3) && bytes-cursor>=3 &&
                   source[cursor+1]==0x0f) {
             /* SSE with a mandatory F2 or F3 prefix. */
@@ -2232,6 +2253,7 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
         d->bit_scan = bit_scan;
         d->bit_scan_opcode = bit_scan_opcode;
         d->bit_scan_word = bit_scan_word;
+        d->bit_scan_count = bit_scan_count;
         d->double_shift = double_shift;
         d->bswap = bswap;
         d->bswap_reg = bswap_reg;
@@ -2421,6 +2443,7 @@ analyze_and_emit:
         unsigned bit_scan = d->bit_scan;
         uint8_t bit_scan_opcode = d->bit_scan_opcode;
         unsigned bit_scan_word = d->bit_scan_word;
+        unsigned bit_scan_count = d->bit_scan_count;
         uint8_t double_shift = d->double_shift;
         unsigned bswap = d->bswap;
         unsigned bswap_reg = d->bswap_reg;
@@ -3033,13 +3056,22 @@ analyze_and_emit:
                 memory_address_width(&e,0,bit_scan_word?2u:4u);
                 byte(&e,0x8b);byte(&e,0x08);
             }
-            load_guest_reg(&e,&block->exit_contract,operand.reg);
-            byte(&e,0x85);byte(&e,0xc9);            /* test ecx, ecx */
-            byte(&e,0x74);byte(&e,(uint8_t)skip);
-            if(bit_scan_word)byte(&e,0x66);
-            byte(&e,0x0f);byte(&e,bit_scan_opcode);byte(&e,0xc1);
-            store_guest_reg(&e,&block->exit_contract,operand.reg);
-            emit_save_flags(&e,0x40,lazy_flags_enabled,d->flags_dead);
+            if(bit_scan_count) {
+                /* TZCNT/LZCNT write the destination for every source, so
+                 * the host instruction runs unconditionally and its flags
+                 * are the guest's. */
+                byte(&e,0xf3);byte(&e,0x0f);byte(&e,bit_scan_opcode);byte(&e,0xc1);
+                store_guest_reg(&e,&block->exit_contract,operand.reg);
+                emit_save_flags(&e,0x8d5,lazy_flags_enabled,d->flags_dead);
+            } else {
+                load_guest_reg(&e,&block->exit_contract,operand.reg);
+                byte(&e,0x85);byte(&e,0xc9);            /* test ecx, ecx */
+                byte(&e,0x74);byte(&e,(uint8_t)skip);
+                if(bit_scan_word)byte(&e,0x66);
+                byte(&e,0x0f);byte(&e,bit_scan_opcode);byte(&e,0xc1);
+                store_guest_reg(&e,&block->exit_contract,operand.reg);
+                emit_save_flags(&e,0x40,lazy_flags_enabled,d->flags_dead);
+            }
         } else if(sse_kind) {
             /*
              * The SSE slice: data movement, lane unpacking and bitwise logic.
