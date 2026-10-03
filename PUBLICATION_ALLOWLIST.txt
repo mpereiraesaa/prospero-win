@@ -311,6 +311,7 @@ tests/test_publish_release.py
 .github/workflows/release.yml
 .github/release-notes.md
 wine/ps5/pw_ws2_32_libc.c
+tests/test_pw_ws2_32_libc.c
 wine/patches/0545-ntdll-keep-the-pages-that-fault-most-often.patch
 COMPATIBILITY.md
 .github/ISSUE_TEMPLATE/game-report.yml

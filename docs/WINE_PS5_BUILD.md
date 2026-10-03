@@ -649,6 +649,11 @@ wineserver's `fchdir`. They belong to the virtual working directory
 (`pw_wine_cwd`), which must emulate them with libkernel calls; once it does,
 the warning becomes a failure.
 
+Imports bound only to the WebKit process's `libkernel_web` or
+`libScePosixForWebKit` are just as NULL in a title. The report lists them
+too (`webkit_unbound`), and the build prints a warning for each module that
+has any.
+
 ## Data directory
 
 A title can write only its own `/download0` sandbox, where `/data` is absent,
@@ -839,10 +844,15 @@ The runtime is staged beside the title:
   xinput mode, and `winevulkan.prx`, `opengl32.prx` and `libvulkan.prx` for
   Vulkan and Direct3D ([Vulkan](#vulkan)), and `ws2_32.prx`, Winsock's
   Unix side, which games import even offline (Warcraft III's `War3.exe`
-  stops at start without it). A title has every socket call it makes but
-  the old resolver's `gethostbyaddr` and its `h_errno`, which
-  `wine/ps5/pw_ws2_32_libc.c` provides (a reverse lookup through
-  `getnameinfo`, and a per-thread error); and `crypt32.prx`, CryptoAPI's
+  stops at start without it). A title has every socket call it makes, but
+  not the resolver: the SDK's stubs put `getaddrinfo`, `freeaddrinfo`,
+  `getnameinfo` and `gethostbyname` in `libScePosixForWebKit`, which only
+  the WebKit process gets, so in a title they stayed NULL and every lookup
+  faulted (GTA IV, tens of thousands a minute). `wine/ps5/pw_ws2_32_libc.c`
+  provides them, with `gethostbyaddr` and `h_errno`. There is no DNS: they
+  answer numeric addresses, the wildcard and loopback addresses, and
+  `localhost` and the console's own host name (loopback); any other name is
+  not found, and a service must be a port number; and `crypt32.prx`, CryptoAPI's
   Unix side, without which `crypt32.dll` refuses to load: FFmpeg's
   `avformat` imports it, so LAV Filters, the DirectShow splitter and
   decoders Warcraft III's cinematics play through, need it (the console's

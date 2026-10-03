@@ -611,6 +611,7 @@ def exports(library, directory=f"{sdk}/target/lib"):
                              capture_output=True, text=True).stdout
     return {line.split()[-1].split("@")[0] for line in listing.splitlines() if line.split()}
 title_exports = exports("libkernel.so") | exports("libSceLibcInternal.so")
+webkit_exports = exports("libkernel_web.so") | exports("libScePosixForWebKit.so")
 objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{sdk}/bin/llvm-objdump"
 SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
@@ -640,6 +641,9 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
                                                               "xinput1_3", "winevulkan", "opengl32", "ws2_32",
                                                               "crypt32") else set())
         entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
+        # Nor does it get the WebKit process's libraries: ws2_32's getaddrinfo,
+        # bound to libScePosixForWebKit, jumped to 0 in GTA IV (measured).
+        entry["webkit_unbound"] = sorted((imports & webkit_exports) - provided)
         # The kernel kills a title that executes a syscall instruction outside
         # libkernel (measured: SYSTEM_ILLEGAL_FUNCTION_CALL). Wine's dispatchers
         # keep one on the FS-base restore path, which patch 0500 never takes.
@@ -674,6 +678,8 @@ for name, entry in result["prx"]["modules"].items():
         print(f"  error: {error}")
     if entry.get("title_unbound"):
         print(f"  unbound in a title (libkernel_sys only): {','.join(entry['title_unbound'])}")
+    if entry.get("webkit_unbound"):
+        print(f"  WARNING: unbound in a title (WebKit libraries only): {','.join(entry['webkit_unbound'])}")
     if entry.get("raw_syscalls"):
         print(f"  raw syscall instructions (fatal in a title): {','.join(entry['raw_syscalls'])}")
 print(f"pe: {', '.join(result['pe']) or 'none'}")
