@@ -397,7 +397,7 @@ static struct pw_thread *get_thread(void)
     {
         int dispatch = getenv( "PW_WOW_DISPATCH_PROFILE" ) != NULL;
         int enabled = getenv( "PW_WOW_EXEC_TIMING" ) != NULL;
-#ifdef PW_WOW_TIMING_TRIGGER
+#ifdef __PROSPERO__
         struct stat dispatch_st;
         if (!stat( "/data/prospero-win/pw_wow_dispatch_profile", &dispatch_st )) dispatch = 1;
 #endif
