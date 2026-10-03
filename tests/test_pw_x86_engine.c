@@ -58,6 +58,35 @@ static void test_execution_clock_batch(void)
     assert(pw_x86_execution_clock_batch(batch_clock,&clock,&mean)==PW_ERR_VM && mean==0);
 }
 
+static void test_refused_reset_execution(void)
+{
+    const uint8_t loop[]={0x40,0xeb,0xfd};
+    Source source={0x1000,loop,sizeof(loop)};
+    PwVmBackend vm;PwX86Engine engine;PwX86CacheEntry entries[8];
+    PwX86State state={.eip=0x1000};PwX86StepReport step;
+    assert(pw_vm_posix_backend(&vm)==PW_OK);
+    assert(pw_x86_engine_init(&engine,&vm,entries,8,32u<<20,1,source_view,&source)==PW_OK);
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && state.gpr[0]==1);
+    const size_t cursor=engine.cache.cursor;
+    assert(cursor && cursor<vm.page_bytes && engine.sealed && !engine.failed);
+    /* Real mprotect removes execute permission during reset. Both refused
+     * generations must restore RX so a cache hit can execute the old block. */
+    for(unsigned generation=0;generation<2;generation++) {
+        const uint64_t calls=engine.protection_calls,bytes=engine.protection_bytes;
+        assert(pw_x86_engine_reset(&engine,generation)==PW_ERR_PRECONDITION);
+        assert(engine.cache.generation==1 && engine.cache.cursor==cursor &&
+               engine.cache.occupied==1 && engine.cache.publishes==1 && !engine.cache.resets);
+        assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && step.cache_hit);
+        assert(engine.sealed && !engine.failed && engine.protection_calls==calls+2 &&
+               engine.protection_bytes==bytes+2*vm.page_bytes);
+        assert(state.eip==0x1000 && state.gpr[0]==generation+2 && engine.compiles==1);
+    }
+    assert(pw_x86_engine_reset(&engine,2)==PW_OK && !engine.sealed);
+    assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK && !step.cache_hit);
+    assert(state.gpr[0]==4 && engine.sealed && engine.compiles==2);
+    assert(pw_x86_engine_destroy(&engine)==PW_OK);
+}
+
 static void test_empty_chain_reset(void)
 {
     const uint8_t jump[]={0xff,0xe2}; /* jmp edx, which is zero */
@@ -267,6 +296,7 @@ int main(void)
     assert(engine.execution_ns==10*(engine.execution_samples-1)); /* Failed clock sample excluded. */
     assert(pw_x86_engine_destroy(&engine)==PW_OK);
     test_empty_chain_reset();
+    test_refused_reset_execution();
     test_guest_error_reporting();
     test_execution_clock_batch();
     test_dispatch_profile();

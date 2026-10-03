@@ -278,6 +278,47 @@ static void *guest_thread(void *opaque)
     return NULL;
 }
 
+static int reset_source(void *opaque, uint32_t pc, const uint8_t **source, size_t *bytes)
+{
+    static const uint8_t code[] = {0x40};
+    (void)opaque;
+    if (pc != 0x1000) return PW_ERR_NOT_FOUND;
+    *source = code; *bytes = sizeof(code); return PW_OK;
+}
+
+static void test_lazy_engine_reset(void)
+{
+    PwVmBackend backend;
+    PwX86Engine engine;
+    PwX86CacheEntry entries[8];
+    PwX86State state = { .eip = 0x1000 };
+    PwX86StepReport step;
+    assert(pw_wow_host_backend(&backend, &lazy_memory) == PW_OK);
+    commits = 0;
+    committed_bytes = 0;
+    assert(pw_x86_engine_init(&engine, &backend, entries, 8, (size_t)32 << 20,
+                              1, reset_source, NULL) == PW_OK);
+    assert(engine.code.handle && !commits);
+    assert(pw_x86_engine_reset(&engine, 2) == PW_OK && !commits); /* Empty reset. */
+    assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK && state.gpr[0] == 1);
+    assert(commits == 1 && committed_bytes == PW_WOW_HOST_COMMIT_STEP);
+    const size_t cursor = engine.cache.cursor;
+    assert(cursor && cursor < PW_WOW_HOST_COMMIT_STEP);
+    /* Refused generation rolls protection back over the same published
+     * pages, without making unused reserved pages accessible. */
+    assert(pw_x86_engine_reset(&engine, 2) == PW_ERR_PRECONDITION);
+    assert(engine.cache.cursor == cursor && commits == 1);
+    state.eip = 0x1000;
+    assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK && step.cache_hit);
+    assert(pw_x86_engine_reset(&engine, 3) == PW_OK);
+    assert(commits == 1 && committed_bytes == PW_WOW_HOST_COMMIT_STEP);
+    assert(((PwWowHostLazy *)engine.code.handle)->committed == PW_WOW_HOST_COMMIT_STEP);
+    for (size_t i = 0; i < cursor; i++) assert(((uint8_t *)engine.code.write_base)[i] == 0xcc);
+    state.eip = 0x1000;
+    assert(pw_x86_engine_step(&engine, &state, &step) == PW_OK && state.gpr[0] == 3);
+    assert(commits == 1 && pw_x86_engine_destroy(&engine) == PW_OK);
+}
+
 static void test_second_thread(void)
 {
     static const uint8_t first_block[] = { 0x64, 0xa1, 0x18, 0x00, 0x00, 0x00, 0xc3 };
@@ -322,6 +363,7 @@ int main(void)
     test_fit();
     test_host_memory();
     test_lazy_commit();
+    test_lazy_engine_reset();
     /* The translator in Wine's memory, as unix.c sets it up, then over
      * plain mappings with protection changes, as before. */
     assert(pw_wow_host_backend(&host, &host_memory) == PW_OK);

@@ -980,3 +980,21 @@ and Warcraft III smoke checks were also reported. Those checks support
 keeping the implementation without a proven 2–3% CPU claim. Reconsider it
 if a controlled comparison finds a regression or the extra memory becomes
 a problem.
+
+
+### Reset protection and lazy arenas
+
+Reset makes only the published code's page extent writable before poisoning
+it. A refused reset generation restores executable protection over that same
+extent. An empty reset requires no protection call. Protecting the complete
+reserved arena would make Wine's lazy backend commit its unused tail, even
+though the poison writes already stop at the published cursor.
+
+A host test reserves 32 MiB, translates within the first 1 MiB commit step,
+then checks both a refused and a successful reset. Commitment stays at 1 MiB;
+published bytes are poisoned and recompiled execution still works. A separate
+POSIX test uses real page protection changes, refuses zero and unchanged
+generations, and executes the original cached block after each refusal. It also
+checks that a successful reset clears the sealed state before recompilation.
+These are synthetic allocation/correctness results, not PS5 memory or performance
+measurement. Console census and regression checks remain pending.

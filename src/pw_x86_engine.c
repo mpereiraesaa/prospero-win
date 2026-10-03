@@ -818,8 +818,12 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
     if(!engine || !engine->initialized)return PW_ERR_PRECONDITION;
     unsigned was_sealed=engine->sealed;
     const size_t discarded_bytes=engine->cache.cursor;
-    if((engine->sealed || engine->failed) &&
-       protection(engine,0,engine->code.bytes,PW_PROT_READ|PW_PROT_WRITE)!=PW_OK)
+    const size_t page=engine->backend->page_bytes;
+    const size_t writable_bytes=((discarded_bytes+page-1)/page)*page;
+    /* Wine's lazy protect commits the whole requested range. Only the pages
+     * about to be poisoned need RW; unused reservations must stay uncommitted. */
+    if(writable_bytes && (engine->sealed || engine->failed) &&
+       protection(engine,0,writable_bytes,PW_PROT_READ|PW_PROT_WRITE)!=PW_OK)
         return PW_ERR_VM;
 
     /* Count unlinks before cache entries are zeroed */
@@ -832,7 +836,7 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
 
     int status=pw_x86_cache_reset(&engine->cache,generation);
     if(status!=PW_OK) {
-        if(was_sealed && protection(engine,0,engine->code.bytes,
+        if(writable_bytes && was_sealed && protection(engine,0,writable_bytes,
                                     PW_PROT_READ|PW_PROT_EXEC)!=PW_OK)
             engine->failed=1;
         return status;
@@ -850,6 +854,9 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
         memset(engine->block_map,0,
                ((discarded_bytes+PW_X86_ENGINE_FAULT_GRANULE-1)/PW_X86_ENGINE_FAULT_GRANULE)*sizeof(uint32_t));
     engine->last_published=0;
+    /* The published extent is now writable. Stub emission or the next
+     * compile seals its own pages; no live entry survives a successful reset. */
+    engine->sealed=0;
     engine->dispatches=0;engine->retired_instructions=0;engine->failed=0;
     return emit_return_stub(engine);
 }
