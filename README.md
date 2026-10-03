@@ -14,6 +14,7 @@
 Bring PC classics to the big screen. **prospero-win runs Windows games
 locally on a homebrew-enabled PlayStation 5**, with DualSense controls,
 keyboard and mouse support, and a launcher for your game library.
+It carries its own copy of [Wine](https://www.winehq.org/).
 
 Built to bridge generations of Windows gaming—from 2000s classics to newer
 32-bit and 64-bit software—with compatibility expanding game by game.
@@ -22,7 +23,7 @@ Built to bridge generations of Windows gaming—from 2000s classics to newer
 
 - **32-bit Windows games** through our custom x86 translator.
 - **64-bit Windows applications** running natively on the PS5's x86-64 CPU
-  through [Wine](https://www.winehq.org/).
+  through Wine.
 - **Direct3D 8, 9, 10 and 11** graphics through
   [DXVK](https://github.com/doitsujin/dxvk) and Vulkan.
 - **OpenGL games** with the optional OpenGL-enabled runtime.
