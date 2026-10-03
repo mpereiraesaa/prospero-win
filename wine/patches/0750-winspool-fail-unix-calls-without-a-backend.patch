@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 3 Oct 2026 16:00:00 +0200
+Subject: [PATCH] winspool: Fail Unix calls cleanly when the printer backend
+ is missing.
+
+The console runtime has no winspool Unix library (winspool.prx: there is
+no CUPS on the PS5), so __wine_init_unix_call() fails and the module's
+Unix-call handle stays zero. DllMain still loads the system printers, and
+its first UNIX_CALL(enum_printers) went through that zero handle: every
+game start logged a syscall fault in ntdll at address 8. UNIX_CALL now
+returns STATUS_DLL_NOT_FOUND when there is no handle, so the existing
+fallbacks (no system printers, default PPD paths) run as on a system
+without CUPS. With a backend present nothing changes.
+---
+ dlls/winspool.drv/wspool.h | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winspool.drv/wspool.h b/dlls/winspool.drv/wspool.h
+index 29a459e..9de545c 100644
+--- a/dlls/winspool.drv/wspool.h
++++ b/dlls/winspool.drv/wspool.h
+@@ -64,7 +64,11 @@ struct get_ppd_params
+     const WCHAR *ppd;
+ };
+ 
+-#define UNIX_CALL( func, params ) WINE_UNIX_CALL( unix_ ## func, params )
++/* The Windows module remains usable without its optional Unix printer
++ * backend. Return an ordinary failure instead of dispatching through a
++ * zero Unix-call handle, so the existing printer/PPD fallbacks can run. */
++#define UNIX_CALL( func, params ) \
++    (__wine_unixlib_handle ? WINE_UNIX_CALL( unix_ ## func, params ) : (NTSTATUS)STATUS_DLL_NOT_FOUND)
+ 
+ enum cups_funcs
+ {

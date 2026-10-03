@@ -213,6 +213,7 @@ wine/patches/0722-win32u-ps5-opengl-refresh-rate.patch
 wine/patches/0723-win32u-ps5-opengl-cursor.patch
 wine/patches/0730-server-ps5-anonymous-mappings-in-shared-memory.patch
 wine/patches/0740-win32u-ps5-vulkan-hardware-cursor.patch
+wine/patches/0750-winspool-fail-unix-calls-without-a-backend.patch
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
