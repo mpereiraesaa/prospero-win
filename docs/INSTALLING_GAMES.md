@@ -69,6 +69,58 @@ for it, and later pushes send it again only when it changes.
 Then copy the controller presets (prospero-win-profiles' `input/*.input`) to
 `/data/prospero-win/input/` if you haven't yet.
 
+### Big games
+
+Modern games can be tens of GB, and the PS5's FTP server isn't fast: in our
+tests it managed about 17 MB/s, so a 23 GB game took around 25 minutes.
+Two things make that easier.
+
+**A push can be stopped and picked up again.** It notes each file as soon as
+the PS5 has it, so if the push is interrupted (you press Ctrl+C, the PC goes
+to sleep, the network drops), run the same command again and it carries on
+from where it stopped instead of starting over. Memory use stays small no
+matter how big the game's files are.
+
+If a push from an older version of `pw_prefix.py` was interrupted, there's no
+record of what it sent. `--trust-size` treats any file the PS5 already has
+at the right size as sent, and `--force` lets the push take over a PS5 copy
+it doesn't have a record for:
+
+```sh
+python3 tools/pw_prefix.py push <game> --library ~/prospero-library --host <PS5 IP> \
+    --force --trust-size
+```
+
+Only use this to finish a copy you started yourself. It checks file sizes,
+not contents: a file that has the right size but different bytes is left as
+it is. Registry files are always checked and sent.
+
+**ps5upload is faster than FTP.** If you use
+[ps5upload](https://github.com/phantomptr/ps5upload), `pw_prefix.py` can send
+the game's files through it. Its authors report about 30 MB/s on a standard
+PS5 and 60 MB/s on a PS5 Pro. We haven't timed it with prospero-win yet, so
+treat this route as new. You need two things from it:
+
+- its payload, `ps5upload.elf`, running on the PS5. Send it with your ELF
+  loader as you would any payload. Keep the FTP server running as well.
+- its command-line client, `ps5upload-lab`, on your PC. Build it in
+  ps5upload's `engine/` folder with `cargo build --release -p ps5upload-lab`.
+
+Then add `--transport ps5upload` to the push:
+
+```sh
+python3 tools/pw_prefix.py push <game> --library ~/prospero-library --host <PS5 IP> \
+    --transport ps5upload --ps5upload-client <ps5upload>/engine/target/release/ps5upload-lab
+```
+
+(You can also set `PS5UPLOAD_LAB` to the client's path, or put it on your
+`PATH`.) The game's files travel through ps5upload a few GB at a time, and
+each batch is recorded once the PS5 has stored it, so these pushes can be
+resumed too. The registry, the symbolic-link tables, `wowprospero.dll` and
+the profile still go over FTP, and FTP is also used afterwards to check that
+every file arrived at the right size. If ps5upload's payload isn't running,
+the push stops before sending anything and tells you so.
+
 ## Keeping saves in sync
 
 On the PS5 the prefix is the game's live copy: settings and saves change
@@ -162,6 +214,19 @@ the executable, its arguments and its working folder.
 - **Manifest:** `~/prospero-library/.pw/<slug>.json` records each file's size
   and SHA-256, which is how pushes send only what changed. `--delete` also
   removes files your PC no longer has.
+- **Progress:** a push saves the manifest as it goes: every 200 files or
+  256 MB sent, after each ps5upload batch, and when it's stopped with Ctrl+C
+  or `kill`. Even if the push is killed outright, it loses at most the files
+  sent since the last save. Those files are sent again on the next push.
+- **Memory:** files are read, hashed and sent 4 MB at a time, whatever their
+  size. Only the registry files are read whole, because a push and a pull
+  rewrite one line in them (see below).
+- **ps5upload:** each batch (up to 2,000 files or 4 GB) is one ps5upload
+  transaction. The batch is sent from a temporary folder of hard links to
+  the game's files in `~/prospero-library/.pw/stage/`, so nothing is copied
+  on your PC. If the client stops waiting before the PS5 confirms the
+  batch, the push asks the payload's management port (9114) whether it went
+  through.
 - **Symbolic links:** a PS5 app can't make them, so prospero-win keeps them
   in a `.pw-symlinks` file per folder:
   - links inside the prefix (the `c:` and `z:` drives) are written there;
