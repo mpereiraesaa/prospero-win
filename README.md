@@ -23,7 +23,8 @@ has only been tested on one console, on firmware 12.02.
 
 Half-Life, Counter-Strike 1.6, OpenArena and Warcraft III are playable
 above 60 fps. Pinball and Minesweeper are playable too, and Half-Life 2 runs
-at 60 fps from the train to the canals; chapters after that haven't been tested yet.
+at 60 fps from the train to the canals, with the DualSense or a keyboard and
+mouse; chapters after that haven't been tested yet.
 
 See [game compatibility](COMPATIBILITY.md) for versions, graphics backends
 and controls. Translator benchmark results are in
