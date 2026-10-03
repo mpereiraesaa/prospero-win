@@ -18,6 +18,7 @@ symptom with a surprising cause, add it: a line in
 6. Change one thing at a time.
 7. Write down what was measured.
 8. When a game is slow, find out where its time goes before changing anything.
+9. Measure speed-ups on the PS5 itself, against main, one change at a time.
 
 ## 1. Reproduce on the PC first
 
@@ -44,6 +45,11 @@ one at a time; an emulated game can take the whole machine with it.
 Some problems only exist on the console: the display driver, VideoOut,
 direct memory, the PS5's input devices. The PC still tells you whether the
 game itself gets that far.
+
+Performance is the exception. The PC's CPU, caches and graphics stack are
+different enough that a speed-up there says little about the console, so
+profile and compare builds on the PS5 directly; see
+[profiling on the PS5](#10-profiling-on-the-ps5). It needs no Wine on the PC.
 
 ## 2. Read the log, not the screen
 
@@ -325,6 +331,102 @@ script build asked the game to close and closed it when it didn't.
 - **Compare like with like.** A run that starts a map and joins a team draws
   a different scene from one that sits at the menu or watches as a spectator;
   keep the same keys and arguments when you compare two builds.
+
+## 10. Profiling on the PS5
+
+Every profiler the translator has also runs on the console, turned on by an
+empty file in the library folder (`/data/prospero-win/`) and reported through
+the same ps5log stream as everything else. Nothing runs on the PC except the
+log receiver, so you can find where a game's time goes, and check whether a
+change helps, on the hardware that matters. This is how the Half-Life 2
+translator speed-ups (the full-PC chain hash, the shared fault exit and the
+second chain-table bank) were found and accepted.
+
+### The switches
+
+Create the file before starting the game and delete it afterwards; the
+translator checks for it as the game starts, not while it runs.
+
+| File | What it reports |
+| --- | --- |
+| `pw_wow_timing` | Where each thread's time goes: translated code, host libraries, system calls ([section 8](#8-when-a-game-is-slow-time-it-first)) |
+| `pw_wow_exec_timing` | CPU time spent inside translated code, per thread (below) |
+| `pw_wow_profile` | The 20 translated blocks each thread spends the most samples in, every five seconds |
+| `pw_wow_dispatch_profile` | How often a jump between blocks finds its target in the chain table, finds it empty, or finds another block there |
+
+`pw_wow_profile` samples with a one-millisecond process CPU timer and resolves
+each sample to a guest address right away:
+
+```
+wowprospero profile: tid=0024 interval_ms=6405 samples=123 outside=0 stubs=9 overflow=0
+wowprospero hotspot: tid=0024 pc=7a7b3c33 samples=6 entry=0 body=0 exit=6 emitted=0
+```
+
+`pc` is the guest address of the block, which you can look up in the game's
+DLLs, and `entry`, `body` and `exit` say which part of the translated block
+the samples landed in: samples in `exit` are time spent getting to the next
+block. For Half-Life 2, the dispatcher profile's `table_collisions` showed
+blocks evicting each other from the chain table, which led to the full-PC
+hash and the second bank. The caveat about signals at the end of
+[section 8](#8-when-a-game-is-slow-time-it-first) still applies to samples
+that land outside translated code, so read these as where translated time
+goes, not as a whole-process profile.
+
+### Measuring CPU, not frame rate
+
+Most games on the console are held at 60 fps by the display. A change that
+makes the translator faster leaves the frame rate at 60 and shows up as spare
+CPU instead, so compare CPU time. With `pw_wow_exec_timing`, each translating
+thread reports a cumulative line:
+
+```
+wowprospero execution: tid=0024 cumulative=1 sample_cpu_ns=1508594000 calls=32265545 samples=504504 stride=64 clock_batch_read_ns=852 clock_resolution_ns=1000 clock_errors=0
+```
+
+It times about one call into translated code in 64. The estimated CPU time
+in translated code is `sample_cpu_ns / samples * calls`, here
+1.508594 s / 504,504 × 32,265,545 ≈ 96.5 s. Use each thread's last line
+of the session. A failed clock read is counted in `clock_errors`; one or two
+among hundreds of thousands of samples don't change the estimate, but a
+run with many is not usable.
+
+### A fair comparison
+
+- **Use a workload the game repeats exactly.** Half-Life 2's
+  `+timedemo hl2long` (added to the profile's launch arguments for the run)
+  plays the same 5,182 frames every time and writes its result to the game's
+  `-condebug` log. Gameplay driven by a macro (section 9) is good for
+  checking that a build plays well, but varies too much from run to run to
+  measure a few percent.
+- **Alternate the builds:** main, candidate, main, candidate, main. Runs
+  drift by about 1%; alternating keeps the drift from favoring one side. Keep
+  the same switches on for both.
+- **Build each candidate as main plus only its own change.** Two of our
+  candidate branches had merged other experiments, and every one of them
+  showed the same large gain, which came from one shared commit. Rebuilding
+  each one on its own showed which change the gain belonged to.
+- **Accept a gain only outside the spread.** Two candidate runs that both
+  beat every main run, on the threads that matter, count; a candidate
+  inside main's range is no gain, however good its average looks. For
+  Half-Life 2, thread `0024` is the game's main thread and the busiest
+  worker is usually `00b0`.
+- **Then play it and quit.** A timedemo doesn't cover everything. Before
+  merging, play the build through a section of real gameplay with the
+  macro, quit from the game's menu, and check that the session ends with
+  `session_end reason=wine-exit` and no translator errors.
+
+The Half-Life 2 numbers, and the candidates that didn't make it, are in the
+[DBT benchmark notes](DBT_BENCHMARK.md).
+
+### Put the console back
+
+Profiling runs swap the runtime, add switch files and change launch
+arguments. Afterwards, check that the console has the release build again,
+that the switch files are gone, that the game's profile matches the
+published one, and that the game itself didn't save anything from the run:
+Half-Life 2, started without a gamepad, writes `joystick "0"` into
+`hl2/cfg/config.cfg`, and the next person to play finds their controller
+dead.
 
 ## Symptoms we've seen
 
