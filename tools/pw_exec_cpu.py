@@ -13,6 +13,8 @@ Only about one call into translated code in 64 is timed, so the thread's
 total is estimated as sample_cpu_ns / samples * calls (here about 96.5 s).
 The last line of each thread in a session is used. This works for any game;
 it reads saved session logs (pw_gameplay_run.py --save) or ps5log captures.
+These whole-session estimates include loading and post-demo work as well as
+clock measurement overhead; they do not isolate the benchmark's frames.
 
 Usage:
     pw_exec_cpu.py LOG...                      the busiest threads of each run
@@ -22,6 +24,7 @@ Usage:
 A comparison only counts a thread as faster or slower when every candidate
 run is on the same side of every baseline run; anything in between is "no
 clear difference". Alternate the builds' runs and repeat each at least twice.
+A nonzero or missing clock-error count makes the estimate unreliable.
 """
 from __future__ import annotations
 
@@ -33,21 +36,16 @@ from pathlib import Path
 from statistics import median
 
 EXECUTION = re.compile(r"wowprospero execution: (.*)")
-# More failed clock reads than this share of samples makes a thread's
-# estimate unreliable; one or two in hundreds of thousands don't matter.
-CLOCK_ERROR_SHARE = 0.001
-
-
 @dataclass
 class Thread:
     tid: str
     seconds: float
     samples: int
-    clock_errors: int
+    clock_errors: int | None
 
     @property
     def reliable(self) -> bool:
-        return self.clock_errors <= self.samples * CLOCK_ERROR_SHARE
+        return self.clock_errors == 0
 
 
 def estimates(text: str) -> dict[str, Thread]:
@@ -61,7 +59,7 @@ def estimates(text: str) -> dict[str, Thread]:
         if "tid" in fields and fields.get("samples", "0").isdigit() and int(fields["samples"]) > 0:
             last[fields["tid"]] = fields
     return {tid: Thread(tid, int(f["sample_cpu_ns"]) / int(f["samples"]) * int(f["calls"]) / 1e9,
-                        int(f["samples"]), int(f.get("clock_errors", "0")))
+                        int(f["samples"]), int(f["clock_errors"]) if "clock_errors" in f else None)
             for tid, f in last.items()}
 
 
@@ -70,7 +68,10 @@ def busiest(threads: dict[str, Thread], count: int) -> list[Thread]:
 
 
 def describe(thread: Thread) -> str:
-    note = "" if thread.reliable else f" ({thread.clock_errors} clock errors: unreliable)"
+    if thread.clock_errors is None:
+        note = " (clock-error count unavailable: unreliable)"
+    else:
+        note = "" if thread.reliable else f" ({thread.clock_errors} clock errors: unreliable)"
     return f"tid={thread.tid} {thread.seconds:.1f} s{note}"
 
 
@@ -87,7 +88,7 @@ def compare(baseline: list[dict[str, Thread]], candidate: list[dict[str, Thread]
         before = [run[tid].seconds for run in baseline]
         after = [run[tid].seconds for run in candidate]
         if not all(run[tid].reliable for run in runs):
-            verdict = "unreliable (too many clock errors in a run)"
+            verdict = "unreliable (clock errors or missing clock-error count in a run)"
         elif max(after) < min(before):
             verdict = "faster"
         elif min(after) > max(before):

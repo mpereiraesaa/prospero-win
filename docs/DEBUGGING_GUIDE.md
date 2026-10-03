@@ -375,7 +375,7 @@ it afterwards; you can name more than one.
 | `--profiler` | File | What it reports |
 | --- | --- | --- |
 | `timing` | `pw_wow_timing` | Where each thread's time goes: translated code, host libraries, system calls ([section 8](#8-when-a-game-is-slow-time-it-first)) |
-| `exec-timing` | `pw_wow_exec_timing` | CPU time spent inside translated code, per thread |
+| `exec-timing` | `pw_wow_exec_timing` | Sampled CPU-time estimates inside translated code, per thread |
 | `profile` | `pw_wow_profile` | The 20 translated blocks each thread spends the most samples in, every five seconds |
 | `dispatch-profile` | `pw_wow_dispatch_profile` | How often a jump between blocks finds its target in the translator's chain table, finds the slot empty, or finds another block there |
 
@@ -435,8 +435,9 @@ translator usually doesn't raise the frame rate: it leaves spare CPU. That
 is why the comparison measures CPU time with `--profiler exec-timing`.
 
 Run the baseline and your change in turn: baseline, change, baseline,
-change, baseline. Runs drift by about 1%, and alternating stops the drift
-from favoring one side. `--runtime` installs a translator build for the run
+change, baseline. Measure the variation in your own control runs; there is
+no fixed drift percentage. Alternating helps expose drift instead of giving
+one build all the early or late runs. `--runtime` installs a translator build for the run
 and puts the app's own back afterwards; `--app` is the app's folder on the
 console, `/data/homebrew/` followed by the folder name you uploaded. For a
 game whose profile is `my-game` with a recorded demo `mydemo`:
@@ -457,12 +458,14 @@ Start the script build on the console each time the tool says it's ready.
 The comparison prints one line per busy thread:
 
 ```
-tid=0024: baseline 96.5, 97.9, 97.2 s; candidate 94.0, 95.9 s; median -2.4%: faster
-tid=00b0: baseline 71.3, 71.6, 71.5 s; candidate 69.3, 69.0 s; median -3.3%: faster
+tid=0024: baseline 97.0, 98.0 s; candidate 94.0, 95.0 s; median -3.1%: faster
+tid=00b0: baseline 71.5, 71.4 s; candidate 69.0, 69.1 s; median -3.4%: faster
 ```
 
-The seconds are an estimate of the CPU each thread spent in translated code
-during the whole run. Each thread logs a line like this one:
+This illustrative output assumes zero clock errors on every compared
+thread. The seconds estimate CPU inside translated invocations over the
+whole captured session, including loading, demo warmup and post-demo work.
+They are not CPU time for just the measured frames. Each thread logs a line like this one:
 
 ```
 wowprospero execution: tid=0024 cumulative=1 sample_cpu_ns=1508594000 calls=32265545 samples=504504 stride=64 clock_batch_read_ns=852 clock_resolution_ns=1000 clock_errors=0
@@ -470,20 +473,30 @@ wowprospero execution: tid=0024 cumulative=1 sample_cpu_ns=1508594000 calls=3226
 
 Only about one call into translated code in 64 is timed, so the total is
 `sample_cpu_ns / samples * calls`: here 1.508594 s / 504,504 × 32,265,545,
-about 96.5 s. `pw_gameplay_run.py` also prints the busiest threads' totals
+about 96.5 s. Clock-read overhead is included in the samples and expanded
+by this formula too; changes in invocation count can change that overhead.
+Keep the instrumentation identical and do not subtract the reported batch
+clock-read cost as though it were an exact correction. `pw_gameplay_run.py` also prints the busiest threads' totals
 after every run, as `translated CPU:`.
 
 How to read the verdict:
 
 - **faster** or **slower** means every run of one build beat every run of
-  the other. Anything in between is **no clear difference**, however good
-  the average looks; that is a result too, and worth writing down.
+  the other in the sampled whole-session estimates. This is a screening
+  result, not proof of a benchmark-phase gain. Anything in between is
+  **no clear difference**, however good the average looks. For a phase claim,
+  bracket the workload with actual counter records from the same thread and
+  process; the demo's duration alone cannot locate those records.
 - Compare thread by thread. Thread numbers (`tid`) are usually the same from
   run to run for a game's busiest threads; the tool only compares threads
   that appear in every run.
-- `clock_errors` counts failed clock reads. One or two among hundreds of
-  thousands of samples don't matter; the tool marks a run with more as
-  unreliable.
+- Any nonzero `clock_errors` count makes that thread's estimate unreliable;
+  a missing count is unknown and is also marked unreliable. It is unsafe
+  to assume a small count is harmless. Keep those errors visible and rerun
+  before using that thread to claim a gain.
+- Check all significant threads and process CPU as well. Matching thread
+  numbers alone does not prove identical work or exhaustive coverage, and
+  process CPU includes native work outside the translated-invocation clock.
 - Build each change on `main` by itself. A branch that also carries other
   experiments measures all of them at once. Once, several candidate branches
   all showed the same large gain, and it came from a single commit they
@@ -500,16 +513,20 @@ for translator errors too.
 
 ### Example: Half-Life 2
 
-The three Half-Life 2 speed-ups merged in October 2026 (the full-PC chain
-hash, the shared fault exit and the second chain-table bank) were found and
-accepted this way. The workload was a long demo recorded in
+The full-PC chain hash, shared fault exit and second chain-table bank were
+merged in October 2026 after profiling, comparisons and gameplay checks.
+The workload was a long demo recorded in
 `d1_trainstation_01`, played with `+timedemo` (5,182 frames, at 59.8 fps on
 every build because of the 60 Hz cap). `-condebug` in the launch arguments
 makes the game write its console, including the timedemo result, to
 `hl2/console.log`. The dispatch profile showed blocks evicting each other
 from the chain table, which is what the first and third changes address,
 and the comparisons were then run as in step 3, followed by a macro playing
-from the train to Barney's monitor and quitting. The full numbers, and the
+from the train to Barney's monitor and quitting. These historical comparisons
+had incomplete phase boundaries and some nonzero clock-error counts, so
+they do not prove exact CPU savings. The second bank is retained for its
+consistent reduction in dispatcher entries and passed gameplay checks;
+its reported 2–3% CPU saving remains unproven. The full numbers, and the
 candidates that showed no gain, are in the
 [DBT benchmark notes](DBT_BENCHMARK.md).
 

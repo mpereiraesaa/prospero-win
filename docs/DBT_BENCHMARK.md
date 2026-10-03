@@ -852,11 +852,13 @@ code over the whole session, from `sample_cpu_ns / samples * calls`:
 | main `a620f92` (three runs) | 106.5–107.2 s | 92.1–92.9 s |
 | full-PC chain hash (two runs) | 102.0, 102.8 s | 73.8, 74.6 s |
 
-That is about 4% less translated CPU on the game's main thread and about 20%
-less on its busiest worker. The frame rate does not move because the demo is
-capped at the display's 60 Hz; the gain is headroom. A few threads reported
-a single failed clock read out of hundreds of thousands of samples, which
-does not change these totals in any meaningful way.
+These raw whole-session estimates are about 4% lower on the main thread
+and 20% lower on the worker. Some threads reported nonzero clock errors,
+which invalidate their affected timing comparisons; their effect cannot
+be dismissed from the error count alone. The counters also include loading
+and post-demo work, without measured-frame phase boundaries. Keep the
+figures as a preliminary screen, not proof of those CPU savings or extra
+headroom. The demo remains capped at the display's 60 Hz.
 
 The change was also played through the opening of `d1_trainstation_01` on
 the console with the route controller, from the train to Barney's monitor,
@@ -903,9 +905,12 @@ over the whole session, from `sample_cpu_ns / samples * calls`:
 | main `a620f92` (three runs) | 106.5–107.2 s | 92.1–92.9 s |
 | shared fault exit (two runs) | 102.1, 102.6 s | 90.3, 89.9 s |
 
-That is about 4% less translated CPU on the main thread and about 2.5% less
-on the busiest worker, consistent with a smaller translated working set.
-The frame rate does not move because the demo is capped at 60 Hz.
+The raw whole-session estimates are about 4% lower on the main thread and
+2.5% lower on the worker. Smaller generated code is established by the
+size probe above; its effect on CPU is a hypothesis. These cumulative
+figures lack measured-frame phase boundaries, and any thread with nonzero
+clock errors is invalid for a timing comparison. The capped frame rate
+does not establish a CPU saving.
 
 These timedemo figures were measured against main before the full-PC chain
 hash landed. The two changes were then combined on the console, played
@@ -936,9 +941,42 @@ frames at 59.8 fps either way, execution clock on):
 | main `f2b0379` (three runs) | 96.5–97.9 s | 71.3–71.6 s |
 | second chain bank (two runs) | 94.0, 95.9 s | 69.3, 69.0 s |
 
-Both runs came in below every main run on both threads: roughly 2% less
-translated CPU on the main thread and 3% less on the worker. The opening of
-`d1_trainstation_01` was then played through with the route controller and
-quit from the game: 59.9 fps on average (minimum 59.2), no translator or
-guest exceptions, and a normal Wine exit.
+Both candidates' raw estimates are below every control on both threads,
+but each candidate reports `clock_errors=1` on both threads. The apparent
+2–3% reduction is therefore not an accepted CPU measurement. The captures
+also include loading and post-demo work rather than just measured frames.
 
+At the same recorded native tick, process CPU was 252.438, 242.558 and
+227.166 s for the controls, versus 251.157 and 253.138 s for the candidates.
+The candidate median is 3.95% higher, while the control range spans 11.12%
+of its median. This does not establish a process-CPU regression either:
+thread `0048` alone varies from 129,033 to 54,443,821 translated invocations
+across the controls. The tick is a captured record, not a demo-phase boundary.
+Process CPU and the translated-invocation estimates cover different work
+and are not interchangeable.
+
+Dispatcher invocation counts are more consistent on the two reported busy
+threads and do not depend on the CPU clock:
+
+| Thread | Control calls (three runs) | Second-bank calls (two runs) | Median change |
+| --- | --- | --- | ---: |
+| `0024` | 32,265,545; 32,268,907; 32,277,310 | 29,524,398; 29,522,607 | -8.51% |
+| `00b0` | 23,728,184; 23,726,021; 23,725,602 | 21,568,800; 21,567,610 | -9.09% |
+
+These counts describe entries into generated chains, not retired guest
+instructions or a CPU-time saving. Fewer entries also mean fewer timed
+samples, so scaled clock-read overhead can contribute to the lower raw
+estimates. No per-read cost has been subtracted to manufacture a corrected
+gain.
+
+**Decision: retain #326.** The consistent reduction in dispatcher entries
+supports its intended collision-handling mechanism, and the host tests
+cover displaced targets, reset, null sentinels and register/flag preservation.
+The additional bank costs 1 MiB per translating thread and probes only after
+a primary mismatch. The PS5 opening of `d1_trainstation_01` was played
+through and quit: 59.9 fps on average (minimum 59.2), no reported translator
+or guest exceptions, and a normal Wine exit; final-runtime Counter-Strike
+and Warcraft III smoke checks were also reported. Those checks support
+keeping the implementation without a proven 2–3% CPU claim. Reconsider it
+if a controlled comparison finds a regression or the extra memory becomes
+a problem.

@@ -58,10 +58,19 @@ class Estimates(unittest.TestCase):
         self.assertEqual(cpu.estimates("REC seq=1 t=1 PW_WINE64 session_end reason=wine-exit\n"), {})
 
     def test_clock_errors(self):
-        self.assertTrue(cpu.estimates(session(90, 70, errors=1))["0024"].reliable)
+        self.assertTrue(cpu.estimates(session(90, 70))["0024"].reliable)
+        # Even one error among many samples cannot be assumed harmless.
+        single = cpu.estimates(row("0024", 1_000_000_000, 64_000_000, 1_000_000, errors=1))["0024"]
+        self.assertFalse(single.reliable)
         unreliable = cpu.estimates(session(90, 70, errors=2))["0024"]
         self.assertFalse(unreliable.reliable)
         self.assertEqual(cpu.describe(unreliable), "tid=0024 90.0 s (2 clock errors: unreliable)")
+
+    def test_missing_clock_error_count(self):
+        unknown = cpu.estimates(row("0024", 1_000_000_000, 64_000, 1000).replace(" clock_errors=0", ""))["0024"]
+        self.assertIsNone(unknown.clock_errors)
+        self.assertFalse(unknown.reliable)
+        self.assertIn("clock-error count unavailable: unreliable", cpu.describe(unknown))
 
     def test_busiest(self):
         threads = cpu.estimates(session(50, 70))
@@ -89,6 +98,16 @@ class Compare(unittest.TestCase):
     def test_unreliable_run(self):
         before = [cpu.estimates(session(97, 70)), cpu.estimates(session(98, 70))]
         after = [cpu.estimates(session(90, 70, errors=50)), cpu.estimates(session(91, 70))]
+        self.assertIn("unreliable", cpu.compare(before, after, 1)[0])
+
+    def test_single_error_cannot_produce_faster_verdict(self):
+        before = [cpu.estimates(session(97, 70)), cpu.estimates(session(98, 70))]
+        after = [cpu.estimates(session(90, 70, errors=1)), cpu.estimates(session(91, 70))]
+        self.assertIn("unreliable", cpu.compare(before, after, 1)[0])
+
+    def test_missing_error_count_cannot_produce_faster_verdict(self):
+        before = [cpu.estimates(session(97, 70)), cpu.estimates(session(98, 70))]
+        after = [cpu.estimates(session(90, 70).replace(" clock_errors=0", "")), cpu.estimates(session(91, 70))]
         self.assertIn("unreliable", cpu.compare(before, after, 1)[0])
 
     def test_threads_missing_from_a_run(self):
