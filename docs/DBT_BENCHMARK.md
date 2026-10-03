@@ -857,3 +857,8 @@ less on its busiest worker. The frame rate does not move because the demo is
 capped at the display's 60 Hz; the gain is headroom. A few threads reported
 a single failed clock read out of hundreds of thousands of samples, which
 does not change these totals in any meaningful way.
+
+The change was also played through the opening of `d1_trainstation_01` on
+the console with the route controller, from the train to Barney's monitor,
+and then quit from the game. It held 59.9 fps throughout (minimum 59.9),
+reported no translator or guest exceptions, and Wine exited normally.
