@@ -23,6 +23,9 @@ native/pw_agc_submit_lifecycle.c
 native/pw_agc_submit_lifecycle.h
 native/pw_audio_ps5.c
 native/pw_audio_ps5.h
+native/lapy_elevation_protocol.h
+native/pw_lapy_elevation.c
+native/pw_lapy_elevation.h
 native/pw_pad_ps5.c
 native/pw_pad_ps5.h
 native/pw_videoout_layout.h
@@ -97,11 +100,13 @@ tests/test_pw_x86_reference.S
 tests/test_x86_differential.py
 tests/test_icon.py
 tests/test_native_contract.py
+tests/test_fetch_lapy_helper.py
 tests/test_pw_vm.c
 tests/test_title_identity.py
 tools/audit_publication.py
 tools/classify_x86.c
 tools/build_native.sh
+tools/fetch_lapy_helper.py
 tools/survey_x86_coverage.py
 tools/make_icon.py
 tools/make_test_pe.py
@@ -280,6 +285,7 @@ tests/test_pw_hid_ps5.c
 native/pw_data_mount.h
 tests/test_pw_data_mount.c
 tests/test_pw_data_mount_native.c
+tests/test_pw_lapy_elevation.c
 tests/test_pw_wine_cwd.c
 wine/ps5/pw_wine_cwd.c
 wine/ps5/pw_wine_cwd.h

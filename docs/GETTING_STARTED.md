@@ -11,13 +11,12 @@ On the PS5:
 - A jailbreak that lets you run homebrew, with an **FTP server** and an
   **ELF loader** (for example `ftpsrv` and `elfldr` from
   [ps5-payload-dev](https://github.com/ps5-payload-dev)). The steps below
-  assume FTP on port 2121.
+  assume FTP on port 2121 and elfldr listening on local port 9021.
 - A **homebrew app loader** that installs apps placed in `/data/homebrew`,
   such as [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus).
-- The **[Lapy JB daemon](https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon)**,
-  running. prospero-win asks it for access to `/data`, where your games and
-  their saves live. Without it the app still starts, but it can only use its
-  own small sandbox, which is too small for most games.
+- The app's bundled one-shot Lapy helper is sent to elfldr on each process
+  startup. No resident Lapy daemon is required. If elfldr is unavailable, the
+  title logs the failure and returns to Home before loading Wine.
 
 On your PC:
 
@@ -96,8 +95,9 @@ Saves and settings stay in the game's prefix on the PS5.
   can't show yet. Please open an issue with the game and its version.
 - **No games in the launcher.** Check that `profiles/profiles.lst` lists your
   profile's file name, and that the profile's `prefix =` matches the folder
-  under `prefixes/`. Also check that the Lapy JB daemon is running: without
-  `/data`, the app looks for games in its own sandbox instead.
+  under `prefixes/`. Check that elfldr is listening on port 9021 and that the
+  packaged app contains `lapy.elf`; if the request does not
+  complete, the title stops before loading profiles or starting a game.
 
 ### Getting a log
 

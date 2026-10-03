@@ -26,7 +26,7 @@ native/            the title
   pw_videoout_ps5     scanout, tiling and scaling into VideoOut (AGC copy and flip)
   pw_pad_ps5          DualSense ownership, edges, sticks, triggers, rumble
   pw_audio_ps5        the main AudioOut port Wine's driver plays on
-  pw_data_mount       requests /data from the Lapy JB daemon
+  pw_data_mount       requests /data through a one-shot ELF helper sent to elfldr
   ps5log/             vendored `ps5log/1` client, pinned by digest
 
 src/               portable code, host-tested

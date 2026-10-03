@@ -652,22 +652,41 @@ the warning becomes a failure.
 ## Data directory
 
 A title can write only its own `/download0` sandbox, where `/data` is absent,
-so the Wine prefix would be limited to that sandbox. Before starting Wine,
-prospero-win (`native/pw_data_mount.c`) asks the Lapy JB daemon
-(<https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon>, running on the
-console) for `/data`, following its protocol: in the title's own process,
-before it creates any other thread, `seteuid(geteuid())`, which must succeed
-(otherwise nothing is requested and the log says why, `prepare_errno`); then
-a complete `{"PID":<pid>}` request, written to a temporary file and renamed
-to `/download0/elevate_proc` (the title's `param.json` enables
-`downloadDataSize` for `/download0`). The daemon consuming the request proves
-nothing, so the title waits until `/data` is actually reachable, after which
-the prefix lives at `/data/prospero-win/prefix`. The earlier daemon's
-`/download0/etahen_jailbreak` marker is no longer written. Once `/data`
-appears after a request, the title waits another second
-(`PW_DATA_MOUNT_SETTLE_MS`) before it goes on. The request is best-effort:
-if the daemon is not running, the title keeps using
-`/download0/prospero-win/prefix`.
+so the Wine prefix would be limited to that sandbox. Before loading the
+library or starting Wine, `native/pw_data_mount.c` streams the bundled
+`/app0/lapy.elf` to the local elfldr listener at
+`127.0.0.1:9021`. The connection stays open for a versioned
+request/prepare/result exchange that identifies this process by PID. The
+helper is built for `PPSA99995` and validates the requested title. The title
+performs `seteuid(geteuid())` only after the helper's prepare response, then
+waits for the final success response and confirms `/data` is reachable. After
+access appears it waits another second (`PW_DATA_MOUNT_SETTLE_MS`) before
+continuing. If elfldr or the helper does not complete successfully, the title
+logs the failure and returns to Home without loading profiles or starting
+Wine. Each launcher/game `LoadExec` process performs its own request through
+the same startup point.
+
+The title build fetches the helper and manifest from the most recently
+published release of `mpereiraesaa/PS5-Lapy-JB-Daemon` every time, including
+prereleases. It does not use a local cached ELF or silently fall back to an
+older release. The release must include
+`lapy.elf` and `lapy-manifest.json`; the build verifies the ELF digest, title
+ID and shared protocol digest before staging it:
+
+~~~sh
+tools/build_native.sh
+~~~
+
+The helper release is built from the Lapy fork with
+`PS5_PAYLOAD_SDK=<sdk> make owned-helper TARGET_TITLE=PPSA99995`. Upload the
+resulting `lapy.elf` and `manifest.json` (renamed to `lapy-manifest.json`) as
+assets on a published latest release. The native title build stages the
+downloaded helper beside `eboot.bin`; release packaging copies it into the
+application image automatically. If the latest release lacks either asset or
+has incompatible hashes, the build stops instead of using stale bytes.
+It also rejects manifests that do not declare `root_layout_probe_retry`, the
+bounded retry added after a counter-delta probe was obscured by concurrent
+vnode activity.
 
 ## Starting Wine in the title
 

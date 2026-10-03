@@ -44,6 +44,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -f "$title/eboot.bin" ] && [ -d "$title/sce_sys" ] || fail "--title: no eboot.bin and sce_sys/ in '$title'"
+[ -f "$title/lapy.elf" ] || fail "--title: no lapy.elf in '$title'"
 ls "$wine_ps5"/prx/sce_module/ntdll.prx >/dev/null 2>&1 || fail "--wine-ps5: no prx/sce_module/ntdll.prx in '$wine_ps5'"
 [ -d "$wine_ps5/prx/fonts" ] || fail "--wine-ps5: no prx/fonts in '$wine_ps5'"
 [ -d "$host_wine/lib/wine/i386-windows" ] && [ -d "$host_wine/lib/wine/x86_64-windows" ] &&

@@ -559,20 +559,20 @@ static void on_exit_report(void)
 
 /* ---- library ------------------------------------------------------------ */
 
-/* Request /data, as a game does, and read the games from it (or from the
- * sandbox's /download0 when /data does not appear). A process granted /data
- * cannot write the sandbox's /download0 (EACCES, measured), so the launcher
- * cannot read a copy there instead. */
-static void open_library(void)
+/* Complete the one-shot helper exchange before loading profiles or starting
+ * Wine. A failed or incomplete request closes this process to Home. */
+static int open_library(void)
 {
     PwDataMountResult mount;
     int status;
 
-    if (pw_data_mount_request(&mount) == 0) library_root = PW_WINE64_ROOT_DATA;
-    PS5LOG_LOG("PW_WINE64 data_mount data_before=%d prepare_errno=%d wrote=%d write_errno=%d data_after=%d "
-               "waited_ms=%d settled_ms=%d root=%s", mount.data_before, mount.prepare_errno,
-               mount.wrote_request, mount.write_errno, mount.data_after, mount.waited_ms,
-               mount.settled_ms, library_root);
+    status = pw_data_mount_request(&mount);
+    if (status == 0) library_root = PW_WINE64_ROOT_DATA;
+    PS5LOG_LOG("PW_WINE64 data_mount data_before=%d helper_completed=%d helper_errno=%d data_after=%d "
+               "waited_ms=%d settled_ms=%d root=%s", mount.data_before,
+               mount.helper_completed, mount.helper_errno, mount.data_after, mount.waited_ms,
+               mount.settled_ms, status == 0 ? library_root : "unavailable");
+    if (status != 0) return -1;
     status = pw_wine_library_load(&library, library_root);
     catalog_count = 0;
     for (uint32_t i = 0; i < library.count; i++) {
@@ -599,8 +599,9 @@ static void open_library(void)
         catalog_count++;
     }
     PS5LOG_LOG("PW_WINE64 library status=%s listed_by=%d scan_errno=%d entries=%u games=%u "
-               "root=%s", pw_result_name(status), library.listed_by, library.scan_error,
+                   "root=%s", pw_result_name(status), library.listed_by, library.scan_error,
                (unsigned)library.count, (unsigned)catalog_count, library_root);
+    return 0;
 }
 
 /* The USB keyboard and mouse's log lines. */
@@ -869,7 +870,11 @@ int main(int argc, char **argv)
                            &log_config, NULL) == 0)
         ps5log_init(&log_config, PW_TITLE_ID, PW_APP_NAME, now_ns());
     pw_hid_ps5_preload(hid_log);   /* before the /data grant changes the title's credentials */
-    open_library();
+    if (open_library() != 0) {
+        PS5LOG_LOG("PW_WINE64 startup blocked reason=data-helper-incomplete");
+        ps5log_close("data-helper-incomplete");
+        return 1;
+    }
     (void)pw_wine_launch_parse(argc, argv, catalog, catalog_count, &launch);
     (void)pw_diagnostics_open(library_root, PW_BUILD_ID,
                               launch.app ? launch.app->id : "launcher", launch.cycle);
