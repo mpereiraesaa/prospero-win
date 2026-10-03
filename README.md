@@ -9,24 +9,53 @@
   <img src="https://img.shields.io/badge/license-LGPL--2.1--or--later-blue" alt="License: LGPL-2.1-or-later">
 </p>
 
-**prospero-win runs Windows games on a jailbroken PS5.** It's a homebrew app
-that carries its own copy of [Wine](https://www.winehq.org/). 64-bit Windows
-programs run natively on the console's x86-64 CPU, 32-bit ones go through our
-own x86 translator, and Direct3D goes through
-[DXVK](https://github.com/doitsujin/dxvk) on the console's Vulkan. You pick a
-game from its launcher and play it with a DualSense, or with a USB keyboard
-and mouse.
+**prospero-win — Windows gaming on your PS5**
 
-It's experimental. A handful of games run well, many won't run yet, and it
-has only been tested on one console, on firmware 12.02.
+Bring PC classics to the big screen. **prospero-win runs Windows games
+locally on a homebrew-enabled PlayStation 5**, with DualSense controls,
+keyboard and mouse support, and a launcher for your game library.
 
-## What runs
+Built to bridge generations of Windows gaming—from 2000s classics to newer
+32-bit and 64-bit software—with compatibility expanding game by game.
 
-Half-Life, Counter-Strike 1.6, OpenArena and Warcraft III are playable
-above 60 fps. Half-Life 2 is playable at 60 fps, the console's refresh rate,
-at High settings with the DualSense or a keyboard and mouse. Pinball and
-Minesweeper are playable too. Minesweeper is a 64-bit program and runs
-natively; the others are 32-bit and run through the translator.
+## What's supported
+
+- **32-bit Windows games** through our custom x86 translator.
+- **64-bit Windows applications** running natively on the PS5's x86-64 CPU
+  through [Wine](https://www.winehq.org/).
+- **Direct3D 8, 9, 10 and 11** graphics through
+  [DXVK](https://github.com/doitsujin/dxvk) and Vulkan.
+- **OpenGL games** with the optional OpenGL-enabled runtime.
+- **Classic 2D games and Windows applications** through GDI.
+- **DualSense controls**, including Xbox-style XInput support, analog
+  sticks, triggers and rumble.
+- **Custom controller mappings** for games originally designed for
+  keyboard and mouse.
+- **USB keyboard and mouse**, usable alongside the controller.
+- **Game audio** through the PS5's audio output.
+- **A game launcher** with individual profiles, graphics settings and
+  control presets.
+- **Separate game installations**, with tools to transfer games and
+  synchronize saves between PC and console.
+- **Community installation recipes and profiles** to make supported games
+  easier to set up.
+
+See [controls](docs/CONTROLS.md) for input modes and mappings, and
+[installing games](docs/INSTALLING_GAMES.md) for library and save transfers.
+
+## Already playable on PS5
+
+- **Half-Life 2:** 60 FPS at High settings, tested with DualSense through
+  Kleiner's lab.
+- **Half-Life, Counter-Strike 1.6 and OpenArena:** playable above 60 FPS.
+- **Warcraft III:** playable above 60 FPS, with DualSense or keyboard and
+  mouse.
+- **Space Cadet Pinball and Wine Minesweeper:** playable.
+
+**Experimental, open source, and growing.** Compatibility depends on the
+game and its requirements; support for 32-bit and 64-bit software does not
+yet mean every modern Windows game works. Currently tested on one PS5 on
+firmware **12.02**.
 
 See [game compatibility](COMPATIBILITY.md) for versions, graphics backends
 and controls. Translator benchmark results are in
