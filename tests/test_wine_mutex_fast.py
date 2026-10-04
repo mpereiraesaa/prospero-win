@@ -19,7 +19,7 @@ PATCH = ROOT / "wine/patches/0790-server-ps5-immediate-mutex-calls.patch"
 
 def function(text, name):
     match = re.search(r"^(?:static )?(?:inline )?(?:DECLSPEC_EXPORT )?"
-                      r"(?:int|unsigned int) " + name + r"\([^;]*?\)\s*\{", text, re.M)
+                      r"(?:void|int|unsigned int) " + name + r"\([^;]*?\)\s*\{", text, re.M)
     assert match, name
     start = text.index("{", match.start())
     end, depth = start + 1, 1
@@ -69,6 +69,7 @@ typedef struct { int64_t QuadPart; } LARGE_INTEGER;
 #define TERMINATED 2
 #define REQ_select 1
 #define REQ_release_mutex 2
+#define ARRAY_SIZE(a) (sizeof(a)/sizeof((a)[0]))
 struct list { struct list *next, *prev; };
 static void list_init(struct list *l) { l->next=l->prev=l; }
 static int list_empty(const struct list *l) { return l->next==l; }
@@ -98,8 +99,9 @@ static struct thread *current;
 static unsigned global_error;
 static int inprocess_direct_ok=1,debug_level;
 static pthread_mutex_t inprocess_server_mutex=PTHREAD_MUTEX_INITIALIZER;
-static uint64_t monotonic_time;
+static uint64_t monotonic_time=17,native_clock_ticks=1000;
 static void set_error(unsigned e) { global_error=e;if(current)current->error=e; }
+static unsigned get_error(void) { return current?current->error:global_error; }
 static void clear_error(void) { set_error(0); }
 static void *grab_object(void *p) { struct object *o=p;assert(!o->destroyed&&o->refs);o->refs++;return p; }
 static void release_object(void *p) {
@@ -116,9 +118,15 @@ static struct thread *get_thread_from_id(unsigned tid) {
     if(!tid||tid>16){set_error(STATUS_INVALID_HANDLE);return NULL;}
     return grab_object(&threads[tid-1]);
 }
-static void set_current_time(void) { monotonic_time++; }
+static uint64_t monotonic_counter(void) { return ++native_clock_ticks; }
 /*AUTHORITY*/
 /*PATCH_SERVER*/
+static atomic_uint module_calls;
+static int counted_try_mutex(unsigned tid,client_ptr_t teb,obj_handle_t h,int release,unsigned *status,unsigned *prev) {
+    sigset_t mask;assert(!pthread_sigmask(SIG_SETMASK,NULL,&mask));assert(sigismember(&mask,SIGUSR1));
+    atomic_fetch_add(&module_calls,1);
+    return pw_wineserver_try_fast_mutex(tid,teb,h,release,status,prev);
+}
 struct thread_data { unsigned tid; };
 static _Thread_local struct thread_data data;
 static struct thread_data *get_thread_data(void) { return &data; }
@@ -152,7 +160,7 @@ static void init(void) {
         t->teb=0x1000+i*0x100;t->reply_fd=1;
         list_init(&t->mutex_list);list_init(&t->system_apc);list_init(&t->user_apc);
     }
-    data.tid=1;try_server_mutex=pw_wineserver_try_fast_mutex;
+    data.tid=1;try_server_mutex=counted_try_mutex;
     sigemptyset(&server_block_set);sigaddset(&server_block_set,SIGUSR1);
 }
 static void make_mutex(struct mutex *m,struct mutex_sync *s,struct process *p,unsigned h)
@@ -173,6 +181,7 @@ static void semantics(void) {
     struct process p={0};struct mutex m;struct mutex_sync s;struct thread *t=&threads[0];
     t->process=&p;threads[1].process=&p;make_mutex(&m,&s,&p,1);
     assert(call(1,0,NULL)==0&&s.count==1&&s.owner==t&&s.obj.refs==2);
+    assert(monotonic_time==17&&t->ps5_last_req_time==native_clock_ticks);
     assert(!list_empty(&t->mutex_list));
     assert(call(1,0,NULL)==0&&s.count==2&&s.obj.refs==2);
     LONG prev=99;assert(call(1,1,&prev)==0&&prev==-1&&s.count==1);
@@ -215,7 +224,7 @@ static void semantics(void) {
     assert(pw_wineserver_try_fast_mutex(1,t->teb,1,2,&status,&previous)==1);
     pthread_mutex_lock(&inprocess_server_mutex);
     assert(call(1,0,NULL)==STATUS_NOT_IMPLEMENTED);pthread_mutex_unlock(&inprocess_server_mutex);
-    try_server_mutex=NULL;BOTH();try_server_mutex=pw_wineserver_try_fast_mutex;
+    try_server_mutex=NULL;BOTH();try_server_mutex=counted_try_mutex;
     assert(call(1,1,NULL)==0);
     /* Readiness precedes a valid expired/zero/relative timeout on this path. */
     for(int64_t value=-1;value<=1;value++){
@@ -238,6 +247,29 @@ static void semantics(void) {
     assert(r.obj.destroyed);
     sigset_t mask;pthread_sigmask(SIG_SETMASK,NULL,&mask);assert(!sigismember(&mask,SIGUSR1));
     puts("native mutex model: ownership/recursion/refs/access/aliases/close/reuse/abandonment and eligibility PASS");
+}
+static void hint_contract(void) {
+    struct process p={0};threads[0].process=&p;data.tid=1;
+    struct object event;obj_init(&event,&other_ops);p.handles[2]=(struct handle_entry){&event,SYNCHRONIZE};
+    server_clear_fast_mutex_hints();unsigned before=atomic_load(&module_calls);
+    assert(call(2,0,NULL)==STATUS_NOT_IMPLEMENTED);assert(atomic_load(&module_calls)==before+1);
+    for(unsigned i=0;i<63;i++)assert(call(2,0,NULL)==STATUS_NOT_IMPLEMENTED);
+    assert(atomic_load(&module_calls)==before+1); /* warm non-mutex skips mask/lock/lookup */
+    assert(call(2,0,NULL)==STATUS_NOT_IMPLEMENTED);assert(atomic_load(&module_calls)==before+2);
+    /* Full handle key, not just a bucket: a colliding invalid handle still probes. */
+    assert(call(258,0,NULL)==STATUS_NOT_IMPLEMENTED);assert(atomic_load(&module_calls)==before+3);
+    server_clear_fast_mutex_hint((HANDLE)2);assert(!nonmutex_hints[0]);
+    assert(call(2,0,NULL)==STATUS_NOT_IMPLEMENTED);assert(atomic_load(&module_calls)==before+4);
+    struct mutex m;struct mutex_sync s;make_mutex(&m,&s,&p,2);
+    /* A stale hint after a concurrent reuse only selects ordinary fallback;
+     * it never acquires a replacement mutex or changes its count/owner. */
+    for(unsigned i=0;i<63;i++)assert(call(2,0,NULL)==STATUS_NOT_IMPLEMENTED&&!s.count&&!s.owner);
+    assert(atomic_load(&module_calls)==before+4);
+    assert(call(2,0,NULL)==0&&s.count==1&&s.owner==&threads[0]);
+    assert(call(2,1,NULL)==0); /* release never uses the advisory wait hint */
+    assert(!s.count&&!s.owner);release_object(&m);
+    server_clear_fast_mutex_hints();for(unsigned i=0;i<ARRAY_SIZE(nonmutex_hints);i++)assert(!nonmutex_hints[i]);
+    puts("native advisory hint: warm skip/63-call expiry/full key/stale reuse/lifecycle clear PASS");
 }
 static atomic_uint inside,entries,fast_count,slow_count;
 static struct mutex *shared_mutex;
@@ -279,7 +311,7 @@ static void concurrency(void) {
     printf("native bounded model: 2/4/8/16-thread exclusion PASS, fast=%u fallback-model=%u\n",
            atomic_load(&fast_count),atomic_load(&slow_count));
 }
-int main(int argc,char **argv) { assert(argc==2);config_dir=argv[1];switch_contract();init();semantics();concurrency();return 0; }
+int main(int argc,char **argv) { assert(argc==2);config_dir=argv[1];switch_contract();init();semantics();hint_contract();concurrency();return 0; }
 '''
 
 
@@ -289,8 +321,13 @@ def main():
         ("server/mutex.c", "try_fast_mutex"),
         ("server/thread.c", "thread_can_fast_mutex"),
         ("server/request.c", "pw_wineserver_try_fast_mutex")))
-    client = "\n\n".join(function(sources["dlls/ntdll/unix/server.c"], name)
-                           for name in ("server_mutex_fast_enabled", "server_try_fast_mutex"))
+    client_source = sources["dlls/ntdll/unix/server.c"]
+    table = re.search(r"static unsigned long long nonmutex_hints\[\d+\];", client_source)
+    assert table
+    client = table[0] + "\n\n" + "\n\n".join(function(client_source, name)
+                           for name in ("server_mutex_fast_enabled", "server_skip_fast_mutex",
+                                        "server_clear_fast_mutex_hint", "server_clear_fast_mutex_hints",
+                                        "server_try_fast_mutex"))
     code = HARNESS.replace("/*AUTHORITY*/", (ROOT / "tests/fixtures/wine_mutex_authority.c").read_text())
     code = code.replace("/*PATCH_SERVER*/", server).replace("/*PATCH_CLIENT*/", client)
     # Registration is default-off and missing exports/disabled direct requests fall back.
@@ -299,6 +336,9 @@ def main():
     assert 'getenv( "WINE_PS5_MUTEX_FAST" )' in binding
     assert 'if (!alertable &&' in sources["dlls/ntdll/unix/sync.c"]
     assert "pw_wineserver_call_direct pw_wineserver_try_fast_mutex" in (ROOT / "tools/build_wine_ps5.sh").read_text()
+    assert sources["dlls/ntdll/unix/sync.c"].count("server_clear_fast_mutex_hint") == 2
+    assert binding.count("server_clear_fast_mutex_hints();") == 1  # NtDuplicateObject
+    assert "server_clear_fast_mutex_hint( handle );" in binding  # NtClose
     with tempfile.TemporaryDirectory(prefix="pw-mutex-model-") as directory:
         directory = Path(directory)
         source = directory / "check.c"
