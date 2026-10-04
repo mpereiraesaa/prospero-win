@@ -1220,9 +1220,10 @@ static void test_fault(void)
 /* div and idiv in every width, on registers (low and high bytes, edi and
  * esp's neighbours) and memory (esi- and esp-relative), signed results of
  * both signs, the 32-bit idiv's exact path (a dividend that is not cdq's, a
- * divisor of -1), each result stored, and the flags of a compare before
- * them carried through to the end. The 8- and 16-bit forms are the host
- * fallback's under the emitter. */
+ * divisor of -1), each result stored. div and idiv leave the arithmetic
+ * flags undefined, and CPUs differ (Intel keeps them, AMD's change), so
+ * each program ends with a compare that defines them again. The 8- and
+ * 16-bit forms are the host fallback's under the emitter. */
 static void test_divide(void)
 {
     static const uint8_t wide[] = {
@@ -1258,9 +1259,9 @@ static void test_divide(void)
         0xf7, 0xff,                         /* idiv edi */
         0x89, 0x46, 0x34, 0x89, 0x56, 0x38,
         0xbd, 0x09, 0, 0, 0,                /* mov ebp, 9 */
-        0x39, 0xd8,                         /* cmp eax, ebx: flags to keep */
         0xf7, 0xf5,                         /* div ebp */
         0xf7, 0xf7,                         /* div edi */
+        0x39, 0xd8,                         /* cmp eax, ebx: the flags again */
         0xc3,
     };
     static const uint8_t narrow[] = {
@@ -1302,8 +1303,8 @@ static void test_divide(void)
         0x89, 0x46, 0x24, 0x89, 0x56, 0x28,
         0xbf, 0x03, 0x00, 0x05, 0x00,       /* mov edi, 0x50003 */
         0x66, 0xf7, 0xf7,                   /* div di */
-        0x39, 0xd8,                         /* cmp eax, ebx */
         0xf6, 0xf1,                         /* div cl */
+        0x39, 0xd8,                         /* cmp eax, ebx: the flags again */
         0xc3,
     };
     Run r;
