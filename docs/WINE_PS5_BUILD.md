@@ -88,6 +88,7 @@ of the port never collide:
 | 0600 | `ntdll`: anonymous memory in the reserved areas is direct memory, not flexible memory; a 16 GiB area at `0x1000000000` takes the allocations free to go anywhere; see [Direct memory](#direct-memory) |
 | 0601 | `ntdll`: an i386 image is never mapped above 4 GiB, so a relocatable exe whose preferred base is taken stays in the low reserved areas instead of the high one |
 | 0610 | `ntdll`: `__wine_ps5_set_segv_hook` lets `wowprospero` resume its own faults (fault markers) from inside Wine's SIGSEGV handler, instead of a second handler chaining to the action `sigaction` reports |
+| 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
 
 ## Allocator
 
@@ -253,7 +254,46 @@ The PRX stage links `wineserver.prx` from the server objects:
 - the compat shims, whose `posix_fadvise` and `if_nametoindex` are needed
   only by the server;
 - the thread registry;
-- a descriptor with `pw_wineserver_connect` and `pw_wine_thread_register`.
+- a descriptor with `pw_wineserver_connect`, `pw_wine_thread_register` and
+  `pw_wineserver_call_direct`.
+
+### Sync requests on the client threads
+
+Through the pipes, every request costs two thread switches: the client
+writes its request pipe, the server thread wakes from `kevent`, handles the
+request, writes the reply pipe, and the client wakes. On the console that is
+19–26 µs for each `SetEvent`, `ReleaseSemaphore`, `ReleaseMutex` or
+zero-timeout wait (measured with syncbench), and GTA IV makes about 500 of
+them a frame.
+
+Patch 0770 lets the client thread run the requests that only touch sync
+objects and handles itself, under a lock that the server thread holds except
+while it sleeps in `kevent` (`epoll` on Linux):
+
+- `select`, `event_op`, `release_mutex`, `release_semaphore`, the create and
+  query requests of events, mutexes, semaphores and keyed events,
+  `close_handle` and `dup_handle` run on the client thread. Everything else
+  still goes through the server thread.
+- A wait that can't be satisfied at once still returns `STATUS_PENDING`, and
+  the thread sleeps on its wait pipe as before. The thread that signals the
+  object writes that pipe itself, so waking a waiter takes one thread switch
+  instead of two.
+- The open requests stay on the pipe, because they carry the application's
+  name buffer, which the server must not read on the client thread.
+- A thread the server doesn't know yet (before `init_thread`), or has
+  already killed, goes through the pipe, which reports its death as before.
+- When a client thread removes or changes one of the server's poll entries
+  while the server thread sleeps, the server thread drops the events it just
+  read and waits again. The events are level-triggered, so nothing is lost.
+- When a client thread adds a timeout that falls before the server thread's
+  next wake-up, it wakes the server thread through a pipe.
+
+`ntdll` uses this path when `wineserver.prx` exports
+`pw_wineserver_call_direct`, and logs `wine-ps5: server requests on client
+threads: on`. `WINE_PS5_SERVER_DIRECT=0` sends every request through the
+pipes again. An older `wineserver.prx` without the export works with the new
+`ntdll.prx` and vice versa, so swapping one module is enough to compare the
+two paths.
 
 ## User driver
 

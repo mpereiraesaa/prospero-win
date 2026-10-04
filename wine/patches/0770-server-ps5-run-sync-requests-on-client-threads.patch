@@ -1,0 +1,506 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 4 Oct 2026 02:00:00 +0200
+Subject: [PATCH] server: Run sync requests on the client threads on PS5.
+
+In-process (patch 0110), every request still went from the client thread
+through its request pipe to the server thread, woken from kqueue, and back
+through the reply pipe: two thread switches and about eight system calls.
+On the console that is 19-26 us per SetEvent, ReleaseSemaphore,
+ReleaseMutex or zero-timeout wait, and GTA IV makes about 500 of them a
+frame.
+
+The server is now guarded by a lock that its thread holds except while it
+sleeps in kqueue/epoll, and ntdll runs the requests that only touch sync
+objects and handles (select, event_op, release_mutex, release_semaphore,
+the create and query requests of events, mutexes, semaphores and keyed
+events, close_handle, dup_handle) on the calling thread through
+pw_wineserver_call_direct, under that lock. A wait that cannot be
+satisfied still returns STATUS_PENDING and the thread sleeps on its wait
+pipe; the thread that signals the object writes that pipe itself, so
+waking a waiter takes one thread switch instead of two.
+
+- The server thread drops a batch of events when a client thread removed
+  or changed a poll user while it slept (the slot may now be another fd's)
+  and polls again; the filters are level-triggered, so nothing is lost.
+- A timeout that a client thread adds earlier than the one the main loop
+  sleeps until wakes it through a pipe.
+- A thread the server does not know (before init_thread, with another
+  TEB, terminated) and every other request use the pipe as before, as does
+  everything when the main loop falls back to poll().
+- The open requests stay on the pipe: they carry the application's name
+  buffer, which the server must not read on the client thread.
+- WINE_PS5_SERVER_DIRECT=0, or a server module without the export, keeps
+  every request on the pipe.
+---
+ dlls/ntdll/unix/server.c |  34 +++++++++
+ server/fd.c              |  99 ++++++++++++++++++++++++
+ server/request.c         | 159 +++++++++++++++++++++++++++++++++++++++
+ server/request.h         |   5 ++
+ 4 files changed, 297 insertions(+)
+
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index bdfad82..340cbfb 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -317,6 +317,20 @@ ULONGLONG ps5_now_us(void)
+     return (ULONGLONG)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+ }
+ 
++#ifdef WINE_INPROCESS_SERVER
++/* the in-process server runs some requests on the calling thread */
++static int (*call_server_direct)( unsigned int tid, client_ptr_t teb, struct __server_request_info *req );
++
++/* the TEB this thread gave the server in init_thread or init_process_done */
++static inline client_ptr_t inprocess_teb(void)
++{
++    TEB *teb = NtCurrentTeb();
++    TEB64 *teb64 = get_teb64( teb );
++
++    return wine_server_client_ptr( teb64 ? (void *)teb64 : (void *)teb );
++}
++#endif
++
+ unsigned int server_call_unlocked( void *req_ptr )
+ {
+     struct thread_data *data = get_thread_data();
+@@ -324,6 +338,22 @@ unsigned int server_call_unlocked( void *req_ptr )
+     unsigned int ret;
+     ULONGLONG start = ps5_slow_log() ? ps5_now_us() : 0;
+ 
++#ifdef WINE_INPROCESS_SERVER
++    if (call_server_direct && data->tid)
++    {
++        switch (call_server_direct( data->tid, inprocess_teb(), req ))
++        {
++        case 0:
++            ret = req->u.reply.reply_header.error;
++            if (start && ps5_now_us() - start > 200000)
++                fprintf( stderr, "wine-ps5: slow direct request=%d ms=%llu tid=%04x\n",
++                         (int)req->u.req.request_header.req, (unsigned long long)((ps5_now_us() - start) / 1000), (int)data->tid );
++            return ret;
++        case 2:
++            abort_thread( 0 );  /* the server killed this thread */
++        }
++    }
++#endif
+     if ((ret = send_request( data->request_fd, req ))) return ret;
+     ret = wait_reply( data->reply_fd, req );
+     if (start && ps5_now_us() - start > 200000)
+@@ -1491,6 +1521,10 @@ static int connect_inprocess_server(void)
+     register_server_thread = dlsym( module, "pw_wine_thread_register" );
+     if ((fd = connect_server( nls_dir )) == -1)
+         fatal_error( "the in-process server %s did not start\n", module_path );
++    /* WINE_PS5_SERVER_DIRECT=0 sends every request through the server thread */
++    p = getenv( "WINE_PS5_SERVER_DIRECT" );
++    if (!p || strcmp( p, "0" )) call_server_direct = dlsym( module, "pw_wineserver_call_direct" );
++    fprintf( stderr, "wine-ps5: server requests on client threads: %s\n", call_server_direct ? "on" : "off" );
+     TRACE( "connected to the in-process server %s\n", module_path );
+     free( dir );
+     free( module_path );
+diff --git a/server/fd.c b/server/fd.c
+index c10e6b6..901dbd4 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -288,6 +288,48 @@ timeout_t monotonic_time;
+ struct _KUSER_SHARED_DATA *user_shared_data = NULL;
+ static const timeout_t user_shared_data_timeout = 16 * 10000;
+ 
++#ifdef WINE_INPROCESS_SERVER
++/* In-process, client threads run some requests themselves (see
++ * pw_wineserver_call_direct) under this lock, which the server thread holds
++ * except while it sleeps in epoll/kqueue. */
++pthread_mutex_t inprocess_server_mutex = PTHREAD_MUTEX_INITIALIZER;
++int inprocess_direct_ok;      /* the main loop sleeps in epoll/kqueue: clients may run requests */
++int inprocess_wake_fd = -1;   /* written to wake the sleeping main loop */
++static timeout_t inprocess_sleep_until;   /* monotonic time the main loop sleeps until, 0 when awake */
++static unsigned int poll_users_epoch;     /* bumped when poll users are removed or change events */
++
++/* a client thread added a timeout: wake the main loop if it sleeps past it */
++static void inprocess_timeout_added( abstime_t when )
++{
++    timeout_t deadline = when > 0 ? monotonic_time + (when - current_time) : -when;
++    char byte = 0;
++
++    if (deadline >= inprocess_sleep_until) return;
++    inprocess_sleep_until = 0;  /* one wake is enough */
++    if (inprocess_wake_fd != -1) write( inprocess_wake_fd, &byte, 1 );
++}
++
++/* the main loop goes to sleep: let client threads in */
++static unsigned int inprocess_sleep( int timeout, const struct timespec *ts )
++{
++    if (timeout == -1) inprocess_sleep_until = TIMEOUT_INFINITE;
++    else if (ts) inprocess_sleep_until = monotonic_time + ts->tv_sec * TICKS_PER_SEC + ts->tv_nsec / 100;
++    else inprocess_sleep_until = monotonic_time + (timeout_t)timeout * 10000;
++    pthread_mutex_unlock( &inprocess_server_mutex );
++    return poll_users_epoch;
++}
++
++/* the main loop wakes up; returns 0 when clients removed or changed poll
++ * users meanwhile, so the events just read may belong to other fds. They are
++ * level-triggered: the next wait reports again whatever is still pending. */
++static int inprocess_wake( unsigned int epoch )
++{
++    pthread_mutex_lock( &inprocess_server_mutex );
++    inprocess_sleep_until = 0;
++    return epoch == poll_users_epoch;
++}
++#endif
++
+ static void atomic_store_ulong(volatile ULONG *ptr, ULONG value)
+ {
+     /* on x86 there should be total store order guarantees, so volatile is
+@@ -381,6 +423,9 @@ struct timeout_user *add_timeout_user( timeout_t when, timeout_callback func, vo
+     user->when     = timeout_to_abstime( when );
+     user->callback = func;
+     user->private  = private;
++#ifdef WINE_INPROCESS_SERVER
++    inprocess_timeout_added( user->when );
++#endif
+ 
+     /* Now insert it in the linked list */
+ 
+@@ -538,13 +583,22 @@ static inline void main_loop_epoll(void)
+     assert( POLLHUP == EPOLLHUP );
+ 
+     if (epoll_fd == -1) return;
++#ifdef WINE_INPROCESS_SERVER
++    inprocess_direct_ok = 1;
++#endif
+ 
+     while (active_users)
+     {
++#ifdef WINE_INPROCESS_SERVER
++        unsigned int epoch;
++#endif
+         timeout = get_next_timeout( &ts );
+ 
+         if (!active_users) break;  /* last user removed by a timeout */
+         if (epoll_fd == -1) break;  /* an error occurred with epoll */
++#ifdef WINE_INPROCESS_SERVER
++        epoch = inprocess_sleep( timeout, &ts );
++#endif
+ 
+ #ifdef HAVE_EPOLL_PWAIT2
+         if (!failed_epoll_pwait2)
+@@ -557,6 +611,13 @@ static inline void main_loop_epoll(void)
+ #endif
+             ret = epoll_wait( epoll_fd, events, ARRAY_SIZE( events ), timeout );
+ 
++#ifdef WINE_INPROCESS_SERVER
++        if (!inprocess_wake( epoch ))
++        {
++            set_current_time();
++            continue;
++        }
++#endif
+         set_current_time();
+ 
+         /* put the events into the pollfd array first, like poll does */
+@@ -643,16 +704,32 @@ static inline void main_loop_epoll(void)
+     struct kevent events[128];
+ 
+     if (kqueue_fd == -1) return;
++#ifdef WINE_INPROCESS_SERVER
++    inprocess_direct_ok = 1;
++#endif
+ 
+     while (active_users)
+     {
++#ifdef WINE_INPROCESS_SERVER
++        unsigned int epoch;
++#endif
+         timeout = get_next_timeout( &ts );
+ 
+         if (!active_users) break;  /* last user removed by a timeout */
+         if (kqueue_fd == -1) break;  /* an error occurred with kqueue */
+ 
++#ifdef WINE_INPROCESS_SERVER
++        epoch = inprocess_sleep( timeout, &ts );
++#endif
+         ret = kevent( kqueue_fd, NULL, 0, events, ARRAY_SIZE( events ), timeout == -1 ? NULL : &ts );
+ 
++#ifdef WINE_INPROCESS_SERVER
++        if (!inprocess_wake( epoch ))
++        {
++            set_current_time();
++            continue;
++        }
++#endif
+         set_current_time();
+ 
+         /* put the events into the pollfd array first, like poll does */
+@@ -830,6 +907,9 @@ static void remove_poll_user( struct fd *fd, int user )
+     assert( poll_users[user] == fd );
+ 
+     remove_epoll_user( fd, user );
++#ifdef WINE_INPROCESS_SERVER
++    poll_users_epoch++;
++#endif
+     pollfd[user].fd = -1;
+     pollfd[user].events = 0;
+     pollfd[user].revents = 0;
+@@ -934,11 +1014,18 @@ void main_loop(void)
+ {
+     int i, ret, timeout;
+ 
++#ifdef WINE_INPROCESS_SERVER
++    pthread_mutex_lock( &inprocess_server_mutex );
++#endif
+     set_current_time();
+     server_start_time = current_time;
+ 
+     main_loop_epoll();
+     /* fall through to normal poll loop */
++#ifdef WINE_INPROCESS_SERVER
++    /* poll() reads the poll arrays while it sleeps: clients must not change them */
++    inprocess_direct_ok = 0;
++#endif
+ 
+     while (active_users)
+     {
+@@ -946,7 +1033,13 @@ void main_loop(void)
+ 
+         if (!active_users) break;  /* last user removed by a timeout */
+ 
++#ifdef WINE_INPROCESS_SERVER
++        pthread_mutex_unlock( &inprocess_server_mutex );
++#endif
+         ret = poll( pollfd, nb_users, timeout );
++#ifdef WINE_INPROCESS_SERVER
++        pthread_mutex_lock( &inprocess_server_mutex );
++#endif
+         set_current_time();
+ 
+         if (ret > 0)
+@@ -961,6 +1054,9 @@ void main_loop(void)
+             }
+         }
+     }
++#ifdef WINE_INPROCESS_SERVER
++    pthread_mutex_unlock( &inprocess_server_mutex );
++#endif
+ }
+ 
+ 
+@@ -1624,6 +1720,9 @@ void set_fd_events( struct fd *fd, int events )
+     int user = fd->poll_index;
+     assert( poll_users[user] == fd );
+ 
++#ifdef WINE_INPROCESS_SERVER
++    if (pollfd[user].events != events || events == -1) poll_users_epoch++;
++#endif
+     set_fd_epoll_events( fd, user, events );
+ 
+     if (events == -1)  /* stop waiting on this fd completely */
+diff --git a/server/request.c b/server/request.c
+index 08dd6cd..e2ae2c5 100644
+--- a/server/request.c
++++ b/server/request.c
+@@ -60,6 +60,9 @@
+ #include "security.h"
+ #include "handle.h"
+ #include "request_handlers.h"
++#ifdef WINE_INPROCESS_SERVER
++#include "wine/server.h"
++#endif
+ 
+ /* Some versions of glibc don't define this */
+ #ifndef SCM_RIGHTS
+@@ -308,6 +311,134 @@ static void call_req_handler( struct thread *thread )
+     current = NULL;
+ }
+ 
++#ifdef WINE_INPROCESS_SERVER
++/* Requests a client thread may run itself: they act on sync objects and
++ * handles only and never sleep in the server (a wait that cannot be
++ * satisfied returns STATUS_PENDING, and the thread then sleeps on its wait
++ * pipe as usual). Their data and replies are ntdll's own buffers, never the
++ * application's (the open requests, which carry the caller's name buffer,
++ * stay on the pipe, where a bad pointer fails the write instead of
++ * faulting). Everything else goes through the server thread. */
++static int is_direct_request( enum request req )
++{
++    switch (req)
++    {
++    case REQ_select:
++    case REQ_create_event:
++    case REQ_event_op:
++    case REQ_query_event:
++    case REQ_create_keyed_event:
++    case REQ_create_mutex:
++    case REQ_release_mutex:
++    case REQ_query_mutex:
++    case REQ_create_semaphore:
++    case REQ_release_semaphore:
++    case REQ_query_semaphore:
++    case REQ_close_handle:
++    case REQ_dup_handle:
++        return 1;
++    default:
++        return 0;
++    }
++}
++
++/* Take the server lock. Another client thread holds it for a microsecond or
++ * two, so spin briefly before sleeping, which costs a thread switch. */
++static void lock_server_for_client(void)
++{
++    int i;
++
++    for (i = 0; i < 200; i++)
++    {
++        if (!pthread_mutex_trylock( &inprocess_server_mutex )) return;
++#if defined(__i386__) || defined(__x86_64__)
++        __asm__ __volatile__( "pause" );
++#endif
++    }
++    pthread_mutex_lock( &inprocess_server_mutex );
++}
++
++/* Run a request on the calling thread, which is the client thread tid of
++ * this process, instead of sending it to the server thread through the
++ * request pipe and waiting for the reply pipe: two thread switches (about
++ * 20 us on the PS5) become a lock. The server thread holds the lock except
++ * while it sleeps. Returns 0 with the reply in info, 1 when the request must
++ * go through the pipe instead, 2 when the server killed the thread (the
++ * pipe would have been closed). */
++DECLSPEC_EXPORT int pw_wineserver_call_direct( unsigned int tid, client_ptr_t teb,
++                                               struct __server_request_info *info )
++{
++    enum request req = info->u.req.request_header.req;
++    data_size_t size = info->u.req.request_header.request_size, pos = 0;
++    union generic_reply reply;
++    struct thread *thread;
++    char data[4096];
++    unsigned int i;
++    int ret = 1;
++
++    if (!inprocess_direct_ok || !is_direct_request( req ) || size > sizeof(data)) return 1;
++    for (i = 0; i < info->data_count && i < __SERVER_MAX_DATA; i++)
++    {
++        if (info->data[i].size > size - pos) return 1;
++        memcpy( data + pos, info->data[i].ptr, info->data[i].size );
++        pos += info->data[i].size;
++    }
++    if (pos != size) return 1;
++
++    lock_server_for_client();
++    if (!inprocess_direct_ok || !(thread = get_thread_from_id( tid )))
++    {
++        pthread_mutex_unlock( &inprocess_server_mutex );
++        return 1;
++    }
++    /* a thread the server has not initialised, or has already killed, uses
++     * the pipe, which reports its death exactly as before */
++    if (thread->teb == teb && teb && thread->state != TERMINATED && thread->reply_fd &&
++        !thread->req_toread && !thread->reply_towrite && !thread->req_data)
++    {
++        set_current_time();
++        thread->req = info->u.req;
++        thread->req_data = size ? data : NULL;
++
++        current = thread;
++        current->ps5_last_req = req;
++        current->ps5_last_req_time = monotonic_time;
++        current->reply_size = 0;
++        clear_error();
++        memset( &reply, 0, sizeof(reply) );
++        if (debug_level) trace_request();
++
++        req_handlers[req]( &current->req, &reply );
++
++        if (current && current->reply_fd)
++        {
++            reply.reply_header.error = current->error;
++            reply.reply_header.reply_size = current->reply_size;
++            if (debug_level) trace_reply( req, &reply );
++            if (current->reply_size) memcpy( info->reply_data, current->reply_data, current->reply_size );
++            free( current->reply_data );
++            current->reply_data = NULL;
++            info->u.reply = reply;
++            ret = 0;
++        }
++        else
++        {
++            if (current)
++            {
++                current->exit_code = 1;
++                kill_thread( current, 1 );  /* no way to continue without reply fd */
++            }
++            ret = 2;
++        }
++        current = NULL;
++        thread->req_data = NULL;
++    }
++    release_object( thread );
++    pthread_mutex_unlock( &inprocess_server_mutex );
++    return ret;
++}
++#endif
++
+ /* read a request from a thread */
+ void read_request( struct thread *thread )
+ {
+@@ -524,6 +655,19 @@ static void master_socket_destroy( struct object *obj )
+ }
+ 
+ #ifdef WINE_INPROCESS_SERVER
++/* client threads write to inprocess_wake_fd to wake the main loop */
++static void inprocess_wake_poll_event( struct fd *fd, int event )
++{
++    char buffer[64];
++
++    while (read( get_unix_fd( fd ), buffer, sizeof(buffer) ) > 0);
++}
++
++static const struct fd_ops inprocess_wake_fd_ops =
++{
++    .poll_event = inprocess_wake_poll_event,
++};
++
+ /* receive one client socket sent by connect_inprocess_client */
+ static int receive_inprocess_client( int channel )
+ {
+@@ -917,6 +1061,21 @@ void open_master_socket(void)
+         set_fd_events( master_socket->fd, POLLIN );
+         make_object_permanent( &master_socket->obj );
+         client_channel = channel[1];
++        /* the main loop's wake pipe (see inprocess_timeout_added) */
++        {
++            struct fd *wake_fd;
++            int wake[2];
++
++            if (pipe( wake ) == -1) fatal_error( "pipe: %s\n", strerror( errno ));
++            fcntl( wake[0], F_SETFD, FD_CLOEXEC );
++            fcntl( wake[1], F_SETFD, FD_CLOEXEC );
++            fcntl( wake[0], F_SETFL, O_NONBLOCK );
++            fcntl( wake[1], F_SETFL, O_NONBLOCK );
++            if (!(wake_fd = create_anonymous_fd( &inprocess_wake_fd_ops, wake[0], &master_socket->obj, 0 )))
++                fatal_error( "out of memory\n" );
++            set_fd_events( wake_fd, POLLIN );
++            inprocess_wake_fd = wake[1];
++        }
+         init_tracing_mechanism();
+         return;
+     }
+diff --git a/server/request.h b/server/request.h
+index 397f662..55ac3a9 100644
+--- a/server/request.h
++++ b/server/request.h
+@@ -59,9 +59,14 @@ extern timeout_t monotonic_counter(void);
+ #define WINE_INPROCESS_SERVER 1
+ #endif
+ #ifdef WINE_INPROCESS_SERVER
++#include <pthread.h>
+ extern int connect_inprocess_client(void);
+ extern int pw_wineserver_connect( const char *nls_dir );
+ extern const char *inprocess_nls_dir;
++/* client threads running requests themselves (fd.c, request.c) */
++extern pthread_mutex_t inprocess_server_mutex;
++extern int inprocess_direct_ok;
++extern int inprocess_wake_fd;
+ #endif
+ extern void open_master_socket(void);
+ extern void close_master_socket( timeout_t timeout );
