@@ -1,9 +1,9 @@
 From: Prospero Win contributors <prospero-win@localhost>
-Subject: [PATCH] server: add shared mutex word primitives for in-process backend
+Subject: [PATCH] server: prepare shared mutex authority and lifetime transitions
 
-The primitives do not activate objects or enable a client fast path. Server
-ownership handoff, lifetime, cache and thread-exit integration is required
-before they may be used. This preparatory patch changes no runtime behavior.
+Add the shared atomic word and server ownership/queue/retirement hooks.
+Client activation, ABI handshake and cache integration remain absent; this
+patch exports no new callable fast path and changes no runtime default.
 
 diff --git a/include/wine/ps5_mutex_word.h b/include/wine/ps5_mutex_word.h
 new file mode 100644
@@ -98,3 +98,674 @@ new file mode 100644
 +    __atomic_store_n(&cell->word, word, __ATOMIC_RELEASE);
 +}
 +#endif
+diff --git a/server/fd.c b/server/fd.c
+index 901dbd4..157d19a 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -315,6 +315,7 @@ static unsigned int inprocess_sleep( int timeout, const struct timespec *ts )
+     if (timeout == -1) inprocess_sleep_until = TIMEOUT_INFINITE;
+     else if (ts) inprocess_sleep_until = monotonic_time + ts->tv_sec * TICKS_PER_SEC + ts->tv_nsec / 100;
+     else inprocess_sleep_until = monotonic_time + (timeout_t)timeout * 10000;
++    ps5_mutex_server_reconcile();
+     pthread_mutex_unlock( &inprocess_server_mutex );
+     return poll_users_epoch;
+ }
+@@ -584,7 +585,7 @@ static inline void main_loop_epoll(void)
+
+     if (epoll_fd == -1) return;
+ #ifdef WINE_INPROCESS_SERVER
+-    inprocess_direct_ok = 1;
++    __atomic_store_n( &inprocess_direct_ok, 1, __ATOMIC_RELEASE );
+ #endif
+
+     while (active_users)
+@@ -705,7 +706,7 @@ static inline void main_loop_epoll(void)
+
+     if (kqueue_fd == -1) return;
+ #ifdef WINE_INPROCESS_SERVER
+-    inprocess_direct_ok = 1;
++    __atomic_store_n( &inprocess_direct_ok, 1, __ATOMIC_RELEASE );
+ #endif
+
+     while (active_users)
+@@ -1024,7 +1025,8 @@ void main_loop(void)
+     /* fall through to normal poll loop */
+ #ifdef WINE_INPROCESS_SERVER
+     /* poll() reads the poll arrays while it sleeps: clients must not change them */
+-    inprocess_direct_ok = 0;
++    __atomic_store_n( &inprocess_direct_ok, 0, __ATOMIC_RELEASE );
++    ps5_mutex_server_disable();
+ #endif
+
+     while (active_users)
+@@ -1034,6 +1036,7 @@ void main_loop(void)
+         if (!active_users) break;  /* last user removed by a timeout */
+
+ #ifdef WINE_INPROCESS_SERVER
++        ps5_mutex_server_reconcile();
+         pthread_mutex_unlock( &inprocess_server_mutex );
+ #endif
+         ret = poll( pollfd, nb_users, timeout );
+@@ -1055,6 +1058,7 @@ void main_loop(void)
+         }
+     }
+ #ifdef WINE_INPROCESS_SERVER
++    ps5_mutex_server_reconcile();
+     pthread_mutex_unlock( &inprocess_server_mutex );
+ #endif
+ }
+diff --git a/server/handle.c b/server/handle.c
+index 1933b2f..2a3e31f 100644
+--- a/server/handle.c
++++ b/server/handle.c
+@@ -99,6 +99,11 @@ static inline obj_handle_t handle_global_to_local( obj_handle_t handle )
+ /* grab an object and increment its handle count */
+ static struct object *grab_object_for_handle( struct object *obj )
+ {
++#ifdef WINE_INPROCESS_SERVER
++    /* Covers inheritance and all other alias allocation paths, including
++     * those that do not pass through duplicate_handle. */
++    if (obj->handle_count) ps5_mutex_retire_object( obj );
++#endif
+     obj->handle_count++;
+     obj->ops->type->handle_count++;
+     obj->ops->type->handle_max = max( obj->ops->type->handle_max, obj->ops->type->handle_count );
+@@ -280,6 +285,9 @@ obj_handle_t alloc_handle( struct process *process, void *ptr, unsigned int acce
+ /* return the handle, or 0 on error */
+ static obj_handle_t alloc_global_handle_no_access_check( void *obj, unsigned int access )
+ {
++#ifdef WINE_INPROCESS_SERVER
++    ps5_mutex_retire_object( obj );
++#endif
+     if (!global_table)
+     {
+         if (!(global_table = alloc_handle_table( NULL, 0 )))
+@@ -562,6 +570,10 @@ obj_handle_t duplicate_handle( struct process *src, obj_handle_t src_handle, str
+     struct object *obj = get_handle_obj( src, src_handle, 0, NULL );
+
+     if (!obj) return 0;
++#ifdef WINE_INPROCESS_SERVER
++    /* Includes same-value CLOSE_SOURCE access rewrites, before publication. */
++    ps5_mutex_retire_object( obj );
++#endif
+     if ((entry = get_handle( src, src_handle )))
+         src_access = entry->access;
+     else  /* pseudo-handle, give it full access */
+diff --git a/server/mutex.c b/server/mutex.c
+index c947303..2a02a2f 100644
+--- a/server/mutex.c
++++ b/server/mutex.c
+@@ -34,6 +34,11 @@
+ #include "thread.h"
+ #include "request.h"
+ #include "security.h"
++#ifdef WINE_INPROCESS_SERVER
++#include <string.h>
++#include "process.h"
++#include "wine/ps5_mutex_word.h"
++#endif
+
+ static const WCHAR mutex_name[] = {'M','u','t','a','n','t'};
+
+@@ -49,6 +54,8 @@ struct type_descr mutex_type =
+     },
+ };
+
++struct ps5_mutex_cell;
++
+ struct mutex_sync
+ {
+     struct object       obj;                /* object header */
+@@ -56,20 +63,37 @@ struct mutex_sync
+     unsigned int        count;              /* recursion count */
+     int                 abandoned;          /* has it been abandoned? */
+     struct list         entry;              /* entry in owner thread mutex list */
++#ifdef WINE_INPROCESS_SERVER
++    struct ps5_mutex_cell *fast;
++    int                 fast_disabled;     /* retirement is permanent for this sync */
++#endif
+ };
+
+ static void mutex_sync_dump( struct object *obj, int verbose );
+ static int mutex_sync_signaled( struct object *obj, struct wait_queue_entry *entry );
+ static void mutex_sync_satisfied( struct object *obj, struct wait_queue_entry *entry );
+ static void mutex_sync_destroy( struct object *obj );
++#ifdef WINE_INPROCESS_SERVER
++static void ps5_mutex_enter_slow( struct mutex_sync *mutex );
++static int ps5_mutex_add_queue( struct object *obj, struct wait_queue_entry *entry );
++static void ps5_mutex_remove_queue( struct object *obj, struct wait_queue_entry *entry );
++static void ps5_mutex_retire( struct mutex_sync *mutex );
++#else
++#define ps5_mutex_enter_slow(mutex) ((void)0)
++#endif
+
+ static const struct object_ops mutex_sync_ops =
+ {
+     .size         = sizeof(struct mutex_sync),
+     .type         = &no_type,
+     .dump         = mutex_sync_dump,
++#ifdef WINE_INPROCESS_SERVER
++    .add_queue    = ps5_mutex_add_queue,
++    .remove_queue = ps5_mutex_remove_queue,
++#else
+     .add_queue    = add_queue,
+     .remove_queue = remove_queue,
++#endif
+     .signaled     = mutex_sync_signaled,
+     .satisfied    = mutex_sync_satisfied,
+     .destroy      = mutex_sync_destroy,
+@@ -78,6 +102,7 @@ static const struct object_ops mutex_sync_ops =
+ /* grab a mutex for a given thread */
+ static void do_grab( struct mutex_sync *mutex, struct thread *thread )
+ {
++    ps5_mutex_enter_slow( mutex );
+     assert( !mutex->count || (mutex->owner == thread) );
+
+     if (!mutex->count++)  /* FIXME: avoid wrap-around */
+@@ -92,6 +117,7 @@ static void do_grab( struct mutex_sync *mutex, struct thread *thread )
+ /* release a mutex once the recursion count is 0 */
+ static int do_release( struct mutex_sync *mutex, struct thread *thread, int count )
+ {
++    ps5_mutex_enter_slow( mutex );
+     if (!mutex->count || (mutex->owner != thread))
+     {
+         set_error( STATUS_MUTANT_NOT_OWNED );
+@@ -108,10 +134,158 @@ static int do_release( struct mutex_sync *mutex, struct thread *thread, int coun
+     return 1;
+ }
+
++#ifdef WINE_INPROCESS_SERVER
++/* Native-only cold backend. No exported function or client activates it yet.
++ * Cells are individually aligned and never freed/reused, including retirement.
++ * All metadata and both lists are accessed only under the server lock. */
++struct ps5_mutex_cell
++{
++    struct pw_mutex_word word;
++    struct mutex_sync *sync;
++    struct process *process;
++    struct list active_entry;
++    struct list pending_entry;
++    int pending;
++};
++static struct list ps5_mutex_active = LIST_INIT(ps5_mutex_active);
++static struct list ps5_mutex_pending = LIST_INIT(ps5_mutex_pending);
++static unsigned int ps5_mutex_operation_depth;
++static unsigned int ps5_mutex_last_token;
++
++static unsigned int ps5_mutex_thread_token( struct thread *thread )
++{
++    if (!thread->ps5_mutex_token && ps5_mutex_last_token != ~0u)
++        thread->ps5_mutex_token = ++ps5_mutex_last_token;
++    return thread->ps5_mutex_token;
++}
++
++static struct thread *ps5_mutex_find_owner( struct ps5_mutex_cell *cell, unsigned int token )
++{
++    struct thread *thread;
++    LIST_FOR_EACH_ENTRY( thread, &cell->process->thread_list, struct thread, proc_entry )
++        if (thread->ps5_mutex_token == token && thread->state != TERMINATED) return thread;
++    return NULL;
++}
++
++static void ps5_mutex_queue_publish( struct ps5_mutex_cell *cell )
++{
++    if (cell->pending) return;
++    list_add_tail( &ps5_mutex_pending, &cell->pending_entry );
++    cell->pending = 1;
++}
++
++static void ps5_mutex_enter_slow( struct mutex_sync *mutex )
++{
++    struct ps5_mutex_cell *cell = mutex->fast;
++    struct thread *owner;
++    uint64_t old;
++    unsigned int count;
++    if (!cell) return;
++    ps5_mutex_queue_publish( cell );
++    if (!pw_mutex_word_freeze( &cell->word, &old )) return;
++    assert( !mutex->owner && !mutex->count );
++    if (!(count = pw_mutex_word_count( old ))) return;
++    if (!(owner = ps5_mutex_find_owner( cell, pw_mutex_word_owner( old ) )))
++    {
++        mutex->abandoned = 1;
++        return;
++    }
++    /* do_grab recursively enters SLOW, which cannot adopt a second time. */
++    do_grab( mutex, owner );
++    mutex->count = count;
++}
++
++static int ps5_mutex_add_queue( struct object *obj, struct wait_queue_entry *entry )
++{
++    ps5_mutex_enter_slow( (struct mutex_sync *)obj );
++    return add_queue( obj, entry );
++}
++
++static void ps5_mutex_remove_queue( struct object *obj, struct wait_queue_entry *entry )
++{
++    struct mutex_sync *mutex = (struct mutex_sync *)obj;
++    ps5_mutex_enter_slow( mutex );
++    remove_queue( obj, entry );
++    /* Never publish here: wake_up/end_wait can still be changing other
++     * objects, references and queues in a nested multiwait completion. */
++}
++
++void ps5_mutex_server_begin(void)
++{
++    ++ps5_mutex_operation_depth;
++}
++
++void ps5_mutex_server_reconcile(void)
++{
++    struct ps5_mutex_cell *cell;
++    struct mutex_sync *mutex;
++    struct list *entry;
++    uint64_t word;
++    unsigned int token;
++    if (ps5_mutex_operation_depth) return;
++    while ((entry = list_head( &ps5_mutex_pending )))
++    {
++        cell = LIST_ENTRY( entry, struct ps5_mutex_cell, pending_entry );
++        list_remove( entry );
++        cell->pending = 0;
++        mutex = cell->sync;
++        assert( mutex && mutex->fast == cell );
++        if (!__atomic_load_n( &inprocess_direct_ok, __ATOMIC_ACQUIRE ) ||
++            mutex->abandoned || !list_empty( &mutex->obj.wait_queue )) continue;
++        if (mutex->owner && mutex->owner->state == TERMINATED) continue;
++        token = mutex->owner ? ps5_mutex_thread_token( mutex->owner ) : 0;
++        if (!pw_mutex_word_compose( token, mutex->count, &word )) continue;
++        if (mutex->owner)
++        {
++            list_remove( &mutex->entry );
++            mutex->owner = NULL;
++            mutex->count = 0;
++            /* The activation pin survives dropping the ownership pin. */
++            release_object( mutex );
++        }
++        pw_mutex_word_publish( &cell->word, word );
++    }
++}
++
++void ps5_mutex_server_end(void)
++{
++    assert( ps5_mutex_operation_depth );
++    if (!--ps5_mutex_operation_depth) ps5_mutex_server_reconcile();
++}
++
++static void ps5_mutex_retire( struct mutex_sync *mutex )
++{
++    struct ps5_mutex_cell *cell = mutex->fast;
++    struct process *process;
++    mutex->fast_disabled = 1;
++    if (!cell) return;
++    ps5_mutex_enter_slow( mutex );
++    if (cell->pending) list_remove( &cell->pending_entry );
++    cell->pending = 0;
++    list_remove( &cell->active_entry );
++    process = cell->process;
++    cell->sync = NULL;
++    cell->process = NULL;
++    mutex->fast = NULL;
++    /* SLOW stays set forever. The retained word is still safe for a stale
++     * native client to read, and can never bind to a different sync. */
++    release_object( process );
++    release_object( mutex );
++}
++
++void ps5_mutex_server_disable(void)
++{
++    struct list *entry;
++    while ((entry = list_head( &ps5_mutex_active )))
++        ps5_mutex_retire( LIST_ENTRY( entry, struct ps5_mutex_cell, active_entry )->sync );
++}
++#endif
++
+ static void mutex_sync_dump( struct object *obj, int verbose )
+ {
+     struct mutex_sync *mutex = (struct mutex_sync *)obj;
+     assert( obj->ops == &mutex_sync_ops );
++    ps5_mutex_enter_slow( mutex );
+     fprintf( stderr, "Mutex count=%u owner=%p\n", mutex->count, mutex->owner );
+ }
+
+@@ -120,12 +294,16 @@ static void mutex_sync_destroy( struct object *obj )
+     struct mutex_sync *mutex = (struct mutex_sync *)obj;
+     assert( obj->ops == &mutex_sync_ops );
+     assert( !mutex->count );
++#ifdef WINE_INPROCESS_SERVER
++    assert( !mutex->fast );
++#endif
+ }
+
+ static int mutex_sync_signaled( struct object *obj, struct wait_queue_entry *entry )
+ {
+     struct mutex_sync *mutex = (struct mutex_sync *)obj;
+     assert( obj->ops == &mutex_sync_ops );
++    ps5_mutex_enter_slow( mutex );
+     return (!mutex->count || (mutex->owner == get_wait_queue_thread( entry )));
+ }
+
+@@ -149,6 +327,10 @@ static struct object *create_mutex_sync( int owned )
+     mutex->count = 0;
+     mutex->owner = NULL;
+     mutex->abandoned = 0;
++#ifdef WINE_INPROCESS_SERVER
++    mutex->fast = NULL;
++    mutex->fast_disabled = 0;
++#endif
+     if (owned) do_grab( mutex, current );
+
+     return &mutex->obj;
+@@ -158,11 +340,17 @@ struct mutex
+ {
+     struct object       obj;             /* object header */
+     struct object      *sync;            /* mutex sync object */
++#ifdef WINE_INPROCESS_SERVER
++    int                 fast_eligible;
++#endif
+ };
+
+ struct mutex_init_data
+ {
+     int owned;
++#ifdef WINE_INPROCESS_SERVER
++    int fast_eligible;
++#endif
+ };
+
+ static void mutex_dump( struct object *obj, int verbose );
+@@ -170,6 +358,9 @@ static bool mutex_init( struct object *obj, const void *init_data );
+ static struct object *mutex_get_sync( struct object *obj );
+ static int mutex_signal( struct object *obj, unsigned int access, int signal );
+ static void mutex_destroy( struct object *obj );
++#ifdef WINE_INPROCESS_SERVER
++static int ps5_mutex_close_handle( struct object *obj, struct process *process, obj_handle_t handle );
++#endif
+
+ static const struct object_ops mutex_ops =
+ {
+@@ -180,6 +371,9 @@ static const struct object_ops mutex_ops =
+     .signal   = mutex_signal,
+     .get_sync = mutex_get_sync,
+     .destroy  = mutex_destroy,
++#ifdef WINE_INPROCESS_SERVER
++    .close_handle = ps5_mutex_close_handle,
++#endif
+ };
+
+ #ifdef WINE_INPROCESS_SERVER
+@@ -196,6 +390,7 @@ int try_fast_mutex( struct thread *thread, obj_handle_t handle, int release, uns
+                                                 release ? 0 : SYNCHRONIZE, &mutex_ops ))) return 0;
+     if (mutex->sync->ops != &mutex_sync_ops) goto done;
+     sync = (struct mutex_sync *)mutex->sync;
++    ps5_mutex_enter_slow( sync );
+
+     /* Let select handle abandonment and every existing waiter, including
+      * wait-all and other processes. A final release may then wake them. */
+@@ -218,9 +413,77 @@ done:
+ }
+ #endif
+
++#ifdef WINE_INPROCESS_SERVER
++void ps5_mutex_retire_object( struct object *obj )
++{
++    struct mutex *mutex;
++    if (obj->ops != &mutex_ops) return;
++    mutex = (struct mutex *)obj;
++    mutex->fast_eligible = 0;
++    if (mutex->sync && mutex->sync->ops == &mutex_sync_ops)
++        ps5_mutex_retire( (struct mutex_sync *)mutex->sync );
++}
++
++static int ps5_mutex_close_handle( struct object *obj, struct process *process, obj_handle_t handle )
++{
++    (void)process;
++    (void)handle;
++    ps5_mutex_retire_object( obj );
++    return 1;
++}
++
++/* Server-lock-held cold preparation, native local outputs only. The caller
++ * must validate the thread/TEB, ABI, module readiness and opt-in policy.
++ * No current runtime caller exists, so no cell is activated by this patch.
++ * Narrow policy is experimental until the owner's census proves coverage. */
++int ps5_get_mutex_word( struct thread *thread, obj_handle_t handle, struct pw_mutex_word **word,
++                        unsigned int *token, unsigned int *access )
++{
++    struct mutex *mutex;
++    struct mutex_sync *sync;
++    struct ps5_mutex_cell *cell;
++    void *storage;
++    int ret = 0;
++    if (!__atomic_load_n( &inprocess_direct_ok, __ATOMIC_ACQUIRE ) || thread->state == TERMINATED) return 0;
++    if (!(mutex = (struct mutex *)get_handle_obj( thread->process, handle, 0, &mutex_ops ))) return 0;
++    if (!mutex->fast_eligible || mutex->obj.name || mutex->obj.handle_count != 1 ||
++        mutex->sync->ops != &mutex_sync_ops || !ps5_mutex_thread_token( thread )) goto done;
++    sync = (struct mutex_sync *)mutex->sync;
++    if (sync->fast_disabled || (sync->owner && sync->owner->process != thread->process)) goto done;
++    if (!(cell = sync->fast))
++    {
++        if (posix_memalign( &storage, 64, sizeof(*cell) )) goto done;
++        cell = storage;
++        memset( cell, 0, sizeof(*cell) );
++        cell->word.word = PW_MUTEX_WORD_SLOW;
++        cell->sync = (struct mutex_sync *)grab_object( sync );
++        cell->process = (struct process *)grab_object( thread->process );
++        sync->fast = cell;
++        list_add_tail( &ps5_mutex_active, &cell->active_entry );
++        ps5_mutex_queue_publish( cell );
++    }
++    *word = &cell->word;
++    *token = thread->ps5_mutex_token;
++    *access = get_handle_access( thread->process, handle );
++    ret = 1;
++done:
++    release_object( mutex );
++    return ret;
++}
++#endif
++
+ void abandon_mutexes( struct thread *thread )
+ {
+     struct list *ptr;
++#ifdef WINE_INPROCESS_SERVER
++    struct ps5_mutex_cell *cell;
++    /* Promptly fold a currently published owner before legacy abandonment.
++     * A later observer also recognizes vanished/TERMINATED tokens lazily. */
++    LIST_FOR_EACH_ENTRY( cell, &ps5_mutex_active, struct ps5_mutex_cell, active_entry )
++        if (cell->process == thread->process && thread->ps5_mutex_token &&
++            pw_mutex_word_owner( pw_mutex_word_load( &cell->word ) ) == thread->ps5_mutex_token)
++            ps5_mutex_enter_slow( cell->sync );
++#endif
+
+     while ((ptr = list_head( &thread->mutex_list )) != NULL)
+     {
+@@ -245,6 +508,9 @@ static bool mutex_init( struct object *obj, const void *init_data )
+     struct mutex *mutex = (struct mutex *)obj;
+     const struct mutex_init_data *data = init_data;
+
++#ifdef WINE_INPROCESS_SERVER
++    mutex->fast_eligible = data->fast_eligible;
++#endif
+     return !!(mutex->sync = create_mutex_sync( data->owned ));
+ }
+
+@@ -275,6 +541,9 @@ static void mutex_destroy( struct object *obj )
+ {
+     struct mutex *mutex = (struct mutex *)obj;
+     assert( obj->ops == &mutex_ops );
++#ifdef WINE_INPROCESS_SERVER
++    ps5_mutex_retire_object( obj );
++#endif
+     if (mutex->sync) release_object( mutex->sync );
+ }
+
+@@ -285,6 +554,9 @@ DECL_HANDLER(create_mutex)
+     struct object_params params = { .ops = &mutex_ops, .access = req->access, .init_data = &data };
+
+     if (!get_req_object_attributes( &params )) return;
++#ifdef WINE_INPROCESS_SERVER
++    data.fast_eligible = !params.name.len && !(params.attr & OBJ_INHERIT);
++#endif
+     reply->handle = create_named_obj_handle( current->process, &params );
+     if (params.root) release_object( params.root );
+ }
+@@ -307,6 +579,7 @@ DECL_HANDLER(release_mutex)
+         struct mutex_sync *sync = (struct mutex_sync *)mutex->sync;
+         assert( mutex->sync->ops == &mutex_sync_ops ); /* never called with inproc syncs */
+
++        ps5_mutex_enter_slow( sync );
+         reply->prev_count = sync->count;
+         do_release( sync, current, 1 );
+         release_object( mutex );
+@@ -324,6 +597,7 @@ DECL_HANDLER(query_mutex)
+         struct mutex_sync *sync = (struct mutex_sync *)mutex->sync;
+         assert( mutex->sync->ops == &mutex_sync_ops ); /* never called with inproc syncs */
+
++        ps5_mutex_enter_slow( sync );
+         reply->count = sync->count;
+         reply->owned = (sync->owner == current);
+         reply->abandoned = sync->abandoned;
+diff --git a/server/request.c b/server/request.c
+index 344dc27..fd25a6d 100644
+--- a/server/request.c
++++ b/server/request.c
+@@ -288,6 +288,9 @@ static void call_req_handler( struct thread *thread )
+
+     if (debug_level) trace_request();
+
++#ifdef WINE_INPROCESS_SERVER
++    ps5_mutex_server_begin();
++#endif
+     if (req < REQ_NB_REQUESTS)
+         req_handlers[req]( &current->req, &reply );
+     else
+@@ -309,6 +312,9 @@ static void call_req_handler( struct thread *thread )
+         }
+     }
+     current = NULL;
++#ifdef WINE_INPROCESS_SERVER
++    ps5_mutex_server_end();
++#endif
+ }
+
+ #ifdef WINE_INPROCESS_SERVER
+@@ -327,7 +333,7 @@ DECLSPEC_EXPORT int pw_wineserver_try_fast_mutex( unsigned int tid, client_ptr_t
+     if (release != 0 && release != 1) return 1;
+     if (pthread_mutex_trylock( &inprocess_server_mutex )) return 1;
+     saved_global_error = global_error;
+-    if (!inprocess_direct_ok || current || debug_level) goto unlock;
++    if (!__atomic_load_n( &inprocess_direct_ok, __ATOMIC_ACQUIRE ) || current || debug_level) goto unlock;
+     if (!(thread = get_thread_from_id( tid ))) goto unlock;
+     if (thread->teb == teb && teb && thread->state != TERMINATED && thread->reply_fd &&
+         !thread->req_toread && !thread->reply_towrite && !thread->req_data && !thread->reply_data &&
+@@ -336,6 +342,7 @@ DECLSPEC_EXPORT int pw_wineserver_try_fast_mutex( unsigned int tid, client_ptr_t
+         saved_error = thread->error;
+         current = thread;
+         clear_error();
++        ps5_mutex_server_begin();
+         if (try_fast_mutex( thread, handle, release, prev_count ))
+         {
+             thread->ps5_last_req = release ? REQ_release_mutex : REQ_select;
+@@ -353,10 +360,12 @@ DECLSPEC_EXPORT int pw_wineserver_try_fast_mutex( unsigned int tid, client_ptr_t
+             thread->error = saved_error;
+         }
+         current = NULL;
++        ps5_mutex_server_end();
+     }
+     release_object( thread );
+ unlock:
+     if (ret) global_error = saved_global_error;
++    ps5_mutex_server_reconcile();
+     pthread_mutex_unlock( &inprocess_server_mutex );
+     return ret;
+ }
+@@ -430,7 +439,7 @@ DECLSPEC_EXPORT int pw_wineserver_call_direct( unsigned int tid, client_ptr_t te
+     unsigned int i;
+     int ret = 1;
+
+-    if (!inprocess_direct_ok || !is_direct_request( req ) || size > sizeof(data)) return 1;
++    if (!__atomic_load_n( &inprocess_direct_ok, __ATOMIC_ACQUIRE ) || !is_direct_request( req ) || size > sizeof(data)) return 1;
+     for (i = 0; i < info->data_count && i < __SERVER_MAX_DATA; i++)
+     {
+         if (info->data[i].size > size - pos) return 1;
+@@ -440,8 +449,9 @@ DECLSPEC_EXPORT int pw_wineserver_call_direct( unsigned int tid, client_ptr_t te
+     if (pos != size) return 1;
+
+     lock_server_for_client();
+-    if (!inprocess_direct_ok || !(thread = get_thread_from_id( tid )))
++    if (!__atomic_load_n( &inprocess_direct_ok, __ATOMIC_ACQUIRE ) || !(thread = get_thread_from_id( tid )))
+     {
++        ps5_mutex_server_reconcile();
+         pthread_mutex_unlock( &inprocess_server_mutex );
+         return 1;
+     }
+@@ -462,6 +472,7 @@ DECLSPEC_EXPORT int pw_wineserver_call_direct( unsigned int tid, client_ptr_t te
+         memset( &reply, 0, sizeof(reply) );
+         if (debug_level) trace_request();
+
++        ps5_mutex_server_begin();
+         req_handlers[req]( &current->req, &reply );
+
+         if (current && current->reply_fd)
+@@ -486,8 +497,10 @@ DECLSPEC_EXPORT int pw_wineserver_call_direct( unsigned int tid, client_ptr_t te
+         }
+         current = NULL;
+         thread->req_data = NULL;
++        ps5_mutex_server_end();
+     }
+     release_object( thread );
++    ps5_mutex_server_reconcile();
+     pthread_mutex_unlock( &inprocess_server_mutex );
+     return ret;
+ }
+diff --git a/server/request.h b/server/request.h
+index 671ce2f..bf2d0d3 100644
+--- a/server/request.h
++++ b/server/request.h
+@@ -65,7 +65,15 @@ extern int pw_wineserver_connect( const char *nls_dir );
+ extern const char *inprocess_nls_dir;
+ /* client threads running requests themselves (fd.c, request.c) */
+ extern pthread_mutex_t inprocess_server_mutex;
+-extern int inprocess_direct_ok;
++extern int inprocess_direct_ok; /* accessed with acquire/release atomic builtins */
++struct pw_mutex_word;
++extern void ps5_mutex_server_begin(void);
++extern void ps5_mutex_server_end(void);
++extern void ps5_mutex_server_reconcile(void);
++extern void ps5_mutex_server_disable(void);
++extern void ps5_mutex_retire_object( struct object *obj );
++extern int ps5_get_mutex_word( struct thread *thread, obj_handle_t handle, struct pw_mutex_word **word,
++                              unsigned int *token, unsigned int *access );
+ extern int inprocess_wake_fd;
+ extern int thread_can_fast_mutex( struct thread *thread );
+ extern int try_fast_mutex( struct thread *thread, obj_handle_t handle, int release, unsigned int *prev_count );
+diff --git a/server/thread.c b/server/thread.c
+index 0872dad..94618f4 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -366,6 +366,9 @@ static inline void init_thread_structure( struct thread *thread )
+     thread->reply_fd        = NULL;
+     thread->wait_fd         = NULL;
+     thread->state           = RUNNING;
++#ifdef WINE_INPROCESS_SERVER
++    thread->ps5_mutex_token = 0;
++#endif
+     thread->exit_code       = 0;
+     thread->priority        = 0;
+     thread->base_priority   = 0;
+diff --git a/server/thread.h b/server/thread.h
+index 5a0830a..4904aac 100644
+--- a/server/thread.h
++++ b/server/thread.h
+@@ -57,6 +57,9 @@ struct thread
+     struct list            desktop_entry; /* entry in per-desktop thread list */
+     struct process        *process;
+     thread_id_t            id;            /* thread id */
++#if defined(__PROSPERO__) || defined(WINE_INPROCESS_SERVER)
++    unsigned int           ps5_mutex_token; /* monotonic token; never reuse Wine tid */
++#endif
+     struct list            mutex_list;    /* list of currently owned mutexes */
+     struct list            d3dkmt_mutexes;/* list of currently owned d3dkmt mutexes */
+     unsigned int           system_regs;   /* which system regs have been set */

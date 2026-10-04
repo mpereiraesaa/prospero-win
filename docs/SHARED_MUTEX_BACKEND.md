@@ -1,9 +1,11 @@
 # Shared mutex backend
 
-Status: preparatory atomic primitives and bounded native checks. Patch 0810
-adds a header only. It activates no mutex, exports no callable fast path,
-changes no default, and establishes no console performance result. The Unix
-client/server backend below still requires implementation and validation.
+Status: server preparation and bounded native checks. Patch 0810 adds the
+atomic header and server authority, queue and lifetime hooks. The internal
+cold preparation function has no runtime caller; no client can activate a
+shared cell yet. No new module export or default is enabled, and no console
+performance result exists for this patch. Unix client/ABI/cache integration
+and full Wine runtime validation remain required.
 
 The performance target remains the full fixed GTA IV route at 1920×1080,
 60 Hz, profiling off, average at least 58 FPS and minimum at least 50 FPS,
@@ -45,39 +47,61 @@ sync remains alive. Retirement must freeze/adopt ownership before dropping
 the activation and wrapper references. Permanently pinning the wrapper
 would change this behavior.
 
-## Integration still required
+## Server preparation
 
-All paths into legacy state must first freeze/adopt the word. This includes
-ordinary wait queue insertion, release, query, SignalObjectAndWait, dump,
-destruction, abandonment, and 0790's `try_fast_mutex` in `server/mutex.c`.
-An unconverted reader cannot be shipped alongside active cells.
+The server hooks freeze/adopt before ordinary queue insertion, signaled
+checks, ownership changes, release, query, SignalObjectAndWait, dump and
+0790's `try_fast_mutex` in `server/mutex.c`. Wrapper close/destruction and
+alias allocation retire the cell before dropping references or publishing
+a new alias. The generic handle reference hook covers inheritance; the
+explicit duplication hook also covers same-value access rewrites. Global
+handles are excluded. An unconverted reader cannot be shipped alongside
+active cells.
 
 Leaving SLOW must happen after a complete top-level operation. `wake_up`
 and multiwait completion can reenter mutex operations; publishing from a
 nested queue callback could expose partially updated legacy state. The
-integration needs explicit operation-depth and pending-publication
-handling, with immediate reconciliation at safe server request boundaries
-and before server-lock release. Relying only on a periodic tick would make
-ordinary contention expensive for too long.
+server now has operation-depth and pending-publication handling. The outer
+request/direct/typed operation reconciles before lock release; queue
+callbacks only mark pending work. This source preparation still needs the
+owner's full Wine waiter/reentrancy tests.
 
 Normal thread exit and asynchronous termination require complete server
 and client lifetime review. A unique counter token prevents a freed or
 reused Wine tid from becoming an apparent live owner. Ordinary abandonment
 must remain prompt for queued waiters, and server inspection must recognize
-a terminated or vanished fast owner. The primitives do not implement or
-prove that protocol.
+a terminated or vanished fast owner. The server code folds a currently
+published fast owner before ordinary abandonment and treats a vanished/terminated token as abandoned on slow
+entry. This has not been tested with real asynchronous termination or
+signals and does not yet prove that protocol.
 
-The first activation policy can exclude named, inheritable or duplicated
-objects only after runtime evidence confirms that this covers the measured
-hot workload. Unsupported objects retain ordinary Wine semantics. Normal
-contention, multiwaits and deep recursion must recover fast mode when their
-conditions permit it. The other agent owns the runtime eligibility census.
+The internal activation policy excludes named, initially inheritable,
+global and previously aliased/retired objects. Cells use separate aligned
+allocations, avoiding a fixed arena capacity; retired word storage is
+intentionally retained for the module lifetime. Allocation/token exhaustion
+falls back. Memory growth must be checked during the 1,800-second gate.
+Normal contention, multiwaits and deep recursion can recover fast mode when
+their conditions permit it.
+
+The owner's protected-route census reported 267 mutexes, four named and
+none of those hot; its latest top-five rows have no named/duplicate/open/
+multiwait/signal-wait/query/abandonment/timeout activity. That supports the
+policy for this run. Inherit attributes were not emitted in these rows;
+full coverage of that restriction remains unproven. The owner separately
+reports null security attributes at the hot creation sites from static
+analysis; this is not an independent source or runtime check. The other
+agent owns the requested runtime attribute capture.
+
+## Client integration still required
 
 The client handle table needs exact negative entries for ineligible objects,
 fill under `fd_cache_mutex` with a second lookup, and invalidation beside
 all four `close_inproc_sync` sites. Module discovery needs an ABI/version
 handshake and an unlocked readiness check. Missing or incompatible exports
-must fall back before cache fill or server locking.
+must fall back before cache fill or server locking. Server readiness reads
+and writes now use acquire/release atomics, and downgrade retires every
+active cell before unlocking. This is preparatory server code; client
+readiness/module lifetime checks remain absent.
 
 ## Entry cost
 
@@ -100,7 +124,30 @@ boundary, retirement, and 80,000 legal critical sections across four live
 native threads. Native output storage is local, never an application
 pointer.
 
-These checks establish primitive behavior and modeled reference transfer.
+The same command also compiles the actual newly added server helper bodies
+extracted from 0810, with fixture list/refcount and legacy-operation
+callbacks. It checks 4,775 ownership/refcount observations, repeated slow
+adoption, nested ordinary queued handoff, count-boundary recovery, owned
+close, and readiness downgrade retirement. The fixture frees retained cells
+only after all test readers have gone; production does not recycle them.
+Both binaries pass normally and under clang ASan/UBSan.
+
+These checks establish primitive behavior and fixture-based server transfer.
 They do not run Wine, a game, console inputs, signal/termination races, or
 fault workloads, and do not prove the full integration, handle lifetime,
 exception behavior, abandonment protocol, or performance target.
+
+The source preparation applied all 57 ordered patches to the pinned Wine
+revision. Reapplying the revised 0810 to its preceding server files produces
+all eight affected source/header files byte-identically to the SDK inputs.
+The server module rebuild compiles all 45 C units against one private
+thread/header layout, with 283 transitive file pins. The unchanged version
+object is copied by the accepted recipe.
+
+The baseline control reproduces the accepted server module byte-for-byte.
+Copying the headers uniformly first shifted 17 assertion line constants
+from 121 to 126 after 0770's five declaration lines; a control-only `#line`
+directive preserves the accepted diagnostic positions. Candidate headers
+use their actual source positions and receive no such directive. The signed
+candidate is build evidence only and must not be deployed before client
+integration and the owner's runtime checks.
