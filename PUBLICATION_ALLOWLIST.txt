@@ -361,3 +361,5 @@ tests/test_wine_shared_sync_server.py
 tests/test_wine_shared_sync_client.py
 tests/fixtures/wine_shared_sync_client.c
 wine/patches/0887-ntdll-ps5-shared-sync-client.patch
+tests/fixtures/wine_sync_ordinary.c
+tools/build_wine_sync_ordinary.py
