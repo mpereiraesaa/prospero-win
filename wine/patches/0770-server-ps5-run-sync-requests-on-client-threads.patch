@@ -35,9 +35,9 @@ waking a waiter takes one thread switch instead of two.
 ---
  dlls/ntdll/unix/server.c |  34 +++++++++
  server/fd.c              |  99 ++++++++++++++++++++++++
- server/request.c         | 159 +++++++++++++++++++++++++++++++++++++++
+server/request.c         | 164 +++++++++++++++++++++++++++++++++++++++
  server/request.h         |   5 ++
- 4 files changed, 297 insertions(+)
+ 4 files changed, 302 insertions(+)
 
 diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
 index bdfad82..340cbfb 100644
@@ -308,18 +308,21 @@ index 08dd6cd..e2ae2c5 100644
  
  /* Some versions of glibc don't define this */
  #ifndef SCM_RIGHTS
-@@ -308,6 +311,134 @@ static void call_req_handler( struct thread *thread )
+@@ -308,6 +311,139 @@ static void call_req_handler( struct thread *thread )
      current = NULL;
  }
  
 +#ifdef WINE_INPROCESS_SERVER
-+/* Requests a client thread may run itself: they act on sync objects and
-+ * handles only and never sleep in the server (a wait that cannot be
-+ * satisfied returns STATUS_PENDING, and the thread then sleeps on its wait
++/* Requests a client thread may run itself: they act on sync objects,
++ * handles and file opens, and never sleep in the server (a wait that cannot
++ * be satisfied returns STATUS_PENDING, and the thread then sleeps on its wait
 + * pipe as usual). Their data and replies are ntdll's own buffers, never the
-+ * application's (the open requests, which carry the caller's name buffer,
-+ * stay on the pipe, where a bad pointer fails the write instead of
-+ * faulting). Everything else goes through the server thread. */
++ * application's (the open requests of named objects, which carry the
++ * caller's name buffer, stay on the pipe, where a bad pointer fails the write
++ * instead of faulting; create_file carries ntdll's copy of the attributes).
++ * create_file's open() of the Unix file and get_handle_fd's sendmsg() of
++ * the descriptor are what the server thread would do for the same request.
++ * Everything else goes through the server thread. */
 +static int is_direct_request( enum request req )
 +{
 +    switch (req)
@@ -337,6 +340,8 @@ index 08dd6cd..e2ae2c5 100644
 +    case REQ_query_semaphore:
 +    case REQ_close_handle:
 +    case REQ_dup_handle:
++    case REQ_create_file:
++    case REQ_get_handle_fd:
 +        return 1;
 +    default:
 +        return 0;
@@ -443,7 +448,7 @@ index 08dd6cd..e2ae2c5 100644
  /* read a request from a thread */
  void read_request( struct thread *thread )
  {
-@@ -524,6 +655,19 @@ static void master_socket_destroy( struct object *obj )
+@@ -524,6 +660,19 @@ static void master_socket_destroy( struct object *obj )
  }
  
  #ifdef WINE_INPROCESS_SERVER
@@ -463,7 +468,7 @@ index 08dd6cd..e2ae2c5 100644
  /* receive one client socket sent by connect_inprocess_client */
  static int receive_inprocess_client( int channel )
  {
-@@ -917,6 +1061,21 @@ void open_master_socket(void)
+@@ -917,6 +1066,21 @@ void open_master_socket(void)
          set_fd_events( master_socket->fd, POLLIN );
          make_object_permanent( &master_socket->obj );
          client_channel = channel[1];

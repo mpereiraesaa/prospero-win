@@ -274,12 +274,20 @@ while it sleeps in `kevent` (`epoll` on Linux):
   query requests of events, mutexes, semaphores and keyed events,
   `close_handle` and `dup_handle` run on the client thread. Everything else
   still goes through the server thread.
+- File opens run there too: `create_file`, and `get_handle_fd`, which hands
+  ntdll the Unix descriptor of a new handle the first time it is used. The
+  server thread would do the same `open()` and `sendmsg()` for the request,
+  so nothing waits longer than before. GTA IV's Social Club stand-in opens
+  and closes its log for every line, about 5,000 times a second while the
+  game loads. Each open cost two server round trips before this, and the
+  load was about 13 seconds longer.
 - A wait that can't be satisfied at once still returns `STATUS_PENDING`, and
   the thread sleeps on its wait pipe as before. The thread that signals the
   object writes that pipe itself, so waking a waiter takes one thread switch
   instead of two.
-- The open requests stay on the pipe, because they carry the application's
-  name buffer, which the server must not read on the client thread.
+- The open requests of named objects stay on the pipe, because they carry
+  the application's name buffer, which the server must not read on the
+  client thread. `create_file` carries ntdll's own copy of the attributes.
 - A thread the server doesn't know yet (before `init_thread`), or has
   already killed, goes through the pipe, which reports its death as before.
 - When a client thread removes or changes one of the server's poll entries
