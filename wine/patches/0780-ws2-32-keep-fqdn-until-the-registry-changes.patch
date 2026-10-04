@@ -1,0 +1,171 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 4 Oct 2026 12:00:00 +0200
+Subject: [PATCH] ws2_32: Keep the computer name until the registry changes
+
+A getaddrinfo call that fails reads the fully qualified computer name to
+decide whether it failed on this machine's own name. GTA IV looks up its
+local address twice a frame and, with no name service on a console, both
+lookups fail, so each frame read Hostname and Domain four times: eight
+registry opens and value queries at 20-30 us each, about 0.6 ms of the
+main thread's frame.
+
+get_fqdn now keeps the name it read while a registry notification on
+HKLM\System, below which GetComputerNameExW reads it, has not fired. The
+watch (subtree, names and values) is armed before the name is read, so a
+change made at any time after a read, including deleting or recreating the
+Tcpip keys or retargeting CurrentControlSet, makes the next call read the
+registry again: each call returns what a fresh read would. Checking the
+watch costs one zero-timeout wait. If the watch cannot be armed, every call
+reads the registry as before. Resolver results and the "Failed to resolve
+your host name IP" diagnostic are unchanged. The key and event are closed
+when ws2_32 is unloaded.
+---
+diff --git a/dlls/ws2_32/protocol.c b/dlls/ws2_32/protocol.c
+index 5985d40..fd8123a 100644
+--- a/dlls/ws2_32/protocol.c
++++ b/dlls/ws2_32/protocol.c
+@@ -29,37 +29,98 @@ WINE_DECLARE_DEBUG_CHANNEL(winediag);
+ 
+ #define WS_CALL(func, params) WINE_UNIX_CALL( ws_unix_ ## func, params )
+ 
++/* getaddrinfo reads the fully qualified computer name from the registry
++ * whenever a lookup fails (GTA IV fails four a frame on a console). The name
++ * is kept between calls only while a registry notification on HKLM\System,
++ * below which GetComputerNameExW reads it, reports no change there. The
++ * watch is armed before the name is read, so any change after a read makes
++ * the next call read the registry again: every call still returns what a
++ * fresh read would. */
++DECLARE_CRITICAL_SECTION(fqdn_cs);
++static HKEY fqdn_key;         /* HKLM\System, opened for the watch */
++static HANDLE fqdn_changed;   /* auto-reset; the registry sets it */
++static BOOL fqdn_watched;     /* the watch is armed and has not fired */
++static WCHAR *fqdn_cache;     /* read after the watch was armed */
++
++/* A fresh wide fully qualified name, or NULL. */
++static WCHAR *read_fqdn(void)
++{
++    WCHAR local[256], *wide;
++    DWORD size = ARRAY_SIZE(local);
++    SIZE_T bytes;
++
++    if (GetComputerNameExW( ComputerNamePhysicalDnsFullyQualified, local, &size ))
++    {
++        if (!(wide = malloc( (size + 1) * sizeof(*wide) ))) return NULL;
++        memcpy( wide, local, (size + 1) * sizeof(*wide) );
++        return wide;
++    }
++    /* Retry once with the API's required capacity for unusually long names. */
++    bytes = (SIZE_T)size * sizeof(*wide);
++    if (GetLastError() != ERROR_MORE_DATA || size <= ARRAY_SIZE(local) ||
++        bytes / sizeof(*wide) != size) return NULL;
++    if (!(wide = malloc( bytes ))) return NULL;
++    if (GetComputerNameExW( ComputerNamePhysicalDnsFullyQualified, wide, &size )) return wide;
++    free( wide );
++    return NULL;
++}
++
++/* Arm the watch; FALSE when the name must not be kept. */
++static BOOL watch_fqdn(void)
++{
++    if (!fqdn_changed && !(fqdn_changed = CreateEventW( NULL, FALSE, FALSE, NULL ))) return FALSE;
++    if (!fqdn_key && RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"System", 0, KEY_NOTIFY, &fqdn_key ))
++    {
++        fqdn_key = NULL;
++        return FALSE;
++    }
++    return !RegNotifyChangeKeyValue( fqdn_key, TRUE, REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET,
++                                     fqdn_changed, TRUE );
++}
++
+ static char *get_fqdn(void)
+ {
+-    WCHAR local[256], *wide = local;
+-    DWORD size = ARRAY_SIZE(local);
++    WCHAR *wide;
+     char *ret = NULL;
+     int count;
+ 
+-    /* A fresh wide lookup avoids the ANSI size probe's duplicate registry
+-     * queries. Do not cache the name: it can change during the process. */
+-    if (!GetComputerNameExW( ComputerNamePhysicalDnsFullyQualified, wide, &size ))
++    EnterCriticalSection( &fqdn_cs );
++    if (fqdn_watched && WaitForSingleObject( fqdn_changed, 0 ) != WAIT_TIMEOUT)
+     {
+-        SIZE_T bytes = (SIZE_T)size * sizeof(*wide);
+-
+-        if (GetLastError() != ERROR_MORE_DATA || size <= ARRAY_SIZE(local) ||
+-            bytes / sizeof(*wide) != size) return NULL;
+-        if (!(wide = malloc( bytes ))) return NULL;
+-        if (!GetComputerNameExW( ComputerNamePhysicalDnsFullyQualified, wide, &size )) goto done;
++        fqdn_watched = FALSE;
++        free( fqdn_cache );
++        fqdn_cache = NULL;
++    }
++    if (!(wide = fqdn_cache))
++    {
++        if (!fqdn_watched) fqdn_watched = watch_fqdn();
++        wide = read_fqdn();
++        if (fqdn_watched) fqdn_cache = wide;
+     }
+-    count = WideCharToMultiByte( CP_ACP, 0, wide, -1, NULL, 0, NULL, NULL );
+-    if (!count || !(ret = malloc( count ))) goto done;
+-    if (!WideCharToMultiByte( CP_ACP, 0, wide, -1, ret, count, NULL, NULL ))
++    if (wide && (count = WideCharToMultiByte( CP_ACP, 0, wide, -1, NULL, 0, NULL, NULL )) &&
++        (ret = malloc( count )) && !WideCharToMultiByte( CP_ACP, 0, wide, -1, ret, count, NULL, NULL ))
+     {
+         free( ret );
+         ret = NULL;
+     }
+-
+-done:
+-    if (wide != local) free( wide );
++    if (wide != fqdn_cache) free( wide );
++    LeaveCriticalSection( &fqdn_cs );
+     return ret;
+ }
+ 
++/* ws2_32 is being unloaded: drop the name and the watch. */
++void free_fqdn_cache(void)
++{
++    free( fqdn_cache );
++    fqdn_cache = NULL;
++    fqdn_watched = FALSE;
++    /* NtClose, like RegCloseKey, without calling into advapi32 here */
++    if (fqdn_key) CloseHandle( fqdn_key );
++    if (fqdn_changed) CloseHandle( fqdn_changed );
++    fqdn_key = NULL;
++    fqdn_changed = NULL;
++}
++
+ /* call Unix getaddrinfo, allocating a large enough buffer */
+ static int do_getaddrinfo( const char *node, const char *service,
+                            const struct addrinfo *hints, struct addrinfo **info )
+diff --git a/dlls/ws2_32/socket.c b/dlls/ws2_32/socket.c
+index b2601c6..4a349d5 100644
+--- a/dlls/ws2_32/socket.c
++++ b/dlls/ws2_32/socket.c
+@@ -730,6 +730,10 @@ BOOL WINAPI DllMain( HINSTANCE instance, DWORD reason, void *reserved )
+     case DLL_PROCESS_ATTACH:
+         return !__wine_init_unix_call();
+ 
++    case DLL_PROCESS_DETACH:
++        if (!reserved) free_fqdn_cache();
++        break;
++
+     case DLL_THREAD_DETACH:
+         free_per_thread_data();
+     }
+diff --git a/dlls/ws2_32/ws2_32_private.h b/dlls/ws2_32/ws2_32_private.h
+index a65db62..30a0e39 100644
+--- a/dlls/ws2_32/ws2_32_private.h
++++ b/dlls/ws2_32/ws2_32_private.h
+@@ -92,6 +92,8 @@ struct per_thread_data
+ 
+ extern int num_startup;
+ 
++void free_fqdn_cache(void);
++
+ struct per_thread_data *get_per_thread_data(void);
+ 
+ struct getaddrinfo_params

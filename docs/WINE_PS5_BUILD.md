@@ -986,6 +986,22 @@ Host tests verify the operation reduction; console benefit remains unmeasured.
 `PROSPERO_WINE_SOURCE=/path/to/pinned/wine python3 tests/test_ws2_fqdn.py`
 also executes the actual ANSI/wide registry functions from that source.
 
+Patch 0780 keeps that name between calls, but only while a registry change
+notification on `HKLM\System` (where `GetComputerNameExW` reads it) has not
+fired. The watch covers the whole subtree, names and values, and is armed
+before the name is read, so any change after a read makes the next call read
+the registry again; each call still returns what a fresh read would. On the
+console, every `getaddrinfo` that fails needs the name to decide whether it
+failed on this machine's own name. GTA IV looks up its local address twice a
+frame, and both lookups fail there (there is no name service), so the
+registry was read four times a frame: eight opens and eight value queries,
+an estimated 0.6 ms of the main thread. With 0780 a lookup checks the watch with one
+zero-timeout wait instead. If the watch can't be armed, every call reads the
+registry as before. Resolver results and the "Failed to resolve your host
+name IP" line are unchanged. `tests/test_ws2_fqdn_cache.py` runs the patched
+function against a model of the registry and its notifications. Like 0760,
+it takes effect only with a rebuilt Windows `ws2_32.dll`.
+
 ## Console bring-up
 
 The runtime and the prefix used for the integrated runs:

@@ -225,6 +225,8 @@ wine/patches/0770-server-ps5-run-sync-requests-on-client-threads.patch
 wine/patches/0790-server-ps5-immediate-mutex-calls.patch
 tests/test_wine_mutex_fast.py
 tests/fixtures/wine_mutex_authority.c
+wine/patches/0780-ws2-32-keep-fqdn-until-the-registry-changes.patch
+tests/test_ws2_fqdn_cache.py
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
