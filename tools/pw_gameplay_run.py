@@ -353,6 +353,19 @@ class Run:
             + (f", translator {Path(self.args.runtime).name}" if self.args.runtime else ""))
 
     def restore(self) -> None:
+        try:
+            self._restore()
+        except (ftplib.all_errors + (EOFError,)) as error:
+            # A signal that ends the run in the middle of a transfer leaves
+            # the connection waiting for a reply that never matches; put the
+            # console back over a new one.
+            if not hasattr(self.remote, "reconnect"):
+                raise
+            log(f"the console connection broke ({error}); reconnecting to restore")
+            self.remote.reconnect()
+            self._restore()
+
+    def _restore(self) -> None:
         if self.runtime:
             self.remote.write(*self.runtime)
             log("restored the app's own translator")

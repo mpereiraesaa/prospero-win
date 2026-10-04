@@ -84,6 +84,7 @@ class FtpRemote:
     """The console's ftpsrv: MLSD lists the current directory only."""
 
     def __init__(self, host: str, port: int):
+        self.host, self.port = host, port
         self.ftp = ftplib.FTP()
         self.ftp.connect(host, port, 30)
         self.ftp.login()
@@ -135,6 +136,16 @@ class FtpRemote:
 
     def close(self) -> None:
         self.ftp.quit()
+
+    def reconnect(self) -> None:
+        """A new control connection, for when a transfer was cut off half-way
+        (a signal during a read leaves the old one out of step with the
+        server's replies)."""
+        try:
+            self.ftp.close()
+        except (OSError, EOFError):
+            pass
+        self.__init__(self.host, self.port)
 
 
 def sha256(data: bytes) -> str:

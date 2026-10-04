@@ -37,8 +37,13 @@ class Console:
     """The library root as the tool sees it over FTP; the title's run happens
     when the tool first polls for it."""
 
-    def __init__(self, root: Path, finish: bool = True, stop: bool = False):
+    def __init__(self, root: Path, finish: bool = True, stop: bool = False, broken: bool = False):
         self.root, self.finish, self.stop, self.polls, self.during = root, finish, stop, 0, {}
+        self.broken, self.reconnects = broken, 0
+
+    def reconnect(self):
+        self.broken = False
+        self.reconnects += 1
 
     def _path(self, path: str) -> Path:
         return self.root / path.lstrip("/").removeprefix("data/prospero-win/")
@@ -66,6 +71,8 @@ class Console:
         return target.read_bytes()
 
     def write(self, path, data):
+        if self.broken and self.polls >= 2:  # the signal cut a transfer short
+            raise ftplib.error_reply("200 Type set to I")
         self._path(path).write_bytes(data)
 
     def delete(self, path):
@@ -371,6 +378,21 @@ with tempfile.TemporaryDirectory() as directory:
     assert (root / "profiles/counter-strike-16.profile").read_text() == "[application]\nid = cs16\nname = CS\n"
     assert not (root / "pw_script_keys").exists() and not (root / "pw_wow_timing").exists()
 
+# The same signal in the middle of a transfer: the restore reconnects first.
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    console = Console(root, stop=True, broken=True)
+    try:
+        main(console, "--key", "1:enter", "--timing", "--fps")
+        raise AssertionError("no exit")
+    except SystemExit as stop:
+        assert stop.code == 143
+    assert console.reconnects == 1
+    assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
+    assert (root / "profiles/counter-strike-16.profile").read_text() == "[application]\nid = cs16\nname = CS\n"
+    assert not (root / "pw_script_keys").exists() and not (root / "pw_wow_timing").exists()
+
 # A missing game or config file stops before anything is changed for good.
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory) / "console"
@@ -384,4 +406,4 @@ with tempfile.TemporaryDirectory() as directory:
         assert (root / "profiles/profiles.lst").read_text() == "half-life.profile\ncounter-strike-16.profile\n"
         assert not (root / "pw_script_keys").exists()
 
-print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, recorded macro, pad presses merged into it, profilers, another translator, fetched files, restore on success/timeout/refusal/signal, stale triggers, session by profile id, summary")
+print("pw_gameplay_run passed: keys, launch arguments, appended configs, timing trigger, fps channel and Vulkan frame rate, recorded macro, pad presses merged into it, profilers, another translator, fetched files, restore on success/timeout/refusal/signal (reconnecting after a cut transfer), stale triggers, session by profile id, summary")
