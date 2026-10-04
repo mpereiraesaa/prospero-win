@@ -42,16 +42,13 @@ configure warning: a build without X11/FreeType is not an installer kit.
 
 Use your fork for public contributions. Make a branch for the change and
 open a PR against `main`; [CONTRIBUTING.md](../CONTRIBUTING.md) lists the steps
-and evidence. The maintainer should require the `host-contracts` CI status
-and a review before merging. A repository ruleset is configured separately
-on GitHub; merely checking in a workflow does not enforce it. The reviewed
-configuration is `.github/rulesets/main.json`: one approving review, resolved
-threads, required up-to-date `host-contracts`, and no branch deletion or force
-push. Repository admins can bypass through a PR for solo-maintainer recovery;
-that exception is deliberate and auditable. Apply it through GitHub settings
-or the rulesets API and verify the active result. The current private/free
-repository requires a plan upgrade or public visibility before GitHub allows
-this ruleset.
+and evidence. `main` is protected by a repository ruleset on GitHub, kept in
+`.github/rulesets/main.json`: every change goes through a pull request, the
+`host-contracts` CI check must pass, and the branch can't be deleted or
+force-pushed. Nobody can bypass it, the maintainer included. It needs no
+approving review, so the maintainer can merge their own pull requests. Checking
+in a change to that file doesn't change the live rules: apply it through
+GitHub's settings or the rulesets API, and read the active result back.
 
 ## Stable tree
 
