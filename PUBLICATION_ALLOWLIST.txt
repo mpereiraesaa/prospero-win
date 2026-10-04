@@ -340,5 +340,5 @@ tests/fixtures/wine_shared_mutex_server.c
 tests/test_wine_shared_mutex_word.py
 docs/SHARED_MUTEX_BACKEND.md
 wine/patches/0820-ntdll-ps5-shared-mutex-client.patch
-tests/test_wine_shared_mutex_client.c
+tests/fixtures/wine_shared_mutex_client.c
 tests/test_wine_shared_mutex_client.py

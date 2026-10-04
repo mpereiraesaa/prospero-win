@@ -1,11 +1,13 @@
 # Shared mutex backend
 
-Status: experimental Unix client/server source implemented and build-tested.
+Status: experimental, default-off Unix client/server backend implemented,
+build-tested and measured on the console.
 Patch 0810 supplies server authority/lifetime hooks; 0820 adds the native ABI,
 client cache and default-off switch. Native fixtures and SDK pair builds
-pass. Real Wine semantics, asynchronous thread/signal behavior and console
-performance remain unvalidated. The pair is held for source/runtime review;
-no hardware activation, PR or merge is approved by these source checks.
+pass. The original matching pair has completed ordinary 480-second and
+600-second console runs. Real Wine semantic checks and asynchronous
+thread/signal behavior remain pending; native checks and FPS observations
+do not establish those contracts or justify enabling the switch by default.
 
 The performance target remains the full fixed GTA IV route at 1920×1080,
 60 Hz, profiling off, average at least 58 FPS and minimum at least 50 FPS,
@@ -14,6 +16,31 @@ console policy (2026-10-04) sets stability to a 600-second run and ordinary
 A/B runs to a 480-second script with a matched 200–440-second window.
 This replaces the earlier 1,800-second stability requirement; it does not
 change the FPS target. A helper test does not replace these gates.
+
+## Console observations (2026-10-04)
+
+Full capture audits use the same 200–440-second window. These are
+equal-weight approximate FPS samples, not a frame-time-weighted average
+or an instantaneous minimum. The console owner reports matching goal
+settings and translator between the control and shared-backend runs.
+
+| Run | Sample count | Mean approximate FPS | Minimum sampled FPS |
+| --- | ---: | ---: | ---: |
+| Default pair control | 158 | 32.68 | 27.42 |
+| Original shared pair, 480-second script | 159 | 48.58 | 41.64 |
+| Original shared pair, 600-second script | 159 | 49.07 | 41.11 |
+
+The longer shared capture spans 602 seconds, records no file-limit failure
+and follows the Wine-exit path. Its complete 460–600-second window has
+92 samples, averaging 48.17 FPS with a minimum sampled value of 45.30.
+The earlier control and 480-second shared run ended by `close-timeout`;
+those endings do not establish a clean Wine exit.
+
+These observations repeat the improvement but still miss the 58/50 FPS
+target. The ordinary 32-bit Wine semantic comparison, exact settings/module
+receipts and matched load-time gate remain pending. Later cold-admission,
+retained-cell-cap and dump changes were not part of these measured runs.
+Keep their source review and runtime comparisons separate.
 
 ## Ownership and mode changes
 
@@ -215,4 +242,5 @@ accepted module hashes byte-for-byte. Applied source and transitive header
 pins, layout probes and separate module hashes accompany the pair. The
 server control retains the previously documented assertion-line metadata
 mapping; no candidate header is rewritten. Full source review and the
-owner's real Wine matrix precede any console deployment.
+owner's real Wine matrix remain required before runtime acceptance or a
+default-on decision.

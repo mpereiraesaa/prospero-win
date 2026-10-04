@@ -77,7 +77,7 @@ def main():
         command = shlex.split(os.environ.get('CC', 'cc'))
         command += shlex.split(os.environ.get('CFLAGS', '-O2 -g -Wall -Wextra -Werror'))
         command += ['-std=gnu11', '-pthread', '-I', str(folder),
-                    str(ROOT / 'tests/test_wine_shared_mutex_client.c'), '-o', str(folder / 'test')]
+                    str(ROOT / 'tests/fixtures/wine_shared_mutex_client.c'), '-o', str(folder / 'test')]
         subprocess.run(command, check=True)
         subprocess.run([str(folder / 'test'), str(folder)], check=True, timeout=60)
 
