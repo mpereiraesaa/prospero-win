@@ -451,10 +451,14 @@ and 3 matter only for code the re-encoder does not take.
   code of consecutive blocks closer together.
 - **What the re-encoder does not take yet** ends its block and goes to the
   emitter, which stores and reloads the pinned state: push/pop of 16-bit
-  operands, pusha/popa, std and cld, and forms that need REX with ah-bh.
-  (div and idiv are re-encoded now: the divisor is checked before the
-  host's instruction, and a divide error goes back to C the way it did
-  before.) Under native FP such a crossing also
+  operands, pusha/popa, std and cld, and register forms that need REX
+  with ah-bh (`movzx edi, ah`). (div and idiv are re-encoded now: the
+  divisor is checked before the host's instruction, and a divide error goes
+  back to C the way it did before. So are ah-bh beside a memory operand,
+  through `r10b` with BMI2's flag-free `rorx` where the address needs REX,
+  and `bt`/`bts`/`btr`/`btc` on memory with a register offset, whose unit is
+  found and guarded before the host's instruction runs on it.) Under native
+  FP such a crossing also
   moves the FP state through C, as in nbench's STRING SORT.
 - **The guard's flag save.** When flags are live across a memory access,
   the guard wraps its compare in `lahf`/`seto` and `sahf`; a flag-free

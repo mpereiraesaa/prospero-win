@@ -29,6 +29,13 @@
  * emitter does, PW_ERR_VM; the 8- and 16-bit ones through the host fallback,
  * PW_X86_REENCODE_HOST_STEP), so the host instruction never raises #DE.
  *
+ * ah-bh beside a memory operand whose address needs a REX prefix (r11, or
+ * esp and edi as base or index) run on r10b, moved there and back with
+ * BMI2's flag-free rorx; bt, bts, btr and btc on memory with a register
+ * offset find the unit of the bit string they reach (sarx) and guard it
+ * before the host's instruction runs on it. A host without BMI2 leaves
+ * both to the emitter.
+ *
  * Differences from the older emitter, both deliberate:
  * - a fault reports the incoming arithmetic flags exactly only when a later
  *   instruction reads them; when every flag is redefined before any read,

@@ -398,6 +398,44 @@ static void test_divide(void)
     assert(marked.state.gpr[0] == (uint32_t)((100 / 7) % 7 << 8 | (100 / 7) / 7));
 }
 
+/* ah-bh beside a memory operand on the null page, copied as they are
+ * (ebx-based) or through r10b (edi- and esp-based), as source and
+ * destination; and bt m,r whose unit, not its base, is on the null page,
+ * with positive, negative and 16-bit offsets. Each faults at its own
+ * access with the high byte's register untouched, as the guard reports. */
+static void test_high_bytes_and_bit_strings(void)
+{
+    /* xor ebx, ebx; cmp ecx, edx; mov bh, [ebx+8]; ret */
+    static const uint8_t load[] = { 0x31, 0xdb, 0x39, 0xd1, 0x8a, 0x7b, 0x08, 0xc3 };
+    /* xor edi, edi; cmp ecx, edx; mov [edi+8], ah; ret */
+    static const uint8_t store[] = { 0x31, 0xff, 0x39, 0xd1, 0x88, 0x67, 0x08, 0xc3 };
+    /* xor edi, edi; cmp ecx, edx; adc ch, [edi+0x10]; ret */
+    static const uint8_t modify[] = { 0x31, 0xff, 0x39, 0xd1, 0x12, 0x6f, 0x10, 0xc3 };
+    /* xor esp, esp; cmp ecx, edx; xchg [esp+0x20], dh; ret */
+    static const uint8_t swap[] = { 0x31, 0xe4, 0x39, 0xd1, 0x86, 0x74, 0x24, 0x20, 0xc3 };
+    /* xor ebx, ebx; mov eax, 64; cmp ecx, edx; bts [ebx], eax; ret */
+    static const uint8_t bts[] = { 0x31, 0xdb, 0xb8, 64, 0, 0, 0, 0x39, 0xd1, 0x0f, 0xab, 0x03, 0xc3 };
+    /* mov ebx, 0x100; mov eax, -1024; cmp ecx, edx; bt [ebx], eax; ret */
+    static const uint8_t back[] = { 0xbb, 0, 1, 0, 0, 0xb8, 0x00, 0xfc, 0xff, 0xff, 0x39, 0xd1,
+                                    0x0f, 0xa3, 0x03, 0xc3 };
+    /* mov edi, 0x800; mov eax, 0xabcdfc00; cmp ecx, edx; btr word [edi], ax; ret */
+    static const uint8_t word[] = { 0xbf, 0, 8, 0, 0, 0xb8, 0x00, 0xfc, 0xcd, 0xab, 0x39, 0xd1,
+                                    0x66, 0x0f, 0xb3, 0x07, 0xc3 };
+    Run marked;
+
+    compare("high byte load", load, sizeof(load), 4, 8, 0, -1);
+    compare("high byte store", store, sizeof(store), 4, 8, 1, -1);
+    compare("high byte adc", modify, sizeof(modify), 4, 0x10, 0, -1);
+    marked = run(modify, sizeof(modify), 1);
+    assert(marked.state.gpr[1] == 0x04040404u);
+    compare("high byte xchg", swap, sizeof(swap), 4, 0x20, 2, -1);
+    marked = run(swap, sizeof(swap), 1);
+    assert(marked.state.gpr[2] == 0x05050505u);
+    compare("bts past the base", bts, sizeof(bts), 9, 8, 2, -1);
+    compare("bt before the base", back, sizeof(back), 12, 0x80, 0, -1);
+    compare("btr word before the base", word, sizeof(word), 12, 0x780, 2, -1);
+}
+
 static void test_fault_table(void)
 {
     /* Three rows: sites 0x10, 0x30 and 0x2345 with their paths. */
@@ -458,9 +496,10 @@ int main(void)
     test_fault_table();
     test_multiple_fault_paths();
     test_divide();
+    test_high_bytes_and_bit_strings();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
            "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
            "and stack form matches the guard; the engine finds each access's path and nothing else; div's divisor load faults like any other, "
-           "its divide error without a host fault\n");
+           "its divide error without a host fault; high bytes beside memory and bit strings fault at their own access\n");
     return 0;
 }

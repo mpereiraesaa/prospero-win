@@ -80,6 +80,9 @@ static unsigned call_stack, call_stack_faults;
 static unsigned superblocks;
 /* run() with pw_x86_engine_set_call_predict, which needs superblocks' writable code. */
 static unsigned call_predict;
+/* run()'s re-encoder with fault markers, which only a test of a fault
+ * (test_pw_x86_fault_markers.c) needs a handler for. */
+static unsigned fault_markers;
 static PwVmBackend posix;
 
 static int writable_commit(void *context, const PwVmRegion *region, size_t offset, size_t bytes, unsigned protection)
@@ -132,6 +135,7 @@ static void setup(PwX86Engine *engine, PwX86CacheEntry *entries, unsigned reenco
     assert(pw_x86_engine_set_superblocks(engine, superblocks) == PW_OK);
     assert(pw_x86_engine_set_call_predict(engine, call_predict && superblocks) == PW_OK);
     assert(pw_x86_engine_set_native_fp(engine, native_fp && reencode) == PW_OK);
+    assert(pw_x86_engine_set_fault_markers(engine, fault_markers && reencode) == PW_OK);
     if (call_stack && reencode)
         assert(pw_x86_engine_set_call_stack(engine, call_stack_region + PW_X86_ENGINE_CALL_STACK_GUARD,
                                             CALL_STACK_BYTES) == PW_OK);
@@ -220,13 +224,27 @@ static Run run_superblocks(const uint8_t *code, size_t bytes)
     return r;
 }
 
+/* Run code as wowprospero does: superblocks, a call stack, native FP and
+ * fault markers. */
+static Run run_production(const uint8_t *code, size_t bytes)
+{
+    Run r;
+    native_fp = fault_markers = 1;
+    r = run_superblocks(code, bytes);
+    native_fp = fault_markers = 0;
+    return r;
+}
+
 /* Both backends give the same result, and so does the re-encoder on a call
- * stack and with superblocks; the re-encoder took some blocks. */
+ * stack, with superblocks, and as wowprospero runs it; the re-encoder took
+ * some blocks. */
 static void compare(const uint8_t *code, size_t bytes)
 {
     Run emitter = run(code, bytes, 0), reencoded = run(code, bytes, 1), stacked = run_call_stack(code, bytes);
-    Run super = run_superblocks(code, bytes);
+    Run super = run_superblocks(code, bytes), production = run_production(code, bytes);
     same(&super, &emitter);
+    same(&production, &emitter);
+    assert(production.reencoded);
     assert(super.reencoded);
     if (emitter.status != PW_OK || emitter.state.eip != 0xdead0000u)
         fprintf(stderr, "emitter stopped: status %d eip +%x\n", emitter.status, emitter.state.eip - low - CODE);
@@ -240,7 +258,8 @@ static void test_options(void)
 {
     static const uint8_t mov[] = { 0x89, 0xc8, 0xc3 };           /* mov eax, ecx; ret */
     static const uint8_t lock[] = { 0xf0, 0x01, 0xc0, 0xc3 };    /* lock add eax, eax: #UD */
-    static const uint8_t tail[] = { 0x40, 0x88, 0x3e };          /* inc eax; mov [esi], bh */
+    static const uint8_t tail[] = { 0x40, 0x0f, 0xb6, 0xfc };    /* inc eax; movzx edi, ah */
+    static const uint8_t high[] = { 0x40, 0x88, 0x3e, 0xc3 };    /* inc eax; mov [esi], bh; ret */
     static const uint8_t divide[] = { 0xf7, 0xf1, 0xc3 };        /* div ecx; ret */
     PwX86TranslateOptions o = { .flat_low = 0x10000, .flat_high = 0xfffff000u, .no_counters = 1 };
     uint8_t out[16384];
@@ -255,6 +274,8 @@ static void test_options(void)
     assert(pw_x86_reencode(tail, sizeof(tail), 0x401000, out, sizeof(out), &block, &o) == PW_OK);
     assert(block.instructions == 1 && block.source_bytes == 1);
     assert(block.exit.kind == PW_X86_EXIT_DIRECT_JUMP && block.exit.target_pc == 0x401001);
+    assert(pw_x86_reencode(high, sizeof(high), 0x401000, out, sizeof(out), &block, &o) == PW_OK);
+    assert(block.instructions == 3 && block.exit.kind == PW_X86_EXIT_DYNAMIC);
     assert(pw_x86_reencode(divide, sizeof(divide), 0x401000, out, sizeof(out), &block, &o) == PW_OK);
     assert(block.instructions == 2 && block.exit.kind == PW_X86_EXIT_DYNAMIC);
     o.no_counters = 0;
@@ -1523,6 +1544,435 @@ static void test_divide_oracle(void)
     assert(ran > 1000 && faulted > 100 && faulted < ran - 1000);
 }
 
+/* Whether the re-encoder takes all of code (bytes, ending in ret) with or
+ * without fault markers: no block stops short of a terminal or the length
+ * limit, so nothing in it is left to the emitter. */
+static void reencodes_all(const uint8_t *code, size_t bytes)
+{
+    static PwX86IndirectTarget targets[16];
+    static uint8_t out[1 << 16];
+    PwX86TranslateOptions o;
+    PwX86Block block;
+
+    memset(&o, 0, sizeof(o));
+    o.flat_low = low; o.flat_high = low + SPAN; o.no_counters = 1;
+    o.indirect_targets = targets; o.chain_targets = targets; o.indirect_mask = 15;
+    o.unbounded_chains = o.call_stack = o.native_fp = 1;
+    for (unsigned markers = 0; markers < 2; markers++) {
+        o.fault_markers = markers;
+        for (size_t at = 0; at < bytes; at += block.source_bytes) {
+            assert(pw_x86_reencode(code + at, bytes - at, low + CODE + (uint32_t)at, out, sizeof(out), &block, &o) == PW_OK);
+            if (block.instructions != 32 && at + block.source_bytes != bytes)
+                fprintf(stderr, "re-encoder stopped at +%zx\n", at + block.source_bytes);
+            assert(block.instructions == 32 || at + block.source_bytes == bytes);
+        }
+    }
+}
+
+/* ah, ch, dh and bh beside a memory operand, as source and destination, in
+ * every instruction that names a byte register (mov, the ALU group, test,
+ * xchg, xadd, cmpxchg, lock), addressed through esi, ebp and ebx (copied as
+ * they are with fault markers), esp and edi as base (through r10b), edi as
+ * index and an absolute address, with flags read across them. Every byte
+ * of the four registers differs, so a wrong byte shows. */
+static void test_high_bytes(void)
+{
+    uint8_t code[] = {
+        0xb8, 0x11, 0x22, 0x33, 0x44,       /* mov eax, 0x44332211 */
+        0xb9, 0x55, 0x66, 0x77, 0x88,       /* mov ecx, 0x88776655 */
+        0xba, 0x99, 0xaa, 0xbb, 0xcc,       /* mov edx, 0xccbbaa99 */
+        0xbb, 0xc0, 0xd0, 0xe0, 0xf0,       /* mov ebx, 0xf0e0d0c0 */
+        0xc7, 0x44, 0x24, 0xfc, 0x8d, 0x7c, 0x6b, 0x5a,   /* mov dword [esp-4], 0x5a6b7c8d */
+        0x88, 0x7c, 0x24, 0xf8,             /* mov [esp-8], bh */
+        0x88, 0x64, 0x24, 0xf9,             /* mov [esp-7], ah */
+        0x88, 0x6c, 0x24, 0xfa,             /* mov [esp-6], ch */
+        0x88, 0x74, 0x24, 0xfb,             /* mov [esp-5], dh */
+        0x88, 0x7f, 0x01,                   /* mov [edi+1], bh */
+        0x88, 0x37,                         /* mov [edi], dh */
+        0x88, 0x24, 0x3d, 4, 0, 0, 0,       /* mov [edi*1+4], ah */
+        0x39, 0xd1,                         /* cmp ecx, edx: CF */
+        0x8a, 0x7e, 0x08,                   /* mov bh, [esi+8] */
+        0x8a, 0x64, 0x24, 0xf8,             /* mov ah, [esp-8] */
+        0x8a, 0x6f, 0x02,                   /* mov ch, [edi+2] */
+        0x8a, 0x36,                         /* mov dh, [esi] */
+        0x8a, 0x34, 0x3d, 4, 0, 0, 0,       /* mov dh, [edi*1+4] */
+        0x0f, 0x92, 0xc0,                   /* setb al */
+        0x88, 0x86, 0x00, 0x02, 0, 0,       /* mov [esi+0x200], al */
+        0x02, 0x66, 0x10,                   /* add ah, [esi+0x10] */
+        0x12, 0x6c, 0x24, 0xfc,             /* adc ch, [esp-4] */
+        0x2a, 0x77, 0x03,                   /* sub dh, [edi+3] */
+        0x1a, 0x7e, 0x11,                   /* sbb bh, [esi+0x11] */
+        0x22, 0x67, 0x05,                   /* and ah, [edi+5] */
+        0x0a, 0x6e, 0x12,                   /* or ch, [esi+0x12] */
+        0x32, 0x74, 0x24, 0xfd,             /* xor dh, [esp-3] */
+        0x3a, 0x7f, 0x06,                   /* cmp bh, [edi+6] */
+        0x0f, 0x92, 0xc0,                   /* setb al */
+        0x88, 0x86, 0x01, 0x02, 0, 0,       /* mov [esi+0x201], al */
+        0x00, 0x67, 0x08,                   /* add [edi+8], ah */
+        0x10, 0x7c, 0x24, 0xfe,             /* adc [esp-2], bh */
+        0x28, 0x6e, 0x20,                   /* sub [esi+0x20], ch */
+        0x18, 0x77, 0x09,                   /* sbb [edi+9], dh */
+        0x20, 0x7e, 0x21,                   /* and [esi+0x21], bh */
+        0x08, 0x67, 0x0a,                   /* or [edi+0xa], ah */
+        0x30, 0x6c, 0x24, 0xff,             /* xor [esp-1], ch */
+        0x38, 0x76, 0x22,                   /* cmp [esi+0x22], dh */
+        0x0f, 0x97, 0xc0,                   /* seta al */
+        0x88, 0x86, 0x02, 0x02, 0, 0,       /* mov [esi+0x202], al */
+        0x84, 0x7f, 0x0b,                   /* test [edi+0xb], bh */
+        0x0f, 0x94, 0xc0,                   /* setz al */
+        0x88, 0x86, 0x03, 0x02, 0, 0,       /* mov [esi+0x203], al */
+        0x86, 0x74, 0x24, 0xf8,             /* xchg [esp-8], dh */
+        0x86, 0x7e, 0x30,                   /* xchg [esi+0x30], bh */
+        0x0f, 0xc0, 0x6f, 0x0c,             /* xadd [edi+0xc], ch */
+        0xf0, 0x00, 0x77, 0x0d,             /* lock add [edi+0xd], dh */
+        0x8b, 0xee,                         /* mov ebp, esi */
+        0x8a, 0x65, 0x40,                   /* mov ah, [ebp+0x40] */
+        0x88, 0x6d, 0x41,                   /* mov [ebp+0x41], ch */
+        0x8a, 0x3d, 0, 0, 0, 0,             /* mov bh, [abs] (patched) */
+        0x88, 0x2d, 0, 0, 0, 0,             /* mov [abs+1], ch (patched) */
+        0x83, 0xf9, 0x07,                   /* cmp ecx, 7 */
+        0x8a, 0x5c, 0x24, 0xfd,             /* mov bl, [esp-3]: flags through */
+        0x8a, 0x7c, 0x24, 0xfe,             /* mov bh, [esp-2] */
+        0x88, 0x7f, 0x50,                   /* mov [edi+0x50], bh */
+        0x83, 0xd0, 0x00,                   /* adc eax, 0: the compare's CF */
+        0x8b, 0x6c, 0x24, 0xf8,             /* mov ebp, [esp-8] */
+        0x89, 0xae, 0x04, 0x02, 0, 0,       /* mov [esi+0x204], ebp */
+        0x8b, 0x6c, 0x24, 0xfc,             /* mov ebp, [esp-4] */
+        0x89, 0xae, 0x08, 0x02, 0, 0,       /* mov [esi+0x208], ebp */
+        0x39, 0xd8,                         /* cmp eax, ebx */
+        0xc3,
+    };
+    const uint32_t absolute = low + DATA + 0x60, absolute1 = absolute + 1;
+    size_t at = 0;
+    Run r;
+
+    while (!(code[at] == 0x8a && code[at + 1] == 0x3d)) at++;   /* mov bh, [abs] */
+    memcpy(code + at + 2, &absolute, 4);
+    memcpy(code + at + 8, &absolute1, 4);
+    reencodes_all(code, sizeof(code));
+    /* xchg, xadd and cmpxchg on bytes are the host fallback's under the emitter. */
+    hostexec_fallback = 1;
+    compare(code, sizeof(code));
+    hostexec_fallback = 0;
+    r = run(code, sizeof(code), 1);
+    assert(r.status == PW_OK && r.state.eip == 0xdead0000u);
+    /* The four stores below esp, then the loads into the high bytes alone. */
+    {
+        uint32_t stored;
+        memcpy(&stored, r.data + 0x204, 4);
+        /* [esp-8] took bh 0xd0, ah 0x22, ch 0x66, dh 0xaa, then xchg with dh. */
+        assert((stored & 0xffffff00u) == 0xaa662200u);
+        assert(r.data[0x100] == 0xaa && r.data[0x101] == 0xd0 && r.data[0x104] == 0x22);
+        assert(r.data[0x200] == 1);             /* 0x88776655 < 0xccbbaa99: CF */
+    }
+}
+
+/* cmpxchg with ah-bh, which neither the emitter nor the host fallback
+ * takes: equal (the high byte stored, ZF) and not equal (al loaded, ZF
+ * clear), through esi and through esp (r10b), with lock. */
+static void test_high_byte_cmpxchg(void)
+{
+    static const uint8_t code[] = {
+        0xb8, 0x11, 0x22, 0x33, 0x44,       /* mov eax, 0x44332211 */
+        0xbb, 0xc0, 0xd0, 0xe0, 0xf0,       /* mov ebx, 0xf0e0d0c0 */
+        0xc7, 0x44, 0x24, 0xfc, 0x8d, 0x7c, 0x6b, 0x5a,   /* mov dword [esp-4], 0x5a6b7c8d */
+        0x8a, 0x46, 0x31,                   /* mov al, [esi+0x31] */
+        0xf0, 0x0f, 0xb0, 0x66, 0x31,       /* lock cmpxchg [esi+0x31], ah: equal */
+        0x0f, 0x94, 0xc1,                   /* setz cl */
+        0x0f, 0xb0, 0x7c, 0x24, 0xfc,       /* cmpxchg [esp-4], bh: not equal */
+        0x0f, 0x94, 0xc5,                   /* setz ch */
+        0xb0, 0x8d,                         /* mov al, 0x8d */
+        0xf0, 0x0f, 0xb0, 0x7c, 0x24, 0xfc, /* lock cmpxchg [esp-4], bh: equal */
+        0x8b, 0x54, 0x24, 0xfc,             /* mov edx, [esp-4] */
+        0xc3,
+    };
+    for (unsigned production = 0; production < 2; production++) {
+        Run r = production ? run_production(code, sizeof(code)) : run(code, sizeof(code), 1);
+        assert(r.status == PW_OK && r.state.eip == 0xdead0000u && r.reencoded);
+        assert(r.data[0x31] == 0x22);
+        assert((r.state.gpr[1] & 0xffff) == 0x0001);
+        assert(r.state.gpr[0] == 0x4433228du && r.state.gpr[2] == 0x5a6b7cd0u);
+    }
+}
+
+/* The same forms with fs: through r10b, the address in r11 (no copy). */
+static void test_high_bytes_fs(void)
+{
+    static const uint8_t code[] = {
+        0xbb, 0xc0, 0xd0, 0xe0, 0xf0,       /* mov ebx, 0xf0e0d0c0 */
+        0xb8, 0x11, 0x22, 0x33, 0x44,       /* mov eax, 0x44332211 */
+        0x64, 0x88, 0x3d, 4, 0, 0, 0,       /* mov fs:[4], bh */
+        0x64, 0x8a, 0x25, 8, 0, 0, 0,       /* mov ah, fs:[8] */
+        0x64, 0x00, 0x25, 9, 0, 0, 0,       /* add fs:[9], ah */
+        0xc3,
+    };
+    Run r;
+
+    fs_offset = DATA + 0x200;
+    for (unsigned markers = 0; markers < 2; markers++) {
+        fault_markers = markers;
+        r = run(code, sizeof(code), 1);
+        assert(r.status == PW_OK && r.state.eip == 0xdead0000u && r.reencoded);
+        assert(r.data[0x204] == 0xd0);
+        assert(r.state.gpr[0] == (0x44330011u | (uint32_t)(uint8_t)(0x208 * 7 + 3) << 8));
+        assert(r.data[0x209] == (uint8_t)(0x209 * 7 + 3 + 0x208 * 7 + 3));
+    }
+    fault_markers = 0;
+    fs_offset = 0;
+}
+
+/* bt, bts, btr and btc on memory with a register offset: offsets inside the
+ * dword, past it (the bit string's next units) and far from it, esp, esi,
+ * edi and an index as the address, edi and ebp as the offset, the 16-bit
+ * forms, lock, CF read after each and the other flags, which bt leaves,
+ * read at the end. Non-negative offsets, which the emitter takes alike. */
+static void test_bit_strings(void)
+{
+    static const uint8_t code[] = {
+        0x31, 0xc0,                         /* xor eax, eax */
+        0x6a, 0x00, 0x6a, 0x00,             /* push 0; push 0: a bitmap */
+        0xb9, 0x23, 0, 0, 0,                /* mov ecx, 35 */
+        0x0f, 0xab, 0x0c, 0x24,             /* bts [esp], ecx: [esp+4] bit 3 */
+        0x0f, 0xa3, 0x0c, 0x24,             /* bt [esp], ecx: CF */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0xbf, 0x05, 0, 0, 0,                /* mov edi, 5 */
+        0x0f, 0xa3, 0x3c, 0x24,             /* bt [esp], edi: clear */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0x0f, 0xab, 0x3c, 0x24,             /* bts [esp], edi */
+        0x59, 0x5a,                         /* pop ecx; pop edx */
+        0x89, 0x8e, 0x00, 0x02, 0, 0,       /* mov [esi+0x200], ecx */
+        0x89, 0x96, 0x04, 0x02, 0, 0,       /* mov [esi+0x204], edx */
+        0xbf, 0x00, 0x01, 0, 0,             /* mov edi, 256 */
+        0xbd, 0x47, 0x01, 0, 0,             /* mov ebp, 327 */
+        0x0f, 0xbb, 0x2e,                   /* btc [esi], ebp: [esi+0x28] bit 7 */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0xbb, 0x02, 0, 0, 0,                /* mov ebx, 2 */
+        0x0f, 0xb3, 0x7c, 0x9e, 0x10,       /* btr [esi+ebx*4+0x10], edi: [esi+0x38] bit 0 */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0x8d, 0x7e, 0x40,                   /* lea edi, [esi+0x40] */
+        0xbd, 0x1f, 0x0c, 0, 0,             /* mov ebp, 0xc1f */
+        0xf0, 0x0f, 0xab, 0x2f,             /* lock bts [edi], ebp: [esi+0x1c0] bit 31 */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0xb9, 0x41, 0, 0, 0,                /* mov ecx, 65 */
+        0x0f, 0xb3, 0x0c, 0x0f,             /* btr [edi+ecx], ecx: [edi+0x49] bit 1 */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0x66, 0xba, 0x13, 0x00,             /* mov dx, 19 */
+        0x66, 0x0f, 0xab, 0x56, 0x60,       /* bts word [esi+0x60], dx: [esi+0x62] bit 3 */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0xba, 0x31, 0x01, 0, 0,             /* mov edx, 0x131 */
+        0x66, 0x0f, 0xa3, 0x56, 0x60,       /* bt word [esi+0x60], dx: [esi+0x86] bit 1 */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0x66, 0x0f, 0xbb, 0x56, 0x70,       /* btc word [esi+0x70], dx */
+        0x66, 0x0f, 0xb3, 0x56, 0x70,       /* btr word [esi+0x70], dx */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0xf0, 0x66, 0x0f, 0xbb, 0x17,       /* lock btc word [edi], dx */
+        0x11, 0xc0,                         /* adc eax, eax */
+        0x39, 0xd1,                         /* cmp ecx, edx: SF, OF, AF, PF... */
+        0x0f, 0xa3, 0x16,                   /* bt [esi], edx */
+        0x9f,                               /* lahf */
+        0x0f, 0x90, 0xc3,                   /* seto bl */
+        0x88, 0x9e, 0x10, 0x02, 0, 0,       /* mov [esi+0x210], bl */
+        0x88, 0xa6, 0x11, 0x02, 0, 0,       /* mov [esi+0x211], ah */
+        0x39, 0xd8,                         /* cmp eax, ebx */
+        0xc3,
+    };
+    Run r;
+
+    reencodes_all(code, sizeof(code));
+    /* lock bts and btc are the host fallback's under the emitter. */
+    hostexec_fallback = 1;
+    compare(code, sizeof(code));
+    hostexec_fallback = 0;
+    r = run_production(code, sizeof(code));
+    assert(r.status == PW_OK && r.state.eip == 0xdead0000u);
+    {
+        uint32_t lo, hi;
+        memcpy(&lo, r.data + 0x200, 4);
+        memcpy(&hi, r.data + 0x204, 4);
+        assert(lo == 1u << 5 && hi == 1u << 3);
+        assert(r.data[0x28] == (uint8_t)((0x28 * 7 + 3) ^ 0x80));
+        assert(r.data[0x38] == (uint8_t)((0x38 * 7 + 3) & ~1));
+        assert(r.data[0x1c3] == (uint8_t)((0x1c3 * 7 + 3) | 0x80));
+        assert(r.data[0x62] == (uint8_t)((0x62 * 7 + 3) | 0x08));
+    }
+}
+
+/* bt, bts, btr, btc [ebx], eax (form: the four with 0f a3 ab b3 bb, then
+ * the same with 0x66) after cmp ecx, edx; the unit at base + offset must
+ * stop every backend at the bt (offset 12) as the guard refuses it, with
+ * the same status, registers, flags and fault (address, width, direction)
+ * on the emitter, the re-encoder, a call stack and superblocks. */
+static void compare_bit_fault(unsigned form, uint32_t base, uint32_t offset, uint32_t address)
+{
+    static const uint8_t ops[4] = { 0xa3, 0xab, 0xb3, 0xbb };
+    uint8_t code[24];
+    size_t n = 0;
+    Run r[4];
+
+    code[n++] = 0xbb; memcpy(code + n, &base, 4); n += 4;          /* mov ebx, base */
+    code[n++] = 0xb8; memcpy(code + n, &offset, 4); n += 4;        /* mov eax, offset */
+    code[n++] = 0x39; code[n++] = 0xd1;                            /* cmp ecx, edx */
+    if (form >= 4) code[n++] = 0x66;
+    code[n++] = 0x0f; code[n++] = ops[form & 3]; code[n++] = 0x03; /* bt [ebx], eax */
+    code[n++] = 0xc3;
+    r[0] = run(code, n, 1);
+    r[1] = run_call_stack(code, n);
+    r[2] = run_superblocks(code, n);
+    r[3] = run(code, n, 0);
+    if (r[0].status != PW_ERR_VM || r[0].state.eip != low + CODE + 12 || r[0].state.fault_address != address)
+        fprintf(stderr, "bit string %u at %08x+%08x: status %d eip +%x fault %08x, want %08x\n", form, base, offset,
+                r[0].status, r[0].state.eip - low - CODE, r[0].state.fault_address, address);
+    assert(r[0].status == PW_ERR_VM && r[0].state.eip == low + CODE + 12 && r[0].reencoded);
+    assert(r[0].state.fault_address == address && r[0].state.fault_width == (form >= 4 ? 2u : 4u));
+    assert(r[0].state.fault_write == ((form & 3) ? 2u : 0u));
+    for (unsigned k = 1; k < 4; k++) {
+        same(&r[k], &r[0]);
+        assert(r[k].state.fault_address == address && r[k].state.fault_width == r[0].state.fault_width);
+        assert(r[k].state.fault_write == r[0].state.fault_write);
+    }
+}
+
+/* The guard on the unit a bit string reaches, not on its base: units that
+ * end exactly at the top of the flat range pass, one more byte stops (dword
+ * and word units, an unaligned base); a negative offset that reaches below
+ * the range stops at the unit's address, and one whose guest address wraps
+ * below 0 at the wrapped address. */
+static void test_bit_string_bounds(void)
+{
+    static const uint8_t fits[] = {
+        0xbb, 0, 0, 0, 0,                   /* mov ebx, top - 0x10 (patched) */
+        0xb8, 0x60, 0, 0, 0,                /* mov eax, 0x60: the last dword */
+        0x0f, 0xab, 0x03,                   /* bts [ebx], eax */
+        0xb8, 0x7f, 0, 0, 0,                /* mov eax, 0x7f: the last word, bit 15 */
+        0x66, 0x0f, 0xbb, 0x03,             /* btc word [ebx], ax */
+        0x4b,                               /* dec ebx */
+        0xb8, 0x68, 0, 0, 0,                /* mov eax, 0x68: an unaligned dword 5 bytes from the top */
+        0x0f, 0xa3, 0x03,                   /* bt [ebx], eax */
+        0x19, 0xc0,                         /* sbb eax, eax */
+        0xc3,
+    };
+    uint8_t code[sizeof(fits)];
+    const uint32_t top = low + SPAN;
+    Run reencoded, emitter;
+
+    memcpy(code, fits, sizeof(code));
+    memcpy(code + 1, &(uint32_t){ top - 0x10 }, 4);
+    memcpy(guest + SPAN - 8, "\0\0\0\x01\0\0\0\x40", 8);
+    reencoded = run(code, sizeof(code), 1);
+    assert(reencoded.status == PW_OK && reencoded.state.eip == 0xdead0000u);
+    assert(guest[SPAN - 4] == 1 && guest[SPAN - 1] == 0xc0 && reencoded.state.gpr[0] == 0xffffffffu);
+    memcpy(guest + SPAN - 8, "\0\0\0\x01\0\0\0\x40", 8);
+    emitter = run(code, sizeof(code), 0);
+    same(&reencoded, &emitter);
+    assert(guest[SPAN - 4] == 1 && guest[SPAN - 1] == 0xc0);
+
+    for (unsigned form = 0; form < 8; form++) {
+        const unsigned wide = form < 4;
+        compare_bit_fault(form, top - 0x10, 0x80, top);                              /* at the top */
+        compare_bit_fault(form, top - (wide ? 3 : 1), 0, top - (wide ? 3 : 1));      /* across it */
+        compare_bit_fault(form, low + 0x10, wide ? 0xffffff00u : 0x1234ff00u, low - 0x10);
+        compare_bit_fault(form, 0x40, wide ? 0xfffff000u : 0xabcdf000u, 0xfffffe40u);
+    }
+}
+
+/* The host's own bt, bts, btr and btc on memory with a register offset
+ * (form as compare_bit_fault's), from flags in: the flags out, and the bit
+ * string changed in place. */
+static __attribute__((noinline)) uint32_t bits_on_host(unsigned form, uint8_t *unit, uint32_t offset, uint32_t flags)
+{
+    unsigned long out, in = flags;
+#define BIT_OP(op) __asm__ volatile("push %[f]; popf; " op " %[o], (%[u]); pushf; pop %[r]" \
+                                    : [r] "=&r"(out) : [f] "r"(in), [o] "r"(offset), [u] "r"(unit) : "cc", "memory")
+#define BIT_OP16(op) __asm__ volatile("push %[f]; popf; " op " %w[o], (%[u]); pushf; pop %[r]" \
+                                      : [r] "=&r"(out) : [f] "r"(in), [o] "r"(offset), [u] "r"(unit) : "cc", "memory")
+    switch (form) {
+    case 0: BIT_OP("btl"); break;
+    case 1: BIT_OP("btsl"); break;
+    case 2: BIT_OP("btrl"); break;
+    case 3: BIT_OP("btcl"); break;
+    case 4: BIT_OP16("btw"); break;
+    case 5: BIT_OP16("btsw"); break;
+    case 6: BIT_OP16("btrw"); break;
+    default: BIT_OP16("btcw"); break;
+    }
+#undef BIT_OP
+#undef BIT_OP16
+    return (uint32_t)out;
+}
+
+/* The re-encoder against the host itself: every form, offsets at the edges
+ * of the unit and of the sign (negative ones reach before the operand), the
+ * 16-bit forms with junk in the offset register's upper half, and two sets
+ * of incoming flags; the same bit string after, the same flags (CF from the
+ * bit, the others as the host's bt leaves them) and registers. The
+ * re-encoder through the guard and with fault markers, as wowprospero runs
+ * it, and the emitter. */
+static void test_bit_string_oracle(void)
+{
+    static const uint32_t wide[] = {
+        0, 1, 31, 32, 33, 63, 64, 1000, 0x7fff, 0xffffffffu, 0xfffffffeu, 0xffffffe1u, 0xffffffe0u,
+        0xffffffdfu, (uint32_t)-1000, (uint32_t)-0x7fff, (uint32_t)-0x8000,
+    };
+    static const uint32_t narrow[] = {
+        0, 1, 15, 16, 17, 0x7fff, 0x8000, 0xffff, 0xfff0, 0xffef, 0x12340005u, 0xabcd8000u, 0x0001ffffu,
+        0x7fff0010u, 0xffff0001u,
+    };
+    static const uint8_t ops[4] = { 0xa3, 0xab, 0xb3, 0xbb };
+    enum { WINDOW = 0x30000, HALF = 0x1000 };
+    static PwX86CacheEntry entries[3][512];
+    static PwX86Engine engines[3];
+    static uint8_t host[2 * HALF];
+    unsigned ran = 0, generation = 1;
+
+    native_fp = superblocks = call_stack = 1;
+    setup(&engines[0], entries[0], 1);
+    fault_markers = 1;
+    setup(&engines[1], entries[1], 1);
+    native_fp = superblocks = call_stack = fault_markers = 0;
+    setup(&engines[2], entries[2], 0);
+    for (unsigned form = 0; form < 8; form++) {
+        const uint32_t *offsets = form < 4 ? wide : narrow;
+        const unsigned count = form < 4 ? sizeof(wide) / sizeof(wide[0]) : sizeof(narrow) / sizeof(narrow[0]);
+        for (unsigned k = 0; k < count; k++)
+            for (unsigned f = 0; f < 2; f++) {
+                const uint8_t flags = f ? 0xd5 : 0x00;
+                const uint32_t base = low + WINDOW, offset = offsets[k];
+                uint32_t native_flags;
+                uint8_t code[32];
+                size_t n = 0;
+
+                code[n++] = 0xbb; memcpy(code + n, &base, 4); n += 4;          /* mov ebx, base */
+                code[n++] = 0xb9; memcpy(code + n, &offset, 4); n += 4;        /* mov ecx, offset */
+                code[n++] = 0xb4; code[n++] = flags; code[n++] = 0x9e;         /* mov ah, flags; sahf */
+                if (form >= 4) code[n++] = 0x66;
+                code[n++] = 0x0f; code[n++] = ops[form & 3]; code[n++] = 0x0b; /* bt [ebx], ecx */
+                code[n++] = 0xc3;
+                for (unsigned i = 0; i < sizeof(host); i++) host[i] = (uint8_t)(i * 13 + k + f);
+                native_flags = bits_on_host(form, host + HALF, offset, 0x202u | flags);
+                for (unsigned e = 0; e < 3; e++) {
+                    Run r;
+                    for (unsigned i = 0; i < sizeof(host); i++) guest[WINDOW - HALF + i] = (uint8_t)(i * 13 + k + f);
+                    assert(pw_x86_engine_reset(&engines[e], ++generation) == PW_OK);
+                    hostexec_fallback = e == 2;           /* sahf, under the emitter */
+                    r = execute(&engines[e], code, n);
+                    hostexec_fallback = 0;
+                    ran++;
+                    if (r.status != PW_OK || (r.state.eflags & 0x8d5) != (native_flags & 0x8d5) ||
+                        memcmp(guest + WINDOW - HALF, host, sizeof(host)))
+                        fprintf(stderr, "bit string form %u offset %08x flags %02x engine %u: status %d flags %03x, host %03x\n",
+                                form, offset, flags, e, r.status, r.state.eflags & 0x8d5, native_flags & 0x8d5);
+                    assert(r.status == PW_OK && r.state.eip == 0xdead0000u);
+                    assert((r.state.eflags & 0x8d5) == (native_flags & 0x8d5));
+                    assert(!memcmp(guest + WINDOW - HALF, host, sizeof(host)));
+                    assert(r.state.gpr[1] == offset && r.state.gpr[3] == base);
+                    assert(r.state.gpr[0] == ((0x11111111u & ~0xff00u) | (uint32_t)flags << 8));
+                }
+            }
+    }
+    assert(engines[0].reencoded_blocks && engines[1].reencoded_blocks && !engines[2].reencoded_blocks && ran > 600);
+    for (unsigned e = 0; e < 3; e++) assert(pw_x86_engine_destroy(&engines[e]) == PW_OK);
+}
+
 static void test_prefixed_padding(void)
 {
     static const uint8_t padding[] = {
@@ -1641,8 +2091,15 @@ int main(void)
     test_divide();
     test_divide_errors();
     test_divide_oracle();
+    test_high_bytes();
+    test_high_byte_cmpxchg();
+    test_high_bytes_fs();
+    test_bit_strings();
+    test_bit_string_bounds();
+    test_bit_string_oracle();
     printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
            "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, predicted calls, strings, native FP, fault state, "
-           "div and idiv in every form with their divide errors, against the emitter and the host\n");
+           "div and idiv in every form with their divide errors, ah-bh beside memory, bit strings in reach and at the guard's edges, "
+           "against the emitter and the host\n");
     return 0;
 }

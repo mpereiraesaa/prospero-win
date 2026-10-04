@@ -15,6 +15,32 @@ enum {
 /* Guest GPR -> host register: eax ecx edx ebx esp ebp esi edi. */
 static const uint8_t host_of[8] = { 0, 1, 2, 3, R12, 5, 6, R13 };
 
+/* Whether the host has BMI2, whose rorx and sarx move and shift without
+ * touching the flags: ah-bh beside a memory operand and bt m,r go through
+ * them (emit_memory, emit_bit_string), and without it they stay the
+ * emitter's. Found once; every thread finds the same answer. */
+static unsigned host_bmi2(void)
+{
+#if defined(__x86_64__)
+    static int known = -1;
+    int value = __atomic_load_n(&known, __ATOMIC_RELAXED);
+    if (value < 0) {
+        unsigned leaf = 0, ebx, ecx = 0, edx;
+        __asm__ volatile("cpuid" : "+a"(leaf), "=b"(ebx), "+c"(ecx), "=d"(edx));
+        value = 0;
+        if (leaf >= 7) {
+            leaf = 7; ecx = 0;
+            __asm__ volatile("cpuid" : "+a"(leaf), "=b"(ebx), "+c"(ecx), "=d"(edx));
+            value = (ebx >> 8) & 1;                     /* leaf 7, ebx bit 8: BMI2 */
+        }
+        __atomic_store_n(&known, value, __ATOMIC_RELAXED);
+    }
+    return (unsigned)value;
+#else
+    return 0;
+#endif
+}
+
 typedef struct Out {
     uint8_t *p;
     size_t n, cap;
@@ -155,7 +181,7 @@ static void ea_lea(Out *o, unsigned dst, const Ea *e)
 typedef enum Kind {
     K_RM = 1, K_PLAIN, K_INCDEC, K_MOVIMM, K_XCHGA, K_BSWAP, K_NOP, K_LEA,
     K_PUSH, K_PUSHIMM, K_PUSHRM, K_POP, K_LEAVE, K_CALL, K_CALLRM, K_RET,
-    K_JMP, K_JMPRM, K_JCC, K_STR, K_DIV,
+    K_JMP, K_JMPRM, K_JCC, K_STR, K_DIV, K_BITS,
 } Kind;
 enum { REG8 = 1, REG32, EXT };      /* what the ModRM reg field names */
 enum { RM8 = 1, RMW, RMRAW };       /* what a register-form rm names (RMRAW: xmm, mm, st, as is) */
@@ -219,15 +245,18 @@ static size_t modrm(const uint8_t *s, size_t avail, size_t at, Inst *in)
 }
 
 /* Can the register or memory form be encoded? A REX prefix, needed for
- * r11, r12 or r13, turns AH-BH into SPL-DIL. */
+ * r11, r12 or r13, turns AH-BH into SPL-DIL. With a memory operand, ah-bh
+ * go through r10b when the address needs one (emit_memory). */
 static int encodable(const Inst *in)
 {
     unsigned rex = 0, high8 = 0;
     if (in->kind != K_RM) return 1;
     if (in->reg_kind == REG32 && host_of[in->reg] >= 8) rex = 1;
     if (in->reg_kind == REG8 && in->reg >= 4) high8 = 1;
-    if (in->mod != 3) rex = 1;
-    else {
+    if (in->mod != 3) {
+        if (high8) return (int)host_bmi2();
+        rex = 1;
+    } else {
         if (in->rm_kind == RMW && host_of[in->rm] >= 8) rex = 1;
         if (in->rm_kind == RM8 && in->rm >= 4) high8 = 1;
     }
@@ -235,11 +264,12 @@ static int encodable(const Inst *in)
 }
 
 /* The instructions a lock prefix may carry, all with a memory destination:
- * the ALU group, not/neg, inc/dec, xchg, cmpxchg, xadd, bts/btr/btc by an
- * immediate, and cmpxchg8b. */
+ * the ALU group, not/neg, inc/dec, xchg, cmpxchg, xadd, bts/btr/btc, and
+ * cmpxchg8b. */
 static int lockable(const Inst *in)
 {
     uint8_t op = in->op[0], x = in->op[1];
+    if (in->kind == K_BITS) return x != 0xa3;             /* bts btr btc, not bt */
     if (in->kind != K_RM || in->mod == 3) return 0;
     if (in->op_len == 1) {
         if (op < 0x40) return (op & 7) < 2 && (op >> 3) != 7;
@@ -452,8 +482,14 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
             in->write = 1; in->use = condition_flags(x & 15);
         } else if (x == 0xa3 || x == 0xab || x == 0xb3 || x == 0xbb) {
             in->kind = K_RM; in->reg_kind = REG32; in->rm_kind = RMW; MODRM();
-            if (in->mod != 3) return 0;               /* bit strings reach past the operand */
             in->def = CF;
+            if (in->mod != 3) {
+                /* A bit string, which reaches past the operand: the unit
+                 * the offset selects is found first (emit_bit_string). */
+                if (!host_bmi2()) return 0;
+                in->kind = K_BITS;
+                in->write = x == 0xa3 ? 0 : 2;
+            }
         } else if (x == 0xba) {
             in->kind = K_RM; in->reg_kind = EXT; in->rm_kind = RMW; MODRM();
             if (in->reg < 4) return 0;
@@ -613,7 +649,7 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
     if (in->rep && !rep_ok) return 0;
     in->len = (uint8_t)i;
     /* fs only on a memory operand; lock only on a read-modify-write of one. */
-    if (in->fs && !((in->kind == K_RM || in->kind == K_DIV) && in->mod != 3)) return 0;
+    if (in->fs && !((in->kind == K_RM || in->kind == K_DIV || in->kind == K_BITS) && in->mod != 3)) return 0;
     if (in->lock && !lockable(in)) return 0;
     return encodable(in);
 }
@@ -676,20 +712,16 @@ static void restore_flags(Out *o)
     rr(o, 0x89, 1, 0, R8);                      /* mov rax, r8 */
 }
 
-/* r11 = the guest address of e, checked against the flat range; a miss
- * stops the block as a refused access (the cold paths after the block).
- * The flags survive when keep is set. */
-static void guard_fs(Ctx *c, const Ea *e, unsigned fs, unsigned width, unsigned write, unsigned keep)
+/* The guest address in r11 checked against the flat range: a miss stops
+ * the block as a refused access (the cold paths after the block). The
+ * flags survive when keep is set. Clobbers r9 (and r8 and r14 with keep).
+ * With fault markers there is no check, and the access emitted next is the
+ * one whose fault reports r11. */
+static void guard_r11(Ctx *c, unsigned width, unsigned write, unsigned keep)
 {
     Out *o = &c->o;
     Cold *cold;
 
-    ea_lea(o, R11, e);
-    if (fs) {
-        /* The guest's fs is a base in PwX86State; add it without flags. */
-        load_state(o, R9, offsetof(PwX86State, fs_base));
-        b(o, 0x47); b(o, 0x8d); b(o, 0x1c); b(o, 0x0b);                  /* lea r11d, [r11+r9] */
-    }
     if (c->cold_count >= MAX_COLD) { o->failed = 1; return; }
     if (c->fault_markers) {
         /* No check: the access emitted next faults instead, and the block's
@@ -713,13 +745,32 @@ static void guard_fs(Ctx *c, const Ea *e, unsigned fs, unsigned width, unsigned 
     cold->width = (uint8_t)width; cold->write = (uint8_t)write; cold->saved = (uint8_t)keep;
     if (keep) restore_flags(o);
 }
+
+/* r11 = the guest address of e, with the guest's fs base when fs is set. */
+static void ea_r11(Out *o, const Ea *e, unsigned fs)
+{
+    ea_lea(o, R11, e);
+    if (fs) {
+        /* The guest's fs is a base in PwX86State; add it without flags. */
+        load_state(o, R9, offsetof(PwX86State, fs_base));
+        b(o, 0x47); b(o, 0x8d); b(o, 0x1c); b(o, 0x0b);                  /* lea r11d, [r11+r9] */
+    }
+}
+
+/* r11 = the guest address of e, guarded (guard_r11). */
+static void guard_fs(Ctx *c, const Ea *e, unsigned fs, unsigned width, unsigned write, unsigned keep)
+{
+    ea_r11(&c->o, e, fs);
+    guard_r11(c, width, write, keep);
+}
 static void guard(Ctx *c, const Ea *e, unsigned width, unsigned write, unsigned keep)
 {
     guard_fs(c, e, 0, width, write, keep);
 }
 
-/* An instruction's opcode and ModRM with the memory operand at [r11]. */
-static void emit_rm(Ctx *c, const Inst *in)
+/* An instruction's opcode and ModRM with the memory operand at [r11]; with
+ * high8, the byte register is r10b in place of ah-bh (emit_memory). */
+static void emit_rm(Ctx *c, const Inst *in, unsigned high8)
 {
     Out *o = &c->o;
     uint8_t rex = 0;
@@ -730,6 +781,7 @@ static void emit_rm(Ctx *c, const Inst *in)
     if (in->rep) b(o, in->rep);
     if (in->reg_kind == REG32 && host_of[in->reg] >= 8) rex |= 4;
     if (in->reg_kind == REG32) regf = host_of[in->reg] & 7;
+    if (high8) { rex |= 4; regf = R10 & 7; }
     if (in->mod == 3) {
         if (in->rm_kind == RMW && host_of[in->rm] >= 8) rex |= 1;
         if (in->rm_kind == RMW) rmf = host_of[in->rm] & 7;
@@ -745,8 +797,9 @@ static void emit_rm(Ctx *c, const Inst *in)
 
 /* With fault markers: the instruction itself, its memory operand addressed
  * with the guest's 32-bit arithmetic (0x67: the 32-bit effective address,
- * zero-extended, is the guest address), recorded in the fault table. */
-static void emit_rm_direct(Ctx *c, const Inst *in)
+ * zero-extended, is the guest address), recorded in the fault table. With
+ * high8, the byte register is r10b in place of ah-bh (emit_memory). */
+static void emit_rm_direct(Ctx *c, const Inst *in, unsigned high8)
 {
     Out *o = &c->o;
     const Ea *e = &in->ea;
@@ -773,6 +826,7 @@ static void emit_rm_direct(Ctx *c, const Inst *in)
         if (host_of[in->reg] >= 8) rex |= 4;
         regf = host_of[in->reg] & 7;
     }
+    if (high8) { rex |= 4; regf = R10 & 7; }
     if (hi >= 8) rex |= 2;
     if (hb >= 8) rex |= 1;
     if (rex) b(o, (uint8_t)(0x40 | rex));
@@ -1370,6 +1424,107 @@ static void emit_divide_stubs(Ctx *c)
     }
 }
 
+/* rorx dst32, src32, n and sarx dst32, src32, count32 (BMI2) between host
+ * registers 0..15: a rotate and a shift that leave the flags alone. */
+static void rorx(Out *o, unsigned dst, unsigned src, unsigned n)
+{
+    b(o, 0xc4);
+    b(o, (uint8_t)((dst >= 8 ? 0 : 0x80) | 0x40 | (src >= 8 ? 0 : 0x20) | 0x03));   /* 0f3a */
+    b(o, 0x7b);                                                                     /* f2, W0 */
+    b(o, 0xf0);
+    b(o, (uint8_t)(0xc0 | (dst & 7) << 3 | (src & 7)));
+    b(o, (uint8_t)n);
+}
+static void sarx(Out *o, unsigned dst, unsigned src, unsigned count)
+{
+    b(o, 0xc4);
+    b(o, (uint8_t)((dst >= 8 ? 0 : 0x80) | 0x40 | (src >= 8 ? 0 : 0x20) | 0x02));   /* 0f38 */
+    b(o, (uint8_t)((~count & 15) << 3 | 0x02));                                     /* f3, W0 */
+    b(o, 0xf7);
+    b(o, (uint8_t)(0xc0 | (dst & 7) << 3 | (src & 7)));
+}
+
+/* Whether a memory form naming ah-bh needs them through r10b: its address
+ * needs a REX prefix (r11, or r12/r13 for esp and edi as base or index),
+ * which would make them spl-dil. Without one (fault markers, the address on
+ * eax-esi or none) the instruction is copied as it is. */
+static int high8_scratch(const Inst *in, unsigned direct)
+{
+    if (in->kind != K_RM || in->mod == 3 || in->reg_kind != REG8 || in->reg < 4) return 0;
+    if (!direct) return 1;
+    return (in->ea.base >= 0 && host_of[in->ea.base] >= 8) ||
+           (in->ea.index >= 0 && host_of[in->ea.index] >= 8);
+}
+
+/* Whether the instruction writes its ModRM reg byte register: op r8, r/m8
+ * (not cmp), xchg, mov r8, r/m8 and xadd; test, cmpxchg and the stores
+ * only read it. */
+static int writes_reg8(const Inst *in)
+{
+    const uint8_t op = in->op[0];
+    if (in->op_len == 2) return in->op[1] == 0xc0;
+    if (op < 0x40) return (op & 2) && (op >> 3) != 7;
+    return op == 0x86 || op == 0x8a;
+}
+
+/* An instruction with a memory operand, copied (emit_rm, emit_rm_direct).
+ * One that names ah-bh where the address needs a REX prefix runs on r10b
+ * instead: rorx loads r10d with the guest register rotated right by 8, so
+ * r10b is its high byte, and when the instruction writes it, rotates r10d
+ * back into place (the other three bytes come back unchanged). Neither
+ * rotate touches the flags, and the guest register changes only after the
+ * access, so one that faults leaves it as it was. */
+static void emit_memory(Ctx *c, const Inst *in, unsigned keep)
+{
+    Out *o = &c->o;
+    const unsigned direct = c->fault_markers && !in->fs;
+    const unsigned high8 = (unsigned)high8_scratch(in, direct);
+    const unsigned whole = high8 ? host_of[in->reg - 4] : 0;
+
+    if (high8) rorx(o, R10, whole, 8);                              /* r10b = ah-bh */
+    if (direct) emit_rm_direct(c, in, high8);
+    else {
+        guard_fs(c, &in->ea, in->fs, in->width, in->write, keep);
+        emit_rm(c, in, high8);
+    }
+    if (high8 && writes_reg8(in)) rorx(o, whole, R10, 24);
+}
+
+/* bt, bts, btr and btc on memory with a register offset address a bit
+ * string: the unit (a dword; a word with 0x66) at ea + size * (offset SAR
+ * 5, or 4), the offset signed (the register's low word in the 16-bit
+ * forms), and bit offset & 31 (15) of it. r11 = that unit's guest address,
+ * with the 32-bit wrap, guarded or marked as the access; then the host's
+ * own instruction on the guest's offset register, based at r9 = r11 -
+ * size * (offset SAR 5, or 4) in 64 bits, so the unit it reaches is r11's
+ * exactly. sarx, movsx, not and lea leave the flags alone. */
+static void emit_bit_string(Ctx *c, const Inst *in, unsigned keep)
+{
+    Out *o = &c->o;
+    const unsigned h = host_of[in->reg], wide = in->width == 4;
+
+    ea_r11(o, &in->ea, in->fs);
+    b(o, 0x41); b(o, 0xb9); w32(o, wide ? 5 : 4);                    /* mov r9d, 5 (4) */
+    if (wide) sarx(o, R10, h, R9);                                   /* r10d = offset SAR 5 */
+    else {
+        b(o, (uint8_t)(0x44 | (h >= 8 ? 1 : 0))); b(o, 0x0f); b(o, 0xbf);
+        b(o, (uint8_t)(0xd0 | (h & 7)));                             /* movsx r10d, offset16 */
+        sarx(o, R10, R10, R9);                                       /* r10d = offset SAR 4 */
+    }
+    b(o, 0x47); b(o, 0x8d); b(o, 0x1c); b(o, wide ? 0x93 : 0x53);    /* lea r11d, [r11+r10*4 (2)] */
+    if (!c->fault_markers) guard_r11(c, in->width, in->write, keep);  /* clobbers r9 */
+    b(o, 0x4d); b(o, 0x63); b(o, 0xd2);                              /* movsxd r10, r10d */
+    b(o, 0x4e); b(o, 0x8d); b(o, 0x0c); b(o, wide ? 0x95 : 0x55); w32(o, 0);   /* lea r9, [r10*4 (2)] */
+    b(o, 0x49); b(o, 0xf7); b(o, 0xd1);                              /* not r9 */
+    b(o, 0x4f); b(o, 0x8d); b(o, 0x4c); b(o, 0x0b); b(o, 1);         /* lea r9, [r11+r9+1] */
+    if (c->fault_markers) guard_r11(c, in->width, in->write, keep);   /* marks the access */
+    if (in->lock) b(o, 0xf0);
+    if (in->opsize16) b(o, 0x66);
+    b(o, (uint8_t)(0x41 | (h >= 8 ? 4 : 0)));
+    b(o, 0x0f); b(o, in->op[1]);
+    b(o, (uint8_t)((h & 7) << 3 | 1));                               /* [r9], offset */
+}
+
 /* The side exits: each loads its target into r10d and the address of its
  * jcc's rel32 into r8, then all share one lookup of r10d in the chain
  * table. A hit rewrites that rel32 to the target's chain entry (r11 - (r8 +
@@ -1459,7 +1614,7 @@ static void emit_cold_paths(Ctx *c, PwX86Block *block)
 static int can_fault(const Inst *in)
 {
     switch (in->kind) {
-    case K_RM: case K_DIV: return in->mod != 3;
+    case K_RM: case K_DIV: case K_BITS: return in->mod != 3;
     case K_PUSH: case K_PUSHIMM: case K_PUSHRM: case K_POP: case K_LEAVE:
     case K_CALL: case K_CALLRM: case K_RET: return 1;
     case K_JMPRM: return in->mod != 3;
@@ -1546,9 +1701,11 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         if (!c.fault_markers && can_fault(in)) store_state_imm(o, offsetof(PwX86State, eip), here);
         switch (in->kind) {
         case K_RM:
-            if (in->mod != 3 && c.fault_markers && !in->fs) { emit_rm_direct(&c, in); break; }
-            if (in->mod != 3) guard_fs(&c, &in->ea, in->fs, in->width, in->write, keep);
-            emit_rm(&c, in);
+            if (in->mod != 3) emit_memory(&c, in, keep);
+            else emit_rm(&c, in, 0);
+            break;
+        case K_BITS:
+            emit_bit_string(&c, in, keep);
             break;
         case K_PLAIN:
             for (unsigned j = 0; j < in->len; j++) b(o, in->bytes[j]);
