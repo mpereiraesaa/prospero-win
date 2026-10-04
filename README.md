@@ -55,8 +55,7 @@ See [controls](docs/CONTROLS.md) for input modes and mappings, and
 
 **Experimental, open source, and growing.** Compatibility depends on the
 game and its requirements; support for 32-bit and 64-bit software does not
-yet mean every modern Windows game works. Currently tested on one PS5 on
-firmware **12.02**.
+yet mean every modern Windows game works.
 
 See [game compatibility](COMPATIBILITY.md) for versions, graphics backends
 and controls. Translator benchmark results are in
@@ -79,14 +78,13 @@ The app itself is a zip on the [Releases page](https://github.com/mpereiraesaa/p
 [Getting started](docs/GETTING_STARTED.md) walks through the whole setup, and
 [installing games](docs/INSTALLING_GAMES.md) covers adding a game.
 
-### Other firmwares
+### Firmware
 
-Everything so far was tested on firmware 12.02. The app itself doesn't use
-firmware-specific offsets. The parts that depend on firmware are the
-jailbreak, the loader and the bundled Lapy helper's runtime layout checks. If
-you try another firmware, please open an issue saying what worked and what
-didn't, with the firmware version. That's exactly the information we're
-missing.
+The app itself doesn't use firmware-specific offsets. The parts that depend
+on your firmware are the jailbreak, the loader and the bundled Lapy helper's
+runtime layout checks, so use versions of those that support it. If
+something doesn't work on your firmware, please open an issue with the
+firmware version and what happened.
 
 ## How it works
 

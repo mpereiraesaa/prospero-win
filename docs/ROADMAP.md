@@ -3,8 +3,6 @@
 - **More games.** Warcraft III runs through DXVK on RADV; the next step is a
   wider set of Direct3D 8–11 games, fixing what they need in Wine's PS5
   drivers and patches rather than game by game.
-- **Other firmwares.** Everything so far was tested on 12.02. Reports from
-  other firmwares tell us what depends on the firmware.
 - **More OpenGL games.** Game profiles can select the PS5 OpenGL backend
   alongside DXVK. Broaden compatibility and reduce draw overhead in the SDK;
   its legacy WGL support is awaiting upstream review.

@@ -1,8 +1,6 @@
 # Getting started
 
-This guide takes you from a jailbroken PS5 to a Windows game on your TV. It's
-written for firmware 12.02, the only one tested so far; see the notes at the
-end if yours differs.
+This guide takes you from a jailbroken PS5 to a Windows game on your TV.
 
 ## What you need
 
@@ -140,10 +138,9 @@ background every five seconds, without pausing the game.
 messages for one game, add a `[debug]` section to its profile, for example
 `winedebug = err+all,+loaddll`.
 
-## Other firmwares
+## Firmware
 
-Only 12.02 has been tested. The app doesn't hard-code firmware offsets, so the
-likely differences are in the jailbreak, the app loader and the Lapy JB
-daemon, each of which documents the firmwares it supports. If you try another
-firmware, an issue with the firmware version and what happened is really
-helpful, even if it's "it works".
+The app doesn't hard-code firmware offsets. What depends on your firmware is
+the jailbreak, the app loader and the Lapy JB daemon, each of which documents
+the firmwares it supports. If something doesn't work on yours, an issue with
+the firmware version and what happened is really helpful.
