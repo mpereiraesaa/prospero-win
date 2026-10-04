@@ -5,9 +5,10 @@ build-tested and measured on the console.
 Patch 0810 supplies server authority/lifetime hooks; 0820 adds the native ABI,
 client cache and default-off switch. Native fixtures and SDK pair builds
 pass. The original matching pair has completed ordinary 480-second and
-600-second console runs. Real Wine semantic checks and asynchronous
-thread/signal behavior remain pending; native checks and FPS observations
-do not establish those contracts or justify enabling the switch by default.
+600-second console runs. The ordinary 32-bit Wine fixture passes on the
+default pair and on the candidate pair with the switch off and on. Broader
+asynchronous thread/signal contracts remain unproven; these checks do not
+justify enabling the switch by default.
 
 The performance target remains the full fixed GTA IV route at 1920×1080,
 60 Hz, profiling off, average at least 58 FPS and minimum at least 50 FPS,
@@ -37,10 +38,22 @@ The earlier control and 480-second shared run ended by `close-timeout`;
 those endings do not establish a clean Wine exit.
 
 These observations repeat the improvement but still miss the 58/50 FPS
-target. The ordinary 32-bit Wine semantic comparison, exact settings/module
-receipts and matched load-time gate remain pending. Later cold-admission,
-retained-cell-cap and dump changes were not part of these measured runs.
-Keep their source review and runtime comparisons separate.
+target. The console owner supplied matching module/settings receipts. The
+same ordinary 32-bit PE fixture passes all 11 cases and 174 checks with
+zero failures in each arm: default modules, candidate modules with the
+switch off, and candidate modules with the switch on. All three fixture
+captures follow the Wine-exit path. Coverage includes recursion, access
+fallbacks, multiwaits, SignalObjectAndWait, aliases, handle reuse, queued
+handoff and normal-thread-exit abandonment; it does not cover every
+asynchronous signal, APC, exception or forced-termination contract.
+
+The matched load proxy (the first recorded memory allocation above
+1.4 GB) occurs at about 94.7 seconds in all three gameplay captures. This
+allocation marker is a proxy for loading, not a direct measurement of every
+loading operation. The console owner reports HL2 timedemo results of
+59.84 FPS with the shared switch off and 59.81 FPS with it on, both with
+Wine-exit. Later cold-admission, retained-cell-cap and dump changes were
+not part of these measured runs; they need separate review and comparisons.
 
 ## Ownership and mode changes
 
