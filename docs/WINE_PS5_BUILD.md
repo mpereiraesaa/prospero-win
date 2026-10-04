@@ -307,11 +307,15 @@ two paths.
 ## Immediate mutex calls
 
 Patch 0790 adds a candidate path for ordinary server mutexes that are ready
-immediately. It is **off by default**. Set `WINE_PS5_MUTEX_FAST=1` with
-client-thread requests enabled to bind `pw_wineserver_try_fast_mutex`; ntdll
+immediately. It is **off by default**. With client-thread requests enabled,
+set `WINE_PS5_MUTEX_FAST=1`, or put `1` (optionally followed by one newline)
+in `<Wine prefix>/pw_mutex_fast`, to bind `pw_wineserver_try_fast_mutex`; ntdll
 logs `wine-ps5: immediate mutex calls: on`. `WINE_PS5_SERVER_DIRECT=0`, an
 older module without the export, or any other value of the new variable
-leaves the ordinary request path in use.
+leaves the ordinary request path in use. An explicitly set variable takes
+precedence over the file; otherwise a missing/unreadable file or any other
+contents disables the candidate. The file is read once at connection time,
+so switch it before launching. Use `0` or remove it for the console OFF arm.
 
 This path tries the existing server lock once, resolves the live handle with
 the ordinary access check, and calls Wine's existing mutex ownership/refcount

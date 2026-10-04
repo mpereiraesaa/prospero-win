@@ -39,7 +39,7 @@ def added_source():
 
 
 HARNESS = r'''
-#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
@@ -47,8 +47,10 @@ HARNESS = r'''
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 typedef unsigned int obj_handle_t;
 typedef uint64_t client_ptr_t;
 typedef int64_t timeout_t;
@@ -124,7 +126,23 @@ static client_ptr_t inprocess_teb(void) { return threads[data.tid-1].teb; }
 static obj_handle_t wine_server_obj_handle(HANDLE h) { return (obj_handle_t)(uintptr_t)h; }
 static sigset_t server_block_set;
 static int (*try_server_mutex)(unsigned,client_ptr_t,obj_handle_t,int,unsigned *,unsigned *);
+static const char *config_dir;
 /*PATCH_CLIENT*/
+static void switch_contract(void) {
+    char *path;assert(asprintf(&path,"%s/pw_mutex_fast",config_dir)>0);
+    assert(!unsetenv("WINE_PS5_MUTEX_FAST"));assert(!server_mutex_fast_enabled());
+    const char *values[]={"", "0", "1", "1\n", "11", "1\nextra", "on", "1\r\n"};
+    for(unsigned i=0;i<sizeof(values)/sizeof(*values);i++){
+        FILE *f=fopen(path,"w");assert(f);assert(fputs(values[i],f)>=0);assert(!fclose(f));
+        assert(server_mutex_fast_enabled()==(i==2||i==3));
+        assert(!setenv("WINE_PS5_MUTEX_FAST","0",1));assert(!server_mutex_fast_enabled());
+        assert(!setenv("WINE_PS5_MUTEX_FAST","1",1));assert(server_mutex_fast_enabled());
+        assert(!setenv("WINE_PS5_MUTEX_FAST","on",1));assert(!server_mutex_fast_enabled());
+        assert(!unsetenv("WINE_PS5_MUTEX_FAST"));
+    }
+    assert(!unlink(path));free(path);assert(!server_mutex_fast_enabled());
+    puts("native switch model: prefix OFF/ON, invalid values and explicit environment precedence PASS");
+}
 static void obj_init(struct object *o,const struct object_ops *ops)
 { memset(o,0,sizeof(*o));o->ops=ops;o->refs=1;list_init(&o->wait_queue); }
 static void init(void) {
@@ -259,7 +277,7 @@ static void concurrency(void) {
     printf("native bounded model: 2/4/8/16-thread exclusion PASS, fast=%u fallback-model=%u\n",
            atomic_load(&fast_count),atomic_load(&slow_count));
 }
-int main(void) { init();semantics();concurrency();return 0; }
+int main(int argc,char **argv) { assert(argc==2);config_dir=argv[1];switch_contract();init();semantics();concurrency();return 0; }
 '''
 
 
@@ -269,12 +287,13 @@ def main():
         ("server/mutex.c", "try_fast_mutex"),
         ("server/thread.c", "thread_can_fast_mutex"),
         ("server/request.c", "pw_wineserver_try_fast_mutex")))
-    client = function(sources["dlls/ntdll/unix/server.c"], "server_try_fast_mutex")
+    client = "\n\n".join(function(sources["dlls/ntdll/unix/server.c"], name)
+                           for name in ("server_mutex_fast_enabled", "server_try_fast_mutex"))
     code = HARNESS.replace("/*AUTHORITY*/", (ROOT / "tests/fixtures/wine_mutex_authority.c").read_text())
     code = code.replace("/*PATCH_SERVER*/", server).replace("/*PATCH_CLIENT*/", client)
     # Registration is default-off and missing exports/disabled direct requests fall back.
     binding = sources["dlls/ntdll/unix/server.c"]
-    assert 'if (call_server_direct && p && !strcmp( p, "1" ))' in binding
+    assert 'if (call_server_direct && server_mutex_fast_enabled())' in binding
     assert 'getenv( "WINE_PS5_MUTEX_FAST" )' in binding
     assert 'if (!alertable &&' in sources["dlls/ntdll/unix/sync.c"]
     assert "pw_wineserver_call_direct pw_wineserver_try_fast_mutex" in (ROOT / "tools/build_wine_ps5.sh").read_text()
@@ -285,7 +304,7 @@ def main():
         compiler = shlex.split(os.environ.get("CC", "cc"))
         flags = shlex.split(os.environ.get("CFLAGS", "-O2 -Wall -Wextra -Werror"))
         subprocess.run([*compiler, "-std=c11", *flags, "-pthread", str(source), "-o", str(directory / "check")], check=True)
-        subprocess.run([str(directory / "check")], check=True, timeout=30)
+        subprocess.run([str(directory / "check"), str(directory)], check=True, timeout=30)
     print("Full Wine/PS5 wait queues, delivery, loader lifetime and speed: owner validation pending")
 
 

@@ -7,24 +7,47 @@ select waiter allocation. Try the lock once; every ineligible operation
 falls back without changing mutex state. Preserve native signal masking,
 handle access, object references, ownership lists, recursion and abandonment.
 
-Default off: enable WINE_PS5_MUTEX_FAST=1 with client-thread requests enabled.
+Default off: enable WINE_PS5_MUTEX_FAST=1 or a prefix-local pw_mutex_fast
+file containing 1, with client-thread requests enabled.
 This leaves the accepted 0770 gate and lock implementation unchanged.
 Performance and complete Wine/PS5 compatibility require owner validation.
 
 diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
-index 340cbfb..576e09b 100644
+index 340cbfb..a566b92 100644
 --- a/dlls/ntdll/unix/server.c
 +++ b/dlls/ntdll/unix/server.c
-@@ -320,6 +320,8 @@ ULONGLONG ps5_now_us(void)
+@@ -320,6 +320,30 @@ ULONGLONG ps5_now_us(void)
  #ifdef WINE_INPROCESS_SERVER
  /* the in-process server runs some requests on the calling thread */
  static int (*call_server_direct)( unsigned int tid, client_ptr_t teb, struct __server_request_info *req );
 +static int (*try_server_mutex)( unsigned int tid, client_ptr_t teb, obj_handle_t handle,
 +                                int release, unsigned int *status, unsigned int *prev_count );
++
++/* The console launcher has no arbitrary environment override. A prefix-local
++ * switch is read once during connection; an explicit environment value wins. */
++static int server_mutex_fast_enabled(void)
++{
++    const char *env = getenv( "WINE_PS5_MUTEX_FAST" );
++    char *path;
++    FILE *file;
++    int enabled = 0, value, end;
++
++    if (env) return !strcmp( env, "1" );
++    if (asprintf( &path, "%s/pw_mutex_fast", config_dir ) == -1) return 0;
++    if ((file = fopen( path, "r" )))
++    {
++        value = fgetc( file );
++        end = fgetc( file );
++        enabled = value == '1' && (end == EOF || (end == '\n' && fgetc( file ) == EOF)) && !ferror( file );
++        fclose( file );
++    }
++    free( path );
++    return enabled;
++}
  
  /* the TEB this thread gave the server in init_thread or init_process_done */
  static inline client_ptr_t inprocess_teb(void)
-@@ -331,6 +333,39 @@ static inline client_ptr_t inprocess_teb(void)
+@@ -331,6 +355,39 @@ static inline client_ptr_t inprocess_teb(void)
  }
  #endif
  
@@ -64,12 +87,11 @@ index 340cbfb..576e09b 100644
  unsigned int server_call_unlocked( void *req_ptr )
  {
      struct thread_data *data = get_thread_data();
-@@ -1524,7 +1559,11 @@ static int connect_inprocess_server(void)
+@@ -1524,7 +1581,10 @@ static int connect_inprocess_server(void)
      /* WINE_PS5_SERVER_DIRECT=0 sends every request through the server thread */
      p = getenv( "WINE_PS5_SERVER_DIRECT" );
      if (!p || strcmp( p, "0" )) call_server_direct = dlsym( module, "pw_wineserver_call_direct" );
-+    p = getenv( "WINE_PS5_MUTEX_FAST" );
-+    if (call_server_direct && p && !strcmp( p, "1" ))
++    if (call_server_direct && server_mutex_fast_enabled())
 +        try_server_mutex = dlsym( module, "pw_wineserver_try_fast_mutex" );
      fprintf( stderr, "wine-ps5: server requests on client threads: %s\n", call_server_direct ? "on" : "off" );
 +    fprintf( stderr, "wine-ps5: immediate mutex calls: %s\n", try_server_mutex ? "on" : "off" );
