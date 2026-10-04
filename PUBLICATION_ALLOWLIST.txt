@@ -222,6 +222,9 @@ wine/patches/0750-winspool-fail-unix-calls-without-a-backend.patch
 wine/patches/0760-ws2-32-read-fqdn-once.patch
 tests/test_ws2_fqdn.py
 wine/patches/0770-server-ps5-run-sync-requests-on-client-threads.patch
+wine/patches/0790-server-ps5-immediate-mutex-calls.patch
+tests/test_wine_mutex_fast.py
+tests/fixtures/wine_mutex_authority.c
 tests/wine_ps5_driver_sink.c
 tools/test_wine_inprocess_server.sh
 tests/wine_inprocess_server_check.c
