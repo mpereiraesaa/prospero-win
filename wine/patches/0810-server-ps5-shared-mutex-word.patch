@@ -1,0 +1,100 @@
+From: Prospero Win contributors <prospero-win@localhost>
+Subject: [PATCH] server: add shared mutex word primitives for in-process backend
+
+The primitives do not activate objects or enable a client fast path. Server
+ownership handoff, lifetime, cache and thread-exit integration is required
+before they may be used. This preparatory patch changes no runtime behavior.
+
+diff --git a/include/wine/ps5_mutex_word.h b/include/wine/ps5_mutex_word.h
+new file mode 100644
+--- /dev/null
++++ b/include/wine/ps5_mutex_word.h
+@@ -0,0 +1,88 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* Atomic word primitives for the opt-in in-process mutex backend.
++ * No authority/lifetime policy lives here. The server must freeze before
++ * adopting ownership into legacy fields, and remove the legacy owner/list
++ * reference before publishing fast state. State cells must never be reused
++ * or freed while a cached client can address them. No guest pointers.
++ */
++#ifndef WINE_PS5_MUTEX_WORD_H
++#define WINE_PS5_MUTEX_WORD_H
++#include <assert.h>
++#include <stdint.h>
++
++#define PW_MUTEX_WORD_SLOW (UINT64_C(1) << 63)
++#define PW_MUTEX_WORD_MAX_COUNT UINT32_C(0x7fffffff)
++struct __attribute__((aligned(64))) pw_mutex_word { uint64_t word; };
++
++static inline uint32_t pw_mutex_word_owner(uint64_t word)
++{
++    return (uint32_t)word;
++}
++static inline uint32_t pw_mutex_word_count(uint64_t word)
++{
++    return (uint32_t)(word >> 32) & PW_MUTEX_WORD_MAX_COUNT;
++}
++static inline uint64_t pw_mutex_word_load(const struct pw_mutex_word *cell)
++{
++    return __atomic_load_n(&cell->word, __ATOMIC_ACQUIRE);
++}
++static inline int pw_mutex_word_try_acquire(struct pw_mutex_word *cell, uint32_t token)
++{
++    uint64_t old, next;
++    uint32_t count;
++    if (!token) return 0;
++    old = pw_mutex_word_load(cell);
++    if (old & PW_MUTEX_WORD_SLOW) return 0;
++    count = pw_mutex_word_count(old);
++    if (!old) next = token | (UINT64_C(1) << 32);
++    else
++    {
++        if (pw_mutex_word_owner(old) != token || !count || count == PW_MUTEX_WORD_MAX_COUNT) return 0;
++        next = old + (UINT64_C(1) << 32);
++    }
++    return __atomic_compare_exchange_n(&cell->word, &old, next, 0,
++                                       __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
++}
++static inline int pw_mutex_word_try_release(struct pw_mutex_word *cell, uint32_t token,
++                                          uint32_t *count_before)
++{
++    uint64_t old, next;
++    uint32_t count;
++    if (!token) return 0;
++    old = pw_mutex_word_load(cell);
++    count = pw_mutex_word_count(old);
++    if ((old & PW_MUTEX_WORD_SLOW) || !count || pw_mutex_word_owner(old) != token) return 0;
++    next = count == 1 ? 0 : old - (UINT64_C(1) << 32);
++    if (!__atomic_compare_exchange_n(&cell->word, &old, next, 0,
++                                     __ATOMIC_RELEASE, __ATOMIC_RELAXED)) return 0;
++    /* Native caller-local storage, never an application output pointer. */
++    *count_before = count;
++    return 1;
++}
++/* Under the server lock. Exactly one entry snapshot is adopted; subsequent
++ * recursive entries see SLOW and keep the existing legacy authority.
++ */
++static inline int pw_mutex_word_freeze(struct pw_mutex_word *cell, uint64_t *snapshot)
++{
++    *snapshot = __atomic_fetch_or(&cell->word, PW_MUTEX_WORD_SLOW, __ATOMIC_ACQ_REL);
++    return !(*snapshot & PW_MUTEX_WORD_SLOW);
++}
++/* Validate representation before removing any owner reference. A count past
++ * MAX stays in ordinary server mode; it is not a guest failure/retirement.
++ */
++static inline int pw_mutex_word_compose(uint32_t token, uint32_t count, uint64_t *word)
++{
++    if (count > PW_MUTEX_WORD_MAX_COUNT || (!!token != !!count)) return 0;
++    *word = token | ((uint64_t)count << 32);
++    return 1;
++}
++/* Under the server lock, only after all waiter, abandonment, retirement,
++ * operation-depth, thread-lifetime and module gates permit fast authority.
++ */
++static inline void pw_mutex_word_publish(struct pw_mutex_word *cell, uint64_t word)
++{
++    assert(!(word & PW_MUTEX_WORD_SLOW));
++    assert(pw_mutex_word_load(cell) & PW_MUTEX_WORD_SLOW);
++    __atomic_store_n(&cell->word, word, __ATOMIC_RELEASE);
++}
++#endif
