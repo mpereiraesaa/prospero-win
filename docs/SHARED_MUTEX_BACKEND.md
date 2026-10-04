@@ -1,11 +1,11 @@
 # Shared mutex backend
 
-Status: server preparation and bounded native checks. Patch 0810 adds the
-atomic header and server authority, queue and lifetime hooks. The internal
-cold preparation function has no runtime caller; no client can activate a
-shared cell yet. No new module export or default is enabled, and no console
-performance result exists for this patch. Unix client/ABI/cache integration
-and full Wine runtime validation remain required.
+Status: experimental Unix client/server source implemented and build-tested.
+Patch 0810 supplies server authority/lifetime hooks; 0820 adds the native ABI,
+client cache and default-off switch. Native fixtures and SDK pair builds
+pass. Real Wine semantics, asynchronous thread/signal behavior and console
+performance remain unvalidated. The pair is held for source/runtime review;
+no hardware activation, PR or merge is approved by these source checks.
 
 The performance target remains the full fixed GTA IV route at 1920×1080,
 60 Hz, profiling off, average at least 58 FPS and minimum at least 50 FPS,
@@ -71,8 +71,8 @@ and client lifetime review. A unique counter token prevents a freed or
 reused Wine tid from becoming an apparent live owner. Ordinary abandonment
 must remain prompt for queued waiters, and server inspection must recognize
 a terminated or vanished fast owner. The server code folds a currently
-published fast owner before ordinary abandonment and treats a vanished/terminated token as abandoned on slow
-entry. This has not been tested with real asynchronous termination or
+published fast owner before ordinary abandonment and treats a vanished or
+terminated token as abandoned on slow entry. This has not been tested with real asynchronous termination or
 signals and does not yet prove that protocol.
 
 The internal activation policy excludes named, initially inheritable,
@@ -92,16 +92,54 @@ reports null security attributes at the hot creation sites from static
 analysis; this is not an independent source or runtime check. The other
 agent owns the requested runtime attribute capture.
 
-## Client integration still required
+## Experimental Unix client
 
-The client handle table needs exact negative entries for ineligible objects,
-fill under `fd_cache_mutex` with a second lookup, and invalidation beside
-all four `close_inproc_sync` sites. Module discovery needs an ABI/version
-handshake and an unlocked readiness check. Missing or incompatible exports
-must fall back before cache fill or server locking. Server readiness reads
-and writes now use acquire/release atomics, and downgrade retires every
-active cell before unlocking. This is preparatory server code; client
-readiness/module lifetime checks remain absent.
+`WINE_PS5_MUTEX_SHARED=1` or a prefix-local `pw_mutex_shared` containing
+exactly `1` (optionally followed by a newline) selects this backend. An
+explicit environment value wins. The switch defaults off and is separate
+from the older typed `pw_mutex_fast` switch. `WINE_PS5_SERVER_DIRECT=0`
+disables both. The switch file is read and closed once during connection.
+
+The client discovers `pw_wineserver_mutex_backend` and validates version,
+structure size, word size, native pointer size and both required pointers.
+Missing/incompatible exports retain the existing backend selection without
+allocating a shared cache or acquiring its lock. The connection retains
+the server module until teardown, just as for the existing direct-call
+function pointers; this API does not support unloading that module while
+clients run. Readiness uses acquire/release atomics and downgrade retires
+active cells before server-lock release.
+
+The canonical handle table uses 128 pages of 64 KiB on the native 64-bit
+build, allocated only on demand. Empty, permanently ineligible and positive
+slots are distinct. A positive slot packs the permanent native cell pointer
+with its wait-access bit; release retains Wine's access-zero behavior.
+Invalid handles and allocation/token/readiness failures remain retryable
+and cannot create permanent negatives. More than 64 valid event handles
+can retain independent negatives without the old modulo hint collisions.
+
+All fills and their second lookups happen under `fd_cache_mutex`, with the
+existing uninterrupted-section machinery. Invalidation sits beside all
+four `close_inproc_sync` calls: ordinary close, duplicate-close-source,
+APC-result consumption and context-handle consumption. Cache pages and
+retired words stay readable through the module lifetime.
+
+The per-thread token occupies the old four-byte padding after `ps5_sleeps`.
+SDK assertions and compiled layout constants confirm `thread_data` size
+and its signal-stack/sleep-field offsets are unchanged. Both thread-id
+initialization sites explicitly reset the token. A new thread obtains its
+own token on the first positive metadata lookup, even if another thread
+already populated that handle's process-wide slot.
+
+A warm success performs readiness/slot/word loads and one ownership CAS.
+It takes no server/cache lock, makes no server request, changes no signal
+mask and reads no clock. Timeout storage is read before an acquisition
+CAS; the caller's previous-count storage is written after a successful
+release. These source properties still require real Wine exception and
+signal validation. With this backend selected, misses go to ordinary Wine
+semantics rather than adding a second typed-mutex probe. Successful shared
+hits also do not refresh the legacy last-server-request watchdog timestamp.
+With that diagnostic enabled, its elapsed-request age cannot establish
+whether a thread was idle or executing shared hits.
 
 ## Entry cost
 
@@ -113,7 +151,7 @@ After that backend passes console gates, a native hit at wowprospero's
 syscall BOP can call the same narrow helper before exiting the run loop.
 It requires its own register/stack/FP, signal, module and diagnostic
 contracts. This avoids adding a guest-writable arena or changing PE
-modules. No BOP interception exists in this preparatory patch.
+modules. No BOP interception exists in this experimental backend.
 
 ## Checks
 
@@ -137,7 +175,7 @@ They do not run Wine, a game, console inputs, signal/termination races, or
 fault workloads, and do not prove the full integration, handle lifetime,
 exception behavior, abandonment protocol, or performance target.
 
-The source preparation applied all 57 ordered patches to the pinned Wine
+The initial server preparation applied all 57 ordered patches to the pinned Wine
 revision. Reapplying the revised 0810 to its preceding server files produces
 all eight affected source/header files byte-identically to the SDK inputs.
 The server module rebuild compiles all 45 C units against one private
@@ -149,5 +187,25 @@ Copying the headers uniformly first shifted 17 assertion line constants
 from 121 to 126 after 0770's five declaration lines; a control-only `#line`
 directive preserves the accepted diagnostic positions. Candidate headers
 use their actual source positions and receive no such directive. The signed
-candidate is build evidence only and must not be deployed before client
-integration and the owner's runtime checks.
+server-only candidate was preparation evidence; the complete pair below
+still requires the owner's source/runtime checks before deployment.
+
+`python3 tests/test_wine_shared_mutex_client.py` compiles the exact added
+client bodies and native ABI header from 0820. It also compiles the actual added
+server lookup/ABI entry bodies. With fixture metadata, server context and
+uninterrupted-section callbacks, it checks ABI mismatch rejection, 24,000
+warm operations without extra cold calls/locks, 80 exact negative slots,
+transient retries, recursion/local output, wait access versus access-zero
+release, a second page, readiness downgrade, temporary SLOW recovery, ordinary close/reuse and
+12,000 protected sections across four live threads. Normal and clang
+ASan/UBSan runs pass. These callbacks do not model the complete Wine server,
+its signals or exception delivery; they do not measure the WoW64 entry or
+establish a console speedup.
+
+The complete matching SDK pair rebuild compiles every server and ntdll
+unit against private, consistent headers. Its baseline arms reproduce both
+accepted module hashes byte-for-byte. Applied source and transitive header
+pins, layout probes and separate module hashes accompany the pair. The
+server control retains the previously documented assertion-line metadata
+mapping; no candidate header is rewritten. Full source review and the
+owner's real Wine matrix precede any console deployment.

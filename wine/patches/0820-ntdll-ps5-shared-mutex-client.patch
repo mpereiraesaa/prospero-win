@@ -1,0 +1,417 @@
+From: Prospero Win contributors <prospero-win@localhost>
+Subject: [PATCH] ntdll: add opt-in native shared mutex backend and exact cache
+
+Depends on 0810 server authority and lifetime preparation. Native ABI and
+handle cache avoid server locking on successful shared-word operations.
+The exact-1 WINE_PS5_MUTEX_SHARED/pw_mutex_shared switch is default off.
+Full Wine semantics and console performance remain validation gates.
+
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index 86f8a96..02689a3 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -327,6 +327,9 @@ static int (*try_server_mutex)( unsigned int tid, client_ptr_t teb, obj_handle_t
+  * retains an object or stores ownership. A stale entry can only lose speed. */
+ static unsigned long long nonmutex_hints[64];
+
++#include "wine/ps5_mutex_backend.h"
++static const struct pw_mutex_backend *shared_mutex_backend;
++
+ /* At most 63 skips after the last observation, then probe again. This also
+  * bounds lost optimization after concurrent close/reuse races. One failed
+  * CAS probes rather than waiting; the hint is never synchronization state. */
+@@ -341,15 +344,15 @@ static int server_skip_fast_mutex( obj_handle_t handle )
+
+ /* The console launcher has no arbitrary environment override. A prefix-local
+  * switch is read once during connection; an explicit environment value wins. */
+-static int server_mutex_fast_enabled(void)
++static int server_mutex_switch_enabled( const char *environment, const char *file_name )
+ {
+-    const char *env = getenv( "WINE_PS5_MUTEX_FAST" );
++    const char *env = getenv( environment );
+     char *path;
+     FILE *file;
+     int enabled = 0, value, end;
+
+     if (env) return !strcmp( env, "1" );
+-    if (asprintf( &path, "%s/pw_mutex_fast", config_dir ) == -1) return 0;
++    if (asprintf( &path, "%s/%s", config_dir, file_name ) == -1) return 0;
+     if ((file = fopen( path, "r" )))
+     {
+         value = fgetc( file );
+@@ -371,6 +374,105 @@ static inline client_ptr_t inprocess_teb(void)
+ }
+ #endif
+
++#ifdef WINE_INPROCESS_SERVER
++/* Exact canonical handle table, like Wine's fd table, never a modulo hint.
++ * Page pointers and slots are acquire/release atomic. Pages are never freed.
++ * fd_cache_mutex serializes every fill and all four close invalidations. */
++#define PW_MUTEX_CACHE_PAGES 128u
++#define PW_MUTEX_CACHE_SLOTS (65536u / sizeof(uintptr_t))
++static uintptr_t *shared_mutex_pages[PW_MUTEX_CACHE_PAGES];
++static uintptr_t shared_mutex_initial[PW_MUTEX_CACHE_SLOTS];
++
++static uintptr_t *shared_mutex_slot( obj_handle_t handle, int allocate )
++{
++    unsigned int index = (handle >> 2) - 1;
++    unsigned int page = index / PW_MUTEX_CACHE_SLOTS;
++    uintptr_t *slots;
++    if (page >= PW_MUTEX_CACHE_PAGES) return NULL;
++    slots = __atomic_load_n( &shared_mutex_pages[page], __ATOMIC_ACQUIRE );
++    if (!slots && allocate)
++    {
++        slots = page ? anon_mmap_alloc( 65536, PROT_READ | PROT_WRITE ) : shared_mutex_initial;
++        if (slots == MAP_FAILED) return NULL;
++        __atomic_store_n( &shared_mutex_pages[page], slots, __ATOMIC_RELEASE );
++    }
++    return slots ? &slots[index % PW_MUTEX_CACHE_SLOTS] : NULL;
++}
++
++/* Caller holds fd_cache_mutex with server signals blocked. Do not cache
++ * transient lookup failures. A negative slot never needs a thread token. */
++static uintptr_t shared_mutex_fill( struct thread_data *data, obj_handle_t handle )
++{
++    struct pw_mutex_word *word = NULL;
++    uint32_t token = 0, access = 0;
++    uintptr_t *slot, value;
++    int ret;
++    if (!pw_mutex_backend_ready( shared_mutex_backend ) ||
++        !(slot = shared_mutex_slot( handle, 1 ))) return 0;
++    value = __atomic_load_n( slot, __ATOMIC_ACQUIRE );
++    if (value == PW_MUTEX_SLOT_NEGATIVE || (value && data->ps5_mutex_token)) return value;
++    ret = shared_mutex_backend->get_word( PW_MUTEX_BACKEND_VERSION, data->tid, inprocess_teb(),
++                                          handle, &word, &token, &access );
++    if (ret == PW_MUTEX_LOOKUP_NEGATIVE)
++        value = PW_MUTEX_SLOT_NEGATIVE;
++    else if (ret == PW_MUTEX_LOOKUP_READY && word && !((uintptr_t)word & 63) && token)
++    {
++        data->ps5_mutex_token = token;
++        value = (uintptr_t)word | ((access & SYNCHRONIZE) ? PW_MUTEX_SLOT_SYNCHRONIZE : 0);
++    }
++    else return 0;
++    __atomic_store_n( slot, value, __ATOMIC_RELEASE );
++    return value;
++}
++
++/* Only the cold miss section changes signals/takes a lock. The ordinary
++ * path preserves guest waits/errors; all outputs to it happen after CAS. */
++static unsigned int server_try_shared_mutex( HANDLE handle, int release,
++                                             const LARGE_INTEGER *timeout, LONG *prev_count )
++{
++    struct thread_data *data = get_thread_data();
++    obj_handle_t h = wine_server_obj_handle( handle );
++    uintptr_t *slot, value;
++    struct pw_mutex_word *word;
++    uint32_t previous;
++    sigset_t sigset;
++    if (!data->tid || !pw_mutex_backend_ready( shared_mutex_backend )) return STATUS_NOT_IMPLEMENTED;
++    slot = shared_mutex_slot( h, 0 );
++    value = slot ? __atomic_load_n( slot, __ATOMIC_ACQUIRE ) : 0;
++    if (value == PW_MUTEX_SLOT_NEGATIVE) return STATUS_NOT_IMPLEMENTED;
++    if (!value || !data->ps5_mutex_token)
++    {
++        server_enter_uninterrupted_section( &fd_cache_mutex, &sigset );
++        value = shared_mutex_fill( data, h );
++        server_leave_uninterrupted_section( &fd_cache_mutex, &sigset );
++    }
++    if (!value || value == PW_MUTEX_SLOT_NEGATIVE ||
++        !pw_mutex_backend_ready( shared_mutex_backend )) return STATUS_NOT_IMPLEMENTED;
++    word = pw_mutex_slot_word( value );
++    if (release)
++    {
++        if (!pw_mutex_word_try_release( word, data->ps5_mutex_token, &previous )) return STATUS_NOT_IMPLEMENTED;
++        if (prev_count) *prev_count = 1 - previous;
++    }
++    else
++    {
++        if (!(value & PW_MUTEX_SLOT_SYNCHRONIZE)) return STATUS_NOT_IMPLEMENTED;
++        if (timeout) { volatile timeout_t when = timeout->QuadPart; (void)when; }
++        if (!pw_mutex_word_try_acquire( word, data->ps5_mutex_token )) return STATUS_NOT_IMPLEMENTED;
++    }
++    return STATUS_SUCCESS;
++}
++#endif
++
++/* Caller already holds fd_cache_mutex, beside close_inproc_sync. */
++void server_clear_shared_mutex_slot( HANDLE handle )
++{
++#ifdef WINE_INPROCESS_SERVER
++    uintptr_t *slot = shared_mutex_slot( wine_server_obj_handle( handle ), 0 );
++    if (slot) __atomic_store_n( slot, 0, __ATOMIC_RELEASE );
++#endif
++}
++
+ void server_clear_fast_mutex_hint( HANDLE handle )
+ {
+ #ifdef WINE_INPROCESS_SERVER
+@@ -402,6 +504,7 @@ unsigned int server_try_fast_mutex( HANDLE handle, int release, const LARGE_INTE
+     sigset_t old_set;
+     int fallback;
+
++    if (shared_mutex_backend) return server_try_shared_mutex( handle, release, timeout, prev_count );
+     if (!try_server_mutex || !data->tid) return STATUS_NOT_IMPLEMENTED;
+     if (!release && server_skip_fast_mutex( h )) return STATUS_NOT_IMPLEMENTED;
+     if (!release && timeout)
+@@ -1090,6 +1193,7 @@ unsigned int server_queue_process_apc( HANDLE process, const union apc_call *cal
+             server_enter_uninterrupted_section( &fd_cache_mutex, &sigset );
+
+             /* remove the handle from the cache, get_apc_result will close it for us */
++            server_clear_shared_mutex_slot( handle );
+             close_inproc_sync( handle );
+
+             SERVER_START_REQ( get_apc_result )
+@@ -1621,8 +1725,17 @@ static int connect_inprocess_server(void)
+     /* WINE_PS5_SERVER_DIRECT=0 sends every request through the server thread */
+     p = getenv( "WINE_PS5_SERVER_DIRECT" );
+     if (!p || strcmp( p, "0" )) call_server_direct = dlsym( module, "pw_wineserver_call_direct" );
+-    if (call_server_direct && server_mutex_fast_enabled())
++    if (call_server_direct && server_mutex_switch_enabled( "WINE_PS5_MUTEX_FAST", "pw_mutex_fast" ))
+         try_server_mutex = dlsym( module, "pw_wineserver_try_fast_mutex" );
++    if (call_server_direct && server_mutex_switch_enabled( "WINE_PS5_MUTEX_SHARED", "pw_mutex_shared" ))
++    {
++        const struct pw_mutex_backend *(*query)(uint32_t);
++        const struct pw_mutex_backend *api;
++        query = dlsym( module, "pw_wineserver_mutex_backend" );
++        if (query && pw_mutex_backend_valid( api = query( PW_MUTEX_BACKEND_VERSION )))
++            shared_mutex_backend = api;
++    }
++    fprintf( stderr, "wine-ps5: shared mutex backend: %s\n", shared_mutex_backend ? "on" : "off" );
+     fprintf( stderr, "wine-ps5: server requests on client threads: %s\n", call_server_direct ? "on" : "off" );
+     fprintf( stderr, "wine-ps5: immediate mutex calls: %s\n", try_server_mutex ? "on" : "off" );
+     TRACE( "connected to the in-process server %s\n", module_path );
+@@ -1955,6 +2068,9 @@ size_t server_init_process(void)
+             obj_handle_t handle;
+             pid               = reply->pid;
+             data->tid         = reply->tid;
++#if defined(__PROSPERO__) || defined(WINE_INPROCESS_SERVER)
++            data->ps5_mutex_token = 0;
++#endif
+             peb->SessionId    = reply->session_id;
+             info_size         = reply->info_size;
+             server_start_time = reply->server_start;
+@@ -2159,6 +2275,7 @@ NTSTATUS WINAPI NtDuplicateObject( HANDLE source_process, HANDLE source, HANDLE
+     if (options & DUPLICATE_CLOSE_SOURCE)
+     {
+         fd = remove_fd_from_cache( source );
++        server_clear_shared_mutex_slot( source );
+         close_inproc_sync( source );
+     }
+
+@@ -2234,6 +2351,7 @@ NTSTATUS WINAPI NtClose( HANDLE handle )
+     /* always remove the cached fd; if the server request fails we'll just
+      * retrieve it again */
+     fd = remove_fd_from_cache( handle );
++    server_clear_shared_mutex_slot( handle );
+     close_inproc_sync( handle );
+
+     SERVER_START_REQ( close_handle )
+diff --git a/dlls/ntdll/unix/thread.c b/dlls/ntdll/unix/thread.c
+index 499ebe4..81f3f4d 100644
+--- a/dlls/ntdll/unix/thread.c
++++ b/dlls/ntdll/unix/thread.c
+@@ -1312,6 +1312,9 @@ static NTSTATUS create_server_thread( HANDLE *handle, struct thread_data **data_
+
+     data->request_fd = request_pipe[1];
+     data->tid        = tid;
++#if defined(__PROSPERO__) || defined(WINE_INPROCESS_SERVER)
++    data->ps5_mutex_token = 0;
++#endif
+     data->start      = start;
+     data->param      = param;
+
+@@ -1958,6 +1961,7 @@ NTSTATUS get_thread_context( HANDLE handle, void *context, BOOL *self, USHORT ma
+         server_enter_uninterrupted_section( &fd_cache_mutex, &sigset );
+
+         /* remove the handle from the cache, get_thread_context will close it for us */
++        server_clear_shared_mutex_slot( context_handle );
+         close_inproc_sync( context_handle );
+
+         SERVER_START_REQ( get_thread_context )
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index ec93497..f9c8f92 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -118,6 +118,9 @@ struct thread_data
+     ULONGLONG    ps5_spawn_us;      /* WINE_PS5_WAIT_WATCHDOG: when spawn_thread created it */
+     ULONGLONG    ps5_sleep_since;   /* WINE_PS5_WAIT_WATCHDOG: NtDelayExecution calls since */
+     unsigned int ps5_sleeps;
++#if defined(__PROSPERO__) || defined(WINE_INPROCESS_SERVER)
++    unsigned int ps5_mutex_token; /* occupies the padding before ps5_sleep_asked on x86_64 */
++#endif
+     LONGLONG     ps5_sleep_asked;   /* microseconds of sleep asked since then */
+     char         debug_info[0x800]; /* debug_info structure */
+     char         signal_stack[];    /* signal stack */
+@@ -248,6 +251,7 @@ extern unsigned int server_call_unlocked( void *req_ptr );
+ extern unsigned int server_try_fast_mutex( HANDLE handle, int release, const LARGE_INTEGER *timeout,
+                                            LONG *prev_count );
+ extern void server_clear_fast_mutex_hint( HANDLE handle );
++extern void server_clear_shared_mutex_slot( HANDLE handle );
+ extern void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset );
+ extern int ps5_slow_log(void);
+ extern ULONGLONG ps5_now_us(void);
+diff --git a/include/wine/ps5_mutex_backend.h b/include/wine/ps5_mutex_backend.h
+new file mode 100644
+index 0000000..7a3d76c
+--- /dev/null
++++ b/include/wine/ps5_mutex_backend.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* Native module ABI. No guest-addressable state or application pointers. */
++#ifndef WINE_PS5_MUTEX_BACKEND_H
++#define WINE_PS5_MUTEX_BACKEND_H
++#include <stddef.h>
++#include <stdint.h>
++#include "ps5_mutex_word.h"
++#define PW_MUTEX_BACKEND_VERSION 1u
++#define PW_MUTEX_LOOKUP_READY 0
++#define PW_MUTEX_LOOKUP_RETRY 1
++#define PW_MUTEX_LOOKUP_NEGATIVE 2
++#define PW_MUTEX_SLOT_NEGATIVE ((uintptr_t)1)
++#define PW_MUTEX_SLOT_SYNCHRONIZE ((uintptr_t)2)
++#define PW_MUTEX_SLOT_FLAGS ((uintptr_t)3)
++struct pw_mutex_backend
++{
++    uint32_t version, size, word_size, pointer_size;
++    const int *ready;
++    int (*get_word)( uint32_t version, uint32_t tid, uint64_t teb, uint32_t handle,
++                     struct pw_mutex_word **word, uint32_t *token, uint32_t *access );
++};
++static inline int pw_mutex_backend_valid( const struct pw_mutex_backend *api )
++{
++    return api && api->version == PW_MUTEX_BACKEND_VERSION && api->size == sizeof(*api) &&
++        api->word_size == sizeof(struct pw_mutex_word) && api->pointer_size == sizeof(void *) &&
++        api->ready && api->get_word;
++}
++static inline int pw_mutex_backend_ready( const struct pw_mutex_backend *api )
++{
++    return __atomic_load_n( api->ready, __ATOMIC_ACQUIRE );
++}
++static inline struct pw_mutex_word *pw_mutex_slot_word( uintptr_t slot )
++{
++    return (struct pw_mutex_word *)(slot & ~PW_MUTEX_SLOT_FLAGS);
++}
++#endif
+diff --git a/server/mutex.c b/server/mutex.c
+index 2a02a2f..c18c806 100644
+--- a/server/mutex.c
++++ b/server/mutex.c
+@@ -38,6 +38,7 @@
+ #include <string.h>
+ #include "process.h"
+ #include "wine/ps5_mutex_word.h"
++#include "wine/ps5_mutex_backend.h"
+ #endif
+
+ static const WCHAR mutex_name[] = {'M','u','t','a','n','t'};
+@@ -470,6 +471,30 @@ done:
+     release_object( mutex );
+     return ret;
+ }
++
++/* Negative entries describe a valid, permanently ineligible handle only.
++ * Invalid handles and allocation/readiness/token failures must be retried;
++ * they cannot poison a handle value created later without a preceding close. */
++int ps5_describe_mutex_word( struct thread *thread, obj_handle_t handle, struct pw_mutex_word **word,
++                            unsigned int *token, unsigned int *access )
++{
++    struct object *obj;
++    struct mutex *mutex;
++    int ret = PW_MUTEX_LOOKUP_RETRY;
++    if (!(obj = get_handle_obj( thread->process, handle, 0, NULL ))) return ret;
++    if (obj->ops != &mutex_ops) ret = PW_MUTEX_LOOKUP_NEGATIVE;
++    else
++    {
++        mutex = (struct mutex *)obj;
++        if (!mutex->fast_eligible || obj->name || obj->handle_count != 1 ||
++            mutex->sync->ops != &mutex_sync_ops || ((struct mutex_sync *)mutex->sync)->fast_disabled)
++            ret = PW_MUTEX_LOOKUP_NEGATIVE;
++        else if (ps5_get_mutex_word( thread, handle, word, token, access ))
++            ret = PW_MUTEX_LOOKUP_READY;
++    }
++    release_object( obj );
++    return ret;
++}
+ #endif
+
+ void abandon_mutexes( struct thread *thread )
+diff --git a/server/request.c b/server/request.c
+index fd25a6d..9e2dd2e 100644
+--- a/server/request.c
++++ b/server/request.c
+@@ -62,6 +62,7 @@
+ #include "request_handlers.h"
+ #ifdef WINE_INPROCESS_SERVER
+ #include "wine/server.h"
++#include "wine/ps5_mutex_backend.h"
+ #endif
+
+ /* Some versions of glibc don't define this */
+@@ -370,6 +371,54 @@ unlock:
+     return ret;
+ }
+
++/* Native caller-local outputs, with server signals blocked by the client's
++ * fd_cache_mutex section. ABI discovery is passive; this lookup may activate. */
++static int get_shared_mutex_word( uint32_t version, uint32_t tid, uint64_t teb, uint32_t handle,
++                                  struct pw_mutex_word **word, uint32_t *token, uint32_t *access )
++{
++    struct thread *thread;
++    unsigned int saved_error, saved_global_error;
++    int ret = PW_MUTEX_LOOKUP_RETRY;
++    if (version != PW_MUTEX_BACKEND_VERSION ||
++        !__atomic_load_n( &inprocess_direct_ok, __ATOMIC_ACQUIRE )) return ret;
++    if (pthread_mutex_trylock( &inprocess_server_mutex )) return ret;
++    saved_global_error = global_error;
++    if (!__atomic_load_n( &inprocess_direct_ok, __ATOMIC_ACQUIRE ) || current || debug_level) goto unlock;
++    if (!(thread = get_thread_from_id( tid ))) goto unlock;
++    if (thread->teb == teb && teb && thread->state != TERMINATED && thread->reply_fd &&
++        !thread->req_toread && !thread->reply_towrite && !thread->req_data && !thread->reply_data &&
++        thread_can_fast_mutex( thread ))
++    {
++        saved_error = thread->error;
++        current = thread;
++        clear_error();
++        ps5_mutex_server_begin();
++        ret = ps5_describe_mutex_word( thread, handle, word, token, access );
++        current = NULL;
++        ps5_mutex_server_end();
++        thread->error = saved_error;
++    }
++    release_object( thread );
++unlock:
++    global_error = saved_global_error;
++    ps5_mutex_server_reconcile();
++    pthread_mutex_unlock( &inprocess_server_mutex );
++    return ret;
++}
++
++/* The connection retains the wineserver module until process teardown, as
++ * with its existing direct-call pointers. Ready can be revoked atomically;
++ * retired cells stay readable and SLOW until that same module teardown. */
++DECLSPEC_EXPORT const struct pw_mutex_backend *pw_wineserver_mutex_backend( uint32_t version )
++{
++    static const struct pw_mutex_backend api =
++    {
++        PW_MUTEX_BACKEND_VERSION, sizeof(api), sizeof(struct pw_mutex_word), sizeof(void *),
++        &inprocess_direct_ok, get_shared_mutex_word
++    };
++    return version == PW_MUTEX_BACKEND_VERSION ? &api : NULL;
++}
++
+ /* Requests a client thread may run itself: they act on sync objects,
+  * handles and file opens, and never sleep in the server (a wait that cannot
+  * be satisfied returns STATUS_PENDING, and the thread then sleeps on its wait
+diff --git a/server/request.h b/server/request.h
+index bf2d0d3..903cda3 100644
+--- a/server/request.h
++++ b/server/request.h
+@@ -72,6 +72,8 @@ extern void ps5_mutex_server_end(void);
+ extern void ps5_mutex_server_reconcile(void);
+ extern void ps5_mutex_server_disable(void);
+ extern void ps5_mutex_retire_object( struct object *obj );
++extern int ps5_describe_mutex_word( struct thread *thread, obj_handle_t handle, struct pw_mutex_word **word,
++                                   unsigned int *token, unsigned int *access );
+ extern int ps5_get_mutex_word( struct thread *thread, obj_handle_t handle, struct pw_mutex_word **word,
+                               unsigned int *token, unsigned int *access );
+ extern int inprocess_wake_fd;
