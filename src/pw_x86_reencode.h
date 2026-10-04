@@ -23,6 +23,12 @@
  * translates; the two meet through the canonical entries (the contracts
  * never match), so either can follow the other.
  *
+ * div and idiv run as the host's, on a divisor checked first: one that would
+ * fault stops the block at the div with the guest state untouched and
+ * returns to C, which then reports it as before (the 32-bit forms as the
+ * emitter does, PW_ERR_VM; the 8- and 16-bit ones through the host fallback,
+ * PW_X86_REENCODE_HOST_STEP), so the host instruction never raises #DE.
+ *
  * Differences from the older emitter, both deliberate:
  * - a fault reports the incoming arithmetic flags exactly only when a later
  *   instruction reads them; when every flag is redefined before any read,
@@ -39,6 +45,12 @@
  * with guest_to_host holding 16 + the host register number. */
 enum { PW_X86_REENCODE_HOST_BASE = 16, PW_X86_REENCODE_CHAIN_SLOTS = 65536,
        PW_X86_REENCODE_CHAIN_ENTRIES = 2 * PW_X86_REENCODE_CHAIN_SLOTS };
+
+/* What a re-encoded block returns when it stops at state->eip for the host
+ * fallback (pw_x86_hostexec) to run that one instruction, as it did before
+ * the re-encoder took it: an 8- or 16-bit div or idiv that divides by zero
+ * or overflows. The engine's step reports it as PW_ERR_UNSUPPORTED. */
+enum { PW_X86_REENCODE_HOST_STEP = 0x100 };
 
 /* Whether a translated block came from this backend. */
 static inline int pw_x86_reencoded(const PwX86RegContract *contract)

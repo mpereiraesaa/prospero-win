@@ -770,6 +770,7 @@ dispatch:;
         engine->dispatcher_transitions++;
     }
     engine->retired_instructions+=report->retired;
+    if(invoked==PW_X86_REENCODE_HOST_STEP)return PW_ERR_UNSUPPORTED;
     return invoked==PW_ERR_X87_TRAP?PW_ERR_X87_TRAP:invoked?PW_ERR_VM:PW_OK;
 }
 

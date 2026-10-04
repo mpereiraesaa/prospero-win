@@ -450,9 +450,11 @@ and 3 matter only for code the re-encoder does not take.
   of it never run. Sharing one leave routine per engine would put the hot
   code of consecutive blocks closer together.
 - **What the re-encoder does not take yet** ends its block and goes to the
-  emitter, which stores and reloads the pinned state: div/idiv (they fault
-  natively), push/pop of 16-bit operands, pusha/popa, std and cld, and
-  forms that need REX with ah-bh. Under native FP such a crossing also
+  emitter, which stores and reloads the pinned state: push/pop of 16-bit
+  operands, pusha/popa, std and cld, and forms that need REX with ah-bh.
+  (div and idiv are re-encoded now: the divisor is checked before the
+  host's instruction, and a divide error goes back to C the way it did
+  before.) Under native FP such a crossing also
   moves the FP state through C, as in nbench's STRING SORT.
 - **The guard's flag save.** When flags are live across a memory access,
   the guard wraps its compare in `lahf`/`seto` and `sahf`; a flag-free

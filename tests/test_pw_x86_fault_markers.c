@@ -363,6 +363,41 @@ static void test_multiple_fault_paths(void)
     host_call_stack=0;
 }
 
+/* div and idiv with markers: a divisor read from the null page faults
+ * through its marked load in every width (the flags still the guest's, as
+ * the check comes after the load), and a divide error, which is no host
+ * fault, stops both modes alike without a redirect. */
+static void test_divide(void)
+{
+    /* xor ebx, ebx; cmp ecx, edx; div dword [ebx+8]; ret */
+    static const uint8_t wide[] = { 0x31, 0xdb, 0x39, 0xd1, 0xf7, 0x73, 0x08, 0xc3 };
+    /* xor ebx, ebx; cmp ecx, edx; idiv byte [ebx+8]; ret */
+    static const uint8_t narrow[] = { 0x31, 0xdb, 0x39, 0xd1, 0xf6, 0x7b, 0x08, 0xc3 };
+    /* xor ebx, ebx; cmp ecx, edx; div word [ebx+8]; ret */
+    static const uint8_t word[] = { 0x31, 0xdb, 0x39, 0xd1, 0x66, 0xf7, 0x73, 0x08, 0xc3 };
+    /* push 0; mov eax, 7; cmp ecx, edx; idiv dword [esp]; ret */
+    static const uint8_t zero[] = { 0x6a, 0x00, 0xb8, 7, 0, 0, 0, 0x39, 0xd1, 0xf7, 0x3c, 0x24, 0xc3 };
+    /* push 7; xor edx, edx; mov eax, 100; div dword [esp]; pop ecx; div cl; ret */
+    static const uint8_t fine[] = { 0x6a, 0x07, 0x31, 0xd2, 0xb8, 100, 0, 0, 0, 0xf7, 0x34, 0x24, 0x59,
+                                    0xf6, 0xf1, 0xc3 };
+    Run guarded, marked;
+
+    compare("div load", wide, sizeof(wide), 4, 8, 0, -1);
+    compare("idiv byte load", narrow, sizeof(narrow), 4, 8, 0, -1);
+    compare("div word load", word, sizeof(word), 4, 8, 0, -1);
+    guarded = run(zero, sizeof(zero), 0);
+    marked = run(zero, sizeof(zero), 1);
+    assert(guarded.status == PW_ERR_VM && guarded.state.eip == low + CODE + 9);
+    assert(marked.status == guarded.status && marked.state.eip == guarded.state.eip && !marked.redirected);
+    for (unsigned g = 0; g < 8; g++) assert(marked.state.gpr[g] == guarded.state.gpr[g]);
+    assert(marked.state.gpr[0] == 7 && (marked.state.eflags & 0x8d5) == (guarded.state.eflags & 0x8d5));
+    guarded = run(fine, sizeof(fine), 0);
+    marked = run(fine, sizeof(fine), 1);
+    assert(guarded.status == PW_OK && marked.status == PW_OK && !marked.redirected);
+    for (unsigned g = 0; g < 8; g++) assert(marked.state.gpr[g] == guarded.state.gpr[g]);
+    assert(marked.state.gpr[0] == (uint32_t)((100 / 7) % 7 << 8 | (100 / 7) / 7));
+}
+
 static void test_fault_table(void)
 {
     /* Three rows: sites 0x10, 0x30 and 0x2345 with their paths. */
@@ -422,8 +457,10 @@ int main(void)
     test_profile_capacity();
     test_fault_table();
     test_multiple_fault_paths();
+    test_divide();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
            "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
-           "and stack form matches the guard; the engine finds each access's path and nothing else\n");
+           "and stack form matches the guard; the engine finds each access's path and nothing else; div's divisor load faults like any other, "
+           "its divide error without a host fault\n");
     return 0;
 }

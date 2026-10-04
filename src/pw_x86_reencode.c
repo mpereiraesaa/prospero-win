@@ -155,7 +155,7 @@ static void ea_lea(Out *o, unsigned dst, const Ea *e)
 typedef enum Kind {
     K_RM = 1, K_PLAIN, K_INCDEC, K_MOVIMM, K_XCHGA, K_BSWAP, K_NOP, K_LEA,
     K_PUSH, K_PUSHIMM, K_PUSHRM, K_POP, K_LEAVE, K_CALL, K_CALLRM, K_RET,
-    K_JMP, K_JMPRM, K_JCC, K_STR,
+    K_JMP, K_JMPRM, K_JCC, K_STR, K_DIV,
 } Kind;
 enum { REG8 = 1, REG32, EXT };      /* what the ModRM reg field names */
 enum { RM8 = 1, RMW, RMRAW };       /* what a register-form rm names (RMRAW: xmm, mm, st, as is) */
@@ -413,7 +413,12 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
         case 2: in->write = 2; break;
         case 3: in->write = 2; in->def = ALL_FLAGS; break;
         case 4: case 5: in->def = ALL_FLAGS; break;
-        default: return 0;                        /* div faults natively */
+        case 6: case 7:
+            /* div, idiv: checked first, so the host's never faults
+             * (emit_divide); the flags are left as they were. */
+            in->kind = K_DIV;
+            break;
+        default: return 0;
         }
     } else if (op == 0xfe || op == 0xff) {
         MODRM();
@@ -608,7 +613,7 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
     if (in->rep && !rep_ok) return 0;
     in->len = (uint8_t)i;
     /* fs only on a memory operand; lock only on a read-modify-write of one. */
-    if (in->fs && !(in->kind == K_RM && in->mod != 3)) return 0;
+    if (in->fs && !((in->kind == K_RM || in->kind == K_DIV) && in->mod != 3)) return 0;
     if (in->lock && !lockable(in)) return 0;
     return encodable(in);
 }
@@ -622,8 +627,20 @@ typedef struct Cold {
     Ea ea;
 } Cold;
 
+/* A div or idiv's out-of-line code (emit_divide_stubs): the jumps to its
+ * divide-error exit, and for a 32-bit idiv the jumps to its exact check
+ * and where that check goes back to. */
+typedef struct DivStub {
+    size_t error[2], rare[2], back;
+    unsigned errors, rares;
+    uint32_t pc;
+    uint8_t saved, host_step;
+} DivStub;
+
 typedef struct Ctx {
     Out o;
+    DivStub div[MAX_INSTS];
+    unsigned div_count;
     uint32_t flat_low, flat_span;
     unsigned fault_markers;
     const PwX86IndirectTarget *table, *chain_table;
@@ -1178,6 +1195,181 @@ static void emit_string(Ctx *c, const Inst *in)
     b(o, 0xfc);                                                     /* cld */
 }
 
+/* jcc rel32 to one of a div's out-of-line paths: the rel32's offset. */
+static size_t jcc32(Out *o, uint8_t condition)
+{
+    b(o, 0x0f); b(o, (uint8_t)(0x80 | condition)); w32(o, 0);
+    return o->n - 4;
+}
+static void record_error(Out *o, DivStub *d, size_t rel)
+{
+    if (d->errors >= 2) { o->failed = 1; return; }
+    d->error[d->errors++] = rel;
+}
+
+/* div and idiv r/m8, r/m16 and r/m32 on the guest's own eax and edx. The
+ * divisor goes to r10 first (one read of a memory operand, guarded as any
+ * load), then a check that the host instruction cannot fault: a divisor of
+ * zero or a quotient too wide goes to the divide-error exit (out of line)
+ * with every guest register and the memory as they were, and the step
+ * reports it as the older translators do (emit_divide_stubs). The guest's
+ * flags, which the architecture leaves undefined, are kept as they were
+ * whenever anything later can read them, as the emitter keeps them.
+ *
+ *   unsigned: #DE exactly when the high half (edx, dx, ah) >= the divisor
+ *   32-bit idiv: a divisor other than 0 and -1 with edx = sign(eax) (cdq)
+ *       cannot overflow; anything else takes the exact check out of line
+ *   8- and 16-bit idiv: computed with the host's 64-bit idiv, which cannot
+ *       fault on those operands, then range-checked */
+static void emit_divide(Ctx *c, const Inst *in, unsigned keep)
+{
+    Out *o = &c->o;
+    const unsigned w = in->width, is_signed = in->reg == 7;
+    DivStub *d;
+    size_t to_restore, to_done;
+
+    if (c->div_count >= MAX_INSTS) { o->failed = 1; return; }
+    d = &c->div[c->div_count++];
+    memset(d, 0, sizeof(*d));
+    d->pc = c->here;
+    d->saved = (uint8_t)keep;
+    /* Only the 32-bit forms are the emitter's; the others were the host's. */
+    d->host_step = w != 4;
+
+    /* r10d = the divisor, zero-extended; the flags are still the guest's. */
+    if (in->mod == 3) {
+        rr(o, 0x89, 0, R10, host_of[w == 1 ? in->rm & 3 : in->rm]);  /* mov r10d, reg */
+    } else {
+        guard_fs(c, &in->ea, in->fs, w, 0, keep);
+        if (w == 4) load_r10(o);                                     /* mov r10d, [r11] */
+        else { b(o, 0x45); b(o, 0x0f); b(o, w == 1 ? 0xb6 : 0xb7); b(o, 0x13); }   /* movzx r10d, [r11] */
+    }
+    if (keep) save_flags(o);
+    if (in->mod == 3 && w < 4) {
+        if (w == 1 && in->rm >= 4) { b(o, 0x41); b(o, 0xc1); b(o, 0xea); b(o, 8); }   /* shr r10d, 8: ah-bh */
+        b(o, 0x45); b(o, 0x0f); b(o, w == 1 ? 0xb6 : 0xb7); b(o, 0xd2);              /* movzx r10d, r10b/w */
+    }
+
+    if (!is_signed) {
+        if (w == 4) { b(o, 0x44); b(o, 0x39); b(o, 0xd2); }                     /* cmp edx, r10d */
+        else if (w == 2) { b(o, 0x66); b(o, 0x44); b(o, 0x39); b(o, 0xd2); }    /* cmp dx, r10w */
+        else {
+            b(o, 0x44); b(o, 0x0f); b(o, 0xb7); b(o, 0xc8);                      /* movzx r9d, ax */
+            b(o, 0x41); b(o, 0xc1); b(o, 0xe9); b(o, 8);                         /* shr r9d, 8 */
+            b(o, 0x45); b(o, 0x39); b(o, 0xd1);                                  /* cmp r9d, r10d */
+        }
+        record_error(o, d, jcc32(o, 0x3));                                       /* jae error */
+        if (w == 2) b(o, 0x66);
+        b(o, 0x41); b(o, w == 1 ? 0xf6 : 0xf7); b(o, 0xf2);                      /* div r10 */
+    } else if (w == 4) {
+        b(o, 0x45); b(o, 0x8d); b(o, 0x4a); b(o, 1);                             /* lea r9d, [r10+1] */
+        b(o, 0x41); b(o, 0x83); b(o, 0xf9); b(o, 1);                             /* cmp r9d, 1 */
+        d->rare[d->rares++] = jcc32(o, 0x6);                                     /* jbe rare: 0, -1 */
+        b(o, 0x41); b(o, 0x89); b(o, 0xc1);                                      /* mov r9d, eax */
+        b(o, 0x41); b(o, 0xc1); b(o, 0xf9); b(o, 31);                            /* sar r9d, 31 */
+        b(o, 0x41); b(o, 0x39); b(o, 0xd1);                                      /* cmp r9d, edx */
+        d->rare[d->rares++] = jcc32(o, 0x5);                                     /* jne rare */
+        b(o, 0x41); b(o, 0xf7); b(o, 0xfa);                                      /* idiv r10d */
+        d->back = o->n;
+    } else {
+        b(o, 0x45); b(o, 0x85); b(o, 0xd2);                                      /* test r10d, r10d */
+        record_error(o, d, jcc32(o, 0x4));                                       /* jz error */
+        b(o, 0x49); b(o, 0x89); b(o, 0xc0);                                      /* mov r8, rax */
+        b(o, 0x49); b(o, 0x89); b(o, 0xd1);                                      /* mov r9, rdx */
+        if (w == 2) {
+            b(o, 0x0f); b(o, 0xb7); b(o, 0xc0);                                  /* movzx eax, ax */
+            b(o, 0xc1); b(o, 0xe2); b(o, 16);                                    /* shl edx, 16 */
+            b(o, 0x09); b(o, 0xd0);                                              /* or eax, edx */
+            b(o, 0x48); b(o, 0x63); b(o, 0xc0);                                  /* movsxd rax, eax */
+            b(o, 0x4d); b(o, 0x0f); b(o, 0xbf); b(o, 0xd2);                      /* movsx r10, r10w */
+        } else {
+            b(o, 0x48); b(o, 0x0f); b(o, 0xbf); b(o, 0xc0);                      /* movsx rax, ax */
+            b(o, 0x4d); b(o, 0x0f); b(o, 0xbe); b(o, 0xd2);                      /* movsx r10, r10b */
+        }
+        b(o, 0x48); b(o, 0x99);                                                  /* cqo */
+        b(o, 0x49); b(o, 0xf7); b(o, 0xfa);                                      /* idiv r10 */
+        b(o, 0x4c); b(o, 0x0f); b(o, w == 2 ? 0xbf : 0xbe); b(o, 0xd8);          /* movsx r11, ax/al */
+        b(o, 0x49); b(o, 0x39); b(o, 0xc3);                                      /* cmp r11, rax */
+        to_restore = jump8(o, 0x75);                                             /* jne restore */
+        if (w == 2) {
+            b(o, 0x66); b(o, 0x41); b(o, 0x89); b(o, 0xd1);                      /* mov r9w, dx */
+        } else {
+            b(o, 0x0f); b(o, 0xb6); b(o, 0xd2);                                  /* movzx edx, dl */
+            b(o, 0xc1); b(o, 0xe2); b(o, 8);                                     /* shl edx, 8 */
+            b(o, 0x0f); b(o, 0xb6); b(o, 0xc0);                                  /* movzx eax, al */
+            b(o, 0x09); b(o, 0xd0);                                              /* or eax, edx */
+        }
+        b(o, 0x66); b(o, 0x41); b(o, 0x89); b(o, 0xc0);                          /* mov r8w, ax */
+        b(o, 0x4c); b(o, 0x89); b(o, 0xc0);                                      /* mov rax, r8 */
+        b(o, 0x4c); b(o, 0x89); b(o, 0xca);                                      /* mov rdx, r9 */
+        to_done = jump8(o, 0xeb);
+        land8(o, to_restore);
+        b(o, 0x4c); b(o, 0x89); b(o, 0xc0);                                      /* mov rax, r8 */
+        b(o, 0x4c); b(o, 0x89); b(o, 0xca);                                      /* mov rdx, r9 */
+        b(o, 0xe9); w32(o, 0); record_error(o, d, o->n - 4);                     /* jmp error */
+        land8(o, to_done);
+    }
+    if (keep) restore_flags(o);
+}
+
+/* Each div's out-of-line code: a 32-bit idiv's exact check, then the
+ * divide-error exit. The check computes the quotient of edx:eax with the
+ * host's 64-bit idiv (or a negation, for -1, whose overflow at INT64_MIN
+ * only the negation survives), keeps it when it fits in 32 bits and goes
+ * back after the native idiv; when it does not, eax and edx are restored.
+ * The exit stores the div's EIP and the guest state and returns to C:
+ * PW_ERR_VM for the 32-bit forms, whose divide error the emitter reports
+ * that way, and PW_X86_REENCODE_HOST_STEP for the others, which the host
+ * fallback ran before, so the step leaves them to it again
+ * (PW_ERR_UNSUPPORTED). */
+static void emit_divide_stubs(Ctx *c)
+{
+    Out *o = &c->o;
+
+    for (unsigned k = 0; k < c->div_count; k++) {
+        const DivStub *d = &c->div[k];
+        if (d->rares) {
+            size_t to_general, to_check, to_restore, to_back;
+            for (unsigned j = 0; j < d->rares; j++) land32(o, d->rare[j]);
+            b(o, 0x45); b(o, 0x85); b(o, 0xd2);                                  /* test r10d, r10d */
+            b(o, 0x0f); b(o, 0x84); w32(o, 0);                                   /* jz error */
+            const size_t zero = o->n - 4;
+            b(o, 0x49); b(o, 0x89); b(o, 0xc0);                                  /* mov r8, rax */
+            b(o, 0x49); b(o, 0x89); b(o, 0xd1);                                  /* mov r9, rdx */
+            b(o, 0x89); b(o, 0xc0);                                              /* mov eax, eax */
+            b(o, 0x48); b(o, 0xc1); b(o, 0xe2); b(o, 32);                        /* shl rdx, 32 */
+            b(o, 0x48); b(o, 0x09); b(o, 0xd0);                                  /* or rax, rdx */
+            b(o, 0x4d); b(o, 0x63); b(o, 0xd2);                                  /* movsxd r10, r10d */
+            b(o, 0x49); b(o, 0x83); b(o, 0xfa); b(o, 0xff);                      /* cmp r10, -1 */
+            to_general = jump8(o, 0x75);                                         /* jne general */
+            b(o, 0x48); b(o, 0xf7); b(o, 0xd8);                                  /* neg rax */
+            b(o, 0x31); b(o, 0xd2);                                              /* xor edx, edx */
+            to_check = jump8(o, 0xeb);
+            land8(o, to_general);
+            b(o, 0x48); b(o, 0x99);                                              /* cqo */
+            b(o, 0x49); b(o, 0xf7); b(o, 0xfa);                                  /* idiv r10 */
+            land8(o, to_check);
+            b(o, 0x4c); b(o, 0x63); b(o, 0xd8);                                  /* movsxd r11, eax */
+            b(o, 0x49); b(o, 0x39); b(o, 0xc3);                                  /* cmp r11, rax */
+            to_restore = jump8(o, 0x75);                                         /* jne restore */
+            b(o, 0x89); b(o, 0xc0);                                              /* mov eax, eax */
+            b(o, 0x89); b(o, 0xd2);                                              /* mov edx, edx */
+            to_back = jump32(o);
+            put32(o, to_back, (uint32_t)(d->back - (to_back + 4)));
+            land8(o, to_restore);
+            b(o, 0x4c); b(o, 0x89); b(o, 0xc0);                                  /* mov rax, r8 */
+            b(o, 0x4c); b(o, 0x89); b(o, 0xca);                                  /* mov rdx, r9 */
+            land32(o, zero);   /* the exit follows */
+        }
+        for (unsigned j = 0; j < d->errors; j++) land32(o, d->error[j]);
+        store_state_imm(o, offsetof(PwX86State, eip), d->pc);
+        if (d->saved) restore_flags(o);
+        emit_leave(o, c->call_stack);
+        b(o, 0xb8); w32(o, d->host_step ? (uint32_t)PW_X86_REENCODE_HOST_STEP : (uint32_t)PW_ERR_VM);
+        b(o, 0xc3);                                                              /* mov eax, status; ret */
+    }
+}
+
 /* The side exits: each loads its target into r10d and the address of its
  * jcc's rel32 into r8, then all share one lookup of r10d in the chain
  * table. A hit rewrites that rel32 to the target's chain entry (r11 - (r8 +
@@ -1267,7 +1459,7 @@ static void emit_cold_paths(Ctx *c, PwX86Block *block)
 static int can_fault(const Inst *in)
 {
     switch (in->kind) {
-    case K_RM: return in->mod != 3;
+    case K_RM: case K_DIV: return in->mod != 3;
     case K_PUSH: case K_PUSHIMM: case K_PUSHRM: case K_POP: case K_LEAVE:
     case K_CALL: case K_CALLRM: case K_RET: return 1;
     case K_JMPRM: return in->mod != 3;
@@ -1393,6 +1585,9 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
             break;
         case K_STR:
             emit_string(&c, in);
+            break;
+        case K_DIV:
+            emit_divide(&c, in, keep);
             break;
         case K_LEA:
             ea_lea(o, host_of[in->reg], &in->ea);
@@ -1535,6 +1730,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         block->exit.target_direct_offset = slots.direct;
     }
     emit_side_exits(&c);
+    emit_divide_stubs(&c);
     emit_cold_paths(&c, block);
     if (c.o.failed) return PW_ERR_LIMIT;
     block->instructions = count;

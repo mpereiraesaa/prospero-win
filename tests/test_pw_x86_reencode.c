@@ -7,6 +7,7 @@
 #include "../src/pw_x86_hostexec.h"
 #include "../src/pw_vm_posix.h"
 #include <assert.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -110,12 +111,35 @@ static void on_fault(int sig, siginfo_t *info, void *context)
     call_stack_faults++;
 }
 
-/* Run code from low+CODE until the guest returns to its sentinel. */
-static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
+/* An engine as run() configures it, from the globals above. */
+static void setup(PwX86Engine *engine, PwX86CacheEntry *entries, unsigned reencode)
 {
-    static PwX86CacheEntry entries[512];
     static PwVmBackend vm;
-    PwX86Engine engine;
+
+    assert(pw_vm_posix_backend(&vm) == PW_OK);
+    if (superblocks) {
+        posix = vm;
+        vm.commit = writable_commit;
+        vm.protect = writable_protect;
+    }
+    assert(pw_x86_engine_init(engine, &vm, entries, 512, 1u << 20, 1, view, NULL) == PW_OK);
+    assert(pw_x86_engine_set_chaining(engine, 1) == PW_OK);
+    assert(pw_x86_engine_set_indirect(engine, 1) == PW_OK);
+    assert(pw_x86_engine_set_counters(engine, 0) == PW_OK);
+    assert(pw_x86_engine_set_flat_memory(engine, low, low + SPAN) == PW_OK);
+    assert(pw_x86_engine_set_reencode(engine, reencode) == PW_OK);
+    assert(pw_x86_engine_set_unbounded_chains(engine, unbounded || call_stack || superblocks) == PW_OK);
+    assert(pw_x86_engine_set_superblocks(engine, superblocks) == PW_OK);
+    assert(pw_x86_engine_set_call_predict(engine, call_predict && superblocks) == PW_OK);
+    assert(pw_x86_engine_set_native_fp(engine, native_fp && reencode) == PW_OK);
+    if (call_stack && reencode)
+        assert(pw_x86_engine_set_call_stack(engine, call_stack_region + PW_X86_ENGINE_CALL_STACK_GUARD,
+                                            CALL_STACK_BYTES) == PW_OK);
+}
+
+/* Run code from low+CODE on engine until the guest returns to its sentinel. */
+static Run execute(PwX86Engine *engine, const uint8_t *code, size_t bytes)
+{
     PwX86StepReport step;
     Run r;
 
@@ -124,46 +148,39 @@ static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
     for (unsigned i = 0; i < 0x1000; i++) guest[DATA + i] = (uint8_t)(i * 7 + 3);
     initial(&r.state);
     memcpy(guest + STACK_TOP, &(uint32_t){ 0xdead0000u }, 4);
-    assert(pw_vm_posix_backend(&vm) == PW_OK);
-    if (superblocks) {
-        posix = vm;
-        vm.commit = writable_commit;
-        vm.protect = writable_protect;
-    }
-    assert(pw_x86_engine_init(&engine, &vm, entries, 512, 1u << 20, 1, view, NULL) == PW_OK);
-    assert(pw_x86_engine_set_chaining(&engine, 1) == PW_OK);
-    assert(pw_x86_engine_set_indirect(&engine, 1) == PW_OK);
-    assert(pw_x86_engine_set_counters(&engine, 0) == PW_OK);
-    assert(pw_x86_engine_set_flat_memory(&engine, low, low + SPAN) == PW_OK);
-    assert(pw_x86_engine_set_reencode(&engine, reencode) == PW_OK);
-    assert(pw_x86_engine_set_unbounded_chains(&engine, unbounded || call_stack || superblocks) == PW_OK);
-    assert(pw_x86_engine_set_superblocks(&engine, superblocks) == PW_OK);
-    assert(pw_x86_engine_set_call_predict(&engine, call_predict && superblocks) == PW_OK);
-    assert(pw_x86_engine_set_native_fp(&engine, native_fp && reencode) == PW_OK);
-    if (call_stack && reencode)
-        assert(pw_x86_engine_set_call_stack(&engine, call_stack_region + PW_X86_ENGINE_CALL_STACK_GUARD,
-                                            CALL_STACK_BYTES) == PW_OK);
-    current = &engine;
+    current = engine;
     r.status = PW_OK;
     r.steps = 0;
     for (unsigned i = 0; i < 100000 && r.state.eip != 0xdead0000u; i++, r.steps++) {
-        r.status = pw_x86_engine_step(&engine, &r.state, &step);
+        r.status = pw_x86_engine_step(engine, &r.state, &step);
         if (r.status == PW_ERR_UNSUPPORTED && hostexec_fallback) {
             /* As wowprospero does: the one instruction on the host. */
             const uint8_t *at = (const uint8_t *)(uintptr_t)r.state.eip;
             pw_x86_commit_canonical_flags(&r.state);
-            pw_x86_engine_fp_sync(&engine, &r.state);
+            pw_x86_engine_fp_sync(engine, &r.state);
             if ((r.status = pw_x86_hostexec_step(&hostexec, &r.state, at, 15)) == PW_OK) continue;
         }
         if (r.status != PW_OK) break;
     }
     current = NULL;
-    pw_x86_engine_fp_sync(&engine, &r.state);
+    pw_x86_engine_fp_sync(engine, &r.state);
     memcpy(r.data, guest + DATA, sizeof(r.data));
-    r.reencoded = engine.reencoded_blocks;
+    r.reencoded = engine->reencoded_blocks;
     r.chain_slots = 0;
-    for (unsigned k = 0; engine.chain_targets && k < PW_X86_REENCODE_CHAIN_ENTRIES; k++)
-        r.chain_slots += engine.chain_targets[k].host_code != NULL;
+    for (unsigned k = 0; engine->chain_targets && k < PW_X86_REENCODE_CHAIN_ENTRIES; k++)
+        r.chain_slots += engine->chain_targets[k].host_code != NULL;
+    return r;
+}
+
+/* Run code from low+CODE until the guest returns to its sentinel. */
+static Run run(const uint8_t *code, size_t bytes, unsigned reencode)
+{
+    static PwX86CacheEntry entries[512];
+    PwX86Engine engine;
+    Run r;
+
+    setup(&engine, entries, reencode);
+    r = execute(&engine, code, bytes);
     assert(pw_x86_engine_destroy(&engine) == PW_OK);
     return r;
 }
@@ -223,7 +240,8 @@ static void test_options(void)
 {
     static const uint8_t mov[] = { 0x89, 0xc8, 0xc3 };           /* mov eax, ecx; ret */
     static const uint8_t lock[] = { 0xf0, 0x01, 0xc0, 0xc3 };    /* lock add eax, eax: #UD */
-    static const uint8_t tail[] = { 0x40, 0xf7, 0xf1 };          /* inc eax; div ecx */
+    static const uint8_t tail[] = { 0x40, 0x88, 0x3e };          /* inc eax; mov [esi], bh */
+    static const uint8_t divide[] = { 0xf7, 0xf1, 0xc3 };        /* div ecx; ret */
     PwX86TranslateOptions o = { .flat_low = 0x10000, .flat_high = 0xfffff000u, .no_counters = 1 };
     uint8_t out[16384];
     PwX86Block block;
@@ -237,6 +255,8 @@ static void test_options(void)
     assert(pw_x86_reencode(tail, sizeof(tail), 0x401000, out, sizeof(out), &block, &o) == PW_OK);
     assert(block.instructions == 1 && block.source_bytes == 1);
     assert(block.exit.kind == PW_X86_EXIT_DIRECT_JUMP && block.exit.target_pc == 0x401001);
+    assert(pw_x86_reencode(divide, sizeof(divide), 0x401000, out, sizeof(out), &block, &o) == PW_OK);
+    assert(block.instructions == 2 && block.exit.kind == PW_X86_EXIT_DYNAMIC);
     o.no_counters = 0;
     assert(pw_x86_reencode(mov, sizeof(mov), 0x401000, out, sizeof(out), &block, &o) ==
            PW_ERR_UNSUPPORTED);
@@ -468,27 +488,29 @@ static void test_bnd_branches(void)
     same(&bnd, &without);
 }
 
-/* A block the re-encoder stops in the middle (div, which it leaves to the
- * emitter) and indirect calls and jumps through registers and memory. */
+/* A block the re-encoder stops in the middle (a high-byte store, which it
+ * leaves to the emitter) and indirect calls and jumps through registers and
+ * memory. */
 static void test_mixed_and_indirect(void)
 {
     uint8_t code[] = {
         0xb8, 100, 0, 0, 0,                 /* 00 mov eax, 100 */
         0x31, 0xd2,                         /* 05 xor edx, edx */
         0xb9, 7, 0, 0, 0,                   /* 07 mov ecx, 7 */
-        0xf7, 0xf1,                         /* 0c div ecx (emitter) */
-        0x8d, 0x1c, 0x10,                   /* 0e lea ebx, [eax+edx] */
-        0xbf, 0, 0, 0, 0,                   /* 11 mov edi, F (patched) */
-        0xff, 0xd7,                         /* 16 call edi */
-        0x89, 0x3e,                         /* 18 mov [esi], edi */
-        0xff, 0x16,                         /* 1a call [esi] */
-        0x39, 0xd8,                         /* 1c cmp eax, ebx: div left the flags undefined */
-        0xc3,                               /* 1e ret */
-        0x43,                               /* 1f F: inc ebx */
-        0xc3,                               /* 20 ret */
+        0xf7, 0xf1,                         /* 0c div ecx */
+        0x88, 0x6e, 0x10,                   /* 0e mov [esi+0x10], ch (emitter) */
+        0x8d, 0x1c, 0x10,                   /* 11 lea ebx, [eax+edx] */
+        0xbf, 0, 0, 0, 0,                   /* 14 mov edi, F (patched) */
+        0xff, 0xd7,                         /* 19 call edi */
+        0x89, 0x3e,                         /* 1b mov [esi], edi */
+        0xff, 0x16,                         /* 1d call [esi] */
+        0x39, 0xd8,                         /* 1f cmp eax, ebx: div left the flags undefined */
+        0xc3,                               /* 21 ret */
+        0x43,                               /* 22 F: inc ebx */
+        0xc3,                               /* 23 ret */
     };
-    uint32_t f = low + CODE + 0x1f;
-    memcpy(code + 0x12, &f, 4);
+    uint32_t f = low + CODE + 0x22;
+    memcpy(code + 0x15, &f, 4);
     compare(code, sizeof(code));
 }
 
@@ -1027,7 +1049,8 @@ static void test_native_fp_gpr(void)
     assert(native.reencoded >= 1);
 }
 
-/* Re-encoded FP code around an instruction only the emitter takes (div):
+/* Re-encoded FP code around an instruction only the emitter takes (a
+ * high-byte store, after a div):
  * the chain leaves through C at each crossing, which never links the two
  * kinds, and the guest's xmm and x87 values live across it survive the
  * emitter, which uses xmm as scratch. Also pause, and cpuid, which the
@@ -1040,7 +1063,7 @@ static void test_native_fp_emitter(void)
         0x02, 0x40, 0xb9, 0x05, 0x00, 0x00, 0x00, 0xf2, 0x0f, 0x10, 0x56, 0x20,
         0x66, 0x0f, 0x57, 0xc9, 0xdd, 0x46, 0x20, 0xf2, 0x0f, 0x58, 0xca, 0xf3,
         0x90, 0xb8, 0x64, 0x00, 0x00, 0x00, 0x31, 0xd2, 0xbb, 0x07, 0x00, 0x00,
-        0x00, 0xf7, 0xf3, 0xd8, 0xc0, 0x49, 0x75, 0xe7, 0xf2, 0x0f, 0x11, 0x4e,
+        0x00, 0xf7, 0xf3, 0x88, 0x7e, 0x58, 0xd8, 0xc0, 0x49, 0x75, 0xe4, 0xf2, 0x0f, 0x11, 0x4e,
         0x40, 0xdd, 0x5e, 0x48, 0x89, 0x46, 0x50, 0x31, 0xc0, 0x0f, 0xa2, 0xc3,
     };
     Run native;
@@ -1194,6 +1217,311 @@ static void test_fault(void)
     same(&reencoded, &emitter);
 }
 
+/* div and idiv in every width, on registers (low and high bytes, edi and
+ * esp's neighbours) and memory (esi- and esp-relative), signed results of
+ * both signs, the 32-bit idiv's exact path (a dividend that is not cdq's, a
+ * divisor of -1), each result stored, and the flags of a compare before
+ * them carried through to the end. The 8- and 16-bit forms are the host
+ * fallback's under the emitter. */
+static void test_divide(void)
+{
+    static const uint8_t wide[] = {
+        0xb8, 0x43, 0x42, 0x0f, 0x00,       /* mov eax, 1000003 */
+        0x31, 0xd2,                         /* xor edx, edx */
+        0xb9, 0x07, 0x00, 0x00, 0x00,       /* mov ecx, 7 */
+        0xf7, 0xf1,                         /* div ecx: 142857 r 4 */
+        0x89, 0x06, 0x89, 0x56, 0x04,       /* mov [esi], eax; mov [esi+4], edx */
+        0xb8, 0xbd, 0xbd, 0xf0, 0xff,       /* mov eax, -1000003 */
+        0x99,                               /* cdq */
+        0xf7, 0xf9,                         /* idiv ecx: -142857 r -4 */
+        0x89, 0x46, 0x08, 0x89, 0x56, 0x0c,
+        0xc7, 0x46, 0x10, 0x0d, 0, 0, 0,    /* mov dword [esi+0x10], 13 */
+        0xb8, 0x78, 0x56, 0x34, 0x12,       /* mov eax, 0x12345678 */
+        0xba, 0x05, 0, 0, 0,                /* mov edx, 5 */
+        0xf7, 0x76, 0x10,                   /* div dword [esi+0x10]: 64-bit dividend */
+        0x89, 0x46, 0x14, 0x89, 0x56, 0x18,
+        0x6a, 0xf9,                         /* push -7 */
+        0xb8, 0x64, 0, 0, 0, 0x99,          /* mov eax, 100; cdq */
+        0xf7, 0x3c, 0x24,                   /* idiv dword [esp]: -14 r 2 */
+        0x59,                               /* pop ecx */
+        0x89, 0x46, 0x1c, 0x89, 0x56, 0x20,
+        0x31, 0xc0, 0xba, 0x01, 0, 0, 0,    /* xor eax, eax; mov edx, 1 */
+        0xbb, 0xfd, 0xff, 0xff, 0xff,       /* mov ebx, -3 */
+        0xf7, 0xfb,                         /* idiv ebx: 2^32 / -3, not cdq's */
+        0x89, 0x46, 0x24, 0x89, 0x56, 0x28,
+        0xb8, 0x05, 0, 0, 0, 0x99,          /* mov eax, 5; cdq */
+        0x83, 0xcb, 0xff,                   /* or ebx, -1 */
+        0xf7, 0xfb,                         /* idiv ebx: by -1 */
+        0x89, 0x46, 0x2c, 0x89, 0x56, 0x30,
+        0x31, 0xc0, 0x83, 0xca, 0xff,       /* xor eax, eax; or edx, -1: -2^32 */
+        0xbf, 0x04, 0, 0, 0,                /* mov edi, 4 */
+        0xf7, 0xff,                         /* idiv edi */
+        0x89, 0x46, 0x34, 0x89, 0x56, 0x38,
+        0xbd, 0x09, 0, 0, 0,                /* mov ebp, 9 */
+        0x39, 0xd8,                         /* cmp eax, ebx: flags to keep */
+        0xf7, 0xf5,                         /* div ebp */
+        0xf7, 0xf7,                         /* div edi */
+        0xc3,
+    };
+    static const uint8_t narrow[] = {
+        0xb8, 0x78, 0x56, 0x34, 0x12,       /* mov eax, 0x12345678 */
+        0xb9, 0xc9, 0, 0, 0,                /* mov ecx, 201 */
+        0xf6, 0xf1,                         /* div cl: 0x5678 / 201, ah remainder */
+        0x89, 0x06,
+        0xbb, 0x00, 0xf0, 0, 0,             /* mov ebx, 0xf000: bh 240 */
+        0xb8, 0x34, 0x12, 0, 0,             /* mov eax, 0x1234 */
+        0xf6, 0xf7,                         /* div bh */
+        0x89, 0x46, 0x04,
+        0xb8, 0x23, 0x01, 0xaa, 0xaa,       /* mov eax, 0xaaaa0123 */
+        0xf6, 0xff,                         /* idiv bh: 291 / -16 */
+        0x89, 0x46, 0x08,
+        0xc6, 0x46, 0x40, 0xf9,             /* mov byte [esi+0x40], -7 */
+        0xb8, 0x9c, 0xff, 0xff, 0xff,       /* mov eax, -100 */
+        0xf6, 0x7e, 0x40,                   /* idiv byte [esi+0x40]: 14 r -2 */
+        0x89, 0x46, 0x0c,
+        0x6a, 0x11,                         /* push 17 */
+        0xb8, 0x00, 0x01, 0, 0,             /* mov eax, 256 */
+        0xf6, 0x34, 0x24,                   /* div byte [esp] */
+        0x59,
+        0x89, 0x46, 0x10,
+        0xb8, 0x34, 0x12, 0xaa, 0xaa,       /* mov eax, 0xaaaa1234 */
+        0xba, 0x01, 0x00, 0xbb, 0xbb,       /* mov edx, 0xbbbb0001 */
+        0xb9, 0x00, 0x01, 0xcc, 0xcc,       /* mov ecx, 0xcccc0100 */
+        0x66, 0xf7, 0xf1,                   /* div cx: upper halves kept */
+        0x89, 0x46, 0x14, 0x89, 0x56, 0x18,
+        0x66, 0xc7, 0x46, 0x44, 0xd4, 0xfe, /* mov word [esi+0x44], -300 */
+        0xb8, 0x60, 0x79, 0x55, 0x55,       /* mov eax, 0x55557960 */
+        0xba, 0xfe, 0xff, 0x66, 0x66,       /* mov edx, 0x6666fffe: dx:ax -100000 */
+        0x66, 0xf7, 0x7e, 0x44,             /* idiv word [esi+0x44]: 333 r -100 */
+        0x89, 0x46, 0x1c, 0x89, 0x56, 0x20,
+        0x6a, 0xf9,                         /* push -7 */
+        0xb8, 0x00, 0x80, 0, 0,             /* mov eax, 0x8000 */
+        0x31, 0xd2,                         /* xor edx, edx */
+        0x66, 0xf7, 0x3c, 0x24,             /* idiv word [esp]: 32768 / -7 */
+        0x59,                               /* pop ecx */
+        0x89, 0x46, 0x24, 0x89, 0x56, 0x28,
+        0xbf, 0x03, 0x00, 0x05, 0x00,       /* mov edi, 0x50003 */
+        0x66, 0xf7, 0xf7,                   /* div di */
+        0x39, 0xd8,                         /* cmp eax, ebx */
+        0xf6, 0xf1,                         /* div cl */
+        0xc3,
+    };
+    Run r;
+
+    compare(wide, sizeof(wide));
+    r = run(wide, sizeof(wide), 1);
+    {
+        const int32_t *v = (const int32_t *)(const void *)r.data;
+        assert(v[0] == 142857 && v[1] == 4 && v[2] == -142857 && v[3] == -4);
+        assert((uint32_t)v[5] == (uint32_t)((0x500000000ull + 0x12345678u) / 13) &&
+               (uint32_t)v[6] == (uint32_t)((0x500000000ull + 0x12345678u) % 13));
+        assert(v[7] == -14 && v[8] == 2);
+        assert(v[9] == -1431655765 && v[10] == 1);
+        assert(v[11] == -5 && v[12] == 0);
+        assert(v[13] == -(1 << 30) && v[14] == 0);
+    }
+    hostexec_fallback = 1;
+    compare(narrow, sizeof(narrow));
+    hostexec_fallback = 0;
+    r = run(narrow, sizeof(narrow), 1);
+    {
+        const uint32_t *v = (const uint32_t *)(const void *)r.data;
+        assert(r.status == PW_OK && r.state.eip == 0xdead0000u);
+        assert(v[0] == (0x12340000u | (0x5678 % 201) << 8 | 0x5678 / 201));
+        assert(v[1] == ((0x1234 % 240) << 8 | 0x1234 / 240));
+        assert(v[2] == 0xaaaa03eeu && v[3] == 0xfffffe0eu);
+        assert(v[4] == (1u << 8 | 15));
+        assert(v[5] == 0xaaaa0112u && v[6] == 0xbbbb0034u);
+        assert(v[7] == 0x5555014du && v[8] == 0x6666ff9cu);
+        assert(v[9] == 0x0000edb7u && v[10] == 0x00000001u);
+    }
+}
+
+/* Run code, which divides at offset fault_at, through every backend: each
+ * stops there with the status the older translators gave (expect), and the
+ * same registers, flags and memory as the emitter's step. */
+static void compare_divide_error(const uint8_t *code, size_t bytes, uint32_t fault_at, int expect)
+{
+    Run emitter = run(code, bytes, 0), reencoded = run(code, bytes, 1), stacked = run_call_stack(code, bytes);
+    Run super = run_superblocks(code, bytes);
+
+    if (emitter.status != expect || emitter.state.eip != low + CODE + fault_at)
+        fprintf(stderr, "divide error: emitter status %d eip +%x\n", emitter.status,
+                emitter.state.eip - low - CODE);
+    assert(emitter.status == expect && emitter.state.eip == low + CODE + fault_at);
+    same(&reencoded, &emitter);
+    same(&stacked, &emitter);
+    same(&super, &emitter);
+    assert(reencoded.reencoded && stacked.reencoded && super.reencoded);
+}
+
+/* Divide errors: by zero (register, memory, esp-relative), quotient
+ * overflow unsigned and signed (INT_MIN / -1, a wide dividend through the
+ * exact path), and the 8- and 16-bit forms (an 8-bit quotient too wide, div
+ * ah, -32768 / -1), each after a compare whose flags must survive. */
+static void test_divide_errors(void)
+{
+    static const struct { uint8_t code[24]; uint8_t bytes, at; int expect; } cases[] = {
+        /* mov eax, 5; xor ecx, ecx; xor edx, edx; cmp eax, 9; div ecx */
+        { { 0xb8, 5, 0, 0, 0, 0x31, 0xc9, 0x31, 0xd2, 0x83, 0xf8, 9, 0xf7, 0xf1, 0xc3 }, 15, 12, PW_ERR_VM },
+        /* mov eax, 0x80000000; cdq; or ebx, -1; cmp eax, 9; idiv ebx */
+        { { 0xb8, 0, 0, 0, 0x80, 0x99, 0x83, 0xcb, 0xff, 0x83, 0xf8, 9, 0xf7, 0xfb, 0xc3 }, 15, 12, PW_ERR_VM },
+        /* mov edx, 7; mov ecx, edx; cmp eax, 9; div ecx: edx >= ecx */
+        { { 0xba, 7, 0, 0, 0, 0x89, 0xd1, 0x83, 0xf8, 9, 0xf7, 0xf1, 0xc3 }, 13, 10, PW_ERR_VM },
+        /* mov edx, 0x40000000; xor eax, eax; mov ebx, 2; cmp eax, 9; idiv ebx */
+        { { 0xba, 0, 0, 0, 0x40, 0x31, 0xc0, 0xbb, 2, 0, 0, 0, 0x83, 0xf8, 9, 0xf7, 0xfb, 0xc3 }, 18, 15, PW_ERR_VM },
+        /* mov dword [esi], 0; cmp eax, 9; idiv dword [esi] */
+        { { 0xc7, 0x06, 0, 0, 0, 0, 0x83, 0xf8, 9, 0xf7, 0x3e, 0xc3 }, 12, 9, PW_ERR_VM },
+        /* push -1; mov eax, 0x80000000; cdq; cmp eax, 9; idiv dword [esp] */
+        { { 0x6a, 0xff, 0xb8, 0, 0, 0, 0x80, 0x99, 0x83, 0xf8, 9, 0xf7, 0x3c, 0x24, 0xc3 }, 15, 11, PW_ERR_VM },
+        /* mov eax, 0x1000; mov ecx, 3; cmp eax, 9; div cl: 1365 */
+        { { 0xb8, 0, 0x10, 0, 0, 0xb9, 3, 0, 0, 0, 0x83, 0xf8, 9, 0xf6, 0xf1, 0xc3 }, 16, 13, PW_ERR_UNSUPPORTED },
+        /* mov eax, 0x8000; or ebx, -1; cmp eax, 9; idiv bl: -32768 / -1 */
+        { { 0xb8, 0, 0x80, 0, 0, 0x83, 0xcb, 0xff, 0x83, 0xf8, 9, 0xf6, 0xfb, 0xc3 }, 14, 11, PW_ERR_UNSUPPORTED },
+        /* mov eax, 0x02f0; cmp eax, 9; div ah: never fits */
+        { { 0xb8, 0xf0, 0x02, 0, 0, 0x83, 0xf8, 9, 0xf6, 0xf4, 0xc3 }, 11, 8, PW_ERR_UNSUPPORTED },
+        /* mov word [esi], 0; cmp eax, 9; div word [esi] */
+        { { 0x66, 0xc7, 0x06, 0, 0, 0x83, 0xf8, 9, 0x66, 0xf7, 0x36, 0xc3 }, 12, 8, PW_ERR_UNSUPPORTED },
+        /* mov eax, 0x8000; or edx, -1; or ecx, -1; cmp eax, 9; idiv cx: dx:ax -32768 / -1 */
+        { { 0xb8, 0, 0x80, 0, 0, 0x83, 0xca, 0xff, 0x83, 0xc9, 0xff, 0x83, 0xf8, 9, 0x66, 0xf7, 0xf9, 0xc3 }, 18, 14, PW_ERR_UNSUPPORTED },
+        /* mov edx, 1; xor eax, eax; mov ecx, 1; cmp eax, 9; div cx: 65536 */
+        { { 0xba, 1, 0, 0, 0, 0x31, 0xc0, 0xb9, 1, 0, 0, 0, 0x83, 0xf8, 9, 0x66, 0xf7, 0xf1, 0xc3 }, 19, 15, PW_ERR_UNSUPPORTED },
+    };
+
+    for (unsigned k = 0; k < sizeof(cases) / sizeof(cases[0]); k++)
+        compare_divide_error(cases[k].code, cases[k].bytes, cases[k].at, cases[k].expect);
+}
+
+/* The host's own div and idiv in every form the oracle runs: eax, edx and
+ * ebx (or [esi] for memory) in, eax and edx out, or 1 for #DE. */
+static sigjmp_buf divide_jump;
+static void on_divide_error(int sig)
+{
+    (void)sig;
+    siglongjmp(divide_jump, 1);
+}
+static __attribute__((noinline)) void divide_on_host(unsigned form, uint32_t *eax_io, uint32_t *edx_io,
+                                                     uint32_t ebx, uint32_t memory)
+{
+    uint32_t a = *eax_io, d = *edx_io;
+    uint8_t byte = (uint8_t)memory;
+    uint16_t word = (uint16_t)memory;
+    switch (form) {
+    case 0: __asm__ volatile("divl %k2" : "+a"(a), "+d"(d) : "b"(ebx)); break;
+    case 1: __asm__ volatile("idivl %k2" : "+a"(a), "+d"(d) : "b"(ebx)); break;
+    case 2: __asm__ volatile("divl %2" : "+a"(a), "+d"(d) : "m"(memory)); break;
+    case 3: __asm__ volatile("idivl %2" : "+a"(a), "+d"(d) : "m"(memory)); break;
+    case 4: __asm__ volatile("divb %%bl" : "+a"(a), "+d"(d) : "b"(ebx)); break;
+    case 5: __asm__ volatile("idivb %%bl" : "+a"(a), "+d"(d) : "b"(ebx)); break;
+    case 6: __asm__ volatile("divb %%bh" : "+a"(a), "+d"(d) : "b"(ebx)); break;
+    case 7: __asm__ volatile("idivb %%bh" : "+a"(a), "+d"(d) : "b"(ebx)); break;
+    case 8: __asm__ volatile("divb %2" : "+a"(a), "+d"(d) : "m"(byte)); break;
+    case 9: __asm__ volatile("idivb %2" : "+a"(a), "+d"(d) : "m"(byte)); break;
+    case 10: __asm__ volatile("divw %%bx" : "+a"(a), "+d"(d) : "b"(ebx)); break;
+    case 11: __asm__ volatile("idivw %%bx" : "+a"(a), "+d"(d) : "b"(ebx)); break;
+    case 12: __asm__ volatile("divw %2" : "+a"(a), "+d"(d) : "m"(word)); break;
+    default: __asm__ volatile("idivw %2" : "+a"(a), "+d"(d) : "m"(word)); break;
+    }
+    *eax_io = a;
+    *edx_io = d;
+}
+static int native_divide(unsigned form, uint32_t *eax_io, uint32_t *edx_io, uint32_t ebx, uint32_t memory)
+{
+    if (sigsetjmp(divide_jump, 1)) return 1;
+    divide_on_host(form, eax_io, edx_io, ebx, memory);
+    return 0;
+}
+
+/* The re-encoder against the host itself over a matrix of dividends and
+ * divisors at the edges (0, 1, -1, the sign bits and byte and word limits
+ * of each width) in all fourteen forms: the same quotient and remainder, the
+ * other registers and flags untouched, or a stop at the div with eax and
+ * edx unchanged and the older translators' status. The 32-bit forms also
+ * against the emitter. */
+static void test_divide_oracle(void)
+{
+    static const uint8_t forms[14][3] = {
+        { 0xf7, 0xf3 }, { 0xf7, 0xfb }, { 0xf7, 0x36 }, { 0xf7, 0x3e },
+        { 0xf6, 0xf3 }, { 0xf6, 0xfb }, { 0xf6, 0xf7 }, { 0xf6, 0xff }, { 0xf6, 0x36 }, { 0xf6, 0x3e },
+        { 0x66, 0xf7, 0xf3 }, { 0x66, 0xf7, 0xfb }, { 0x66, 0xf7, 0x36 }, { 0x66, 0xf7, 0x3e },
+    };
+    static const uint32_t dividends[] = {
+        0, 1, 0x80, 0x7fff, 0x8000, 0x12345678, 0x80000000, 0xfffffff9, 0xffffffff,
+    };
+    static const uint32_t highs[] = { 0, 1, 0x8000, 0x3fffffff, 0x80000000, 0xffffffff };
+    static const uint32_t divisors[] = {
+        0, 1, 7, 0x7f, 0x80, 0xff00, 0x8000, 0xffff, 0x10000,
+        0x7fffffff, 0x80000000, 0xfffffff9, 0xffffffff, 0xff80ff80,
+    };
+    static PwX86CacheEntry entries[2][512];
+    static PwX86Engine engines[2];
+    struct sigaction action, previous;
+    unsigned ran = 0, faulted = 0, generation = 1;
+
+    /* The emitter, and the re-encoder as wowprospero runs it (native FP,
+     * superblocks, call stack), each kept across the matrix and reset
+     * between programs. */
+    setup(&engines[0], entries[0], 0);
+    native_fp = superblocks = call_stack = 1;
+    setup(&engines[1], entries[1], 1);
+    native_fp = superblocks = call_stack = 0;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = on_divide_error;
+    action.sa_flags = SA_NODEFER;
+    sigemptyset(&action.sa_mask);
+    assert(!sigaction(SIGFPE, &action, &previous));
+    for (unsigned f = 0; f < 14; f++) {
+        const unsigned len = forms[f][0] == 0x66 ? 3 : 2, wide = f < 4;
+        for (unsigned i = 0; i < sizeof(dividends) / sizeof(dividends[0]); i++)
+            for (unsigned j = 0; j < sizeof(highs) / sizeof(highs[0]); j++)
+                for (unsigned k = 0; k < sizeof(divisors) / sizeof(divisors[0]); k++) {
+                    const uint32_t a = dividends[i], d = highs[j], v = divisors[k];
+                    uint8_t code[32];
+                    uint32_t na = a, nd = d;
+                    size_t n = 0;
+                    int error;
+                    Run r;
+                    /* edx's own matrix matters only to the forms that read it. */
+                    if (f >= 4 && f < 10 && j) continue;
+                    code[n++] = 0xb8; memcpy(code + n, &a, 4); n += 4;         /* mov eax, a */
+                    code[n++] = 0xba; memcpy(code + n, &d, 4); n += 4;         /* mov edx, d */
+                    code[n++] = 0xbb; memcpy(code + n, &v, 4); n += 4;         /* mov ebx, v */
+                    code[n++] = 0xc7; code[n++] = 0x06; memcpy(code + n, &v, 4); n += 4;   /* mov [esi], v */
+                    memcpy(code + n, forms[f], len); n += len;
+                    code[n++] = 0xc3;
+                    error = native_divide(f, &na, &nd, v, v);
+                    assert(pw_x86_engine_reset(&engines[1], ++generation) == PW_OK);
+                    r = execute(&engines[1], code, n);
+                    ran++;
+                    if (error) {
+                        faulted++;
+                        assert(r.status == (wide ? PW_ERR_VM : PW_ERR_UNSUPPORTED));
+                        assert(r.state.eip == low + CODE + n - 1 - len);
+                        assert(r.state.gpr[0] == a && r.state.gpr[2] == d);
+                    } else {
+                        if (r.status != PW_OK || r.state.gpr[0] != na || r.state.gpr[2] != nd)
+                            fprintf(stderr, "divide form %u: %08x:%08x / %08x: status %d %08x:%08x, host %08x:%08x\n",
+                                    f, d, a, v, r.status, r.state.gpr[2], r.state.gpr[0], nd, na);
+                        assert(r.status == PW_OK && r.state.eip == 0xdead0000u);
+                        assert(r.state.gpr[0] == na && r.state.gpr[2] == nd);
+                    }
+                    assert(r.state.gpr[3] == v && r.state.gpr[1] == 0x22222222u);
+                    assert((r.state.eflags & 0x8d5) == 0x041);
+                    if (wide) {
+                        Run e;
+                        assert(pw_x86_engine_reset(&engines[0], ++generation) == PW_OK);
+                        e = execute(&engines[0], code, n);
+                        same(&r, &e);
+                    }
+                }
+    }
+    assert(!sigaction(SIGFPE, &previous, NULL));
+    assert(engines[1].reencoded_blocks >= ran && !engines[0].reencoded_blocks);
+    assert(pw_x86_engine_destroy(&engines[0]) == PW_OK && pw_x86_engine_destroy(&engines[1]) == PW_OK);
+    assert(ran > 1000 && faulted > 100 && faulted < ran - 1000);
+}
+
 static void test_prefixed_padding(void)
 {
     static const uint8_t padding[] = {
@@ -1309,7 +1637,11 @@ int main(void)
     test_native_fp_emitter();
     test_refused_bit_count_reads();
     test_fault();
+    test_divide();
+    test_divide_errors();
+    test_divide_oracle();
     printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
-           "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, predicted calls, strings, native FP, fault state\n");
+           "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, predicted calls, strings, native FP, fault state, "
+           "div and idiv in every form with their divide errors, against the emitter and the host\n");
     return 0;
 }
