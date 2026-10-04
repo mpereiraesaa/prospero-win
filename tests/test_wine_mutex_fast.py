@@ -180,6 +180,8 @@ static void semantics(void) {
     assert(list_empty(&t->mutex_list));expect_fallback(&s,1,1);
     expect_fallback(&s,31,0); /* invalid handle */
     p.handles[1].access=0;expect_fallback(&s,1,0);p.handles[1].access=SYNCHRONIZE;
+    assert(call(1,0,NULL)==0);p.handles[1].access=0;
+    assert(call(1,1,NULL)==0);p.handles[1].access=SYNCHRONIZE; /* Wine release checks access 0 */
     struct object other;obj_init(&other,&other_ops);p.handles[2]=(struct handle_entry){&other,SYNCHRONIZE};
     expect_fallback(&s,2,0);assert(other.refs==1);
     s.obj.ops=&other_ops;expect_fallback(&s,1,0);s.obj.ops=&mutex_sync_ops;
