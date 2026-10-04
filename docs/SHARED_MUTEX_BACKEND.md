@@ -1,14 +1,15 @@
 # Shared mutex backend
 
-Status: experimental, default-off Unix client/server backend implemented,
-build-tested and measured on the console.
+Status: experimental Unix client/server backend implemented, build-tested
+and measured on the console. Patch 0880 proposes default-on selection for
+compatible direct-call modules; its new revision still needs console gates.
 Patch 0810 supplies server authority/lifetime hooks; 0820 adds the native ABI,
-client cache and default-off switch. Native fixtures and SDK pair builds
-pass. The original matching pair has completed ordinary 480-second and
+client cache and the original default-off switch. Native fixtures and SDK
+pair builds pass. The original matching pair has completed ordinary 480-second and
 600-second console runs. The ordinary 32-bit Wine fixture passes on the
 default pair and on the candidate pair with the switch off and on. Broader
-asynchronous thread/signal contracts remain unproven; these checks do not
-justify enabling the switch by default.
+asynchronous thread/signal contracts remain unproven. Default-on selection
+is a separate proposal and requires matching-revision console validation.
 
 The performance target remains the full fixed GTA IV route at 1920×1080,
 60 Hz, profiling off, average at least 58 FPS and minimum at least 50 FPS,
@@ -138,10 +139,24 @@ agent owns the requested runtime attribute capture.
 ## Experimental Unix client
 
 `WINE_PS5_MUTEX_SHARED=1` or a prefix-local `pw_mutex_shared` containing
-exactly `1` (optionally followed by a newline) selects this backend. An
-explicit environment value wins. The switch defaults off and is separate
-from the older typed `pw_mutex_fast` switch. `WINE_PS5_SERVER_DIRECT=0`
-disables both. The switch file is read and closed once during connection.
+exactly `1` (optionally followed by a newline) selects this backend.
+`WINE_PS5_MUTEX_SHARED=0` or a prefix-local file containing `0` with an
+optional newline disables it. An explicit environment value wins. With
+0880, a missing setting defaults to the shared backend; malformed values,
+file read/open errors other than a missing file, or allocation failure
+keep it off. Missing/incompatible server ABI exports retain ordinary Wine.
+The older typed `pw_mutex_fast` switch stays independently default off.
+`WINE_PS5_SERVER_DIRECT=0` disables both. The setting is read once during
+connection and the switch file is closed immediately.
+
+The measured results above used explicit selection with the original
+0820 modules. They support the default-on proposal but do not validate its
+new matching server/NTDLL pair. Patch 0880 also selects image-view descriptor
+cleanup by default, with its independent explicit off switch; see
+[the lifetime contract](IMAGE_VIEW_FD_LIFETIME.md). Require matching OFF/default-ON module receipts,
+ordinary PE semantics, HL2 timedemo/clean exit, load and 600-second gameplay
+results before merging the default-selection change. The 58/50 FPS target
+remains unchanged.
 
 The client discovers `pw_wineserver_mutex_backend` and validates version,
 structure size, word size, native pointer size and both required pointers.
@@ -237,8 +252,10 @@ still requires the owner's source/runtime checks before deployment.
 client bodies and native ABI header from 0820. It also compiles the actual added
 server lookup/ABI entry bodies. The generalized switch body is reconstructed
 from 0790 with each replacement verified against 0820's actual changes.
-It checks strict default-off file/environment selection and independence
-of the typed and shared switches. With fixture metadata, server context and
+It reconstructs the final switch body through 0880 and checks independent
+typed-off/shared-on defaults, explicit environment/prefix overrides,
+malformed settings and file read/open errors. The other cache/hit checks
+remain unchanged. With fixture metadata, server context and
 uninterrupted-section callbacks, it checks ABI mismatch rejection, 15 cold
 lookup rejection gates with unchanged outputs/errors/references, 24,000
 warm operations without extra cold calls/locks, 80 exact negative slots,

@@ -1,7 +1,8 @@
 # Image-view file descriptor lifetime
 
-Status: experimental, default off. Native/sanitizer checks, complete SDK
-server builds and ordinary console application comparisons pass. Broader
+Status: experimental. Patch 0870 is default off; patch 0880 proposes a
+default-on selection alongside the shared mutex backend. Native/sanitizer
+checks, complete SDK server builds and ordinary console application comparisons pass. Broader
 section-lifetime and debugger behavior still needs real Wine coverage.
 
 The 600-second fixed-route console capture records 68 image descriptor
@@ -57,15 +58,20 @@ debugger review before enabling the option by default.
 
 Select `WINE_PS5_IMAGE_VIEW_FD_RELEASE=1`, or place exactly `1` with an
 optional final newline in the prefix-local `pw_image_view_fd_release`.
-An explicit environment value overrides the file. The setting is read
-once and defaults off; non-PS5 builds always retain existing behavior.
+An explicit environment value overrides the file. With 0880, an absent
+setting in a valid prefix defaults on. An explicit `0` disables cleanup;
+malformed settings, read errors, other open errors and an unavailable prefix
+directory keep it off. The setting is read once and preserves `errno`;
+non-PS5 builds always retain existing behavior. Matching-pair HL2, load and
+600-second gameplay gates are pending for the combined default-on revision.
 
 `python3 tests/test_wine_image_view_fds.py` compiles the actual patched
 selection, release, census, mapping destruction, reuse and debugger-file
 bodies with bounded fixture metadata. It checks 18 dependency rejection
 guards, zero/mismatched view counts, multiple mapping owners and processes,
 late debugger attachment, shared/data exclusions, metadata reuse, single
-close and 15 strict configuration cases. A real host `mmap` remains readable
+close and 17 strict configuration cases, including absent settings and
+read/open errors. A real host `mmap` remains readable
 after descriptor close. These are native contract checks, not a complete
 Wine execution or a console resource-limit test. Run normally and with
 clang ASan/UBSan; console validation must compare the same module pair with

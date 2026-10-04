@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #include "ps5_mutex_backend.h"
 #include <assert.h>
+#include <errno.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
@@ -11,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define WINE_INPROCESS_SERVER 1
 #define STATUS_SUCCESS 0u
@@ -104,28 +107,43 @@ static void test_switches(void) {
     const char *files[]={"pw_mutex_fast","pw_mutex_shared"};
     const char *values[]={"","0","1","1\n","11","1\nextra","on","1\r\n"};
     for (unsigned lane=0;lane<2;lane++) {
+        int default_enabled=lane==1;
         assert(!unsetenv(envs[lane]));
-        assert(!server_mutex_switch_enabled(envs[lane],files[lane]));
+        assert(server_mutex_switch_enabled(envs[lane],files[lane],default_enabled)==default_enabled);
         for (unsigned i=0;i<8;i++) {
             write_switch(files[lane],values[i]);
-            assert(server_mutex_switch_enabled(envs[lane],files[lane])==(i==2 || i==3));
+            assert(server_mutex_switch_enabled(envs[lane],files[lane],default_enabled)==(i==2 || i==3));
             assert(!setenv(envs[lane],"0",1));
-            assert(!server_mutex_switch_enabled(envs[lane],files[lane]));
+            assert(!server_mutex_switch_enabled(envs[lane],files[lane],default_enabled));
             assert(!setenv(envs[lane],"1",1));
-            assert(server_mutex_switch_enabled(envs[lane],files[lane]));
+            assert(server_mutex_switch_enabled(envs[lane],files[lane],default_enabled));
             assert(!setenv(envs[lane],"on",1));
-            assert(!server_mutex_switch_enabled(envs[lane],files[lane]));
+            assert(!server_mutex_switch_enabled(envs[lane],files[lane],default_enabled));
+            assert(!setenv(envs[lane],"1\n",1));
+            assert(!server_mutex_switch_enabled(envs[lane],files[lane],default_enabled));
             assert(!unsetenv(envs[lane]));
         }
         remove_switch(files[lane]);
+        assert(server_mutex_switch_enabled(envs[lane],files[lane],default_enabled)==default_enabled);
+        char *path; assert(asprintf(&path,"%s/%s",config_dir,files[lane])>0);
+        assert(!mkdir(path,0700)); /* fopen succeeds, but fgetc reports a read error */
+        assert(!server_mutex_switch_enabled(envs[lane],files[lane],default_enabled));
+        assert(!rmdir(path)); free(path);
+        assert(asprintf(&path,"%s/%s",config_dir,files[lane])>0);
+        assert(!symlink(files[lane],path)); /* open failure other than ENOENT stays off */
+        assert(!server_mutex_switch_enabled(envs[lane],files[lane],default_enabled));
+        assert(!unlink(path)); free(path);
     }
     write_switch(files[0],"1");
-    assert(server_mutex_switch_enabled(envs[0],files[0]));
-    assert(!server_mutex_switch_enabled(envs[1],files[1]));
-    write_switch(files[1],"1");
+    assert(server_mutex_switch_enabled(envs[0],files[0],0));
+    assert(server_mutex_switch_enabled(envs[1],files[1],1));
+    write_switch(files[1],"0\n");
+    assert(server_mutex_switch_enabled(envs[0],files[0],0));
+    assert(!server_mutex_switch_enabled(envs[1],files[1],1));
+    write_switch(files[1],"1\n");
     assert(!setenv(envs[0],"0",1));
-    assert(!server_mutex_switch_enabled(envs[0],files[0]));
-    assert(server_mutex_switch_enabled(envs[1],files[1]));
+    assert(!server_mutex_switch_enabled(envs[0],files[0],0));
+    assert(server_mutex_switch_enabled(envs[1],files[1],1));
     assert(!unsetenv(envs[0]));
     remove_switch(files[0]); remove_switch(files[1]);
 }

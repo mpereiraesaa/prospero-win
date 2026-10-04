@@ -1,0 +1,147 @@
+From: Prospero Win contributors <prospero-win@localhost>
+Subject: [PATCH] wine: Enable shared mutex and image-view cleanup defaults.
+
+Select the shared backend when no explicit setting exists, retaining the
+independent default-off typed backend. Exact environment or prefix values
+still override selection; malformed/unreadable files stay off. Direct
+server disable and missing/incompatible ABI exports keep ordinary Wine.
+
+Also select image-view descriptor cleanup when the prefix setting is absent.
+Explicit off values, malformed settings and read/open errors retain ordinary
+behavior. Both options remain independently selectable.
+
+This changes selection only; matching-pair console comparisons gate deployment.
+
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -335,40 +335,41 @@
+  * CAS probes rather than waiting; the hint is never synchronization state. */
+ static int server_skip_fast_mutex( obj_handle_t handle )
+ {
+     unsigned long long *slot = &nonmutex_hints[(handle >> 2) % ARRAY_SIZE(nonmutex_hints)];
+     unsigned long long hint = __atomic_load_n( slot, __ATOMIC_RELAXED );
+     if (!handle || (unsigned int)hint != handle || !(hint >> 32)) return 0;
+     return __atomic_compare_exchange_n( slot, &hint, hint - (1ull << 32), 0,
+                                         __ATOMIC_RELAXED, __ATOMIC_RELAXED );
+ }
+
+ /* The console launcher has no arbitrary environment override. A prefix-local
+  * switch is read once during connection; an explicit environment value wins. */
+-static int server_mutex_switch_enabled( const char *environment, const char *file_name )
++static int server_mutex_switch_enabled( const char *environment, const char *file_name, int default_enabled )
+ {
+     const char *env = getenv( environment );
+     char *path;
+     FILE *file;
+     int enabled = 0, value, end;
+
+     if (env) return !strcmp( env, "1" );
+     if (asprintf( &path, "%s/%s", config_dir, file_name ) == -1) return 0;
+     if ((file = fopen( path, "r" )))
+     {
+         value = fgetc( file );
+         end = fgetc( file );
+         enabled = value == '1' && (end == EOF || (end == '\n' && fgetc( file ) == EOF)) && !ferror( file );
+         fclose( file );
+     }
++    else if (errno == ENOENT) enabled = default_enabled;
+     free( path );
+     return enabled;
+ }
+
+ /* the TEB this thread gave the server in init_thread or init_process_done */
+ static inline client_ptr_t inprocess_teb(void)
+ {
+     TEB *teb = NtCurrentTeb();
+     TEB64 *teb64 = get_teb64( teb );
+
+     return wine_server_client_ptr( teb64 ? (void *)teb64 : (void *)teb );
+ }
+@@ -1716,27 +1717,27 @@
+     if (!module_path || !nls_dir) fatal_error( "out of memory\n" );
+
+     if (!(module = dlopen( module_path, RTLD_NOW )))
+         fatal_error( "cannot load the in-process server %s: %s\n", module_path, dlerror() );
+     if (!(connect_server = dlsym( module, "pw_wineserver_connect" )))
+         fatal_error( "%s has no pw_wineserver_connect\n", module_path );
+     register_server_thread = dlsym( module, "pw_wine_thread_register" );
+     if ((fd = connect_server( nls_dir )) == -1)
+         fatal_error( "the in-process server %s did not start\n", module_path );
+     /* WINE_PS5_SERVER_DIRECT=0 sends every request through the server thread */
+     p = getenv( "WINE_PS5_SERVER_DIRECT" );
+     if (!p || strcmp( p, "0" )) call_server_direct = dlsym( module, "pw_wineserver_call_direct" );
+-    if (call_server_direct && server_mutex_switch_enabled( "WINE_PS5_MUTEX_FAST", "pw_mutex_fast" ))
++    if (call_server_direct && server_mutex_switch_enabled( "WINE_PS5_MUTEX_FAST", "pw_mutex_fast", 0 ))
+         try_server_mutex = dlsym( module, "pw_wineserver_try_fast_mutex" );
+-    if (call_server_direct && server_mutex_switch_enabled( "WINE_PS5_MUTEX_SHARED", "pw_mutex_shared" ))
++    if (call_server_direct && server_mutex_switch_enabled( "WINE_PS5_MUTEX_SHARED", "pw_mutex_shared", 1 ))
+     {
+         const struct pw_mutex_backend *(*query)(uint32_t);
+         const struct pw_mutex_backend *api;
+         query = dlsym( module, "pw_wineserver_mutex_backend" );
+         if (query && pw_mutex_backend_valid( api = query( PW_MUTEX_BACKEND_VERSION )))
+             shared_mutex_backend = api;
+     }
+     fprintf( stderr, "wine-ps5: shared mutex backend: %s\n", shared_mutex_backend ? "on" : "off" );
+     fprintf( stderr, "wine-ps5: server requests on client threads: %s\n", call_server_direct ? "on" : "off" );
+     fprintf( stderr, "wine-ps5: immediate mutex calls: %s\n", try_server_mutex ? "on" : "off" );
+     TRACE( "connected to the in-process server %s\n", module_path );
+     free( dir );
+
+diff --git a/server/fd.c b/server/fd.c
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -1900,39 +1900,42 @@
+     }
+     return fd;
+
+ failed:
+     release_object( fd );
+     return NULL;
+ }
+
+-/* Opt-in resource cleanup; read the prefix setting once, without retaining a file. */
++/* Resource cleanup; read the prefix setting once, without retaining a file. */
+ int ps5_image_view_fd_release_enabled(void)
+ {
+ #ifdef __PROSPERO__
+     static int enabled = -1;
+     const char *value;
+     char buffer[3];
+     int file, result = 0, saved_errno = errno;
+     size_t count = 0;
+     ssize_t size = -1;
+
+     if (enabled != -1) return enabled;
+     if ((value = getenv( "WINE_PS5_IMAGE_VIEW_FD_RELEASE" )))
+         result = !strcmp( value, "1" );
+-    else if (config_dir_fd != -1 &&
+-             (file = openat( config_dir_fd, "pw_image_view_fd_release", O_RDONLY )) != -1)
+-    {
+-        while (count < sizeof(buffer) &&
+-               (size = read( file, buffer + count, sizeof(buffer) - count )) > 0)
+-            count += size;
+-        close( file );
+-        result = size == 0 && (count == 1 || (count == 2 && buffer[1] == '\n')) &&
+-                 buffer[0] == '1';
++    else if (config_dir_fd != -1)
++    {
++        if ((file = openat( config_dir_fd, "pw_image_view_fd_release", O_RDONLY )) != -1)
++        {
++            while (count < sizeof(buffer) &&
++                   (size = read( file, buffer + count, sizeof(buffer) - count )) > 0)
++                count += size;
++            close( file );
++            result = size == 0 && (count == 1 || (count == 2 && buffer[1] == '\n')) &&
++                     buffer[0] == '1';
++        }
++        else if (errno == ENOENT) result = 1;
+     }
+     enabled = result;
+     fprintf( stderr, "wine-ps5: image-view fd release: %s\n", enabled ? "on" : "off" );
+     errno = saved_errno;
+     return enabled;
+ #else
+     return 0;
+ #endif

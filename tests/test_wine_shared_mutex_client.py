@@ -68,6 +68,21 @@ def main():
         for before, after in replacements:
             assert switch.count(before) == 1 and after in body
             switch = switch.replace(before, after)
+        # Apply the separate default-selection patch to that exact switch body.
+        default_patch = ROOT / 'wine/patches/0880-wine-ps5-runtime-defaults.patch'
+        default_changes = additions(default_patch, 'dlls/ntdll/unix/server.c')
+        replacements = [
+            ('static int server_mutex_switch_enabled( const char *environment, const char *file_name )',
+             'static int server_mutex_switch_enabled( const char *environment, const char *file_name, int default_enabled )'),
+            ('    free( path );\n    return enabled;',
+             '    else if (errno == ENOENT) enabled = default_enabled;\n    free( path );\n    return enabled;'),
+        ]
+        for before, after in replacements:
+            assert switch.count(before) == 1
+            assert after.splitlines()[0] in default_changes
+            switch = switch.replace(before, after)
+        assert 'call_server_direct && server_mutex_switch_enabled( "WINE_PS5_MUTEX_FAST", "pw_mutex_fast", 0 )' in default_changes
+        assert 'call_server_direct && server_mutex_switch_enabled( "WINE_PS5_MUTEX_SHARED", "pw_mutex_shared", 1 )' in default_changes
         (folder / 'shared_mutex_switch.inc').write_text(switch)
         (folder / 'shared_mutex_client.inc').write_text(cache)
         server = additions(PATCH, 'server/request.c')
