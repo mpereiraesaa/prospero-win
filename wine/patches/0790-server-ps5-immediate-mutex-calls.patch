@@ -63,13 +63,13 @@ index 340cbfb..86f8a96 100644
 +    free( path );
 +    return enabled;
 +}
- 
+
  /* the TEB this thread gave the server in init_thread or init_process_done */
  static inline client_ptr_t inprocess_teb(void)
 @@ -331,6 +371,63 @@ static inline client_ptr_t inprocess_teb(void)
  }
  #endif
- 
+
 +void server_clear_fast_mutex_hint( HANDLE handle )
 +{
 +#ifdef WINE_INPROCESS_SERVER
@@ -144,20 +144,20 @@ index 340cbfb..86f8a96 100644
 @@ -2025,6 +2125,8 @@ NTSTATUS WINAPI NtDuplicateObject( HANDLE source_process, HANDLE source, HANDLE
      unsigned int ret;
      int fd = -1;
- 
+
 +    /* Duplication can close a source, reuse a number or rewrite access. */
 +    server_clear_fast_mutex_hints();
      if (dest) *dest = 0;
- 
+
      if ((options & DUPLICATE_CLOSE_SOURCE) && source_process != NtCurrentProcess())
 @@ -2121,6 +2223,7 @@ NTSTATUS WINAPI NtClose( HANDLE handle )
      unsigned int ret;
      int fd;
- 
+
 +    server_clear_fast_mutex_hint( handle );
      if (HandleToLong( handle ) >= ~5 && HandleToLong( handle ) <= ~0)
          return STATUS_SUCCESS;
- 
+
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
 index 103be94..a2cb762 100644
 --- a/dlls/ntdll/unix/sync.c
@@ -181,7 +181,7 @@ index 103be94..a2cb762 100644
 @@ -1346,6 +1348,9 @@ NTSTATUS WINAPI NtReleaseMutant( HANDLE handle, LONG *prev_count )
      if ((ret = inproc_release_mutex( handle, prev_count )) != STATUS_NOT_IMPLEMENTED)
          return ret;
- 
+
 +    if ((ret = server_try_fast_mutex( handle, 1, NULL, prev_count )) != STATUS_NOT_IMPLEMENTED)
 +        return ret;
 +
@@ -191,7 +191,7 @@ index 103be94..a2cb762 100644
 @@ -2355,6 +2360,9 @@ NTSTATUS WINAPI NtWaitForSingleObject( HANDLE handle, BOOLEAN alertable, const L
          return ret;
      }
- 
+
 +    if (!alertable && (ret = server_try_fast_mutex( handle, 0, timeout, NULL )) != STATUS_NOT_IMPLEMENTED)
 +        return ret;
 +
@@ -204,7 +204,7 @@ index 9dacc72..ec93497 100644
 +++ b/dlls/ntdll/unix/unix_private.h
 @@ -245,6 +245,9 @@ extern ULONG_PTR redirect_arm64ec_rva( void *module, ULONG_PTR rva, const IMAGE_
  extern void start_server( BOOL debug );
- 
+
  extern unsigned int server_call_unlocked( void *req_ptr );
 +extern unsigned int server_try_fast_mutex( HANDLE handle, int release, const LARGE_INTEGER *timeout,
 +                                           LONG *prev_count );
@@ -219,7 +219,7 @@ index ead214b..c947303 100644
 @@ -182,6 +182,42 @@ static const struct object_ops mutex_ops =
      .destroy  = mutex_destroy,
  };
- 
+
 +#ifdef WINE_INPROCESS_SERVER
 +/* Called with the server lock held. No cached handles, second ownership
 + * state or waiter registration: the existing server object remains the
@@ -265,7 +265,7 @@ index 6f68d95..344dc27 100644
 +++ b/server/request.c
 @@ -312,6 +312,55 @@ static void call_req_handler( struct thread *thread )
  }
- 
+
  #ifdef WINE_INPROCESS_SERVER
 +/* The caller blocks server signals, just as wine_server_call does. Return
 + * 0 only after an immediately successful operation, 2 for an observed
@@ -339,7 +339,7 @@ index 5f4c432..0872dad 100644
 @@ -400,6 +400,16 @@ static inline int is_thread_suspended( struct thread *thread )
      return !thread->bypass_proc_suspend && thread->process->suspend;
  }
- 
+
 +#ifdef WINE_INPROCESS_SERVER
 +/* A typed mutex call cannot deliver APCs or a suspend context. Keep those
 + * operations, nested waits and suspended callers on the ordinary path. */
