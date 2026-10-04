@@ -258,6 +258,11 @@ with calls.open("a") as log:
     log.write(" ".join([address, command, *rest]) + "\\n")
 if os.environ.get("FAKE_DOWN"):
     sys.exit("Error: connect " + address + ": Connection refused")
+# The payload takes transactions on 9113 and everything else on 9114.
+if (command in ("transfer", "transfer-dir")) != address.endswith(":9113"):
+    print("frame_type=Error")
+    print("  body: wrong_port")
+    sys.exit("Error: expected HelloAck, got Error")
 if command == "hello":
     print("frame_type=HelloAck")
     print('{"version":"2.2.0"}')
@@ -299,7 +304,7 @@ def check_ps5upload(root: Path) -> None:
         remote = DirRemote(console)
         assert pw_prefix.main(["push", "game", *fast], remote) == 0
         log = calls.read_text().splitlines()
-        assert log[0] == "ps5.invalid:9113 hello"
+        assert log[0] == "ps5.invalid:9114 hello"
         transfers = [line.split() for line in log if " transfer-dir " in line]
         # Seven game files in batches of four, each its own transaction.
         assert len(transfers) == 2 and transfers[0][2] != transfers[1][2]
@@ -343,7 +348,7 @@ def check_ps5upload(root: Path) -> None:
         remote.writes.clear()
         with contextlib.redirect_stderr(io.StringIO()) as errors:
             assert pw_prefix.main(["push", "game", *fast], remote) == 1
-        assert "ps5upload's payload does not answer on ps5.invalid:9113" in errors.getvalue()
+        assert "ps5upload's payload does not answer on ps5.invalid:9114" in errors.getvalue()
         assert "Connection refused" in errors.getvalue() and not remote.writes
         del os.environ["FAKE_DOWN"]
         # Nor without the client.

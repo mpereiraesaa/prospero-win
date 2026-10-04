@@ -95,11 +95,13 @@ Only use this to finish a copy you started yourself. It checks file sizes,
 not contents: a file that has the right size but different bytes is left as
 it is. Registry files are always checked and sent.
 
-**ps5upload is faster than FTP.** If you use
+**You can also send the files with ps5upload.** If you use
 [ps5upload](https://github.com/phantomptr/ps5upload), `pw_prefix.py` can send
-the game's files through it. Its authors report about 30 MB/s on a standard
-PS5 and 60 MB/s on a PS5 Pro. We haven't timed it with prospero-win yet, so
-treat this route as new. You need two things from it:
+the game's files through it instead of FTP. Its authors report about 30 MB/s
+on a standard PS5 and 60 MB/s on a PS5 Pro. On our standard PS5 it wasn't
+faster than FTP: both sent a 1.2 GB test folder at about 16 MB/s over the
+same network. It may help more on a faster connection. You need two things
+from it:
 
 - its payload, `ps5upload.elf`, running on the PS5. Send it with your ELF
   loader as you would any payload. Keep the FTP server running as well.

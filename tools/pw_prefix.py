@@ -28,7 +28,7 @@ and z:), and links that leave the prefix (Wine's Desktop or Documents into
 the PC's home) become empty directories.
 
 --transport ps5upload sends the game's files through ps5upload's payload
-(github.com/phantomptr/ps5upload), which is faster than FTP, using its
+(github.com/phantomptr/ps5upload) instead of FTP, using its
 ps5upload-lab client. The registry, the link tables, wowprospero.dll and the
 profile still go over FTP, which also checks every file's size afterwards.
 
@@ -74,7 +74,8 @@ CHUNK = 4 << 20
 # How often a push records its progress in the manifest.
 SAVE_EVERY_FILES = 200
 SAVE_EVERY_BYTES = 256 << 20
-# ps5upload's payload: transfers on 9113, management (query-tx) on 9114.
+# ps5upload's payload: transactions on 9113; hello and query-tx on its
+# management port, 9114 (it answers wrong_port to anything else).
 # Each transaction carries up to PS5UPLOAD_BATCH_* of the game, and a push
 # records a batch once the console committed it.
 PS5UPLOAD_PORT, PS5UPLOAD_MGMT_PORT = 9113, 9114
@@ -185,7 +186,8 @@ class FtpRemote:
         self.ftp.retrbinary(f"RETR {path}", take, blocksize=CHUNK)
 
     def delete(self, path: str) -> None:
-        self.ftp.delete(path)
+        # ftpsrv confirms a delete with 226, which ftplib's delete() refuses.
+        self.ftp.sendcmd(f"DELE {path}")
 
     def close(self) -> None:
         self.ftp.quit()
@@ -277,9 +279,9 @@ class Ps5Upload:
         return done.returncode, done.stdout + done.stderr
 
     def check(self) -> None:
-        code, output = self.call(PS5UPLOAD_PORT, "hello", timeout=15)
+        code, output = self.call(PS5UPLOAD_MGMT_PORT, "hello", timeout=15)
         if code != 0:
-            raise SyncError(f"ps5upload's payload does not answer on {self.host}:{PS5UPLOAD_PORT} "
+            raise SyncError(f"ps5upload's payload does not answer on {self.host}:{PS5UPLOAD_MGMT_PORT} "
                             f"({output.strip().splitlines()[-1] if output.strip() else f'exit {code}'}): "
                             "send ps5upload.elf to the console first, or use --transport ftp")
 
