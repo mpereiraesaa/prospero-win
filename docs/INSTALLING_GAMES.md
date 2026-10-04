@@ -229,6 +229,14 @@ the executable, its arguments and its working folder.
   on your PC. If the client stops waiting before the PS5 confirms the
   batch, the push asks the payload's management port (9114) whether it went
   through.
+- **The console's Windows user:** on the PS5, Wine runs as the user
+  `prospero`, so Windows' user folders there are `C:\users\prospero`.
+  `pw_install.py` makes prefixes as that user. If you made a prefix another
+  way, it only has your own user's folders, and the PS5 can't create the
+  missing ones itself. Games that keep their settings in AppData would then
+  lose them every time they close. When the prefix has no `prospero` folder,
+  the push creates its AppData, Documents, Desktop and Saved Games folders
+  on the PS5.
 - **Symbolic links:** a PS5 app can't make them, so prospero-win keeps them
   in a `.pw-symlinks` file per folder:
   - links inside the prefix (the `c:` and `z:` drives) are written there;

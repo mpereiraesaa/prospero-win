@@ -359,6 +359,28 @@ def check_ps5upload(root: Path) -> None:
         pw_prefix.PS5UPLOAD_BATCH_FILES = saved
 
 
+def check_console_user(root: Path) -> None:
+    """A prefix made as another user gets the console user's folders on the console."""
+    library, console, fast = new_game(root, "other-user")
+    prefix = library / "prefixes/game"
+    os.rename(prefix / "drive_c/users/prospero", prefix / "drive_c/users/someone")
+    remote = DirRemote(console)
+    with contextlib.redirect_stdout(io.StringIO()) as output:
+        assert pw_prefix.main(["push", "game", *fast], remote) == 0
+    assert "no drive_c/users/prospero" in output.getvalue()
+    users = console / REMOTE_PREFIX / "drive_c/users"
+    for directory in pw_prefix.CONSOLE_USER_DIRS:
+        assert (users / "prospero" / directory).is_dir()
+    assert (users / "someone/Desktop").is_dir()
+    # A prefix that has the console user's folders is pushed as it is.
+    library, console, fast = new_game(root, "same-user")
+    remote = DirRemote(console)
+    with contextlib.redirect_stdout(io.StringIO()) as output:
+        assert pw_prefix.main(["push", "game", *fast], remote) == 0
+    assert "no drive_c/users/prospero" not in output.getvalue()
+    assert not (console / REMOTE_PREFIX / "drive_c/users/prospero/AppData").exists()
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -438,6 +460,7 @@ def main() -> int:
         check_resume(root)
         check_trust_size(root)
         check_ps5upload(root)
+        check_console_user(root)
     print("pw_prefix passed")
     return 0
 

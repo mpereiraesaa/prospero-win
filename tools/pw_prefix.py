@@ -69,6 +69,16 @@ PC_CPU, CONSOLE_CPU = b'@="wow64cpu.dll"', b'@="wowprospero.dll"'
 # the runtime's copy (c0000135 without it), so a push puts the console's
 # there: --cpu-dll, tools/build_wowprospero.sh's output.
 CPU_DLL = "drive_c/windows/system32/wowprospero.dll"
+# The title runs Wine as USER=prospero (native/wine64_main.c), so on the
+# console Windows' user folders are C:\users\prospero. tools/pw_install.py
+# makes prefixes as that user; a prefix made another way has only its own
+# user's folders, and the console cannot make them (wineboot does not run
+# there). Games then fail to save settings under AppData, and lose them at
+# exit, so a push makes these folders on the console when the prefix lacks
+# them.
+CONSOLE_USER = "prospero"
+CONSOLE_USER_DIRS = ("AppData/Local/Temp", "AppData/LocalLow", "AppData/Roaming",
+                     "Desktop", "Documents", "Saved Games")
 # The most a file read, hash or FTP block holds at once.
 CHUNK = 4 << 20
 # How often a push records its progress in the manifest.
@@ -408,6 +418,12 @@ class Sync:
         console = self.walk_remote() if self.trust_size and exists else {}
         for directory in sorted(dirs):
             self.remote.makedirs(posixpath.join(self.remote_prefix, directory) if directory else self.remote_prefix)
+        users = "drive_c/users"
+        if (self.prefix / users).is_dir() and not (self.prefix / users / CONSOLE_USER).is_dir():
+            log(f"the prefix has no {users}/{CONSOLE_USER}, the user the console runs Wine as: "
+                "making its folders there, so games can save settings under AppData")
+            for directory in CONSOLE_USER_DIRS:
+                self.remote.makedirs(posixpath.join(self.remote_prefix, users, CONSOLE_USER, directory))
         self.progress = dict(known)
         pushed, batch = {}, []
         sent = trusted = sent_bytes = batch_bytes = 0
