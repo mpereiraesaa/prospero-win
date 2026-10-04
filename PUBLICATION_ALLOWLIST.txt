@@ -335,7 +335,7 @@ tests/test_pw_script_input.c
 
 # Experimental shared mutex primitives and bounded native checks
 wine/patches/0810-server-ps5-shared-mutex-word.patch
-tests/test_wine_shared_mutex_word.c
-tests/test_wine_shared_mutex_server.c
+tests/fixtures/wine_shared_mutex_word.c
+tests/fixtures/wine_shared_mutex_server.c
 tests/test_wine_shared_mutex_word.py
 docs/SHARED_MUTEX_BACKEND.md
