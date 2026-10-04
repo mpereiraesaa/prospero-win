@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Actual client bodies, native local metadata and ordinary legal lifecycle.
  * No Wine, application faults, signals or asynchronous termination. */
+#define _GNU_SOURCE
 #include "ps5_mutex_backend.h"
 #include <assert.h>
 #include <pthread.h>
@@ -8,6 +9,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 
 #define WINE_INPROCESS_SERVER 1
@@ -49,12 +51,17 @@ static struct thread server_threads[256];
 static struct thread *current;
 static unsigned global_error=7,server_depth;
 static int debug_level;
+static unsigned missing_tid,thread_lookups,gate_checks;
+static int allow_thread=1;
 static pthread_mutex_t inprocess_server_mutex=PTHREAD_MUTEX_INITIALIZER;
 static struct thread *get_thread_from_id(unsigned tid) {
     assert(tid<256); struct thread *t=&server_threads[tid];
-    t->id=tid; t->teb=inprocess_teb(); t->reply_fd=1; t->error=9; ++t->refs; return t;
+    ++thread_lookups;
+    if (tid==missing_tid) { global_error=11; return NULL; }
+    if (!t->id) { t->id=tid; t->teb=inprocess_teb(); t->reply_fd=1; t->error=9; }
+    ++t->refs; return t;
 }
-static int thread_can_fast_mutex(struct thread *t) { (void)t; return 1; }
+static int thread_can_fast_mutex(struct thread *t) { (void)t; return allow_thread; }
 static void release_object(struct thread *t) { assert(t->refs); --t->refs; }
 static void clear_error(void) { global_error=0; if (current) current->error=0; }
 static void ps5_mutex_server_begin(void) { ++server_depth; }
@@ -80,10 +87,92 @@ static int ps5_describe_mutex_word(struct thread *t,obj_handle_t handle,
 #include "shared_mutex_server_abi.inc"
 static const struct pw_mutex_backend *shared_mutex_backend;
 #include "shared_mutex_client.inc"
+static const char *config_dir;
+#include "shared_mutex_switch.inc"
+
+static void write_switch(const char *name,const char *value) {
+    char *path; assert(asprintf(&path,"%s/%s",config_dir,name)>0);
+    FILE *f=fopen(path,"w"); assert(f);
+    assert(fputs(value,f)>=0 && !fclose(f)); free(path);
+}
+static void remove_switch(const char *name) {
+    char *path; assert(asprintf(&path,"%s/%s",config_dir,name)>0);
+    assert(!remove(path)); free(path);
+}
+static void test_switches(void) {
+    const char *envs[]={"WINE_PS5_MUTEX_FAST","WINE_PS5_MUTEX_SHARED"};
+    const char *files[]={"pw_mutex_fast","pw_mutex_shared"};
+    const char *values[]={"","0","1","1\n","11","1\nextra","on","1\r\n"};
+    for (unsigned lane=0;lane<2;lane++) {
+        assert(!unsetenv(envs[lane]));
+        assert(!server_mutex_switch_enabled(envs[lane],files[lane]));
+        for (unsigned i=0;i<8;i++) {
+            write_switch(files[lane],values[i]);
+            assert(server_mutex_switch_enabled(envs[lane],files[lane])==(i==2 || i==3));
+            assert(!setenv(envs[lane],"0",1));
+            assert(!server_mutex_switch_enabled(envs[lane],files[lane]));
+            assert(!setenv(envs[lane],"1",1));
+            assert(server_mutex_switch_enabled(envs[lane],files[lane]));
+            assert(!setenv(envs[lane],"on",1));
+            assert(!server_mutex_switch_enabled(envs[lane],files[lane]));
+            assert(!unsetenv(envs[lane]));
+        }
+        remove_switch(files[lane]);
+    }
+    write_switch(files[0],"1");
+    assert(server_mutex_switch_enabled(envs[0],files[0]));
+    assert(!server_mutex_switch_enabled(envs[1],files[1]));
+    write_switch(files[1],"1");
+    assert(!setenv(envs[0],"0",1));
+    assert(!server_mutex_switch_enabled(envs[0],files[0]));
+    assert(server_mutex_switch_enabled(envs[1],files[1]));
+    assert(!unsetenv(envs[0]));
+    remove_switch(files[0]); remove_switch(files[1]);
+}
 
 static struct node *node(unsigned handle,unsigned kind,unsigned access) {
     assert(node_count<100); struct node *n=&nodes[node_count++];
     n->handle=handle; n->kind=kind; n->access=access; return n;
+}
+static void expect_lookup_retry(const struct pw_mutex_backend *api,uint32_t version,uint64_t teb) {
+    struct pw_mutex_word *word=&nodes[0].word;
+    uint32_t token=23,access=47;
+    unsigned before=cold_calls;
+    struct thread *saved_current=current;
+    assert(api->get_word(version,1,teb,4,&word,&token,&access)==PW_MUTEX_LOOKUP_RETRY);
+    assert(word==&nodes[0].word && token==23 && access==47);
+    assert(cold_calls==before && global_error==7 && !server_depth);
+    assert(current==saved_current && !server_threads[1].refs && server_threads[1].error==9);
+    assert(!pw_mutex_word_load(&nodes[0].word));
+    ++gate_checks;
+}
+static void test_lookup_gates(const struct pw_mutex_backend *api) {
+    struct thread *t=get_thread_from_id(1); release_object(t);
+    unsigned lookups=thread_lookups;
+    uint64_t teb=inprocess_teb(),saved_teb=t->teb;
+    int data;
+    expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION+1,teb);
+    __atomic_store_n(&ready,0,__ATOMIC_RELEASE);
+    expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb);
+    __atomic_store_n(&ready,1,__ATOMIC_RELEASE);
+    assert(!pthread_mutex_lock(&inprocess_server_mutex));
+    expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb);
+    assert(!pthread_mutex_unlock(&inprocess_server_mutex));
+    current=t; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); current=NULL;
+    debug_level=1; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); debug_level=0;
+    assert(thread_lookups==lookups);
+    missing_tid=1; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); missing_tid=0;
+    t->teb=0; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); t->teb=saved_teb;
+    expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,0);
+    /* Fixture state only; no actual thread is terminated or signaled. */
+    t->state=TERMINATED; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); t->state=0;
+    t->reply_fd=0; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); t->reply_fd=1;
+    t->req_toread=1; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); t->req_toread=0;
+    t->reply_towrite=1; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); t->reply_towrite=0;
+    t->req_data=&data; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); t->req_data=NULL;
+    t->reply_data=&data; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); t->reply_data=NULL;
+    allow_thread=0; expect_lookup_retry(api,PW_MUTEX_BACKEND_VERSION,teb); allow_thread=1;
+    assert(gate_checks==15 && thread_lookups==lookups+10);
 }
 static void take_release(HANDLE handle) {
     assert(server_try_shared_mutex(handle,0,NULL,NULL)==STATUS_SUCCESS);
@@ -99,7 +188,8 @@ static void *worker(void *arg) {
     }
     return NULL;
 }
-int main(void) {
+int main(int argc,char **argv) {
+    assert(argc==2); config_dir=argv[1]; test_switches();
     /* Native ABI mismatch discovery never invokes metadata or reads a word. */
     const struct pw_mutex_backend *api=pw_wineserver_mutex_backend(PW_MUTEX_BACKEND_VERSION);
     assert(api && !pw_wineserver_mutex_backend(PW_MUTEX_BACKEND_VERSION+1));
@@ -113,6 +203,7 @@ int main(void) {
     wrong.ready=NULL; assert(!pw_mutex_backend_valid(&wrong)); wrong=*api;
     wrong.get_word=NULL; assert(!pw_mutex_backend_valid(&wrong));
     struct node *first=node(4,1,SYNCHRONIZE);
+    test_lookup_gates(api);
     take_release(4); assert(fixture_thread.ps5_mutex_token==101 && cold_calls==1 && sections==1);
     assert(global_error==7 && server_threads[1].error==9 && !server_threads[1].refs && !current);
     unsigned cold_before=cold_calls, sections_before=sections;
@@ -178,6 +269,6 @@ int main(void) {
     assert(global_error==7 && !current && !server_depth);
     for (unsigned i=0;i<256;i++) assert(!server_threads[i].refs);
     for (unsigned i=0;i<page_count;i++) free(pages[i]);
-    printf("PASS: 24000 warm hits without cold calls/locks, 80 exact negatives, legal lifecycle, 12000 concurrent sections\n");
+    printf("PASS: strict independent switches, 15 lookup gates, 24000 warm hits without cold calls/locks, 80 exact negatives, legal lifecycle, 12000 concurrent sections\n");
     return 0;
 }

@@ -51,6 +51,24 @@ def main():
         (folder / 'ps5_mutex_word.h').write_text(additions(
             ROOT / 'wine/patches/0810-server-ps5-shared-mutex-word.patch', 'include/wine/ps5_mutex_word.h'))
         (folder / 'ps5_mutex_backend.h').write_text(additions(PATCH, 'include/wine/ps5_mutex_backend.h'))
+        # 0820 generalizes the complete switch body added by 0790. Check
+        # each replacement against the actual changed lines before compiling
+        # that resulting function, rather than reproducing the parser logic.
+        switch = function_body(additions(
+            ROOT / 'wine/patches/0790-server-ps5-immediate-mutex-calls.patch',
+            'dlls/ntdll/unix/server.c'), 'static int server_mutex_fast_enabled(')
+        replacements = [
+            ('static int server_mutex_fast_enabled(void)',
+             'static int server_mutex_switch_enabled( const char *environment, const char *file_name )'),
+            ('const char *env = getenv( "WINE_PS5_MUTEX_FAST" );',
+             'const char *env = getenv( environment );'),
+            ('asprintf( &path, "%s/pw_mutex_fast", config_dir )',
+             'asprintf( &path, "%s/%s", config_dir, file_name )'),
+        ]
+        for before, after in replacements:
+            assert switch.count(before) == 1 and after in body
+            switch = switch.replace(before, after)
+        (folder / 'shared_mutex_switch.inc').write_text(switch)
         (folder / 'shared_mutex_client.inc').write_text(cache)
         server = additions(PATCH, 'server/request.c')
         server_abi = function_body(server, 'static int get_shared_mutex_word(')
@@ -61,7 +79,7 @@ def main():
         command += ['-std=gnu11', '-pthread', '-I', str(folder),
                     str(ROOT / 'tests/test_wine_shared_mutex_client.c'), '-o', str(folder / 'test')]
         subprocess.run(command, check=True)
-        subprocess.run([str(folder / 'test')], check=True, timeout=60)
+        subprocess.run([str(folder / 'test'), str(folder)], check=True, timeout=60)
 
 
 if __name__ == '__main__':

@@ -195,8 +195,12 @@ still requires the owner's source/runtime checks before deployment.
 
 `python3 tests/test_wine_shared_mutex_client.py` compiles the exact added
 client bodies and native ABI header from 0820. It also compiles the actual added
-server lookup/ABI entry bodies. With fixture metadata, server context and
-uninterrupted-section callbacks, it checks ABI mismatch rejection, 24,000
+server lookup/ABI entry bodies. The generalized switch body is reconstructed
+from 0790 with each replacement verified against 0820's actual changes.
+It checks strict default-off file/environment selection and independence
+of the typed and shared switches. With fixture metadata, server context and
+uninterrupted-section callbacks, it checks ABI mismatch rejection, 15 cold
+lookup rejection gates with unchanged outputs/errors/references, 24,000
 warm operations without extra cold calls/locks, 80 exact negative slots,
 transient retries, recursion/local output, wait access versus access-zero
 release, a second page, readiness downgrade, temporary SLOW recovery, ordinary close/reuse and

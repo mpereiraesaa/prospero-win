@@ -293,7 +293,7 @@ index 0000000..7a3d76c
 +}
 +#endif
 diff --git a/server/mutex.c b/server/mutex.c
-index 2a02a2f..c18c806 100644
+index 2a02a2f..fdcb9ab 100644
 --- a/server/mutex.c
 +++ b/server/mutex.c
 @@ -38,6 +38,7 @@
@@ -304,6 +304,15 @@ index 2a02a2f..c18c806 100644
  #endif
 
  static const WCHAR mutex_name[] = {'M','u','t','a','n','t'};
+@@ -135,7 +136,7 @@ static int do_release( struct mutex_sync *mutex, struct thread *thread, int coun
+ }
+
+ #ifdef WINE_INPROCESS_SERVER
+-/* Native-only cold backend. No exported function or client activates it yet.
++/* Native-only server state, activated through the validated backend lookup.
+  * Cells are individually aligned and never freed/reused, including retirement.
+  * All metadata and both lists are accessed only under the server lock. */
+ struct ps5_mutex_cell
 @@ -470,6 +471,30 @@ done:
      release_object( mutex );
      return ret;
