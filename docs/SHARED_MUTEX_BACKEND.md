@@ -31,17 +31,50 @@ four-thread count conservation across 3,000 server authority transfers, and
 2,000 payload handoffs through auto-reset events. It does not start Wine or
 exercise real handles, waits, APCs or object lifetime.
 
-Server integration still needs freeze/adopt hooks for queue insertion and
+Patch 0886 supplies server freeze/adopt hooks for queue insertion and
 removal, signaled/satisfied callbacks, queries, event set/reset/pulse and
-semaphore release. Publication must occur only after the outermost server
-operation, with no remaining waiters or slow dependencies. Named,
-inheritable, aliased, global and retired handles require ordinary server
-authority. Retired cells must remain addressable and permanently slow for
-stale native cache entries. A separate versioned ABI and client cache must
-preserve access, alertable waits, multiwait and SignalObjectAndWait semantics.
-Activation remains pending that source integration, complete SDK builds and
-the ordinary real-Wine console matrix plus matched performance/regression
-gates.
+semaphore release. Its native metadata keeps a sync-object reference while
+a cell is active. It reuses the existing mutex request-depth, readiness and
+handle alias hooks, preserving the mutex ABI. No client activates these
+event/semaphore cells yet.
+
+Publication occurs only after the outermost server operation, with no
+remaining waiters or debug/module disable. Cold preparation admits only
+unnamed, non-inheritable, single-handle event/semaphore objects with the
+ordinary server sync type. Events associated with kernel objects stay slow;
+requesting the kernel-object list retires any existing cell before an
+association can be added. Aliases, global handles, closes and backend disable
+freeze/adopt state, remove publication entries and drop the activation
+reference. Retired cells remain addressable and permanently slow, with their
+sync pointers cleared. Their sync remains permanently ineligible, including
+after readiness returns. Ordinary multiwait and SignalObjectAndWait still
+use their existing callbacks and handlers; publication waits for nested
+completions to finish.
+
+The process retains at most one MiB of requested event/semaphore cell payload
+over its lifetime. The limit is computed from the complete native cell size;
+allocator metadata is additional. Only successful allocations consume the
+budget. Retiring a cell never returns that allowance, since old native cache
+entries must continue to address the same permanently SLOW word. An existing
+binding remains usable at the limit. New objects rejected by the full budget
+stay permanently on the ordinary path and produce exact negative client cache
+entries, avoiding repeated cold allocation attempts. A transient allocation
+failure leaves the object eligible for a later retry. This budget does not
+change the mutex backend, ABI or event/semaphore default-off selection.
+
+`python3 tests/test_wine_shared_sync_server.py` compiles the exact added
+authority, cold preparation, queue and retirement bodies with native fixture
+list/refcount callbacks. It checks 600 fast/legacy authority cycles, repeated
+slow entry, nested request completion, persistent waiters, state adoption,
+cold exclusions and pin/retirement lifetime. It positions a fixture-only
+admission counter at the boundary, without allocating to a resource limit,
+and checks allocation-failure retry, existing bindings at capacity, event and
+semaphore ordinary fallback, unchanged state/output/refcounts, and no budget
+reuse after retirement. This fixture does not establish
+real Wine wait, APC or handle semantics. A separate versioned native ABI and
+client cache still need access and alertable-wait gates, complete SDK builds
+and the ordinary real-Wine console matrix plus matched performance and
+regression gates before activation.
 
 Status: experimental Unix client/server backend implemented, build-tested
 and measured on the console. Patch 0880 selects it by default for compatible

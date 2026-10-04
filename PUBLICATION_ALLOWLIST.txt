@@ -355,3 +355,6 @@ docs/IMAGE_VIEW_FD_LIFETIME.md
 wine/patches/0885-server-ps5-shared-sync-word.patch
 tests/fixtures/wine_shared_sync_word.c
 tests/test_wine_shared_sync_word.py
+wine/patches/0886-server-ps5-shared-sync-lifetime.patch
+tests/fixtures/wine_shared_sync_server.c
+tests/test_wine_shared_sync_server.py

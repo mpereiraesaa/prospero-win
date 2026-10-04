@@ -1,0 +1,718 @@
+From: Prospero Win contributors <prospero-win@localhost>
+Subject: [PATCH] server: prepare bounded event/semaphore authority and lifetime hooks
+
+Freeze shared state before ordinary operations and publish only after the
+outermost request with no waiters. Retire permanently on handle alias/close
+or backend disable. Retained cell payload has a one-MiB lifetime budget;
+full-budget objects use ordinary Wine without recurring allocation attempts.
+Depends on 0885; no native ABI or client activates it yet.
+
+diff --git a/server/event.c b/server/event.c
+--- a/server/event.c
++++ b/server/event.c
+@@ -34,6 +34,125 @@
+ #include "thread.h"
+ #include "request.h"
+ #include "security.h"
++#ifdef WINE_INPROCESS_SERVER
++#include <string.h>
++#endif
++
++#ifdef WINE_INPROCESS_SERVER
++/* All metadata/list/callback operations are under the server lock. The word
++ * remains allocated and SLOW after retirement, so cached native pointers can
++ * never address freed storage or a different synchronization object. */
++static struct list ps5_sync_active = LIST_INIT(ps5_sync_active);
++static struct list ps5_sync_pending = LIST_INIT(ps5_sync_pending);
++static unsigned int ps5_sync_operation_depth;
++/* Lifetime budget counts successful allocations, including retired cells.
++ * Retired pointers can remain cached, so storage is never freed or reused.
++ * Requested payload is bounded; allocator metadata is not part of this cap. */
++#define PW_SYNC_RETAINED_PAYLOAD_BYTES (1024u * 1024u)
++#define PW_SYNC_RETAINED_CELL_LIMIT (PW_SYNC_RETAINED_PAYLOAD_BYTES / sizeof(struct ps5_sync_cell))
++static unsigned int ps5_sync_retained_cells;
++
++static void ps5_sync_queue_publish(struct ps5_sync_cell *cell)
++{
++    if (cell->pending) return;
++    list_add_tail(&ps5_sync_pending, &cell->pending_entry);
++    cell->pending = 1;
++}
++
++void ps5_sync_enter_slow(struct ps5_sync_cell *cell)
++{
++    unsigned int snapshot;
++    if (!cell) return;
++    assert(cell->sync && *cell->binding == cell);
++    ps5_sync_queue_publish(cell);
++    if (pw_sync_word_freeze(&cell->word, &snapshot))
++        cell->adopt_value(cell->sync, snapshot);
++}
++
++struct ps5_sync_cell *ps5_sync_prepare(struct object *sync, struct ps5_sync_cell **binding, int *disabled,
++    unsigned int kind, unsigned int maximum, unsigned int (*read_value)(struct object *),
++    void (*adopt_value)(struct object *, unsigned int))
++{
++    struct ps5_sync_cell *cell;
++    void *storage;
++    if (*disabled) return NULL;
++    if ((cell = *binding)) return cell;
++    if (ps5_sync_retained_cells >= PW_SYNC_RETAINED_CELL_LIMIT)
++    {
++        *disabled = 1; /* Permanent ordinary fallback; do not retry a full budget. */
++        return NULL;
++    }
++    if (posix_memalign(&storage, 64, sizeof(*cell))) return NULL;
++    ++ps5_sync_retained_cells;
++    cell = storage;
++    memset(cell, 0, sizeof(*cell));
++    pw_sync_word_init(&cell->word, kind, read_value(sync), maximum);
++    cell->sync = grab_object(sync);
++    cell->binding = binding;
++    cell->disabled = disabled;
++    cell->read_value = read_value;
++    cell->adopt_value = adopt_value;
++    *binding = cell;
++    list_add_tail(&ps5_sync_active, &cell->active_entry);
++    ps5_sync_queue_publish(cell);
++    return cell;
++}
++
++void ps5_sync_server_begin(void)
++{
++    ++ps5_sync_operation_depth;
++}
++
++void ps5_sync_server_reconcile(void)
++{
++    struct ps5_sync_cell *cell;
++    struct list *entry;
++    if (ps5_sync_operation_depth) return;
++    while ((entry = list_head(&ps5_sync_pending)))
++    {
++        cell = LIST_ENTRY(entry, struct ps5_sync_cell, pending_entry);
++        list_remove(entry);
++        cell->pending = 0;
++        assert(cell->sync && *cell->binding == cell);
++        if (!__atomic_load_n(&inprocess_direct_ok, __ATOMIC_ACQUIRE) || debug_level ||
++            !list_empty(&cell->sync->wait_queue)) continue;
++        pw_sync_word_publish(&cell->word, cell->read_value(cell->sync));
++    }
++}
++
++void ps5_sync_server_end(void)
++{
++    assert(ps5_sync_operation_depth);
++    if (!--ps5_sync_operation_depth) ps5_sync_server_reconcile();
++}
++
++void ps5_sync_retire(struct ps5_sync_cell **binding)
++{
++    struct ps5_sync_cell *cell = *binding;
++    struct object *sync;
++    if (!cell) return;
++    ps5_sync_enter_slow(cell);
++    if (cell->pending) list_remove(&cell->pending_entry);
++    cell->pending = 0;
++    list_remove(&cell->active_entry);
++    sync = cell->sync;
++    *cell->disabled = 1;
++    *binding = NULL;
++    cell->sync = NULL;
++    cell->binding = NULL;
++    cell->disabled = NULL;
++    /* Do not free cell or clear SLOW. Its retained word has no live pointer
++     * into the sync; the activation reference can now be dropped safely. */
++    release_object(sync);
++}
++
++void ps5_sync_server_disable(void)
++{
++    struct list *entry;
++    while ((entry = list_head(&ps5_sync_active)))
++        ps5_sync_retire(LIST_ENTRY(entry, struct ps5_sync_cell, active_entry)->binding);
++}
++#endif
+
+ static const WCHAR event_name[] = {'E','v','e','n','t'};
+
+@@ -54,6 +173,10 @@
+     struct object  obj;             /* object header */
+     unsigned int   manual : 1;      /* is it a manual reset event? */
+     unsigned int   signaled : 1;    /* event has been signaled */
++#ifdef WINE_INPROCESS_SERVER
++    struct ps5_sync_cell *fast;
++    int fast_disabled;
++#endif
+ };
+
+ static void event_sync_dump( struct object *obj, int verbose );
+@@ -61,13 +184,35 @@
+ static void event_sync_satisfied( struct object *obj, struct wait_queue_entry *entry );
+ static int event_sync_signal( struct object *obj, unsigned int access, int signal );
+
++#ifdef WINE_INPROCESS_SERVER
++#define ps5_event_enter_slow(sync) ps5_sync_enter_slow((sync)->fast)
++static int ps5_event_add_queue(struct object *obj, struct wait_queue_entry *entry)
++{
++    ps5_event_enter_slow((struct event_sync *)obj);
++    return add_queue(obj, entry);
++}
++static void ps5_event_remove_queue(struct object *obj, struct wait_queue_entry *entry)
++{
++    ps5_event_enter_slow((struct event_sync *)obj);
++    remove_queue(obj, entry);
++    /* Publication waits for the outermost request/multiwait completion. */
++}
++#else
++#define ps5_event_enter_slow(sync) ((void)0)
++#endif
++
+ static const struct object_ops event_sync_ops =
+ {
+     .size         = sizeof(struct event_sync),
+     .type         = &no_type,
+     .dump         = event_sync_dump,
++#ifdef WINE_INPROCESS_SERVER
++    .add_queue    = ps5_event_add_queue,
++    .remove_queue = ps5_event_remove_queue,
++#else
+     .add_queue    = add_queue,
+     .remove_queue = remove_queue,
++#endif
+     .signaled     = event_sync_signaled,
+     .satisfied    = event_sync_satisfied,
+     .signal       = event_sync_signal,
+@@ -82,6 +227,10 @@
+     if (!(event = alloc_object( &event_sync_ops ))) return NULL;
+     event->manual   = manual;
+     event->signaled = signaled;
++#ifdef WINE_INPROCESS_SERVER
++    event->fast = NULL;
++    event->fast_disabled = 0;
++#endif
+
+     return &event->obj;
+ }
+@@ -93,6 +242,10 @@
+     if (!(event = alloc_object( &event_sync_ops ))) return NULL;
+     event->manual   = manual;
+     event->signaled = signaled;
++#ifdef WINE_INPROCESS_SERVER
++    event->fast = NULL;
++    event->fast_disabled = 0;
++#endif
+
+     return event;
+ }
+@@ -107,6 +260,7 @@
+ {
+     struct event_sync *event = (struct event_sync *)obj;
+     assert( obj->ops == &event_sync_ops );
++    ps5_event_enter_slow(event);
+     fprintf( stderr, "Event manual=%d signaled=%d\n",
+              event->manual, event->signaled );
+ }
+@@ -115,6 +269,7 @@
+ {
+     struct event_sync *event = (struct event_sync *)obj;
+     assert( obj->ops == &event_sync_ops );
++    ps5_event_enter_slow(event);
+     return event->signaled;
+ }
+
+@@ -122,6 +277,7 @@
+ {
+     struct event_sync *event = (struct event_sync *)obj;
+     assert( obj->ops == &event_sync_ops );
++    ps5_event_enter_slow(event);
+     /* Reset if it's an auto-reset event */
+     if (!event->manual) event->signaled = 0;
+ }
+@@ -130,6 +286,7 @@
+ {
+     struct event_sync *event = (struct event_sync *)obj;
+     assert( obj->ops == &event_sync_ops );
++    ps5_event_enter_slow(event);
+
+     /* wake up all waiters if manual reset, a single one otherwise */
+     if ((event->signaled = !!signal)) wake_up( &event->obj, !event->manual );
+@@ -141,12 +298,18 @@
+     struct object      obj;             /* object header */
+     struct object     *sync;            /* event sync object */
+     struct list        kernel_object;   /* list of kernel object pointers */
++#ifdef WINE_INPROCESS_SERVER
++    int fast_eligible;
++#endif
+ };
+
+ struct event_init_data
+ {
+     int manual_reset;
+     int initial_state;
++#ifdef WINE_INPROCESS_SERVER
++    int fast_eligible;
++#endif
+ };
+
+ static void event_dump( struct object *obj, int verbose );
+@@ -155,6 +318,9 @@
+ static int event_signal( struct object *obj, unsigned int access, int signal );
+ static struct list *event_get_kernel_obj_list( struct object *obj );
+ static void event_destroy( struct object *obj );
++#ifdef WINE_INPROCESS_SERVER
++static int ps5_event_close_handle(struct object *, struct process *, obj_handle_t);
++#endif
+
+ static const struct object_ops event_ops =
+ {
+@@ -166,6 +332,9 @@
+     .get_sync            = event_get_sync,
+     .get_kernel_obj_list = event_get_kernel_obj_list,
+     .destroy             = event_destroy,
++#ifdef WINE_INPROCESS_SERVER
++    .close_handle        = ps5_event_close_handle,
++#endif
+ };
+
+
+@@ -241,6 +410,9 @@
+     const struct event_init_data *data = init_data;
+
+     list_init( &event->kernel_object );
++#ifdef WINE_INPROCESS_SERVER
++    event->fast_eligible = data->fast_eligible;
++#endif
+     return !!(event->sync = create_event_sync( data->manual_reset, data->initial_state ));
+ }
+
+@@ -271,6 +443,9 @@
+ static struct list *event_get_kernel_obj_list( struct object *obj )
+ {
+     struct event *event = (struct event *)obj;
++#ifdef WINE_INPROCESS_SERVER
++    ps5_sync_retire_object(obj);
++#endif
+     return &event->kernel_object;
+ }
+
+@@ -279,8 +454,68 @@
+     struct event *event = (struct event *)obj;
+     assert( obj->ops == &event_ops );
+
++#ifdef WINE_INPROCESS_SERVER
++    ps5_sync_retire_object(obj);
++#endif
+     if (event->sync) release_object( event->sync );
+ }
++
++#ifdef WINE_INPROCESS_SERVER
++static unsigned int ps5_event_read_value(struct object *obj)
++{
++    return ((struct event_sync *)obj)->signaled;
++}
++static void ps5_event_adopt_value(struct object *obj, unsigned int value)
++{
++    assert(value <= 1);
++    ((struct event_sync *)obj)->signaled = value;
++}
++void ps5_sync_retire_object(struct object *obj)
++{
++    struct event *event;
++    struct event_sync *sync;
++    if (obj->ops != &event_ops)
++    {
++        ps5_semaphore_retire_object(obj);
++        return;
++    }
++    event = (struct event *)obj;
++    event->fast_eligible = 0;
++    if (!event->sync || event->sync->ops != &event_sync_ops) return;
++    sync = (struct event_sync *)event->sync;
++    sync->fast_disabled = 1;
++    ps5_sync_retire(&sync->fast);
++}
++static int ps5_event_close_handle(struct object *obj, struct process *process, obj_handle_t handle)
++{
++    (void)process;
++    (void)handle;
++    ps5_sync_retire_object(obj);
++    return 1;
++}
++/* Native cold preparation only. A later ABI wrapper must validate the
++ * thread/TEB, module readiness and the process handle before calling. */
++int ps5_get_event_word(struct thread *thread, struct object *obj, struct pw_sync_word **word)
++{
++    struct event *event;
++    struct event_sync *sync;
++    struct ps5_sync_cell *cell;
++    if (!__atomic_load_n(&inprocess_direct_ok, __ATOMIC_ACQUIRE) || debug_level) return 0;
++    if (obj->ops != &event_ops) return 0;
++    event = (struct event *)obj;
++    if (!event->fast_eligible || obj->name || obj->handle_count != 1 ||
++        !list_empty(&event->kernel_object) ||
++        event->sync->ops != &event_sync_ops || thread->state == TERMINATED) return 0;
++    sync = (struct event_sync *)event->sync;
++    if (sync->fast_disabled) return 0;
++    cell = ps5_sync_prepare(&sync->obj, &sync->fast, &sync->fast_disabled,
++        sync->manual ? PW_SYNC_MANUAL_EVENT : PW_SYNC_AUTO_EVENT, 1,
++        ps5_event_read_value, ps5_event_adopt_value);
++    if (!cell) return sync->fast_disabled ? 0 : -1;
++    *word = &cell->word;
++    return 1;
++}
++#endif
+
+ struct keyed_event *create_keyed_event( struct object *root, struct unicode_str name,
+                                         unsigned int attr, const struct security_descriptor *sd )
+@@ -337,6 +572,9 @@
+     struct object_params params = { .ops = &event_ops, .access = req->access, .init_data = &data };
+
+     if (!get_req_object_attributes( &params )) return;
++#ifdef WINE_INPROCESS_SERVER
++    data.fast_eligible = !params.name.len && !(params.attr & OBJ_INHERIT);
++#endif
+     reply->handle = create_named_obj_handle( current->process, &params );
+     if (params.root) release_object( params.root );
+ }
+@@ -357,6 +595,7 @@
+     if (!(event = get_event_obj( current->process, req->handle, EVENT_MODIFY_STATE ))) return;
+     assert( event->sync->ops == &event_sync_ops ); /* never called with inproc syncs */
+     sync = (struct event_sync *)event->sync;
++    ps5_event_enter_slow(sync);
+
+     reply->state = sync->signaled;
+     switch(req->op)
+@@ -387,6 +626,7 @@
+     if (!(event = get_event_obj( current->process, req->handle, EVENT_QUERY_STATE ))) return;
+     assert( event->sync->ops == &event_sync_ops ); /* never called with inproc syncs */
+     sync = (struct event_sync *)event->sync;
++    ps5_event_enter_slow(sync);
+
+     reply->manual_reset = sync->manual;
+     reply->state = sync->signaled;
+diff --git a/server/semaphore.c b/server/semaphore.c
+--- a/server/semaphore.c
++++ b/server/semaphore.c
+@@ -54,19 +54,44 @@
+     struct object       obj;                /* object header */
+     unsigned int        count;              /* current count */
+     unsigned int        max;                /* maximum possible count */
++#ifdef WINE_INPROCESS_SERVER
++    struct ps5_sync_cell *fast;
++    int fast_disabled;
++#endif
+ };
+
+ static void semaphore_sync_dump( struct object *obj, int verbose );
+ static int semaphore_sync_signaled( struct object *obj, struct wait_queue_entry *entry );
+ static void semaphore_sync_satisfied( struct object *obj, struct wait_queue_entry *entry );
+
++#ifdef WINE_INPROCESS_SERVER
++#define ps5_semaphore_enter_slow(sync) ps5_sync_enter_slow((sync)->fast)
++static int ps5_semaphore_add_queue(struct object *obj, struct wait_queue_entry *entry)
++{
++    ps5_semaphore_enter_slow((struct semaphore_sync *)obj);
++    return add_queue(obj, entry);
++}
++static void ps5_semaphore_remove_queue(struct object *obj, struct wait_queue_entry *entry)
++{
++    ps5_semaphore_enter_slow((struct semaphore_sync *)obj);
++    remove_queue(obj, entry);
++}
++#else
++#define ps5_semaphore_enter_slow(sync) ((void)0)
++#endif
++
+ static const struct object_ops semaphore_sync_ops =
+ {
+     .size         = sizeof(struct semaphore_sync),
+     .type         = &no_type,
+     .dump         = semaphore_sync_dump,
++#ifdef WINE_INPROCESS_SERVER
++    .add_queue    = ps5_semaphore_add_queue,
++    .remove_queue = ps5_semaphore_remove_queue,
++#else
+     .add_queue    = add_queue,
+     .remove_queue = remove_queue,
++#endif
+     .signaled     = semaphore_sync_signaled,
+     .satisfied    = semaphore_sync_satisfied,
+ };
+@@ -74,6 +99,7 @@
+ static int release_semaphore( struct semaphore_sync *sem, unsigned int count,
+                               unsigned int *prev )
+ {
++    ps5_semaphore_enter_slow(sem);
+     if (prev) *prev = sem->count;
+     if (sem->count + count < sem->count || sem->count + count > sem->max)
+     {
+@@ -97,6 +123,7 @@
+ {
+     struct semaphore_sync *sem = (struct semaphore_sync *)obj;
+     assert( obj->ops == &semaphore_sync_ops );
++    ps5_semaphore_enter_slow(sem);
+     fprintf( stderr, "Semaphore count=%d max=%d\n", sem->count, sem->max );
+ }
+
+@@ -104,6 +131,7 @@
+ {
+     struct semaphore_sync *sem = (struct semaphore_sync *)obj;
+     assert( obj->ops == &semaphore_sync_ops );
++    ps5_semaphore_enter_slow(sem);
+     return (sem->count > 0);
+ }
+
+@@ -111,6 +139,7 @@
+ {
+     struct semaphore_sync *sem = (struct semaphore_sync *)obj;
+     assert( obj->ops == &semaphore_sync_ops );
++    ps5_semaphore_enter_slow(sem);
+     assert( sem->count );
+     sem->count--;
+ }
+@@ -124,6 +153,10 @@
+     if (!(sem = alloc_object( &semaphore_sync_ops ))) return NULL;
+     sem->count = initial;
+     sem->max   = max;
++#ifdef WINE_INPROCESS_SERVER
++    sem->fast = NULL;
++    sem->fast_disabled = 0;
++#endif
+     return &sem->obj;
+ }
+
+@@ -131,12 +164,18 @@
+ {
+     struct object          obj;    /* object header */
+     struct object         *sync;   /* semaphore sync object */
++#ifdef WINE_INPROCESS_SERVER
++    int fast_eligible;
++#endif
+ };
+
+ struct semaphore_init_data
+ {
+     unsigned int initial;
+     unsigned int max;
++#ifdef WINE_INPROCESS_SERVER
++    int fast_eligible;
++#endif
+ };
+
+ static void semaphore_dump( struct object *obj, int verbose );
+@@ -144,6 +183,9 @@
+ static struct object *semaphore_get_sync( struct object *obj );
+ static int semaphore_signal( struct object *obj, unsigned int access, int signal );
+ static void semaphore_destroy( struct object *obj );
++#ifdef WINE_INPROCESS_SERVER
++static int ps5_semaphore_close_handle(struct object *, struct process *, obj_handle_t);
++#endif
+
+ static const struct object_ops semaphore_ops =
+ {
+@@ -154,6 +196,9 @@
+     .signal   = semaphore_signal,
+     .get_sync = semaphore_get_sync,
+     .destroy  = semaphore_destroy,
++#ifdef WINE_INPROCESS_SERVER
++    .close_handle = ps5_semaphore_close_handle,
++#endif
+ };
+
+ static void semaphore_dump( struct object *obj, int verbose )
+@@ -168,6 +213,9 @@
+     struct semaphore *sem = (struct semaphore *)obj;
+     const struct semaphore_init_data *data = init_data;
+
++#ifdef WINE_INPROCESS_SERVER
++    sem->fast_eligible = data->fast_eligible;
++#endif
+     return !!(sem->sync = create_semaphore_sync( data->initial, data->max ));
+ }
+
+@@ -198,8 +246,62 @@
+ {
+     struct semaphore *sem = (struct semaphore *)obj;
+     assert( obj->ops == &semaphore_ops );
++#ifdef WINE_INPROCESS_SERVER
++    ps5_semaphore_retire_object(obj);
++#endif
+     if (sem->sync) release_object( sem->sync );
+ }
++
++#ifdef WINE_INPROCESS_SERVER
++static unsigned int ps5_semaphore_read_value(struct object *obj)
++{
++    return ((struct semaphore_sync *)obj)->count;
++}
++static void ps5_semaphore_adopt_value(struct object *obj, unsigned int value)
++{
++    struct semaphore_sync *sync = (struct semaphore_sync *)obj;
++    assert(value <= sync->max);
++    sync->count = value;
++}
++void ps5_semaphore_retire_object(struct object *obj)
++{
++    struct semaphore *sem;
++    struct semaphore_sync *sync;
++    if (obj->ops != &semaphore_ops) return;
++    sem = (struct semaphore *)obj;
++    sem->fast_eligible = 0;
++    if (!sem->sync || sem->sync->ops != &semaphore_sync_ops) return;
++    sync = (struct semaphore_sync *)sem->sync;
++    sync->fast_disabled = 1;
++    ps5_sync_retire(&sync->fast);
++}
++static int ps5_semaphore_close_handle(struct object *obj, struct process *process, obj_handle_t handle)
++{
++    (void)process;
++    (void)handle;
++    ps5_semaphore_retire_object(obj);
++    return 1;
++}
++/* Native cold preparation; caller validates thread/TEB and handle context. */
++int ps5_get_semaphore_word(struct thread *thread, struct object *obj, struct pw_sync_word **word)
++{
++    struct semaphore *sem;
++    struct semaphore_sync *sync;
++    struct ps5_sync_cell *cell;
++    if (!__atomic_load_n(&inprocess_direct_ok, __ATOMIC_ACQUIRE) || debug_level) return 0;
++    if (obj->ops != &semaphore_ops) return 0;
++    sem = (struct semaphore *)obj;
++    if (!sem->fast_eligible || obj->name || obj->handle_count != 1 ||
++        sem->sync->ops != &semaphore_sync_ops || thread->state == TERMINATED) return 0;
++    sync = (struct semaphore_sync *)sem->sync;
++    if (sync->fast_disabled || !sync->max || sync->max > PW_SYNC_WORD_MAX_COUNT) return 0;
++    cell = ps5_sync_prepare(&sync->obj, &sync->fast, &sync->fast_disabled,
++        PW_SYNC_SEMAPHORE, sync->max, ps5_semaphore_read_value, ps5_semaphore_adopt_value);
++    if (!cell) return sync->fast_disabled ? 0 : -1;
++    *word = &cell->word;
++    return 1;
++}
++#endif
+
+ /* create a semaphore */
+ DECL_HANDLER(create_semaphore)
+@@ -214,6 +316,9 @@
+     }
+
+     if (!get_req_object_attributes( &params )) return;
++#ifdef WINE_INPROCESS_SERVER
++    data.fast_eligible = !params.name.len && !(params.attr & OBJ_INHERIT);
++#endif
+     reply->handle = create_named_obj_handle( current->process, &params );
+     if (params.root) release_object( params.root );
+ }
+@@ -235,6 +340,7 @@
+     {
+         struct semaphore_sync *sync = (struct semaphore_sync *)sem->sync;
+         assert( sem->sync->ops == &semaphore_sync_ops ); /* never called with inproc syncs */
++        ps5_semaphore_enter_slow(sync);
+
+         release_semaphore( sync, req->count, &reply->prev_count );
+         release_object( sem );
+@@ -251,6 +357,7 @@
+     {
+         struct semaphore_sync *sync = (struct semaphore_sync *)sem->sync;
+         assert( sem->sync->ops == &semaphore_sync_ops ); /* never called with inproc syncs */
++        ps5_semaphore_enter_slow(sync);
+
+         reply->current = sync->count;
+         reply->max = sync->max;
+diff --git a/server/mutex.c b/server/mutex.c
+--- a/server/mutex.c
++++ b/server/mutex.c
+@@ -214,6 +214,7 @@
+ void ps5_mutex_server_begin(void)
+ {
+     ++ps5_mutex_operation_depth;
++    ps5_sync_server_begin();
+ }
+
+ void ps5_mutex_server_reconcile(void)
+@@ -224,6 +225,7 @@
+     uint64_t word;
+     unsigned int token;
+     if (ps5_mutex_operation_depth) return;
++    ps5_sync_server_reconcile();
+     while ((entry = list_head( &ps5_mutex_pending )))
+     {
+         cell = LIST_ENTRY( entry, struct ps5_mutex_cell, pending_entry );
+@@ -251,6 +253,7 @@
+ void ps5_mutex_server_end(void)
+ {
+     assert( ps5_mutex_operation_depth );
++    ps5_sync_server_end();
+     if (!--ps5_mutex_operation_depth) ps5_mutex_server_reconcile();
+ }
+
+@@ -277,6 +280,7 @@
+ void ps5_mutex_server_disable(void)
+ {
+     struct list *entry;
++    ps5_sync_server_disable();
+     while ((entry = list_head( &ps5_mutex_active )))
+         ps5_mutex_retire( LIST_ENTRY( entry, struct ps5_mutex_cell, active_entry )->sync );
+ }
+@@ -418,6 +422,7 @@
+ void ps5_mutex_retire_object( struct object *obj )
+ {
+     struct mutex *mutex;
++    ps5_sync_retire_object(obj);
+     if (obj->ops != &mutex_ops) return;
+     mutex = (struct mutex *)obj;
+     mutex->fast_eligible = 0;
+diff --git a/server/request.h b/server/request.h
+--- a/server/request.h
++++ b/server/request.h
+@@ -60,6 +60,7 @@
+ #endif
+ #ifdef WINE_INPROCESS_SERVER
+ #include <pthread.h>
++#include "ps5_sync.h"
+ extern int connect_inprocess_client(void);
+ extern int pw_wineserver_connect( const char *nls_dir );
+ extern const char *inprocess_nls_dir;
+diff --git a/server/ps5_sync.h b/server/ps5_sync.h
+new file mode 100644
+--- /dev/null
++++ b/server/ps5_sync.h
+@@ -0,0 +1,37 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#ifndef WINE_SERVER_PS5_SYNC_H
++#define WINE_SERVER_PS5_SYNC_H
++#ifdef WINE_INPROCESS_SERVER
++#include "wine/list.h"
++#include "wine/ps5_sync_word.h"
++struct object;
++struct thread;
++struct ps5_sync_cell
++{
++    struct pw_sync_word word;
++    struct object *sync;
++    struct ps5_sync_cell **binding;
++    int *disabled;
++    unsigned int (*read_value)(struct object *);
++    void (*adopt_value)(struct object *, unsigned int);
++    struct list active_entry;
++    struct list pending_entry;
++    int pending;
++};
++extern void ps5_sync_enter_slow(struct ps5_sync_cell *cell);
++extern struct ps5_sync_cell *ps5_sync_prepare(struct object *sync, struct ps5_sync_cell **binding, int *disabled,
++    unsigned int kind, unsigned int maximum, unsigned int (*read_value)(struct object *),
++    void (*adopt_value)(struct object *, unsigned int));
++extern void ps5_sync_retire(struct ps5_sync_cell **binding);
++extern void ps5_sync_server_begin(void);
++extern void ps5_sync_server_end(void);
++extern void ps5_sync_server_reconcile(void);
++extern void ps5_sync_server_disable(void);
++extern void ps5_sync_retire_object(struct object *obj);
++extern void ps5_semaphore_retire_object(struct object *obj);
++extern int ps5_get_event_word(struct thread *thread, struct object *obj,
++                             struct pw_sync_word **word);
++extern int ps5_get_semaphore_word(struct thread *thread, struct object *obj,
++                                 struct pw_sync_word **word);
++#endif
++#endif
