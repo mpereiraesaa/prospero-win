@@ -3245,7 +3245,7 @@ analyze_and_emit:
                 /*
                  * BT/BTS/BTR/BTC address a *bit string*: with a memory
                  * operand the CPU does not touch [base] but the unit at
-                 * base + width*(offset DIV (width*8)), so an offset of 40
+                 * base + width*(offset SAR (5|4)), so an offset of 40
                  * on a dword operand reads the next dword. The guard has to
                  * validate the address the CPU will really use, not the base
                  * the ModRM names - validating the base alone let a guest
@@ -3267,10 +3267,17 @@ analyze_and_emit:
                         byte(&e,0x83);byte(&e,0xc0);byte(&e,(uint8_t)offset);
                     }
                 } else {
+                    /* The offset is signed: a negative one reaches the
+                     * units before the base. The 16-bit forms take the
+                     * register's low word, sign-extended. */
                     load_guest_reg_ecx(&e,&block->exit_contract,operand.reg);
-                    byte(&e,0x89);byte(&e,0xca);            /* mov edx, ecx */
-                    byte(&e,0xc1);byte(&e,0xea);
-                    byte(&e,(uint8_t)unit_shift);           /* shr edx, 5|4 */
+                    if(width == 4u) {
+                        byte(&e,0x89);byte(&e,0xca);        /* mov edx, ecx */
+                    } else {
+                        byte(&e,0x0f);byte(&e,0xbf);byte(&e,0xd1);   /* movsx edx, cx */
+                    }
+                    byte(&e,0xc1);byte(&e,0xfa);
+                    byte(&e,(uint8_t)unit_shift);           /* sar edx, 5|4 */
                     byte(&e,0xc1);byte(&e,0xe2);
                     byte(&e,(uint8_t)(unit_bytes == 4u ? 2u : 1u));
                     byte(&e,0x03);byte(&e,0xc2);            /* add eax, edx */
