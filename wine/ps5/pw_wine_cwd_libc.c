@@ -20,6 +20,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -263,10 +264,39 @@ char *__wrap_getcwd(char *buffer, size_t size)
     return buffer;
 }
 
+/* The PS5 counts every open file against a per-process cap of about 268,
+ * however many descriptors share it: copies made with dup() add nothing,
+ * and the file stays counted until its last descriptor closes (measured on
+ * the console, notes/gtaiv/fd-exhaustion.md). /dev/null is opened over and
+ * over (GTA IV's Social Club stand-in logs there and opens it for every
+ * line), so every open of it is a copy of one descriptor held for the life
+ * of the module: one file, whatever the number of handles. Writes are
+ * discarded and reads end at once whatever the flags, so sharing the file's
+ * mode changes nothing; only O_CLOEXEC is per descriptor. O_EXCL and
+ * O_DIRECTORY still go to the kernel, which refuses them. */
+static int shared_null = -1;
+static pthread_mutex_t shared_null_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int open_null_copy(int flags)
+{
+    int fd;
+
+    pthread_mutex_lock(&shared_null_lock);
+    if (shared_null < 0) shared_null = __real_open("/dev/null", O_RDWR | O_CLOEXEC);
+    fd = shared_null < 0 ? -1 : dup(shared_null);
+    pthread_mutex_unlock(&shared_null_lock);
+    if (fd >= 0 && (flags & O_CLOEXEC)) fcntl(fd, F_SETFD, FD_CLOEXEC);
+    return fd;
+}
+
 static int open_resolved(struct resolved *r, int flags, mode_t mode)
 {
     int fd;
 
+    if (!strcmp(r->full, "/dev/null") && !(flags & (O_EXCL | O_DIRECTORY)) && (fd = open_null_copy(flags)) >= 0) {
+        pw_cwd_track(fd, r->full);
+        return fd;
+    }
     if ((flags & O_CREAT) && load_parent_table(r)) return -1;
     while ((fd = __real_open(r->full, flags, mode)) < 0 && reload(r)) {}
     if (fd >= 0) pw_cwd_track(fd, r->full);

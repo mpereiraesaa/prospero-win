@@ -87,6 +87,22 @@ static void test_links_on_create(void)
     assert((fd = open(at_root("prefix/dosdevices/c:/game/null.log"), O_WRONLY | O_CREAT | O_APPEND | O_NONBLOCK,
                       0644)) >= 0);
     assert(!fstat(fd, &st) && S_ISCHR(st.st_mode) && write(fd, "gone", 4) == 4 && !close(fd));
+    /* Every open of /dev/null shares one file: copies of a descriptor held
+     * for the module's life, so they count once against the PS5's cap on
+     * open files. Each copy is its own descriptor, with its own close-on-exec. */
+    {
+        struct stat a, b;
+        int one = open("/dev/null", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        int two = open(at_root("prefix/dosdevices/c:/game/null.log"), O_RDONLY | O_CLOEXEC);
+        char byte;
+        assert(one >= 0 && two >= 0 && one != two);
+        assert(!fstat(one, &a) && !fstat(two, &b) && a.st_ino == b.st_ino && a.st_dev == b.st_dev);
+        assert(!(fcntl(one, F_GETFD) & FD_CLOEXEC) && (fcntl(two, F_GETFD) & FD_CLOEXEC));
+        assert(write(one, "gone", 4) == 4 && read(two, &byte, 1) == 0);
+        assert(fcntl(one, F_GETFL) == fcntl(two, F_GETFL));   /* the same open file */
+        assert(!close(one) && !close(two));
+        assert((one = open("/dev/null", O_RDONLY)) >= 0 && !close(one));   /* still there after both closed */
+    }
     assert((fd = openat(AT_FDCWD, at_root("prefix/drive_c/game/null.log"), O_WRONLY | O_CREAT | O_TRUNC,
                         0644)) >= 0 && !close(fd));
     errno = 0;
