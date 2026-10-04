@@ -9,8 +9,11 @@ no hardware activation, PR or merge is approved by these source checks.
 
 The performance target remains the full fixed GTA IV route at 1920×1080,
 60 Hz, profiling off, average at least 58 FPS and minimum at least 50 FPS,
-with the existing HL2 timedemo/clean-exit, load and 1,800-second stability
-gates. A helper test does not replace these gates.
+with the existing HL2 timedemo/clean-exit and load gates. The owner's latest
+console policy (2026-10-04) sets stability to a 600-second run and ordinary
+A/B runs to a 480-second script with a matched 200–440-second window.
+This replaces the earlier 1,800-second stability requirement; it does not
+change the FPS target. A helper test does not replace these gates.
 
 ## Ownership and mode changes
 
@@ -79,7 +82,7 @@ The internal activation policy excludes named, initially inheritable,
 global and previously aliased/retired objects. Cells use separate aligned
 allocations, avoiding a fixed arena capacity; retired word storage is
 intentionally retained for the module lifetime. Allocation/token exhaustion
-falls back. Memory growth must be checked during the 1,800-second gate.
+falls back. Memory growth must be checked during the 600-second gate.
 Normal contention, multiwaits and deep recursion can recover fast mode when
 their conditions permit it.
 
