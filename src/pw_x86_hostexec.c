@@ -578,24 +578,29 @@ static int stack_memory_form(PwX86State *s, const uint8_t *src, size_t n)
  * stores the guest's arithmetic, DF, AC and ID bits with the always-set
  * bit 1 and IF; POPFD takes back only those bits, so the ID toggle that
  * CPUID detection performs (pushfd; btc [esp], 21; popfd) reads back as
- * supported. TF, IOPL, NT, RF and VM stay clear; the 16-bit forms are
- * refused. */
+ * supported. TF, IOPL, NT, RF and VM stay clear. The 16-bit forms (66 9C,
+ * 66 9D) move only FLAGS, the low 16 bits, and leave the upper bits alone;
+ * San Andreas's RenderWare runs its CPUID probe with them. */
 enum { POPF_BITS = 0x00240cd5u, PUSHF_FIXED = 0x00000202u };
 static int flags_stack_form(PwX86State *s, const uint8_t *src, size_t n)
 {
-    uint32_t value;
+    const unsigned narrow = n && src[0] == 0x66;
+    const uint8_t op = narrow && n > 1 ? src[1] : n ? src[0] : 0;
+    const uint32_t bits = narrow ? POPF_BITS & 0xffffu : POPF_BITS;
+    const uint32_t size = narrow ? 2 : 4;
+    uint32_t value = 0;
 
-    if (!n || (src[0] != 0x9c && src[0] != 0x9d)) return PW_ERR_UNSUPPORTED;
-    if (src[0] == 0x9c) {
+    if (op != 0x9c && op != 0x9d) return PW_ERR_UNSUPPORTED;
+    if (op == 0x9c) {
         value = (s->eflags & POPF_BITS) | PUSHF_FIXED;
-        s->gpr[4] -= 4;
-        memcpy((void *)(uintptr_t)s->gpr[4], &value, 4);
+        s->gpr[4] -= size;
+        memcpy((void *)(uintptr_t)s->gpr[4], &value, size);
     } else {
-        memcpy(&value, (const void *)(uintptr_t)s->gpr[4], 4);
-        s->gpr[4] += 4;
-        s->eflags = (s->eflags & ~POPF_BITS) | (value & POPF_BITS);
+        memcpy(&value, (const void *)(uintptr_t)s->gpr[4], size);
+        s->gpr[4] += size;
+        s->eflags = (s->eflags & ~bits) | (value & bits);
     }
-    s->eip += 1;
+    s->eip += 1 + narrow;
     return PW_OK;
 }
 

@@ -114,8 +114,19 @@ static void test_integer_forms(void)
     assert(s.eflags == (0x00200000u | 0x880 | 0x2));        /* ID, OF, SF; no TF or IOPL */
     assert(run(&s, (const uint8_t[]){0x9c}, 1) == PW_OK);
     assert(!memcmp(guest + 0x7ffc, &(uint32_t){0x00200a82u}, 4));
-    /* 66 9C (pushf, 16-bit) stays refused. */
-    assert(run(&s, (const uint8_t[]){0x66, 0x9c}, 2) == PW_ERR_UNSUPPORTED);
+    /* 66 9C/66 9D (pushfw, popfw) move FLAGS only, two bytes at a time.
+     * San Andreas's RenderWare probes CPUID with them; ID is above bit 15,
+     * so its toggle never reaches EFLAGS, as on a real CPU. */
+    reset_state(&s);
+    s.eflags = 0x00200000u | 0x400 | 0x41 | 0x2;            /* ID, DF, ZF, CF */
+    memcpy(guest + 0x7ffc, &(uint32_t){0xa5a5a5a5u}, 4);
+    assert(run(&s, (const uint8_t[]){0x66, 0x9c}, 2) == PW_OK);
+    assert(s.gpr[4] == addr(0x7ffe) && s.eip == 0x1002);
+    assert(!memcmp(guest + 0x7ffc, &(uint32_t){0x0643a5a5u}, 4));   /* low half untouched */
+    memcpy(guest + 0x7ffe, &(uint16_t){0x0880 | 0x100 | 0x3000 | 0x2}, 2);
+    assert(run(&s, (const uint8_t[]){0x66, 0x9d}, 2) == PW_OK);
+    assert(s.gpr[4] == addr(0x8000) && s.eip == 0x1004);
+    assert(s.eflags == (0x00200000u | 0x880 | 0x2));        /* OF, SF; ID kept; no TF or IOPL */
 
     /* 98: cwde, and CF from a memory ADD, merged into the guest flags. */
     reset_state(&s);
