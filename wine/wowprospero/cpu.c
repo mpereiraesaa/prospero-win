@@ -189,9 +189,17 @@ void WINAPI BTCpuNotifyMemoryFree( void *addr, SIZE_T size, ULONG type, BOOL is_
     if (is_after && !status) flush( addr, size );
 }
 
+/* wow64 passes the range NtProtectVirtualMemory rounded it to and the
+ * protection it gave every page in it, so the Unix side need not query the
+ * pages again (hooking code toggles San Andreas's code this way about a
+ * hundred times a frame). */
 void WINAPI BTCpuNotifyMemoryProtect( void *addr, SIZE_T size, ULONG prot, BOOL is_after, NTSTATUS status )
 {
-    if (is_after && !status) flush( addr, size );
+    struct pw_wow_protect_params params = { (ULONG_PTR)addr, size, prot };
+
+    if (!is_after || status) return;
+    if (!size) flush( addr, size );
+    else WINE_UNIX_CALL( pw_wow_protect, &params );
 }
 
 /* Wine tells the backend only the address of a view being unmapped, and a

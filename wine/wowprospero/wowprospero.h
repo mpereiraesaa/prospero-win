@@ -33,6 +33,15 @@ struct pw_wow_flush_params
     UINT64 size;
 };
 
+/* A protection change that succeeded: every page of [address, address +
+ * size) is committed and has the Win32 protection prot now. */
+struct pw_wow_protect_params
+{
+    UINT64 address;
+    UINT64 size;
+    UINT   prot;
+};
+
 /* A missing source span is an invalid guest instruction fetch, rather than
  * an internal translator failure. Do not reuse a previous data-fault address
  * or write flag when delivering that access violation. */
@@ -48,6 +57,8 @@ static inline void pw_wow_report_error(struct pw_wow_run_params *params, int sta
     else params->reason = PW_WOW_ERROR;
 }
 
+/* New calls go last, so the existing ones keep their numbers. The PE side
+ * and the Unix side always ship together. */
 enum pw_wow_funcs
 {
     pw_wow_process_init,
@@ -55,6 +66,7 @@ enum pw_wow_funcs
     pw_wow_flush,
     pw_wow_thread_term,
     pw_wow_dump,
+    pw_wow_protect,
     pw_wow_funcs_count
 };
 

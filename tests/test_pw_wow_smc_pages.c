@@ -92,12 +92,36 @@ int main(void)
     assert(!pw_smc_protect(&smc, 0x500000, rwx) && pw_smc_state(&smc, 0x500000) == PW_SMC_INELIGIBLE);
     refuse = 0;
 
+    /* After a protection change that succeeded: a page at the checks stays
+     * there and needs nothing; one that did not qualify is NONE again, with
+     * no host call; NONE and PROTECTED pages need the full refresh. */
+    {
+        const unsigned before = call_count;
+        const uint32_t checked = 0x600000, ineligible = 0x700000;
+
+        for (unsigned k = 0; k < PW_SMC_DEMOTE_FAULTS; k++) {
+            clock_ms += 10;
+            assert(pw_smc_protect(&smc, checked, rwx) && pw_smc_fault(&smc, checked));
+        }
+        assert(pw_smc_state(&smc, checked) == PW_SMC_CHECKED);
+        assert(!pw_smc_after_protect(&smc, checked + 0x123) && pw_smc_state(&smc, checked) == PW_SMC_CHECKED);
+        pw_smc_ineligible(&smc, ineligible);
+        assert(!pw_smc_after_protect(&smc, ineligible) && pw_smc_state(&smc, ineligible) == PW_SMC_NONE);
+        assert(pw_smc_after_protect(&smc, ineligible));                 /* NONE */
+        assert(pw_smc_protect(&smc, ineligible, rwx));
+        assert(pw_smc_after_protect(&smc, ineligible));                 /* PROTECTED */
+        assert(!pw_smc_after_protect(&smc, 0x100000000ull));
+        assert(call_count == before + 2 * PW_SMC_DEMOTE_FAULTS + 1);   /* only the protects and faults */
+        pw_smc_refresh(&smc, ineligible, 0, 0, 0);
+        pw_smc_refresh(&smc, checked, 0, 0, 0);
+    }
+
     /* Pages are remembered for notifications of unknown extent while they
      * need it: each page here took over the entry of one that no longer
      * did. */
-    assert(smc.tracked_count == 1 && smc.tracked[0] == 0x500000 / HOST);
+    assert(smc.tracked_count == 3 && smc.tracked[0] == 0x500000 / HOST);
     pw_smc_destroy(&smc);
     printf("wowprospero write-protected code pages passed: protect, fault, decay, demotion, "
-           "notifications, refused mprotect\n");
+           "notifications, refused mprotect, protection changes\n");
     return 0;
 }

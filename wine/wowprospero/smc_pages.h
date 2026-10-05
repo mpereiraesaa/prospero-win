@@ -306,6 +306,28 @@ static inline void pw_smc_refresh(PwSmcPages *smc, uint64_t address, int committ
     pw_smc_leave(smc, &saved);
 }
 
+/* After a protection change that succeeded on the host page holding
+ * address, which leaves every page of it committed as it was: 1 when the
+ * caller must refresh it as after any notification (pw_smc_refresh, from
+ * its pages queried), 0 when it is settled here. A page at the checks
+ * leaves them only when no longer committed, so it stays; a page that did
+ * not qualify goes back to NONE whatever its protection. Hooking code that
+ * patches the same game code every frame makes its pages CHECKED, and then
+ * a protection change costs no query or signal mask. */
+static inline int pw_smc_after_protect(PwSmcPages *smc, uint64_t address)
+{
+    if (!pw_smc_enabled(smc) || address >= 0x100000000ull) return 0;
+    switch (pw_smc_state(smc, address)) {
+    case PW_SMC_CHECKED:
+        return 0;
+    case PW_SMC_INELIGIBLE:
+        pw_smc_refresh(smc, address, 1, 0, 0);
+        return 0;
+    default:
+        return 1;
+    }
+}
+
 /* Mark the host page holding address as not qualifying, until a memory
  * notification on it (pw_smc_refresh). */
 static inline void pw_smc_ineligible(PwSmcPages *smc, uint64_t address)
