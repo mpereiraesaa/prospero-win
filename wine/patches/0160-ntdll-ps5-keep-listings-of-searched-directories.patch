@@ -1,0 +1,202 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 5 Oct 2026 11:46:10 +0200
+Subject: [PATCH] ntdll: Keep listings of searched directories on PS5.
+
+When a name is not found under its exact spelling, find_file_in_dir
+reads the whole directory for another one, and lookup_unix_name then
+does it all again for the name with "?" appended, Wine's reparse-point
+file. With the volume's case-sensitivity probe each time, a missed name
+costs about twenty system calls on the console. The Ultimate ASI Loader
+makes such a lookup before every file a game opens once an update
+folder exists, which with FusionFix is about 2.4 ms of CPU per GTA IV
+frame in open, fstat, getdirentries and close.
+
+On PS5:
+- get_dir_case_sensitivity answers TRUE at once. A title has no
+  fstatfs (pw_wine_compat answers ENOSYS), so the FreeBSD method
+  already always answered TRUE, after an openat and a close.
+- find_file_in_dir gets the names from pw_cwd_scan_directory
+  (wine/ps5/pw_wine_cwd.h), which keeps a directory's names while no
+  name can have changed: wrapped calls that add, remove or rename a
+  name count a change, and the directory's times must match. The
+  comparison is the readdir loop's, in readdir's order.
+- lookup_unix_name skips the reparse-point retry when the search read
+  the whole directory and no name in it, virtual links included, ends
+  in "?".
+
+find_file_in_dir then costs a stat of the name and one of its directory
+when nothing changed. In a host trace of this code through the PS5
+wrappers, a missed \??\C:\Games\GTAIV\update\socialclub_LOG.txt
+went from 24 system calls to 6 (the stats of the path, its directories,
+the name and the directory). The exact-name stat stays first, so virtual
+links and hits are found as before.
+---
+ dlls/ntdll/unix/file.c | 95 ++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 87 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -1263,7 +1263,11 @@ done:
+  */
+ static BOOLEAN get_dir_case_sensitivity_stat( int root_fd, const char *dir )
+ {
+-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
++#ifdef __PROSPERO__
++    /* A title has no fstatfs (pw_wine_compat answers ENOSYS), so the FreeBSD
++     * method below always answered TRUE, after an openat and a close. */
++    return TRUE;
++#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+     struct statfs stfs;
+     int fd;
+ 
+@@ -3020,22 +3024,76 @@ NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event, PIO_APC_ROUTI
+ }
+ 
+ 
++#ifdef __PROSPERO__
++/* wine/ps5/pw_wine_cwd.h: a directory's names, kept in memory while no name
++ * in it can have changed */
++extern int pw_cwd_scan_directory( int dirfd, const char *path, int (*visit)( const char *name, void *context ),
++                                  void *context, unsigned int *flags );
++#define PW_CWD_NO_REPARSE_NAMES 1
++
++struct dir_match
++{
++    const WCHAR *name;
++    int length;
++    BOOLEAN is_name_8_dot_3;
++    char found[MAX_DIR_ENTRY_LEN + 1];
++};
++
++/***********************************************************************
++ *           match_dir_entry
++ *
++ * Compare a directory entry with the name find_file_in_dir looks for, as its
++ * readdir loop does elsewhere; 1 when it matches.
++ */
++static int match_dir_entry( const char *entry, void *context )
++{
++    struct dir_match *match = context;
++    WCHAR buffer[MAX_DIR_ENTRY_LEN];
++    size_t len = strlen( entry );
++    int ret;
++
++    if (len > MAX_DIR_ENTRY_LEN) return 0;
++    ret = ntdll_umbstowcs( entry, len, buffer, MAX_DIR_ENTRY_LEN );
++    if (ret == match->length && !wcsnicmp( buffer, match->name, ret )) goto found;
++    if (match->is_name_8_dot_3 && !is_legal_8dot3_name( buffer, ret ))
++    {
++        WCHAR short_nameW[12];
++        ret = hash_short_file_name( buffer, ret, short_nameW );
++        if (ret == match->length && !wcsnicmp( short_nameW, match->name, match->length )) goto found;
++    }
++    return 0;
++
++found:
++    memcpy( match->found, entry, len + 1 );
++    return 1;
++}
++#endif
++
++
+ /***********************************************************************
+  *           find_file_in_dir
+  *
+  * Find a file in a directory the hard way, by doing a case-insensitive search.
+  * The file found is appended to unix_name at pos.
+  * There must be at least MAX_DIR_ENTRY_LEN+2 chars available at pos.
++ * no_reparse, when given, is set when the whole directory was searched and no
++ * name in it ends in '?', so it holds no reparse point to look for.
+  */
+ static NTSTATUS find_file_in_dir( int root_fd, char *unix_name, int pos, const WCHAR *name, int length,
+-                                  BOOLEAN check_case )
++                                  BOOLEAN check_case, BOOLEAN *no_reparse )
+ {
++#ifdef __PROSPERO__
++    struct dir_match match;
++    unsigned int flags;
++#else
+     WCHAR buffer[MAX_DIR_ENTRY_LEN];
+-    BOOLEAN is_name_8_dot_3;
+     DIR *dir;
+     struct dirent *de;
++    int fd;
++#endif
++    BOOLEAN is_name_8_dot_3;
+     struct stat st;
+-    int fd, ret;
++    int ret;
+ 
+     /* try a shortcut for this directory */
+ 
+@@ -3110,6 +3168,24 @@ static NTSTATUS find_file_in_dir( int root_fd, char *unix_name, int pos, const W
+     }
+ #endif /* VFAT_IOCTL_READDIR_BOTH */
+ 
++#ifdef __PROSPERO__
++    /* Each system call costs microseconds on the console, and the loaders that
++     * look for a file in an override folder before every open miss there on
++     * almost every lookup: the names come from memory while the directory
++     * cannot have changed (wine/ps5/pw_wine_cwd.h). */
++    match.name = name;
++    match.length = length;
++    match.is_name_8_dot_3 = is_name_8_dot_3;
++    ret = pw_cwd_scan_directory( root_fd, unix_name, match_dir_entry, &match, &flags );
++    if (ret < 0) return errno_to_status( errno );
++    if (ret > 0)
++    {
++        unix_name[pos - 1] = '/';
++        strcpy( unix_name + pos, match.found );
++        return STATUS_SUCCESS;
++    }
++    if (no_reparse && (flags & PW_CWD_NO_REPARSE_NAMES)) *no_reparse = TRUE;
++#else
+     if ((fd = openat( root_fd, unix_name, O_RDONLY )) == -1) return errno_to_status( errno );
+     if (!(dir = fdopendir( fd )))
+     {
+@@ -3143,6 +3219,7 @@ static NTSTATUS find_file_in_dir( int root_fd, char *unix_name, int pos, const W
+         }
+     }
+     closedir( dir );
++#endif
+ 
+ not_found:
+     unix_name[pos - 1] = 0;
+@@ -3671,6 +3748,7 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
+     {
+         const WCHAR *end, *next;
+         WCHAR *reparse_name;
++        BOOLEAN no_reparse = FALSE;
+ 
+         end = name;
+         while (end < name + name_len && *end != '\\') end++;
+@@ -3688,10 +3766,11 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
+             unix_name = *buffer = new_name;
+         }
+ 
+-        status = find_file_in_dir( root_fd, unix_name, pos, name, end - name, is_unix );
++        status = find_file_in_dir( root_fd, unix_name, pos, name, end - name, is_unix, &no_reparse );
+ 
+         /* try to resolve it as a reparse point */
+-        if (status == STATUS_OBJECT_NAME_NOT_FOUND && (reparse_name = malloc( (end - name + 1) * sizeof(WCHAR) )))
++        if (status == STATUS_OBJECT_NAME_NOT_FOUND && !no_reparse &&
++            (reparse_name = malloc( (end - name + 1) * sizeof(WCHAR) )))
+         {
+             int reparse_fd;
+ 
+@@ -3700,11 +3779,11 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
+ 
+             if (!name_len && open_reparse)
+             {
+-                status = find_file_in_dir( root_fd, unix_name, pos, reparse_name, end - name + 1, is_unix );
++                status = find_file_in_dir( root_fd, unix_name, pos, reparse_name, end - name + 1, is_unix, NULL );
+             }
+             else
+             {
+-                if (!find_file_in_dir( root_fd, unix_name, pos, reparse_name, end - name + 1, is_unix )
++                if (!find_file_in_dir( root_fd, unix_name, pos, reparse_name, end - name + 1, is_unix, NULL )
+                     && (reparse_fd = openat( root_fd, unix_name, O_RDONLY )) >= 0)
+                 {
+                     status = resolve_reparse_point( reparse_fd, root_fd, attr, nt_name, nt_pos, next - name, buffer,

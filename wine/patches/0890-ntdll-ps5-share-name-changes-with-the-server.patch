@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 5 Oct 2026 11:46:33 +0200
+Subject: [PATCH] ntdll: Share name changes with the in-process server on PS5.
+
+The server creates, renames and deletes the files of ntdll's handles,
+through its own copy of the working-directory wrappers, so ntdll alone
+cannot tell when a directory listing it kept (patch 0160) is stale.
+Before starting the server, give the server module ntdll's change
+counter through its pw_cwd_share_changes export, and keep listings only
+when it took it. A server module without the export, or
+WINE_PS5_DIR_LISTINGS=0, leaves every search reading its directory. The
+choice is logged with the other wine-ps5 switches.
+
+The number places it after the patches that rewrite the code around
+the server connection.
+---
+ dlls/ntdll/unix/server.c | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -1824,6 +1824,33 @@ static void server_connect_error( const char *serverdir )
+ /* the in-process server signals threads through this table on PS5 */
+ static int (*register_server_thread)( long tid, pthread_t thread );
+ 
++#ifdef __PROSPERO__
++/* wine/ps5/pw_wine_cwd.h */
++extern unsigned long *pw_cwd_changes_counter(void);
++extern void pw_cwd_listings_enable( int enable );
++
++/***********************************************************************
++ *           share_name_changes
++ *
++ * The server creates, renames and deletes the files of ntdll's handles,
++ * through its own copy of the working-directory wrappers. Have it count
++ * those changes in ntdll's counter, so that file.c can keep the listings of
++ * directories it searched for a name that was not there. A server module
++ * that cannot share, or WINE_PS5_DIR_LISTINGS=0, leaves every search reading
++ * its directory.
++ */
++static void share_name_changes( void *module )
++{
++    void (*share)( unsigned long *counter ) = dlsym( module, "pw_cwd_share_changes" );
++    const char *env = getenv( "WINE_PS5_DIR_LISTINGS" );
++    int enable = share && !(env && !strcmp( env, "0" ));
++
++    if (share) share( pw_cwd_changes_counter() );
++    pw_cwd_listings_enable( enable );
++    fprintf( stderr, "wine-ps5: directory listings for missed names: %s\n", enable ? "on" : "off" );
++}
++#endif
++
+ /***********************************************************************
+  *           connect_inprocess_server
+  *
+@@ -1861,6 +1888,9 @@ static int connect_inprocess_server(void)
+ 
+     if (!(module = dlopen( module_path, RTLD_NOW )))
+         fatal_error( "cannot load the in-process server %s: %s\n", module_path, dlerror() );
++#ifdef __PROSPERO__
++    share_name_changes( module );  /* before the server starts creating files */
++#endif
+     if (!(connect_server = dlsym( module, "pw_wineserver_connect" )))
+         fatal_error( "%s has no pw_wineserver_connect\n", module_path );
+     register_server_thread = dlsym( module, "pw_wine_thread_register" );

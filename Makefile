@@ -162,6 +162,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wine_shared_sync_client.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wine_shared_mutex_client.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_ws2_fqdn_cache.py
+	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wine_lookup_misses.py
 	python3 tests/test_pw_install.py
 	python3 tests/test_pw_prefix.py
 	python3 tests/test_pw_gameplay_run.py
@@ -186,6 +187,7 @@ wine-check: test
 	@test -f "$(WINE_SOURCE)/dlls/ntdll/ntsyscalls.h" || \
 		{ echo "wine-check: no pinned Wine source at $(WINE_SOURCE)" >&2; exit 2; }
 	PROSPERO_WINE_SOURCE="$(WINE_SOURCE)" python3 tests/test_wowprospero_contract.py
+	PROSPERO_WINE_SOURCE="$(WINE_SOURCE)" CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wine_lookup_misses.py
 	@test -f .deps/wine-runtime/lib/i386-windows/ntdll.dll || \
 		{ echo "wine-check: no staged runtime (tools/build_wine_runtime.sh)" >&2; exit 2; }
 	python3 tests/test_wine_runtime_manifest.py
