@@ -1,0 +1,409 @@
+From: Prospero Win contributors <prospero-win@localhost>
+Subject: [PATCH] ntdll: opt in to shared event/semaphore operations
+
+Depends on 0885/0886. Add an independent versioned native ABI, exact handle
+and permission cache, and single-CAS operations for eligible events and
+semaphores. Preserve the mutex ABI and strict independent default-off
+selection. Existing close invalidations clear both caches. Alertable and
+multi-object waits, pulse/query and SignalObjectAndWait remain ordinary.
+
+Console semantic and performance gates remain required.
+
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -329,6 +329,8 @@
+
+ #include "wine/ps5_mutex_backend.h"
+ static const struct pw_mutex_backend *shared_mutex_backend;
++#include "wine/ps5_sync_backend.h"
++static const struct pw_sync_backend *shared_sync_backend;
+
+ /* At most 63 skips after the last observation, then probe again. This also
+  * bounds lost optimization after concurrent close/reuse races. One failed
+@@ -363,6 +365,28 @@
+     free( path );
+     return enabled;
+ }
++
++/* Independent strict default-off switch for event/semaphore activation. */
++static int server_shared_sync_enabled(void)
++{
++    const char *env = getenv( "WINE_PS5_SYNC_SHARED" );
++    char *path;
++    FILE *file;
++    int enabled = 0, value, end;
++
++    if (env) return !strcmp( env, "1" );
++    if (asprintf( &path, "%s/pw_sync_shared", config_dir ) == -1) return 0;
++    if ((file = fopen( path, "r" )))
++    {
++        value = fgetc( file );
++        end = fgetc( file );
++        enabled = value == '1' && (end == EOF || (end == '\n' && fgetc( file ) == EOF)) && !ferror( file );
++        fclose( file );
++    }
++    free( path );
++    return enabled;
++}
++
+
+ /* the TEB this thread gave the server in init_thread or init_process_done */
+ static inline client_ptr_t inprocess_teb(void)
+@@ -464,11 +488,126 @@
+ }
+ #endif
+
++#ifdef WINE_INPROCESS_SERVER
++/* Exact canonical handles, serialized fills/clears and retained page storage.
++ * Cell kind/maximum and cached access are immutable. Retired cells remain SLOW.
++ * Warm operations only load ready/page/slot then attempt one strong word CAS. */
++#define PW_SYNC_CACHE_PAGES 128u
++#define PW_SYNC_CACHE_SLOTS (65536u / sizeof(uintptr_t))
++static uintptr_t *shared_sync_pages[PW_SYNC_CACHE_PAGES];
++static uintptr_t shared_sync_initial[PW_SYNC_CACHE_SLOTS];
++
++static uintptr_t *shared_sync_slot(obj_handle_t handle, int allocate)
++{
++    unsigned int index, page;
++    uintptr_t *slots;
++    if (!handle || (handle & 3)) return NULL;
++    index = (handle >> 2) - 1;
++    page = index / PW_SYNC_CACHE_SLOTS;
++    if (page >= PW_SYNC_CACHE_PAGES) return NULL;
++    slots = __atomic_load_n(&shared_sync_pages[page], __ATOMIC_ACQUIRE);
++    if (!slots && allocate)
++    {
++        slots = page ? anon_mmap_alloc(65536, PROT_READ | PROT_WRITE) : shared_sync_initial;
++        if (slots == MAP_FAILED) return NULL;
++        __atomic_store_n(&shared_sync_pages[page], slots, __ATOMIC_RELEASE);
++    }
++    return slots ? &slots[index % PW_SYNC_CACHE_SLOTS] : NULL;
++}
++
++/* Caller holds fd_cache_mutex with server signals blocked. Allocation, invalid
++ * handles and server-context failures retry; only valid ineligible handles
++ * produce exact negative entries. No guest pointer is passed to the backend. */
++static uintptr_t shared_sync_fill(struct thread_data *data, obj_handle_t handle)
++{
++    struct pw_sync_word *word = NULL;
++    uint32_t access = 0;
++    uintptr_t *slot, value;
++    int ret;
++    if (!pw_sync_backend_ready(shared_sync_backend) ||
++        !(slot = shared_sync_slot(handle, 1))) return 0;
++    value = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
++    if (value) return value;
++    ret = shared_sync_backend->get_word(PW_SYNC_BACKEND_VERSION, data->tid, inprocess_teb(),
++                                        handle, &word, &access);
++    if (ret == PW_SYNC_LOOKUP_NEGATIVE) value = PW_SYNC_SLOT_NEGATIVE;
++    else if (ret == PW_SYNC_LOOKUP_READY && word && !((uintptr_t)word & 63) &&
++             pw_sync_word_value_valid(word, 0))
++        value = (uintptr_t)word | ((access & SYNCHRONIZE) ? PW_SYNC_SLOT_SYNCHRONIZE : 0) |
++                ((access & (word->kind == PW_SYNC_SEMAPHORE ? SEMAPHORE_MODIFY_STATE :
++                                                               EVENT_MODIFY_STATE)) ? PW_SYNC_SLOT_MODIFY : 0);
++    else return 0;
++    __atomic_store_n(slot, value, __ATOMIC_RELEASE);
++    return value;
++}
++
++static unsigned int server_try_shared_sync_inprocess(HANDLE handle, unsigned int operation, unsigned int count,
++                                    const LARGE_INTEGER *timeout, unsigned int *previous)
++{
++    struct thread_data *data = get_thread_data();
++    obj_handle_t h = wine_server_obj_handle(handle);
++    uintptr_t *slot, value;
++    struct pw_sync_word *word;
++    uint32_t old;
++    sigset_t sigset;
++    if (!data->tid || operation > PW_SYNC_RELEASE ||
++        !pw_sync_backend_ready(shared_sync_backend)) return STATUS_NOT_IMPLEMENTED;
++    slot = shared_sync_slot(h, 0);
++    value = slot ? __atomic_load_n(slot, __ATOMIC_ACQUIRE) : 0;
++    if (value == PW_SYNC_SLOT_NEGATIVE) return STATUS_NOT_IMPLEMENTED;
++    if (!value)
++    {
++        server_enter_uninterrupted_section(&fd_cache_mutex, &sigset);
++        value = shared_sync_fill(data, h);
++        server_leave_uninterrupted_section(&fd_cache_mutex, &sigset);
++    }
++    if (!value || value == PW_SYNC_SLOT_NEGATIVE ||
++        !pw_sync_backend_ready(shared_sync_backend)) return STATUS_NOT_IMPLEMENTED;
++    word = pw_sync_slot_word(value);
++    if (operation == PW_SYNC_WAIT)
++    {
++        if (!(value & PW_SYNC_SLOT_SYNCHRONIZE)) return STATUS_NOT_IMPLEMENTED;
++        if (timeout) { volatile timeout_t when = timeout->QuadPart; (void)when; }
++        if (!pw_sync_word_try_wait(word)) return STATUS_NOT_IMPLEMENTED;
++    }
++    else
++    {
++        if (!(value & PW_SYNC_SLOT_MODIFY)) return STATUS_NOT_IMPLEMENTED;
++        if (operation == PW_SYNC_RELEASE)
++        {
++            if (!pw_sync_word_try_release(word, count, &old)) return STATUS_NOT_IMPLEMENTED;
++        }
++        else if (!pw_sync_word_try_event(word, operation == PW_SYNC_SET, &old))
++            return STATUS_NOT_IMPLEMENTED;
++        if (previous) *previous = old;
++    }
++    return STATUS_SUCCESS;
++}
++
++/* Called under fd_cache_mutex through all existing mutex cache invalidations. */
++static void server_clear_shared_sync_slot(HANDLE handle)
++{
++    uintptr_t *slot = shared_sync_slot(wine_server_obj_handle(handle), 0);
++    if (slot) __atomic_store_n(slot, 0, __ATOMIC_RELEASE);
++}
++#endif
++
++unsigned int server_try_shared_sync(HANDLE handle, unsigned int operation, unsigned int count,
++                                    const LARGE_INTEGER *timeout, unsigned int *previous)
++{
++#ifdef WINE_INPROCESS_SERVER
++    return server_try_shared_sync_inprocess(handle, operation, count, timeout, previous);
++#else
++    return STATUS_NOT_IMPLEMENTED;
++#endif
++}
++
+ /* Caller already holds fd_cache_mutex, beside close_inproc_sync. */
+ void server_clear_shared_mutex_slot( HANDLE handle )
+ {
+ #ifdef WINE_INPROCESS_SERVER
+     uintptr_t *slot = shared_mutex_slot( wine_server_obj_handle( handle ), 0 );
++    server_clear_shared_sync_slot(handle);
+     if (slot) __atomic_store_n( slot, 0, __ATOMIC_RELEASE );
+ #endif
+ }
+@@ -1735,6 +1874,15 @@
+         if (query && pw_mutex_backend_valid( api = query( PW_MUTEX_BACKEND_VERSION )))
+             shared_mutex_backend = api;
+     }
++    if (call_server_direct && server_shared_sync_enabled())
++    {
++        const struct pw_sync_backend *(*query)(uint32_t);
++        const struct pw_sync_backend *api;
++        query = dlsym(module, "pw_wineserver_sync_backend");
++        if (query && pw_sync_backend_valid(api = query(PW_SYNC_BACKEND_VERSION)))
++            shared_sync_backend = api;
++    }
++    fprintf(stderr, "wine-ps5: shared event/semaphore backend: %s\n", shared_sync_backend ? "on" : "off");
+     fprintf( stderr, "wine-ps5: shared mutex backend: %s\n", shared_mutex_backend ? "on" : "off" );
+     fprintf( stderr, "wine-ps5: server requests on client threads: %s\n", call_server_direct ? "on" : "off" );
+     fprintf( stderr, "wine-ps5: immediate mutex calls: %s\n", try_server_mutex ? "on" : "off" );
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -71,6 +71,7 @@
+ #include "wine/server.h"
+ #include "wine/debug.h"
+ #include "unix_private.h"
++#include "wine/ps5_sync_backend.h"
+
+ WINE_DEFAULT_DEBUG_CHANNEL(sync);
+
+@@ -1064,12 +1065,18 @@
+  */
+ NTSTATUS WINAPI NtReleaseSemaphore( HANDLE handle, ULONG count, ULONG *previous )
+ {
+-    unsigned int ret;
++    unsigned int ret, old;
+
+     TRACE( "handle %p, count %u, prev_count %p\n", handle, count, previous );
+
+     if ((ret = inproc_release_semaphore( handle, count, previous )) != STATUS_NOT_IMPLEMENTED)
+         return ret;
++
++    if ((ret = server_try_shared_sync(handle, PW_SYNC_RELEASE, count, NULL, &old)) != STATUS_NOT_IMPLEMENTED)
++    {
++        if (!ret && previous) *previous = (ULONG)old;
++        return ret;
++    }
+
+     SERVER_START_REQ( release_semaphore )
+     {
+@@ -1150,12 +1157,18 @@
+  */
+ NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
+ {
+-    unsigned int ret;
++    unsigned int ret, old;
+
+     TRACE( "handle %p, prev_state %p\n", handle, prev_state );
+
+     if ((ret = inproc_set_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
+         return ret;
++
++    if ((ret = server_try_shared_sync(handle, PW_SYNC_SET, 0, NULL, &old)) != STATUS_NOT_IMPLEMENTED)
++    {
++        if (!ret && prev_state) *prev_state = (LONG)old;
++        return ret;
++    }
+
+     SERVER_START_REQ( event_op )
+     {
+@@ -1183,12 +1196,18 @@
+  */
+ NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
+ {
+-    unsigned int ret;
++    unsigned int ret, old;
+
+     TRACE( "handle %p, prev_state %p\n", handle, prev_state );
+
+     if ((ret = inproc_reset_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
+         return ret;
++
++    if ((ret = server_try_shared_sync(handle, PW_SYNC_RESET, 0, NULL, &old)) != STATUS_NOT_IMPLEMENTED)
++    {
++        if (!ret && prev_state) *prev_state = (LONG)old;
++        return ret;
++    }
+
+     SERVER_START_REQ( event_op )
+     {
+@@ -2359,6 +2378,9 @@
+         TRACE( "-> %#x\n", ret );
+         return ret;
+     }
++
++    if (!alertable && (ret = server_try_shared_sync(handle, PW_SYNC_WAIT, 0, timeout, NULL)) != STATUS_NOT_IMPLEMENTED)
++        return ret;
+
+     if (!alertable && (ret = server_try_fast_mutex( handle, 0, timeout, NULL )) != STATUS_NOT_IMPLEMENTED)
+         return ret;
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -252,6 +252,8 @@
+                                            LONG *prev_count );
+ extern void server_clear_fast_mutex_hint( HANDLE handle );
+ extern void server_clear_shared_mutex_slot( HANDLE handle );
++extern unsigned int server_try_shared_sync(HANDLE handle, unsigned int operation, unsigned int count,
++                                            const LARGE_INTEGER *timeout, unsigned int *previous);
+ extern void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset );
+ extern int ps5_slow_log(void);
+ extern ULONGLONG ps5_now_us(void);
+diff --git a/include/wine/ps5_sync_backend.h b/include/wine/ps5_sync_backend.h
+new file mode 100644
+--- /dev/null
++++ b/include/wine/ps5_sync_backend.h
+@@ -0,0 +1,38 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* Native module ABI; only native cells and caller-local metadata cross it. */
++#ifndef WINE_PS5_SYNC_BACKEND_H
++#define WINE_PS5_SYNC_BACKEND_H
++#include <stddef.h>
++#include <stdint.h>
++#include "ps5_sync_word.h"
++#define PW_SYNC_BACKEND_VERSION 1u
++#define PW_SYNC_LOOKUP_READY 0
++#define PW_SYNC_LOOKUP_RETRY 1
++#define PW_SYNC_LOOKUP_NEGATIVE 2
++#define PW_SYNC_SLOT_NEGATIVE ((uintptr_t)1)
++#define PW_SYNC_SLOT_SYNCHRONIZE ((uintptr_t)2)
++#define PW_SYNC_SLOT_MODIFY ((uintptr_t)4)
++#define PW_SYNC_SLOT_FLAGS ((uintptr_t)7)
++enum pw_sync_operation { PW_SYNC_WAIT, PW_SYNC_SET, PW_SYNC_RESET, PW_SYNC_RELEASE };
++struct pw_sync_backend
++{
++    uint32_t version, size, word_size, pointer_size;
++    const int *ready;
++    int (*get_word)(uint32_t version, uint32_t tid, uint64_t teb, uint32_t handle,
++                    struct pw_sync_word **word, uint32_t *access);
++};
++static inline int pw_sync_backend_valid(const struct pw_sync_backend *api)
++{
++    return api && api->version == PW_SYNC_BACKEND_VERSION && api->size == sizeof(*api) &&
++           api->word_size == sizeof(struct pw_sync_word) && api->pointer_size == sizeof(void *) &&
++           api->ready && api->get_word;
++}
++static inline int pw_sync_backend_ready(const struct pw_sync_backend *api)
++{
++    return api && __atomic_load_n(api->ready, __ATOMIC_ACQUIRE);
++}
++static inline struct pw_sync_word *pw_sync_slot_word(uintptr_t slot)
++{
++    return (struct pw_sync_word *)(slot & ~PW_SYNC_SLOT_FLAGS);
++}
++#endif
+diff --git a/server/request.c b/server/request.c
+--- a/server/request.c
++++ b/server/request.c
+@@ -63,6 +63,7 @@
+ #ifdef WINE_INPROCESS_SERVER
+ #include "wine/server.h"
+ #include "wine/ps5_mutex_backend.h"
++#include "wine/ps5_sync_backend.h"
+ #endif
+
+ /* Some versions of glibc don't define this */
+@@ -417,6 +418,66 @@
+         &inprocess_direct_ok, get_shared_mutex_word
+     };
+     return version == PW_MUTEX_BACKEND_VERSION ? &api : NULL;
++}
++
++/* Passive discovery; only a cold lookup under the existing server lock may
++ * activate a cell. Outputs remain local and unchanged unless lookup is ready. */
++static int get_shared_sync_word(uint32_t version, uint32_t tid, uint64_t teb, uint32_t handle,
++                                struct pw_sync_word **word, uint32_t *access)
++{
++    struct thread *thread;
++    struct object *obj;
++    struct pw_sync_word *cell = NULL;
++    unsigned int saved_error, saved_global_error;
++    int found, ret = PW_SYNC_LOOKUP_RETRY;
++    if (version != PW_SYNC_BACKEND_VERSION ||
++        !__atomic_load_n(&inprocess_direct_ok, __ATOMIC_ACQUIRE)) return ret;
++    if (pthread_mutex_trylock(&inprocess_server_mutex)) return ret;
++    saved_global_error = global_error;
++    if (!__atomic_load_n(&inprocess_direct_ok, __ATOMIC_ACQUIRE) || current || debug_level) goto unlock;
++    if (!(thread = get_thread_from_id(tid))) goto unlock;
++    if (thread->teb == teb && teb && thread->state != TERMINATED && thread->reply_fd &&
++        !thread->req_toread && !thread->reply_towrite && !thread->req_data && !thread->reply_data &&
++        thread_can_fast_mutex(thread))
++    {
++        saved_error = thread->error;
++        current = thread;
++        clear_error();
++        ps5_mutex_server_begin();
++        if ((obj = get_handle_obj(thread->process, handle, 0, NULL)))
++        {
++            found = ps5_get_event_word(thread, obj, &cell);
++            if (!found) found = ps5_get_semaphore_word(thread, obj, &cell);
++            if (found > 0)
++            {
++                *word = cell;
++                *access = get_handle_access(thread->process, handle);
++                ret = PW_SYNC_LOOKUP_READY;
++            }
++            else if (!found && __atomic_load_n(&inprocess_direct_ok, __ATOMIC_ACQUIRE))
++                ret = PW_SYNC_LOOKUP_NEGATIVE;
++            release_object(obj);
++        }
++        current = NULL;
++        ps5_mutex_server_end();
++        thread->error = saved_error;
++    }
++    release_object(thread);
++unlock:
++    global_error = saved_global_error;
++    ps5_mutex_server_reconcile();
++    pthread_mutex_unlock(&inprocess_server_mutex);
++    return ret;
++}
++
++DECLSPEC_EXPORT const struct pw_sync_backend *pw_wineserver_sync_backend(uint32_t version)
++{
++    static const struct pw_sync_backend api =
++    {
++        PW_SYNC_BACKEND_VERSION, sizeof(api), sizeof(struct pw_sync_word), sizeof(void *),
++        &inprocess_direct_ok, get_shared_sync_word
++    };
++    return version == PW_SYNC_BACKEND_VERSION ? &api : NULL;
+ }
+
+ /* Requests a client thread may run itself: they act on sync objects,

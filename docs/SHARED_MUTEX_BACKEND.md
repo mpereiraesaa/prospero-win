@@ -35,8 +35,8 @@ Patch 0886 supplies server freeze/adopt hooks for queue insertion and
 removal, signaled/satisfied callbacks, queries, event set/reset/pulse and
 semaphore release. Its native metadata keeps a sync-object reference while
 a cell is active. It reuses the existing mutex request-depth, readiness and
-handle alias hooks, preserving the mutex ABI. No client activates these
-event/semaphore cells yet.
+handle alias hooks, preserving the mutex ABI. Patch 0886 alone has no
+runtime client; patch 0887 supplies the opt-in client below.
 
 Publication occurs only after the outermost server operation, with no
 remaining waiters or debug/module disable. Cold preparation admits only
@@ -71,10 +71,58 @@ admission counter at the boundary, without allocating to a resource limit,
 and checks allocation-failure retry, existing bindings at capacity, event and
 semaphore ordinary fallback, unchanged state/output/refcounts, and no budget
 reuse after retirement. This fixture does not establish
-real Wine wait, APC or handle semantics. A separate versioned native ABI and
-client cache still need access and alertable-wait gates, complete SDK builds
-and the ordinary real-Wine console matrix plus matched performance and
-regression gates before activation.
+real Wine wait, APC or handle semantics.
+
+Patch 0887 adds an independent `pw_wineserver_sync_backend` versioned native
+ABI and exact paged handle cache. Its discovery validates version, structure,
+word and pointer sizes and both required pointers. Cold lookup uses the
+existing server lock, thread/TEB and pending-request gates, preserving thread
+and global errors. Native caller-local word/access outputs change only on a
+ready result. Invalid handles, allocation failures and unavailable server
+contexts retry; valid permanently ineligible handles have exact negative
+slots. Cache fills and all four existing close invalidations use
+`fd_cache_mutex`. Cell and page storage remains addressable through teardown;
+retired cells cannot be rebound to a new handle.
+
+The independent `WINE_PS5_SYNC_SHARED=1` or prefix-local `pw_sync_shared`
+containing exactly `1` with an optional newline enables discovery. Explicit
+environment settings win; absent, malformed and unreadable settings stay
+off. The shared and typed mutex selections and their existing ABI remain
+unchanged. Disabling direct server calls prevents discovery. Non-in-process
+builds return ordinary fallback from the same client entry point.
+
+Warm single-object non-alertable waits require cached `SYNCHRONIZE` access;
+event set/reset and semaphore release require their modify-state access.
+Operations attempt one word CAS, with no new server lock or signal section
+on a warm success. Empty waits, wrong types, invalid counts, maximum
+violations, contention, SLOW state and readiness downgrade fall back without
+changing output storage. The caller copies a successful local previous
+state/count to the application only after the helper returns. Alertable and
+multi-object waits, pulses, queries and SignalObjectAndWait retain ordinary
+Wine behavior and the server authority hooks from 0886.
+
+`python3 tests/test_wine_shared_sync_client.py` compiles the actual added ABI,
+switch, client cache and operation bodies, with bounded native metadata. It
+checks ABI mismatches, 15 server-context gates, all wait/modify permission
+combinations for each kind, event previous states, semaphore limits,
+36,000 warm operations without extra cold lookups or locks, 80 exact negative
+handles, invalid-handle/allocation retries, a second cache page, close/reuse,
+readiness/SLOW fallback and 12,000 protected semaphore sections across four
+live threads. It also compiles the ordinary non-in-process fallback wrapper.
+These tests do not run Wine or establish APC, signal, exception, wait-queue
+integration or console performance. The real-Wine console semantic matrix,
+matching module pair, HL2/load/city and 600-second stability gates remain
+required before runtime acceptance.
+
+The console owner reports the bounded matching pair (server `3cfaa720`,
+ntdll `ddc5bc0e`) passed the ordinary 32-bit sync fixture with the switch
+off and on: 12 cases, 330 checks, zero failures and Wine-exit in each arm.
+HL2 measured 59.38 FPS with Wine-exit in both arms on the same console.
+The reported 480-second city comparisons were 52.3/45.4 FPS (mean/minimum)
+with the switch on, 50.8/46.5 off, and 53.0/47.2 on again. Verification of
+the matching 200–440-second window and the 600-second stability gate is
+pending. These reports do not establish the full 58/50 FPS target or an
+accepted event/semaphore gain; selection remains default off.
 
 Status: experimental Unix client/server backend implemented, build-tested
 and measured on the console. Patch 0880 selects it by default for compatible

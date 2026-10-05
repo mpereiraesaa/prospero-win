@@ -358,3 +358,6 @@ tests/test_wine_shared_sync_word.py
 wine/patches/0886-server-ps5-shared-sync-lifetime.patch
 tests/fixtures/wine_shared_sync_server.c
 tests/test_wine_shared_sync_server.py
+tests/test_wine_shared_sync_client.py
+tests/fixtures/wine_shared_sync_client.c
+wine/patches/0887-ntdll-ps5-shared-sync-client.patch
