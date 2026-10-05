@@ -24,6 +24,7 @@ PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, con
 PFN_vkVoidFunction VKAPI_CALL vk_common_GetDeviceProcAddr(VkDevice device, const char *name);
 bool wsi_videoout_idle(void);
 int wsi_videoout_show_tiled(const void *tiled, uint64_t bytes, uint32_t width, uint32_t height);
+bool wsi_videoout_present_rect(VkRect2D *rect, VkExtent2D *frame);
 int pw_videoout_idle(void);
 int pw_videoout_show_tiled(const void *tiled, uint64_t bytes, uint32_t width, uint32_t height);
 int pw_videoout_cursor(const uint32_t *argb, uint32_t width, uint32_t height, int32_t x, int32_t y,
@@ -166,9 +167,23 @@ int pw_videoout_cursor(const uint32_t *argb, uint32_t width, uint32_t height, in
     }
     /* The position is in the shown frame's pixels, not the output's: at a
      * 3840x2160 output, (928, 508) is the middle of a 1920x1080 frame
-     * (measured), so a desktop the frame shows whole needs no scaling. */
-    if (cursor.enabled)
-        rc = sceVideoOutCursorSetPosition(handle, 0, x > 0 ? (uint32_t)x : 0, y > 0 ? (uint32_t)y : 0);
+     * (measured), so a desktop the frame shows whole needs no scaling. A
+     * swapchain of a size VideoOut does not take shows scaled and centred
+     * in a framebuffer of one it does (RADV's WSI), where win32u maps the
+     * display mode onto the desktop from its top left, scaled alike: the
+     * position moves by the image's offset there, scaled by the framebuffer
+     * to the desktop. */
+    if (cursor.enabled) {
+        VkRect2D rect;
+        VkExtent2D frame;
+        int64_t fx = x > 0 ? x : 0, fy = y > 0 ? y : 0;
+
+        if (wsi_videoout_present_rect(&rect, &frame) && frame.width && frame.height) {
+            fx = rect.offset.x + fx * frame.width / space_width;
+            fy = rect.offset.y + fy * frame.height / space_height;
+        }
+        rc = sceVideoOutCursorSetPosition(handle, 0, (uint32_t)fx, (uint32_t)fy);
+    }
     cursor_unlock();
     return rc == 0 ? 0 : -2;
 }

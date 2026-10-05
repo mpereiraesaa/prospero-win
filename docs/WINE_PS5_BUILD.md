@@ -617,10 +617,18 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   are enumerated, and caches a failed open for the whole process, while
   ps5vk opens it with the swapchain.
 - **Swapchain size.** The swapchain is the window's size, normally the
-  profile's desktop. RADV takes any size up to the mode's and VideoOut
-  scales it to the whole screen (PS5_Mesa #1; 1920x1080 on 3840x2160 was
-  measured). ps5vk takes only 1920x1080, so with ps5vk a game's desktop
-  should be 1920x1080. When Wine has to create a host swapchain larger than
+  profile's desktop, or the display mode a game sets. RADV takes any size up
+  to the mode's. VideoOut itself takes framebuffers of a few sizes only:
+  1920x1080 and 3840x2160 register and fill the screen, while 1440x960,
+  1280x720 and 1440x1080 were refused (`[VideoOut] Buffer Resolution Error`,
+  0x80290005). So a 1920x1080 or 3840x2160 swapchain is VideoOut's
+  framebuffers, with no copy, and any other size has images of its own that
+  each present blits into a framebuffer of the smallest of those two sizes
+  that holds it: scaled with its aspect ratio kept, centred, with black bars
+  where the shapes differ (`wsi/videoout: a 1440x960 swapchain presents
+  scaled to 1620x1080 at (150, 0) of 1920x1080 framebuffers`). The hardware
+  cursor follows the image there. ps5vk takes only 1920x1080, so with ps5vk
+  a game's desktop should be 1920x1080. When Wine has to create a host swapchain larger than
   the window it adds `VkSwapchainPresentScalingCreateInfoEXT` in front of
   the application's structures (patch 0456); dropping them crashed DXVK's
   swapchain in Mesa's WSI.
