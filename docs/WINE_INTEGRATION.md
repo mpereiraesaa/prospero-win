@@ -53,14 +53,18 @@ PE32 application + Wine i386 PE modules          (guest, IA-32)
 ```
 
 The PE side keeps the canonical `I386_CONTEXT` where Wine expects it
-(`TlsSlots[WOW64_TLS_CPURESERVED]`) and services the two BOP addresses exactly
-as `wow64cpu`'s thunks do, down to the call's status always becoming the
-guest's EAX. Wine sets back the context of a thread it suspends inside a
-call and flags `RESET_STATE`; that context's EAX is stale, so a thread that
-was only suspended (a hooking library freezing every thread while it
-patches code) would otherwise get it back as the call's result, and so
-would a wait that ran a user APC (`SleepEx` returned 0, not
-`WAIT_IO_COMPLETION`). The Unix side owns one engine per host thread.
+(`TlsSlots[WOW64_TLS_CPURESERVED]`) and services the two BOP addresses as
+`wow64cpu`'s thunks do, with one difference. Wine sets back the context of a thread it
+suspends inside a call and flags `RESET_STATE`, and that context's EAX is
+the one the guest had when it made the call; wow64 does the same where it
+means to (APC delivery, `NtContinue`, exception dispatch, user callbacks).
+A Unix call's status still becomes EAX, so a thread that was only suspended
+(a hooking library freezing every thread while it patches code) gets its
+result back. A system call keeps the replaced context's EAX, as the backend
+always did: with `wow64cpu`'s rule there too, Half-Life 2 on the PS5 never
+loaded its menu's background map. Each call that comes back replaced is
+logged (`came back replaced`, the first 64 of each kind, then every 1024th).
+The Unix side owns one engine per host thread.
 Between runs of guest code the guest's x87 and SSE state is the thread's
 hardware state, as with `wow64cpu`: `cpu.c` saves it into the context's
 FXSAVE image before each run and restores it after, so what `NtContinue`,

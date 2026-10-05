@@ -344,25 +344,48 @@ static void raise_guest_exception( I386_CONTEXT *ctx, DWORD code, UINT address, 
     Wow64RaiseException( -1, &rec );
 }
 
-/* The end of a system or Unix call, as wow64cpu's syscall_32to64 and
- * unix_call_32to64 have it: the status is the guest's EAX, also when the
- * context was replaced while the call ran (RESET_STATE). The rest of a
- * replaced context stands, and the DBT reloads all of it on its next entry.
+/* The end of a system or Unix call: 1 when the context was replaced while
+ * the call ran (RESET_STATE), else 0.
+ *
  * Wine replaces the context of every thread suspended inside a call: the
- * suspend signal handler sets the context it read back, with the EAX the
- * guest had when it made the call, and flags RESET_STATE. Keeping that EAX
- * made the call return garbage to a thread that was only suspended, e.g. by
- * a hooking library freezing all threads while it patches code (GTA San
- * Andreas's Proper Shaders: DXVK's compiler threads, suspended inside
- * vkCreateGraphicsPipelines, saw "Exception 0x83c0d750 in Unix call" and
- * ended the game). A wait that ran a user APC also comes back through a
- * replaced context, and SleepEx returned 0 instead of WAIT_IO_COMPLETION.
- * wow64 itself gives a status that is the context's EAX where the call
- * means to set it (NtContinue). */
-static void service_return( WOW64_CPURESERVED *cpu, I386_CONTEXT *ctx, NTSTATUS status )
+ * suspend signal handler sets back the context it read, whose EAX is the
+ * one the guest had when it made the call, and flags RESET_STATE. A Unix
+ * call's status always reaches EAX, as wow64cpu's unix_call_32to64 does it:
+ * with the stale EAX, a thread that was only suspended got garbage back. GTA
+ * San Andreas's Proper Shaders freezes all threads while it patches code,
+ * and DXVK's compiler threads, suspended inside vkCreateGraphicsPipelines,
+ * saw "Exception 0x83c0d750 in Unix call" and ended the game.
+ *
+ * A system call keeps the replaced context's EAX, as this backend always
+ * did. wow64cpu stores the status there too, but on the PS5 Half-Life 2
+ * then never loads its menu's background map (main thread busy, 53 fps): a
+ * status some system call returns after such a replacement there is not one
+ * the game survives. Which call it is is not known yet; the backend names
+ * the calls that come back replaced (log_reset). */
+static int service_return( WOW64_CPURESERVED *cpu, I386_CONTEXT *ctx, NTSTATUS status, int unix_call )
 {
+    if (!(cpu->Flags & WOW64_CPURESERVED_FLAG_RESET_STATE))
+    {
+        ctx->Eax = status;
+        return 0;
+    }
     cpu->Flags &= ~WOW64_CPURESERVED_FLAG_RESET_STATE;
-    ctx->Eax = status;
+    if (unix_call) ctx->Eax = status;
+    return 1;
+}
+
+/* Names a call that came back with its context replaced: the first 64 of
+ * each kind, then every 1024th. */
+static void log_reset( int unix_call, UINT number, UINT entry_eax, UINT entry_eip, NTSTATUS status,
+                       const I386_CONTEXT *ctx )
+{
+    static LONG counts[2];
+    LONG count = InterlockedIncrement( &counts[!!unix_call] );
+
+    if (count <= 64 || !(count & 1023))
+        ERR( "%s %#x came back replaced (%ld): status %#lx, eax %#x -> %#lx, eip %#x -> %#lx\n",
+             unix_call ? "unix call" : "syscall", number, count, status, entry_eax, ctx->Eax,
+             entry_eip, ctx->Eip );
 }
 
 /* The FXSAVE image between the thread's hardware state and the context, on
@@ -461,7 +484,8 @@ void WINAPI BTCpuSimulate(void)
             ctx->Eip = stack[0];
             ctx->Esp += 4;
             status = Wow64SystemServiceEx( num, stack + 2 );
-            service_return( cpu, ctx, status );
+            if (service_return( cpu, ctx, status, 0 ))
+                log_reset( 0, num, num, stack[0], status, ctx );
             break;
         }
         case PW_WOW_UNIXCALL:
@@ -470,11 +494,13 @@ void WINAPI BTCpuSimulate(void)
             unixlib_handle_t handle = *(UINT64 *)(stack + 1);
             UINT code = stack[3];
             void *args = ULongToPtr( stack[4] );
+            UINT eax = ctx->Eax;
 
             ctx->Eip = stack[0];
             ctx->Esp += 20;
             status = unix_call_dispatcher( handle, code, args );
-            service_return( cpu, ctx, status );
+            if (service_return( cpu, ctx, status, 1 ))
+                log_reset( 1, code, eax, stack[0], status, ctx );
             break;
         }
         case PW_WOW_FAULT:
