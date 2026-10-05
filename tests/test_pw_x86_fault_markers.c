@@ -485,12 +485,64 @@ static void test_main_instruction_faults(void)
     host_call_stack=0;
 }
 
+/* PUSHFD, POPFD, their 16-bit forms, PUSHAD and POPAD on a stack in the
+ * null page, and PUSHAD and POPAD whose far end is past the guest range
+ * (an inaccessible page on each side): each faults at its first access that
+ * fails, with ESP, every register and the flags (DF too) as they were. */
+static void test_flags_and_all_registers_faults(void)
+{
+    /* mov esp, 0x10 (0x20); cmp ecx, edx; std; then the instruction; ret */
+    static const uint8_t forms[][3] = { { 0x9c }, { 0x9d }, { 0x66, 0x9c }, { 0x66, 0x9d }, { 0x60 }, { 0x61 } };
+    static const uint8_t lengths[] = { 1, 1, 2, 2, 1, 1 };
+    static const uint32_t addresses[] = { 0xc, 0x20, 0xe, 0x20, 0xc, 0x20 };
+    /* cmp 0x04040404, 0x05050505 then std: what the marked block reports
+     * where the guard's own compare is all the guard has (POPFD redefines
+     * every flag, so nothing keeps them across its guard). */
+    const int cmp_flags = 0x095;
+
+    for (unsigned stack = 0; stack < 2; ++stack) {
+        host_call_stack = stack;
+        for (unsigned i = 0; i < 6; ++i) {
+            uint8_t code[16] = { 0xbc, 0, 0, 0, 0, 0x39, 0xd1, 0xfd };
+            const uint32_t esp = forms[i][lengths[i] - 1] == 0x9d || forms[i][0] == 0x61 ? 0x20 : 0x10;
+            const unsigned pops = esp == 0x20;
+            size_t bytes = 8;
+            memcpy(code + 1, &esp, 4);
+            memcpy(code + bytes, forms[i], lengths[i]); bytes += lengths[i];
+            code[bytes++] = 0xc3;
+            compare("flags and all registers", code, bytes, 8, addresses[i], !pops,
+                    pops && i != 5 ? cmp_flags : -1);
+            Run marked = run(code, bytes, 1);
+            assert(marked.state.gpr[4] == esp && (marked.state.eflags & 0x400));
+            assert(marked.state.fault_width == (lengths[i] == 2 ? 2u : 4u));
+        }
+        /* pushad with esp 16 bytes into the range: its first store is
+         * fine, its last below the range; popad 16 bytes from the end. */
+        {
+            uint8_t push[] = { 0xbc, 0, 0, 0, 0, 0x39, 0xd1, 0x60, 0xc3 };
+            uint8_t pop[] = { 0xbc, 0, 0, 0, 0, 0x39, 0xd1, 0x61, 0xc3 };
+            uint32_t esp = low + 16;
+            memcpy(push + 1, &esp, 4);
+            compare("pushad's last store", push, sizeof(push), 7, low - 16, 1, -1);
+            esp = low + SPAN - 16;
+            memcpy(pop + 1, &esp, 4);
+            compare("popad's last load", pop, sizeof(pop), 7, low + SPAN + 12, 0, -1);
+            Run marked = run(pop, sizeof(pop), 1);
+            assert(marked.state.gpr[4] == esp && marked.state.gpr[7] == 0x01010101u * 10);
+        }
+    }
+    host_call_stack = 0;
+}
+
 int main(void)
 {
     struct sigaction action;
 
-    guest = mmap(NULL, SPAN, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    /* The range, with an inaccessible page on each side. */
+    guest = mmap(NULL, SPAN + 0x2000, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
     assert(guest != MAP_FAILED);
+    guest += 0x1000;
+    assert(!mprotect(guest, SPAN, PROT_READ | PROT_WRITE));
     low = (uint32_t)(uintptr_t)guest;
     memset(&action, 0, sizeof(action));
     action.sa_sigaction = on_fault;
@@ -530,9 +582,11 @@ int main(void)
     test_divide();
     test_high_bytes_and_bit_strings();
     test_main_instruction_faults();
+    test_flags_and_all_registers_faults();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
            "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
            "and stack form matches the guard; the engine finds each access's path and nothing else; div's divisor load faults like any other, "
-           "its divide error without a host fault; high bytes beside memory and bit strings fault at their own access\n");
+           "its divide error without a host fault; high bytes beside memory and bit strings fault at their own access; "
+           "pushfd, popfd, pushad and popad fault at their first failing access with the guest state untouched\n");
     return 0;
 }

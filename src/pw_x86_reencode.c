@@ -181,7 +181,7 @@ static void ea_lea(Out *o, unsigned dst, const Ea *e)
 typedef enum Kind {
     K_RM = 1, K_PLAIN, K_INCDEC, K_MOVIMM, K_XCHGA, K_BSWAP, K_NOP, K_LEA,
     K_PUSH, K_PUSHIMM, K_PUSHRM, K_POP, K_LEAVE, K_CALL, K_CALLRM, K_RET,
-    K_JMP, K_JMPRM, K_JCC, K_STR, K_DIV, K_BITS, K_XLAT, K_DF,
+    K_JMP, K_JMPRM, K_JCC, K_STR, K_DIV, K_BITS, K_XLAT, K_DF, K_FLAGS, K_ALLREGS,
 } Kind;
 enum { REG8 = 1, REG32, EXT };      /* what the ModRM reg field names */
 enum { RM8 = 1, RMW, RMRAW };       /* what a register-form rm names (RMRAW: xmm, mm, st, as is) */
@@ -396,6 +396,13 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
             if (in->rep) in->use = ALL_FLAGS;     /* a zero count leaves them */
         }
         rep_ok = 1;
+    } else if (op == 0x9c || op == 0x9d) {
+        /* pushfd, popfd (and pushf, popf): emit_flags_stack */
+        in->kind = K_FLAGS; in->reg = op == 0x9d; in->width = (uint8_t)z;
+        if (op == 0x9c) in->use = ALL_FLAGS; else in->def = ALL_FLAGS;
+    } else if (op == 0x60 || op == 0x61) {
+        if (in->opsize16) return 0;               /* pushaw, popaw: the host fallback's */
+        in->kind = K_ALLREGS; in->reg = op == 0x61; /* pushad, popad: emit_all_registers */
     } else if (op == 0x9e || op == 0x9f) {
         in->kind = K_PLAIN;                       /* sahf, lahf: ah is the guest's */
         if (op == 0x9e) in->def = 0x0d5; else in->use = 0x0d5;
@@ -868,26 +875,16 @@ static void emit_rm_direct(Ctx *c, const Inst *in, unsigned high8)
     for (unsigned k = 0; k < in->imm_len; k++) b(o, in->imm[k]);
 }
 
-/* push the 32-bit value in host register src (or imm32 when src < 0). */
-/* With fault markers: one stack or frame access, [base + disp] with the
- * guest's 32-bit address, listed in the fault table. opcode is 0x89 (store
- * host register reg), 0x8b (load it) or 0xc7 (store imm32). */
-static void emit_frame_access(Ctx *c, uint8_t opcode, unsigned reg, unsigned base, int8_t disp,
-                              unsigned write, uint32_t imm)
+/* One stack or frame access, [base + disp] with the guest's 32-bit address
+ * (0x67): opcode is 0x89 (store host register reg), 0x8b (load it) or 0xc7
+ * (store imm32); narrow makes a register store or load the 16-bit one. */
+static void frame_access(Out *o, uint8_t opcode, unsigned reg, unsigned base, int8_t disp,
+                         uint32_t imm, unsigned narrow)
 {
-    Out *o = &c->o;
     const unsigned hb = host_of[base];
     const uint8_t rex = (uint8_t)((reg >= 8 ? 4 : 0) | (hb >= 8 ? 1 : 0));
-    Cold *cold;
 
-    if (c->cold_count >= MAX_COLD) { o->failed = 1; return; }
-    cold = &c->cold[c->cold_count++];
-    memset(cold, 0, sizeof(*cold));
-    cold->site = o->n;
-    cold->pc = c->here;
-    cold->width = 4; cold->write = (uint8_t)write;
-    cold->direct = 1;
-    cold->ea.base = (int)base; cold->ea.index = -1; cold->ea.disp = (uint32_t)(int32_t)disp;
+    if (narrow) b(o, 0x66);
     b(o, 0x67);
     if (rex) b(o, (uint8_t)(0x40 | rex));
     b(o, opcode);
@@ -897,11 +894,36 @@ static void emit_frame_access(Ctx *c, uint8_t opcode, unsigned reg, unsigned bas
     if (opcode == 0xc7) w32(o, imm);
 }
 
+/* With fault markers: frame_access, listed in the fault table as an access
+ * of width bytes (2: the 16-bit form). */
+static void emit_frame_access_width(Ctx *c, uint8_t opcode, unsigned reg, unsigned base, int8_t disp,
+                                    unsigned write, uint32_t imm, unsigned width)
+{
+    Out *o = &c->o;
+    Cold *cold;
+
+    if (c->cold_count >= MAX_COLD) { o->failed = 1; return; }
+    cold = &c->cold[c->cold_count++];
+    memset(cold, 0, sizeof(*cold));
+    cold->site = o->n;
+    cold->pc = c->here;
+    cold->width = (uint8_t)width; cold->write = (uint8_t)write;
+    cold->direct = 1;
+    cold->ea.base = (int)base; cold->ea.index = -1; cold->ea.disp = (uint32_t)(int32_t)disp;
+    frame_access(o, opcode, reg, base, disp, imm, width == 2);
+}
+static void emit_frame_access(Ctx *c, uint8_t opcode, unsigned reg, unsigned base, int8_t disp,
+                              unsigned write, uint32_t imm)
+{
+    emit_frame_access_width(c, opcode, reg, base, disp, write, imm, 4);
+}
+
 static void lea_r12_r12(Out *o, int8_t n)
 {
     b(o, 0x45); b(o, 0x8d); b(o, 0x64); b(o, 0x24); b(o, (uint8_t)n);   /* lea r12d, [r12+n] */
 }
 
+/* push the 32-bit value in host register src (or imm32 when src < 0). */
 static void emit_push(Ctx *c, int src, uint32_t imm, unsigned keep)
 {
     Out *o = &c->o;
@@ -927,6 +949,122 @@ static void operand_r10(Ctx *c, const Inst *in, unsigned keep)
     if (in->mod == 3) { rr(&c->o, 0x89, 0, R10, host_of[in->rm]); return; }
     guard_fs(c, &in->ea, in->fs, 4, 0, keep);
     load_r10(&c->o);
+}
+
+/* PUSHFD (9C) and POPFD (9D), and PUSHF and POPF (66 9C, 66 9D), as the
+ * host fallback runs them (pw_x86_hostexec): PUSHFD stores the guest's
+ * arithmetic flags, DF, AC and ID with the always-set bit 1 and IF; POPFD
+ * takes back only those, so TF, IOPL, NT, RF and VM stay clear and the ID
+ * toggle of a CPUID probe reads back as supported. The 16-bit forms move
+ * FLAGS, the low 16 bits, and leave AC and ID alone. The arithmetic flags
+ * are the host's (lahf, seto; sahf and add al, 0x7f back), DF, AC and ID
+ * PwX86State.eflags' (K_DF, emit_string). Both forms are flag-free around
+ * the one stack access, so a fault there leaves the guest's flags. */
+enum { POPF_BITS = 0x00240cd5u, PUSHF_FIXED = 0x00000202u, POPF_STATE = POPF_BITS & ~(uint32_t)ALL_FLAGS };
+static void emit_flags_stack(Ctx *c, const Inst *in, unsigned keep)
+{
+    Out *o = &c->o;
+    const unsigned narrow = in->opsize16, size = narrow ? 2 : 4;
+    const uint32_t state_bits = narrow ? POPF_STATE & 0xffffu : POPF_STATE;
+    const size_t eflags = offsetof(PwX86State, eflags);
+
+    if (!in->reg) {
+        /* r10d = the image, built from the saved flags; the flags come back
+         * before the store. */
+        save_flags(o);                                                 /* r14: ah flags, al OF */
+        rr(o, 0x89, 0, R10, R14);                                      /* mov r10d, r14d */
+        b(o, 0x41); b(o, 0xc1); b(o, 0xea); b(o, 8);                   /* shr r10d, 8 */
+        b(o, 0x41); b(o, 0x81); b(o, 0xe2); w32(o, 0xd5);              /* and r10d, SF ZF AF PF CF */
+        b(o, 0x45); b(o, 0x0f); b(o, 0xb6); b(o, 0xce);                /* movzx r9d, r14b */
+        b(o, 0x41); b(o, 0xc1); b(o, 0xe1); b(o, 11);                  /* shl r9d, 11: OF */
+        b(o, 0x45); b(o, 0x09); b(o, 0xca);                            /* or r10d, r9d */
+        load_state(o, R9, eflags);
+        b(o, 0x41); b(o, 0x81); b(o, 0xe1); w32(o, POPF_STATE);        /* and r9d, DF AC ID */
+        b(o, 0x45); b(o, 0x09); b(o, 0xca);                            /* or r10d, r9d */
+        b(o, 0x41); b(o, 0x81); b(o, 0xca); w32(o, PUSHF_FIXED);       /* or r10d, 0x202 */
+        restore_flags(o);
+        if (!narrow) { emit_push(c, R10, 0, keep); return; }
+        if (c->fault_markers) emit_frame_access_width(c, 0x89, R10, 4, -2, 1, 0, 2);
+        else {
+            const Ea top = { 4, -1, 0, (uint32_t)-2 };
+            guard(c, &top, 2, 1, keep);
+            b(o, 0x66); b(o, 0x45); b(o, 0x89); b(o, 0x13);            /* mov [r11], r10w */
+        }
+        lea_r12_r12(o, -2);
+        return;
+    }
+    if (c->fault_markers) emit_frame_access_width(c, 0x8b, R10, 4, 0, 0, 0, size);
+    else {
+        const Ea top = { 4, -1, 0, 0 };
+        guard(c, &top, size, 0, keep);
+        if (narrow) b(o, 0x66);
+        load_r10(o);                                                   /* mov r10d (r10w), [r11] */
+    }
+    lea_r12_r12(o, (int8_t)size);
+    /* DF, AC and ID (DF alone for POPF) into PwX86State.eflags. */
+    load_state(o, R9, eflags);
+    b(o, 0x41); b(o, 0x81); b(o, 0xe1); w32(o, ~state_bits);           /* and r9d, ~bits */
+    rr(o, 0x89, 0, R11, R10);                                          /* mov r11d, r10d */
+    b(o, 0x41); b(o, 0x81); b(o, 0xe3); w32(o, state_bits);            /* and r11d, bits */
+    b(o, 0x45); b(o, 0x09); b(o, 0xd9);                                /* or r9d, r11d */
+    store_state(o, R9, eflags);
+    /* The arithmetic flags into RFLAGS, as emit_enter loads them. */
+    rr(o, 0x89, 0, R11, R10);                                          /* mov r11d, r10d */
+    b(o, 0x41); b(o, 0xc1); b(o, 0xeb); b(o, 11);                      /* shr r11d, 11 */
+    b(o, 0x41); b(o, 0x83); b(o, 0xe3); b(o, 1);                       /* and r11d, 1: OF */
+    rr(o, 0x89, 1, R8, 0);                                             /* mov r8, rax */
+    rr(o, 0x89, 0, 0, R10);                                            /* mov eax, r10d */
+    b(o, 0xc1); b(o, 0xe0); b(o, 8);                                   /* shl eax, 8: ah = low flags */
+    b(o, 0x44); b(o, 0x88); b(o, 0xd8);                                /* mov al, r11b */
+    b(o, 0x04); b(o, 0x7f);                                            /* add al, 0x7f: OF = al */
+    b(o, 0x9e);                                                        /* sahf */
+    rr(o, 0x89, 1, 0, R8);                                             /* mov rax, r8 */
+}
+
+/* PUSHAD (60) and POPAD (61), which 64-bit mode does not have. PUSHAD
+ * stores EAX, ECX, EDX, EBX, the ESP it started with, EBP, ESI and EDI from
+ * the highest address down; POPAD loads them back and skips the saved ESP.
+ * The 32 bytes span at most two pages, so the two ends are reached first:
+ * with fault markers those two accesses are the listed ones (PUSHAD stores
+ * EAX's and EDI's; POPAD loads EDI's and EAX's into r9 and r10), and without
+ * them each end is guarded first. Once both succeed the rest cannot fault
+ * on a range check, so nothing changes ESP or a guest register before the
+ * last access that can fail. The flags are untouched apart from the guard. */
+static void emit_all_registers(Ctx *c, const Inst *in, unsigned keep)
+{
+    Out *o = &c->o;
+
+    if (!in->reg) {
+        if (!c->fault_markers) {
+            const Ea highest = { 4, -1, 0, (uint32_t)-4 }, lowest = { 4, -1, 0, (uint32_t)-32 };
+            guard(c, &highest, 4, 1, keep);
+            guard(c, &lowest, 4, 1, keep);
+            frame_access(o, 0x89, host_of[0], 4, -4, 0, 0);
+            frame_access(o, 0x89, host_of[7], 4, -32, 0, 0);
+        } else {
+            emit_frame_access(c, 0x89, host_of[0], 4, -4, 1, 0);       /* mov [esp-4], eax */
+            emit_frame_access(c, 0x89, host_of[7], 4, -32, 1, 0);      /* mov [esp-32], edi */
+        }
+        for (unsigned g = 1; g < 7; g++)                               /* ecx .. esi; esp as it was */
+            frame_access(o, 0x89, host_of[g], 4, (int8_t)(-4 - 4 * (int)g), 0, 0);
+        lea_r12_r12(o, -32);
+        return;
+    }
+    if (!c->fault_markers) {
+        const Ea lowest = { 4, -1, 0, 0 }, highest = { 4, -1, 0, 28 };
+        guard(c, &lowest, 4, 0, keep);
+        guard(c, &highest, 4, 0, keep);
+        frame_access(o, 0x8b, R9, 4, 0, 0, 0);
+        frame_access(o, 0x8b, R10, 4, 28, 0, 0);
+    } else {
+        emit_frame_access(c, 0x8b, R9, 4, 0, 0, 0);                    /* mov r9d, [esp]: edi */
+        emit_frame_access(c, 0x8b, R10, 4, 28, 0, 0);                  /* mov r10d, [esp+28]: eax */
+    }
+    for (unsigned g = 1; g < 7; g++)                                   /* ecx .. esi, not esp */
+        if (g != 4) frame_access(o, 0x8b, host_of[g], 4, (int8_t)(28 - 4 * (int)g), 0, 0);
+    rr(o, 0x89, 0, host_of[7], R9);                                    /* mov edi, r9d */
+    rr(o, 0x89, 0, host_of[0], R10);                                   /* mov eax, r10d */
+    lea_r12_r12(o, 32);
 }
 
 typedef struct ExitSlots {
@@ -1636,7 +1774,7 @@ static int can_fault(const Inst *in)
     case K_PUSH: case K_PUSHIMM: case K_PUSHRM: case K_POP: case K_LEAVE:
     case K_CALL: case K_CALLRM: case K_RET: return 1;
     case K_JMPRM: return in->mod != 3;
-    case K_XLAT: return 1;
+    case K_XLAT: case K_FLAGS: case K_ALLREGS: return 1;
     default: return 0;
     }
 }
@@ -1791,6 +1929,12 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
             b(o, (uint8_t)(offsetof(PwX86State, eflags) + 1));
             b(o, in->reg ? 0x04 : 0xfb);
             restore_flags(o);
+            break;
+        case K_FLAGS:
+            emit_flags_stack(&c, in, keep);
+            break;
+        case K_ALLREGS:
+            emit_all_registers(&c, in, keep);
             break;
         case K_POP: {
             const Ea top = { 4, -1, 0, 0 };

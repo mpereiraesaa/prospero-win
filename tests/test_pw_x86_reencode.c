@@ -13,6 +13,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <ucontext.h>
 #include <unistd.h>
 
@@ -2236,6 +2237,370 @@ static void test_main_coverage_cold_flags(void)
         }
 }
 
+/* PUSHFD, POPFD, PUSHAD and POPAD against the processor itself. The guest
+ * range is below 4 GiB, so the test runs the same program there natively in
+ * 32-bit compatibility mode (code segment 0x23, as a 32-bit process runs on
+ * x86-64 Linux): a trampoline at NATIVE loads the guest registers and EFLAGS
+ * from NATIVE_CONTEXT, jumps to the program, and the program's ret lands on
+ * an exit that stores them back and far-jumps to a 64-bit stub, which
+ * returns to native32_enter. */
+enum { NATIVE = 0x1c000, NATIVE_CONTEXT = 0x3fc00, POPF_BITS = 0x00240cd5u };
+/* The context: gpr[8], eflags (+32), the program's address (+36), and the
+ * host rsp to return on (+40). */
+uint64_t pw_test_native32_enter(uint32_t entry, uint64_t *rsp_slot);
+__asm__(".text\n"
+        ".globl pw_test_native32_enter\n"
+        ".type pw_test_native32_enter, @function\n"
+        "pw_test_native32_enter:\n"
+        "    push %rbx\n    push %rbp\n    push %r12\n    push %r13\n    push %r14\n    push %r15\n"
+        "    lea 1f(%rip), %rax\n"
+        "    push %rax\n"
+        "    mov %rsp, (%rsi)\n"
+        "    mov %edi, %eax\n"
+        "    pushq $0x23\n"
+        "    push %rax\n"
+        "    lretq\n"
+        "1:  pushq $2\n    popfq\n"   /* DF, AC and ID clear again for C */
+        "    pop %r15\n    pop %r14\n    pop %r13\n    pop %r12\n    pop %rbp\n    pop %rbx\n"
+        "    xor %eax, %eax\n"
+        "    ret\n"
+        ".size pw_test_native32_enter, .-pw_test_native32_enter\n");
+
+static uint32_t native_exit;   /* the return address the native run's program returns to */
+static unsigned native_ok;     /* compatibility mode works here */
+
+static void native32_build(void)
+{
+    static const uint8_t modrm[8] = { 0x05, 0x0d, 0x15, 0x1d, 0x25, 0x2d, 0x35, 0x3d };
+    uint8_t *p = guest + NATIVE;
+    const uint32_t context = low + NATIVE_CONTEXT;
+    size_t n = 0;
+#define B(v) (p[n++] = (uint8_t)(v))
+#define D(v) do { const uint32_t d_ = (v); memcpy(p + n, &d_, 4); n += 4; } while (0)
+    B(0x8c); B(0xd0);                                   /* mov eax, ss */
+    B(0x8e); B(0xd8);                                   /* mov ds, eax */
+    B(0x8e); B(0xc0);                                   /* mov es, eax */
+    B(0xbc); D(context + 32);                           /* mov esp, &eflags */
+    B(0x9d);                                            /* popfd */
+    for (unsigned g = 0; g < 8; g++)
+        if (g != 4) { B(0x8b); B(modrm[g]); D(context + 4 * g); }
+    B(0x8b); B(modrm[4]); D(context + 16);              /* mov esp, [esp's] */
+    B(0xff); B(0x25); D(context + 36);                  /* jmp [program] */
+    native_exit = low + NATIVE + (uint32_t)n;
+    for (unsigned g = 0; g < 8; g++) { B(0x89); B(modrm[g]); D(context + 4 * g); }
+    B(0xbc); D(context + 36);                           /* mov esp, &program */
+    B(0x9c);                                            /* pushfd: to eflags */
+    B(0xea); D(low + NATIVE + (uint32_t)n + 6); B(0x33); B(0x00);   /* jmp 0x33:next */
+    B(0x48); B(0x8b); B(0x24); B(0x25); D(context + 40);            /* mov rsp, [rsp's] */
+    B(0xc3);
+#undef B
+#undef D
+}
+
+/* The program at CODE natively, from gpr and eflags; its ret pops the
+ * return address at ret_slot, which reads 0xdead0000 again afterwards. */
+static void native32_run(uint32_t gpr[8], uint32_t *eflags, uint32_t ret_slot)
+{
+    uint32_t context[10];
+
+    memcpy(context, gpr, 32);
+    context[8] = *eflags;
+    context[9] = low + CODE;
+    memcpy(guest + NATIVE_CONTEXT, context, sizeof(context));
+    memcpy((void *)(uintptr_t)ret_slot, &native_exit, 4);
+    pw_test_native32_enter(low + NATIVE, (uint64_t *)(void *)(guest + NATIVE_CONTEXT + 40));
+    memcpy(context, guest + NATIVE_CONTEXT, sizeof(context));
+    memcpy(gpr, context, 32);
+    *eflags = context[8];
+    memcpy((void *)(uintptr_t)ret_slot, &(uint32_t){ 0xdead0000u }, 4);
+}
+
+/* Whether a 32-bit program runs here at all (an x86-64 kernel without IA-32
+ * emulation refuses code segment 0x23): tried in a child first. */
+static unsigned native32_available(void)
+{
+    static const uint8_t code[] = { 0x40, 0xc3 };              /* inc eax; ret */
+    int status = 0;
+    pid_t child;
+
+    memset(guest + CODE, 0xcc, NATIVE - CODE);
+    memcpy(guest + CODE, code, sizeof(code));
+    native32_build();
+    fflush(NULL);
+    child = fork();
+    assert(child >= 0);
+    if (!child) {
+        uint32_t gpr[8] = { 41, 0, 0, 0, low + STACK_TOP, 0, 0, 0 }, eflags = 0x202;
+        native32_run(gpr, &eflags, low + STACK_TOP);
+        _exit(gpr[0] == 42 && gpr[4] == low + STACK_TOP + 4 ? 0 : 1);
+    }
+    assert(waitpid(child, &status, 0) == child);
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/* One starting point: registers (gpr[4] is esp), EFLAGS, and words at esp;
+ * the return address follows them. */
+typedef struct StackCase {
+    uint32_t gpr[8], eflags, words[9];
+    unsigned count;
+} StackCase;
+
+enum { WINDOW = 0x200 };    /* the stack bytes compared, below STACK_TOP + 0x20 */
+
+static void stack_case_memory(const StackCase *c)
+{
+    const uint32_t esp = c->gpr[4];
+    for (unsigned i = 0; i < WINDOW; i++) guest[STACK_TOP + 0x20 - WINDOW + i] = (uint8_t)(i * 13 + 5);
+    for (unsigned i = 0; i < 0x1000; i++) guest[DATA + i] = (uint8_t)(i * 7 + 3);
+    memcpy((void *)(uintptr_t)esp, c->words, 4 * c->count);
+    memcpy((void *)(uintptr_t)(esp + 4 * c->count), &(uint32_t){ 0xdead0000u }, 4);
+}
+
+/* The program from each case natively, then on the emitter with the host
+ * fallback (the path before), the re-encoder with the guard, and the
+ * re-encoder as wowprospero runs it: registers, EIP, the arithmetic flags,
+ * DF, AC and ID, the stack and the data all as the processor left them. The
+ * re-encoder runs the program without the host fallback. */
+static void stack_program(const char *name, const uint8_t *code, size_t bytes, const StackCase *cases, unsigned n)
+{
+    static PwX86CacheEntry entries[3][512];
+    static uint8_t native_stack[WINDOW], native_data[0x1000];
+    PwX86Engine engines[3];
+    uint64_t fallbacks[3] = { 0, 0, 0 };
+
+    memset(guest + CODE, 0xcc, NATIVE - CODE);
+    memcpy(guest + CODE, code, bytes);
+    native32_build();
+    setup(&engines[0], entries[0], 0);
+    setup(&engines[1], entries[1], 1);
+    native_fp = fault_markers = superblocks = call_stack = 1;
+    setup(&engines[2], entries[2], 1);
+    native_fp = fault_markers = superblocks = call_stack = 0;
+    for (unsigned i = 0; i < n; i++) {
+        const StackCase *c = &cases[i];
+        uint32_t gpr[8], eflags = (c->eflags & POPF_BITS) | 0x202;
+        if (native_ok) {
+            stack_case_memory(c);
+            memcpy(gpr, c->gpr, sizeof(gpr));
+            native32_run(gpr, &eflags, c->gpr[4] + 4 * c->count);
+            memcpy(native_stack, guest + STACK_TOP + 0x20 - WINDOW, WINDOW);
+            memcpy(native_data, guest + DATA, sizeof(native_data));
+        }
+        for (unsigned m = 0; m < 3; m++) {
+            PwX86State s;
+            PwX86StepReport step;
+            int status = PW_OK;
+            stack_case_memory(c);
+            initial(&s);
+            memcpy(s.gpr, c->gpr, sizeof(s.gpr));
+            s.eflags = c->eflags;
+            current = &engines[m];
+            for (unsigned k = 0; k < 1000 && s.eip != 0xdead0000u; k++) {
+                status = pw_x86_engine_step(&engines[m], &s, &step);
+                if (status == PW_ERR_UNSUPPORTED) {
+                    pw_x86_commit_canonical_flags(&s);
+                    pw_x86_engine_fp_sync(&engines[m], &s);
+                    status = pw_x86_hostexec_step(&hostexec, &s, (const uint8_t *)(uintptr_t)s.eip, 15);
+                    fallbacks[m]++;
+                }
+                if (status != PW_OK) break;
+            }
+            current = NULL;
+            pw_x86_engine_fp_sync(&engines[m], &s);
+            {
+                uint64_t host;
+                __asm__ volatile("pushfq; popq %0" : "=r"(host));
+                assert(!(host & 0x400));                    /* host DF stays clear */
+            }
+            if (status != PW_OK || s.eip != 0xdead0000u)
+                fprintf(stderr, "%s case %u mode %u: status %d eip %08x\n", name, i, m, status, s.eip);
+            assert(status == PW_OK && s.eip == 0xdead0000u);
+            if (!native_ok) continue;
+            for (unsigned g = 0; g < 8; g++) {
+                if (s.gpr[g] != gpr[g])
+                    fprintf(stderr, "%s case %u mode %u: gpr%u %08x != native %08x\n", name, i, m, g, s.gpr[g], gpr[g]);
+                assert(s.gpr[g] == gpr[g]);
+            }
+            if ((s.eflags ^ eflags) & POPF_BITS)
+                fprintf(stderr, "%s case %u mode %u: eflags %08x != native %08x\n", name, i, m,
+                        s.eflags & POPF_BITS, eflags & POPF_BITS);
+            assert(!((s.eflags ^ eflags) & POPF_BITS));
+            assert(!memcmp(guest + STACK_TOP + 0x20 - WINDOW, native_stack, WINDOW));
+            assert(!memcmp(guest + DATA, native_data, sizeof(native_data)));
+        }
+    }
+    for (unsigned m = 0; m < 3; m++) assert(pw_x86_engine_destroy(&engines[m]) == PW_OK);
+    /* The path before stopped at each of them; the re-encoder takes them. */
+    if (fallbacks[0] < n || fallbacks[1] || fallbacks[2])
+        fprintf(stderr, "%s: host fallbacks %llu %llu %llu\n", name, (unsigned long long)fallbacks[0],
+                (unsigned long long)fallbacks[1], (unsigned long long)fallbacks[2]);
+    assert(fallbacks[0] >= n && !fallbacks[1] && !fallbacks[2]);
+}
+
+/* EFLAGS from the k-th of 512 combinations: the six arithmetic flags, DF, AC
+ * and ID, with bit 1 and IF. */
+static uint32_t flag_combination(unsigned k)
+{
+    static const uint32_t bits[9] = { 0x001, 0x004, 0x010, 0x040, 0x080, 0x800, 0x400, 0x40000, 0x200000 };
+    uint32_t flags = 0x202;
+    for (unsigned b = 0; b < 9; b++)
+        if (k >> b & 1) flags |= bits[b];
+    return flags;
+}
+
+static void stack_case(StackCase *c, uint32_t eflags, uint32_t esp)
+{
+    memset(c, 0, sizeof(*c));
+    for (unsigned g = 0; g < 8; g++) c->gpr[g] = 0x9e3779b9u * (g + 1) ^ eflags;
+    c->gpr[4] = esp;
+    c->gpr[6] = low + DATA + 0x40;
+    c->gpr[7] = low + DATA + 0x400;
+    c->eflags = eflags;
+}
+
+static void test_flags_and_all_registers(void)
+{
+    /* popfd; pushfd; pop eax; ret: every combination popped and pushed
+     * back, with bits POPFD leaves clear (IOPL, RF, VM, VIF, VIP, and the
+     * reserved 3, 5 and 15) set in half of them */
+    static const uint8_t round_trip[] = { 0x9d, 0x9c, 0x58, 0xc3 };
+    /* pushfd; pop eax; ret */
+    static const uint8_t push[] = { 0x9c, 0x58, 0xc3 };
+    /* cmp ecx, edx; std; pushfd; pop eax; cld; pushfd; pop ebx; ret */
+    static const uint8_t computed[] = { 0x39, 0xd1, 0xfd, 0x9c, 0x58, 0xfc, 0x9c, 0x5b, 0xc3 };
+    /* popfd; jb +1; inc ecx; movsb; pushfd; pop eax; ret: CF read by a
+     * branch, then DF by a string instruction */
+    static const uint8_t consumers[] = { 0x9d, 0x72, 0x01, 0x41, 0xa4, 0x9c, 0x58, 0xc3 };
+    /* CPUID detection, toggling ID, then the 486 check, toggling AC:
+     * pushfd; pop eax; mov ecx, eax; xor eax, 0x200000; push eax; popfd;
+     * pushfd; pop eax; xor eax, ecx; mov ebx, eax; push ecx; popfd;
+     * pushfd; xor dword [esp], 0x40000; popfd; pushfd; pop edx; push ecx;
+     * popfd; ret */
+    static const uint8_t probe[] = {
+        0x9c, 0x58, 0x89, 0xc1, 0x35, 0x00, 0x00, 0x20, 0x00, 0x50, 0x9d,
+        0x9c, 0x58, 0x31, 0xc8, 0x89, 0xc3, 0x51, 0x9d,
+        0x9c, 0x81, 0x34, 0x24, 0x00, 0x00, 0x04, 0x00, 0x9d, 0x9c, 0x5a, 0x51, 0x9d, 0xc3,
+    };
+    /* pushfd; xor dword [esp], every POPFD bit; popfd; ret */
+    static const uint8_t toggle[] = { 0x9c, 0x81, 0x34, 0x24, 0xd5, 0x0c, 0x24, 0x00, 0x9d, 0xc3 };
+    /* popf; pushfd; pop eax; popf; pushfd; pop ebx; ret: FLAGS only */
+    static const uint8_t narrow_pop[] = { 0x66, 0x9d, 0x9c, 0x58, 0x66, 0x9d, 0x9c, 0x5b, 0xc3 };
+    /* pushf; pushf; pop eax; ret */
+    static const uint8_t narrow_push[] = { 0x66, 0x9c, 0x66, 0x9c, 0x58, 0xc3 };
+    /* pushad; sub every register but esp from itself; popad; ret (sub,
+     * not xor, whose AF is undefined) */
+    static const uint8_t all[] = { 0x60, 0x29, 0xc0, 0x29, 0xc9, 0x29, 0xd2, 0x29, 0xdb, 0x29, 0xed,
+                                   0x29, 0xf6, 0x29, 0xff, 0x61, 0xc3 };
+    /* popad; ret, from a crafted frame whose esp slot is ignored */
+    static const uint8_t frame[] = { 0x61, 0xc3 };
+    /* Open Limit Adjuster's hook stub (III.VC.SA.LimitAdjuster.asi), called
+     * at 00, its handler at 30, which bumps the saved eax, clobbers ecx and
+     * edx and leaves DF and CF set:
+     * 00 call 10; pushfd; pop ebx; ret
+     * 10 pushfd; pushad; add dword [esp+0xc], 8; push esp; call 30;
+     *    add esp, 4; sub dword [esp+0xc], 8; popad; popfd; ret
+     * 30 mov eax, [esp+4]; inc dword [eax+0x1c]; sub ecx, ecx;
+     *    sub edx, edx; std; cmp ecx, 1; ret */
+    static uint8_t ola[0x40];
+    static const uint8_t ola_main[] = { 0xe8, 0x0b, 0, 0, 0, 0x9c, 0x5b, 0xc3 };
+    static const uint8_t ola_stub[] = { 0x9c, 0x60, 0x83, 0x44, 0x24, 0x0c, 0x08, 0x54, 0xe8, 0x13, 0, 0, 0,
+                                        0x83, 0xc4, 0x04, 0x83, 0x6c, 0x24, 0x0c, 0x08, 0x61, 0x9d, 0xc3 };
+    static const uint8_t ola_handler[] = { 0x8b, 0x44, 0x24, 0x04, 0xff, 0x40, 0x1c, 0x29, 0xc9, 0x29, 0xd2,
+                                           0xfd, 0x83, 0xf9, 0x01, 0xc3 };
+    static StackCase cases[1024];
+    const uint32_t top = low + STACK_TOP;
+    unsigned n;
+
+    native_ok = native32_available();
+    if (!native_ok) fprintf(stderr, "reencode: no 32-bit compatibility mode here; flags checked without it\n");
+
+    for (n = 0; n < 1024; n++) {
+        stack_case(&cases[n], 0x8d5 ^ flag_combination(n & 511), top - 4);
+        cases[n].words[0] = flag_combination(n & 511) | (n & 512 ? 0x1bb028u : 0);
+        cases[n].count = 1;
+    }
+    stack_program("popfd round trip", round_trip, sizeof(round_trip), cases, n);
+    for (n = 0; n < 512; n++) stack_case(&cases[n], flag_combination(n), top);
+    stack_program("pushfd", push, sizeof(push), cases, n);
+    stack_program("probe", probe, sizeof(probe), cases, n);
+    stack_program("toggle", toggle, sizeof(toggle), cases, n);
+    for (n = 0; n < 512; n++) {
+        stack_case(&cases[n], flag_combination(n), top);
+        cases[n].gpr[1] = n * 0x01234567u;
+        cases[n].gpr[2] = (n >> 3) * 0x89abcdefu;
+    }
+    stack_program("computed flags", computed, sizeof(computed), cases, n);
+    for (n = 0; n < 512; n++) {
+        stack_case(&cases[n], flag_combination(511 - n) & ~0x40000u, top - 4);
+        cases[n].words[0] = flag_combination(n);
+        cases[n].count = 1;
+    }
+    stack_program("popfd consumers", consumers, sizeof(consumers), cases, n);
+    /* The 16-bit forms; AC stays clear where esp is left unaligned. */
+    for (n = 0; n < 512; n++) {
+        stack_case(&cases[n], flag_combination(n) & ~0x40000u, top - 4);
+        cases[n].words[0] = (flag_combination(n) & 0xffff) | (flag_combination(511 - n) | 0x3000) << 16;
+        cases[n].count = 1;
+    }
+    stack_program("popf", narrow_pop, sizeof(narrow_pop), cases, n);
+    for (n = 0; n < 512; n++) stack_case(&cases[n], flag_combination(n), top);
+    stack_program("pushf", narrow_push, sizeof(narrow_push), cases, n);
+    /* pushad and popad at every alignment of esp and across the guest's
+     * registers' values. */
+    for (n = 0; n < 256; n++) {
+        stack_case(&cases[n], flag_combination(n * 3) & ~0x40000u, top - 0x40 - (n & 3) - 4 * (n >> 6));
+        for (unsigned g = 0; g < 8; g++)
+            if (g != 4) cases[n].gpr[g] = n & 4 ? ~cases[n].gpr[g] : cases[n].gpr[g] * (n + 1);
+    }
+    stack_program("pushad", all, sizeof(all), cases, n);
+    for (n = 0; n < 64; n++) {
+        stack_case(&cases[n], flag_combination(n * 5) & ~0x40000u, top - 0x40 - (n & 3));
+        for (unsigned w = 0; w < 8; w++) cases[n].words[w] = 0x01000193u * (w + 1) * (n + 7);
+        cases[n].count = 8;
+    }
+    stack_program("popad", frame, sizeof(frame), cases, n);
+    memset(ola, 0xcc, sizeof(ola));
+    memcpy(ola, ola_main, sizeof(ola_main));
+    memcpy(ola + 0x10, ola_stub, sizeof(ola_stub));
+    memcpy(ola + 0x30, ola_handler, sizeof(ola_handler));
+    for (n = 0; n < 512; n++) stack_case(&cases[n], flag_combination(n), top);
+    stack_program("ola stub", ola, sizeof(ola), cases, n);
+
+    /* TF and NT never reach the guest: popped, they read back clear, as
+     * the host fallback leaves them. */
+    {
+        static const uint8_t junk[] = { 0x68, 0xff, 0xff, 0xff, 0xff, 0x9d, 0x9c, 0x58, 0xc3 };
+        Run e, r, p;
+        hostexec_fallback = 1;
+        e = run(junk, sizeof(junk), 0);
+        r = run(junk, sizeof(junk), 1);
+        p = run_production(junk, sizeof(junk));
+        hostexec_fallback = 0;
+        assert(e.state.gpr[0] == (POPF_BITS | 0x202) && (e.state.eflags & ~0x202u) == POPF_BITS);
+        same(&r, &e);
+        same(&p, &e);
+        assert(r.state.eflags == e.state.eflags && p.state.eflags == e.state.eflags);
+    }
+    /* The 16-bit pushaw and popaw stay the host fallback's; locked,
+     * repeated and FS-prefixed forms are refused. */
+    {
+        static const uint8_t refused[][2] = { { 0x66, 0x60 }, { 0x66, 0x61 }, { 0xf0, 0x9c }, { 0xf3, 0x9d },
+                                              { 0x64, 0x60 }, { 0xf0, 0x61 } };
+        PwX86TranslateOptions options = { .flat_low = low, .flat_high = low + SPAN, .no_counters = 1 };
+        uint8_t out[16384];
+        PwX86Block block;
+        for (unsigned i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
+            assert(pw_x86_reencode(refused[i], 2, low + CODE, out, sizeof(out), &block, &options) ==
+                   PW_ERR_UNSUPPORTED);
+        static const uint8_t taken[][2] = { { 0x9c, 0xc3 }, { 0x9d, 0xc3 }, { 0x60, 0xc3 }, { 0x61, 0xc3 },
+                                            { 0x66, 0x9c }, { 0x66, 0x9d } };
+        for (unsigned i = 0; i < sizeof(taken) / sizeof(taken[0]); i++) {
+            assert(pw_x86_reencode(taken[i], 2, low + CODE, out, sizeof(out), &block, &options) == PW_OK);
+            assert(block.instruction_ends[0] == (taken[i][0] == 0x66 ? 2 : 1));
+        }
+    }
+}
+
 int main(void)
 {
     guest = mmap(NULL, SPAN, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -2289,6 +2654,7 @@ int main(void)
     test_refused_bit_count_reads();
     test_main_instruction_coverage();
     test_main_coverage_cold_flags();
+    test_flags_and_all_registers();
     test_fault();
     test_divide();
     test_divide_errors();
@@ -2302,6 +2668,6 @@ int main(void)
     printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
            "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, predicted calls, strings, native FP, fault state, "
            "div and idiv in every form with their divide errors, ah-bh beside memory, bit strings in reach and at the guard's edges, "
-           "against the emitter and the host\n");
+           "pushfd, popfd, pushad and popad against the processor, against the emitter and the host\n");
     return 0;
 }

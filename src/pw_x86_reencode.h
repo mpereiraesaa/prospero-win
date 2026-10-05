@@ -36,6 +36,11 @@
  * before the host's instruction runs on it. A host without BMI2 leaves
  * both to the emitter.
  *
+ * PUSHFD and POPFD (and the 16-bit PUSHF and POPF) build and load EFLAGS
+ * from the host's arithmetic flags and PwX86State.eflags' DF, AC and ID, as
+ * the host fallback does; PUSHAD and POPAD reach both ends of their 32 bytes
+ * first, so one that faults leaves ESP and the registers as they were.
+ *
  * Differences from the older emitter, both deliberate:
  * - a fault reports the incoming arithmetic flags exactly only when a later
  *   instruction reads them; when every flag is redefined before any read,
