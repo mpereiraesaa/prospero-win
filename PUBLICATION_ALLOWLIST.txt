@@ -144,6 +144,7 @@ assets/prospero-win-logo.svg
 assets/prospero-win-banner.svg
 tests/test_wowprospero_contract.py
 tests/test_wowprospero_unmap.py
+tests/test_wowprospero_service_return.py
 wine/wowprospero/code_pages.h
 wine/wowprospero/thread_budget.h
 wine/wowprospero/tsc_clock.h

@@ -344,6 +344,27 @@ static void raise_guest_exception( I386_CONTEXT *ctx, DWORD code, UINT address, 
     Wow64RaiseException( -1, &rec );
 }
 
+/* The end of a system or Unix call, as wow64cpu's syscall_32to64 and
+ * unix_call_32to64 have it: the status is the guest's EAX, also when the
+ * context was replaced while the call ran (RESET_STATE). The rest of a
+ * replaced context stands, and the DBT reloads all of it on its next entry.
+ * Wine replaces the context of every thread suspended inside a call: the
+ * suspend signal handler sets the context it read back, with the EAX the
+ * guest had when it made the call, and flags RESET_STATE. Keeping that EAX
+ * made the call return garbage to a thread that was only suspended, e.g. by
+ * a hooking library freezing all threads while it patches code (GTA San
+ * Andreas's Proper Shaders: DXVK's compiler threads, suspended inside
+ * vkCreateGraphicsPipelines, saw "Exception 0x83c0d750 in Unix call" and
+ * ended the game). A wait that ran a user APC also comes back through a
+ * replaced context, and SleepEx returned 0 instead of WAIT_IO_COMPLETION.
+ * wow64 itself gives a status that is the context's EAX where the call
+ * means to set it (NtContinue). */
+static void service_return( WOW64_CPURESERVED *cpu, I386_CONTEXT *ctx, NTSTATUS status )
+{
+    cpu->Flags &= ~WOW64_CPURESERVED_FLAG_RESET_STATE;
+    ctx->Eax = status;
+}
+
 /* The FXSAVE image between the thread's hardware state and the context, on
  * every entry and exit of translated code: that is, on every system and
  * Unix call the guest makes. ntdll's memcpy copies a byte at a time, which
@@ -440,10 +461,7 @@ void WINAPI BTCpuSimulate(void)
             ctx->Eip = stack[0];
             ctx->Esp += 4;
             status = Wow64SystemServiceEx( num, stack + 2 );
-            if (cpu->Flags & WOW64_CPURESERVED_FLAG_RESET_STATE)
-                cpu->Flags &= ~WOW64_CPURESERVED_FLAG_RESET_STATE;
-            else
-                ctx->Eax = status;
+            service_return( cpu, ctx, status );
             break;
         }
         case PW_WOW_UNIXCALL:
@@ -456,10 +474,7 @@ void WINAPI BTCpuSimulate(void)
             ctx->Eip = stack[0];
             ctx->Esp += 20;
             status = unix_call_dispatcher( handle, code, args );
-            if (cpu->Flags & WOW64_CPURESERVED_FLAG_RESET_STATE)
-                cpu->Flags &= ~WOW64_CPURESERVED_FLAG_RESET_STATE;
-            else
-                ctx->Eax = status;
+            service_return( cpu, ctx, status );
             break;
         }
         case PW_WOW_FAULT:
