@@ -68,6 +68,7 @@ struct pw_thread
     /* Last committed, readable region NtQueryVirtualMemory reported, valid
      * for readable_generation: consecutive blocks rarely leave it. */
     uintptr_t readable_low, readable_high;
+    int readable_writable;
     uint64_t readable_generation;
     uint64_t readable_queries, readable_hits;
     PwX86CacheEntry *entries;  /* the budget's count (thread_budget.h) */
@@ -115,6 +116,11 @@ static volatile uint64_t protect_generation = 1;
 static PwX86CodePages code_pages;
 static volatile int flush_lock;
 
+static const ULONG readable_mask = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                                   PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+static const ULONG writable_mask = PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE |
+                                   PAGE_EXECUTE_WRITECOPY;
+
 /* Translation reads source bytes straight from the identity-mapped guest.
  * A span never extends into an unreadable page. Readability comes from
  * Wine's own view of the address space (NtQueryVirtualMemory is resolved in
@@ -122,12 +128,10 @@ static volatile int flush_lock;
  * last readable region is cached per thread until the next memory
  * notification, because frees and protection changes bump
  * protect_generation. */
-static int readable( uintptr_t address )
+static int readable( uintptr_t address, int *writable )
 {
     struct pw_thread *thread = self;
     MEMORY_BASIC_INFORMATION info;
-    const ULONG readable_mask = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
-                                PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
 
     uint64_t generation = __atomic_load_n( &protect_generation, __ATOMIC_ACQUIRE );
 
@@ -135,6 +139,7 @@ static int readable( uintptr_t address )
         address >= thread->readable_low && address < thread->readable_high)
     {
         thread->readable_hits++;
+        *writable = thread->readable_writable;
         return 1;
     }
     if (thread) thread->readable_queries++;
@@ -143,8 +148,10 @@ static int readable( uintptr_t address )
         return 0;
     if (info.State != MEM_COMMIT || !(info.Protect & readable_mask) || (info.Protect & PAGE_GUARD))
         return 0;
+    *writable = (info.Protect & writable_mask) != 0;
     if (thread)
     {
+        thread->readable_writable = *writable;
         thread->readable_low = (uintptr_t)info.BaseAddress;
         thread->readable_high = (uintptr_t)info.BaseAddress + info.RegionSize;
         thread->readable_generation = generation;
@@ -156,15 +163,21 @@ static int source_view( void *opaque, uint32_t pc, const uint8_t **source, size_
 {
     const uintptr_t page = 0x1000;
     uintptr_t end = ((uintptr_t)pc | (page - 1)) + 1;
+    int writable, next_writable;
 
-    if (pc < 0x10000 || !readable( pc )) return PW_ERR_NOT_FOUND;
-    if (end - pc < PW_X86_ENGINE_MAX_SOURCE && end < 0x100000000ull && readable( end ))
+    if (pc < 0x10000 || !readable( pc, &writable )) return PW_ERR_NOT_FOUND;
+    if (end - pc < PW_X86_ENGINE_MAX_SOURCE && end < 0x100000000ull && readable( end, &next_writable ))
+    {
         end += page;
+        writable |= next_writable;
+    }
     *source = (const uint8_t *)(uintptr_t)pc;
     *bytes = end - pc;
     if (*bytes > PW_X86_ENGINE_MAX_SOURCE) *bytes = PW_X86_ENGINE_MAX_SOURCE;
     /* Whatever a translation may read from; flush() keys on these marks. */
     pw_x86_code_pages_mark( &code_pages, pc, *bytes );
+    /* Before the protection check in flush() can trust a read-only page. */
+    if (writable) pw_x86_code_pages_mark_writable( &code_pages, pc, *bytes );
     return PW_OK;
 }
 
@@ -1113,12 +1126,50 @@ static NTSTATUS run( void *args )
     return STATUS_SUCCESS;
 }
 
-/* A memory notification. The loader protects and frees memory hundreds of
- * times while it maps and relocates DLLs; discarding every translation each
- * time made a game's startup re-translate the same loader code over and
- * over. Translations are discarded only when the range touches a page code
- * was translated from, or its extent is unknown (size 0: an unmapped view
- * or a whole-cache flush).
+/* Whether the marked pages [address, address + size) may have changed, from
+ * their protection now; see pw_x86_code_page_protect_stale. A page that is no
+ * longer committed (a free) counts as changed. Called under flush_lock. */
+static int code_pages_stale( uint64_t address, uint64_t size )
+{
+    uint32_t first, last;
+    MEMORY_BASIC_INFORMATION info;
+    uintptr_t region_end = 0;
+    int committed = 0, writable = 0, can_read = 0;
+
+    if (!pw_x86_code_pages_any( &code_pages, address, size ) ||
+        !pw_code_pages_span( address, size, &first, &last ))
+        return 0;
+    for (uint32_t page = first; page <= last; page++)
+    {
+        uintptr_t base = (uintptr_t)page << PW_X86_CODE_PAGE_SHIFT;
+
+        if (!pw_x86_code_page_marked( &code_pages, page )) continue;
+        if (base >= region_end)
+        {
+            if (NtQueryVirtualMemory( NtCurrentProcess(), (void *)base, MemoryBasicInformation,
+                                      &info, sizeof(info), NULL ))
+                return 1;
+            region_end = (uintptr_t)info.BaseAddress + info.RegionSize;
+            committed = info.State == MEM_COMMIT;
+            can_read = committed && (info.Protect & readable_mask) && !(info.Protect & PAGE_GUARD);
+            writable = committed && (info.Protect & writable_mask);
+        }
+        if (!committed ||
+            pw_x86_code_page_protect_stale( &code_pages, page, writable,
+                                            can_read ? (const uint8_t *)base : NULL ))
+            return 1;
+    }
+    return 0;
+}
+
+/* A memory notification (protection change, free, instruction-cache flush),
+ * after the fact. The loader protects and frees memory hundreds of times while
+ * it maps and relocates DLLs, and hooking code unprotects game code to read or
+ * patch it, some of it every frame; discarding every translation each time
+ * re-translates the same code over and over. Every thread discards its
+ * translations only when the range overlaps a page translated code was read
+ * from and that page may have changed (code_pages_stale), or its extent is
+ * unknown (size 0: an unmapped view or a whole-cache flush).
  *
  * Marks are cleared before the generation moves, under a lock, so a thread
  * that saw the new generation marks pages after the clear: a mark is lost
@@ -1130,7 +1181,7 @@ static NTSTATUS flush( void *args )
 
     __atomic_add_fetch( &protect_generation, 1, __ATOMIC_SEQ_CST );
     while (__atomic_exchange_n( &flush_lock, 1, __ATOMIC_ACQUIRE )) __builtin_ia32_pause();
-    if (!params || !params->size || pw_x86_code_pages_any( &code_pages, params->address, params->size ))
+    if (!params || !params->size || code_pages_stale( params->address, params->size ))
     {
         pw_x86_code_pages_clear( &code_pages );
         __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );

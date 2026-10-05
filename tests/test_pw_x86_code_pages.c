@@ -67,6 +67,59 @@ int main(void)
     pw_x86_code_pages_clear(&pages);
     assert(marked_words() == 0 && !pw_x86_code_pages_any(&pages, 0, 0x100000000ull));
 
+    /* Protection changes on translated pages (pw_x86_code_page_protect_stale). */
+    static uint8_t code[3][4096];
+    const uint32_t ro = 0x468, rw = 0x500, hot = 0x600;
+
+    pw_x86_code_pages_mark(&pages, (uint64_t)ro << 12, 16);
+    /* Read-only and still read-only: nothing can have changed. */
+    assert(!pw_x86_code_page_protect_stale(&pages, ro, 0, code[0]));
+    /* Framerate Vigilante's read, every frame: unprotect, read, restore. */
+    for (int frame = 0; frame < 3; frame++) {
+        assert(!pw_x86_code_page_protect_stale(&pages, ro, 1, code[0]));
+        assert(!pw_x86_code_page_protect_stale(&pages, ro, 0, code[0]));
+    }
+    /* A patch: unprotect, write, restore, is stale on the restore. */
+    assert(!pw_x86_code_page_protect_stale(&pages, ro, 1, code[0]));
+    code[0][0x123] = 0xc3;
+    assert(pw_x86_code_page_protect_stale(&pages, ro, 0, code[0]));
+    pw_x86_code_pages_clear(&pages);
+    /* Left writable after a write, the next change notices it too. */
+    pw_x86_code_pages_mark(&pages, (uint64_t)ro << 12, 16);
+    assert(!pw_x86_code_page_protect_stale(&pages, ro, 1, code[0]));
+    assert(!pw_x86_code_page_protect_stale(&pages, ro, 1, code[0]));
+    code[0][0x124] = 0x90;
+    assert(pw_x86_code_page_protect_stale(&pages, ro, 1, code[0]));
+    pw_x86_code_pages_clear(&pages);
+    /* Writable when translated, with no digest: taken as changed. */
+    pw_x86_code_pages_mark(&pages, (uint64_t)rw << 12, 16);
+    pw_x86_code_pages_mark_writable(&pages, (uint64_t)rw << 12, 16);
+    assert(pw_x86_code_page_protect_stale(&pages, rw, 0, code[1]));
+    assert(pw_x86_code_page_protect_stale(&pages, rw, 1, code[1]));
+    pw_x86_code_pages_clear(&pages);
+    assert(!pages.writable[rw / 64]);
+    /* Unreadable when made writable, or when checked: taken as changed. */
+    pw_x86_code_pages_mark(&pages, (uint64_t)ro << 12, 16);
+    assert(pw_x86_code_page_protect_stale(&pages, ro, 1, NULL));
+    pw_x86_code_pages_clear(&pages);
+    pw_x86_code_pages_mark(&pages, (uint64_t)ro << 12, 16);
+    assert(!pw_x86_code_page_protect_stale(&pages, ro, 1, code[0]));
+    assert(pw_x86_code_page_protect_stale(&pages, ro, 0, NULL));
+    pw_x86_code_pages_clear(&pages);
+    /* More pages held writable than there are digests: the rest flush. Pages
+     * that hash to one slot leave and rejoin without losing each other. */
+    for (uint32_t i = 0; i < PW_X86_CODE_ARMED + 1; i++)
+        pw_x86_code_pages_mark(&pages, (uint64_t)(hot + i) << 12, 16);
+    for (uint32_t i = 0; i < PW_X86_CODE_ARMED; i++)
+        assert(!pw_x86_code_page_protect_stale(&pages, hot + i, 1, code[2]));
+    assert(pw_x86_code_page_protect_stale(&pages, hot + PW_X86_CODE_ARMED, 1, code[2]));
+    for (uint32_t i = 0; i < PW_X86_CODE_ARMED; i += 2)
+        assert(!pw_x86_code_page_protect_stale(&pages, hot + i, 0, code[2]));
+    for (uint32_t i = 1; i < PW_X86_CODE_ARMED; i += 2)
+        assert(!pw_x86_code_page_protect_stale(&pages, hot + i, 0, code[2]));
+    for (unsigned slot = 0; slot < PW_X86_CODE_ARMED; slot++) assert(!pages.armed[slot].page_plus1);
+    pw_x86_code_pages_clear(&pages);
+
     /* NULL is ignored. */
     pw_x86_code_pages_mark(NULL, 0x1000, 1);
     assert(!pw_x86_code_pages_any(NULL, 0x1000, 1));
