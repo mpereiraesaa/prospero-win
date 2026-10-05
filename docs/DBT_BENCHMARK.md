@@ -1066,5 +1066,11 @@ clear when control returns to C.
 The console owner reports two alternating 480-second comparisons at the goal
 settings on 2026-10-05, with sync disabled and enabled. Coverage wins three
 of four matched pairs, averaging about 1.3 approximate FPS above its controls.
-These are preliminary comparisons: coverage HL2 and 600-second stability
-validation remain pending, and the 58-mean/50-minimum city target remains unmet.
+The owner then accepted HL2 at 59.38 FPS with Wine-exit and a 600-second city
+run with sync v3 enabled. An independent full-stream audit of that longer run
+finds 53.19 mean approximate FPS / 42.41 sampled minimum over 200–440 seconds,
+and 51.09 / 48.97 over 460–600 seconds, with no recorded file-limit failure or
+fault. The run ends by the normal GTA IV close-timeout; that is a transport
+completion rather than Wine-exit. The 58-mean/50-minimum city target remains
+unmet, and these limited alternating pairs do not establish statistical
+significance or attribute the complete runtime gain to coverage alone.
