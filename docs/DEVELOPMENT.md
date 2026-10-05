@@ -156,7 +156,10 @@ ship to the ones in this repository. `SOURCES.txt` records the source
 revision of each part, read from the builds themselves (the Wine build's
 `report.json` and the helper's `release.json`). Packaging stops if one of
 those is missing, or if `libvulkan.prx` is not the RADV build the notices
-describe.
+describe. For an OpenGL package, pass `--ps5-opengl-sdk` the SDK that
+ps5-opengl's `make sdk` installed inside its own checkout
+(`build/sdk/ps5-opengl-gl46`), so the report can name the commit it was
+built from.
 
 ## Making a release
 

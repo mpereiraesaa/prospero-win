@@ -45,7 +45,8 @@ def main() -> int:
         # the Wine and FreeType sources it built, the helper's release.
         report = {"wine_commit": "a" * 40, "patches": ["0100-x.patch", "0110-y.patch"],
                   "sources": {"prx_foundation": "b" * 40, "ps5_mesa": "c" * 40, "ps5_vulkan": "d" * 40,
-                              "ps5vk": None, "ps5_opengl_sdk": None}}
+                              "radv_payload_sdk": "9" * 40, "ps5vk": None, "ps5_opengl_sdk": None,
+                              "ps5_opengl": None}}
         write(ps5 / "report.json", json.dumps(report))
         for name in ("LICENSE", "COPYING.LIB", "AUTHORS", "NOTICES.md"):
             write(ps5 / "source" / name, f"wine {name}")
@@ -115,6 +116,7 @@ def main() -> int:
                          "SHA-256 0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289",
                          "https://example.invalid/v9.9.9  release v9.9.9",
                          f"PS5_Mesa  commit {'c' * 40}", f"PS5_Vulkan  commit {'d' * 40}",
+                         f"PS5_PayloadSDK  commit {'9' * 40}",
                          "OpenGL  not included"):
             assert expected in sources, (expected, sources)
         # The console refuses to exec an eboot or load a PRX without execute
@@ -131,11 +133,12 @@ def main() -> int:
         assert not (app / "stale.txt").exists()
 
         # An OpenGL build says so, with the SDK it linked.
-        report["sources"]["ps5_opengl_sdk"] = "e" * 64
+        report["sources"].update(ps5_opengl_sdk="e" * 64, ps5_opengl="8" * 40)
         write(ps5 / "report.json", json.dumps(report))
         assert run(*inputs, "--out", str(out)).returncode == 0
         sources = (app / "SOURCES.txt").read_text()
-        assert "OpenGL (in win32u.prx)  https://github.com/mpereiraesaa/ps5-opengl" in sources, sources
+        assert f"OpenGL (in win32u.prx)  https://github.com/mpereiraesaa/ps5-opengl  commit {'8' * 40}" \
+            in sources, sources
         assert f"SDK manifest SHA-256 {'e' * 64}" in sources and "not included" not in sources
         # A libvulkan.prx that is not RADV has no notice here: refused.
         report["sources"].update(ps5_mesa=None, ps5_vulkan=None, ps5vk="f" * 64)

@@ -325,9 +325,14 @@ fi
 # The revisions behind the PRXs, for the release's SOURCES.txt
 # (tools/package_release.sh): report.json's "sources".
 source_prx_foundation=$(git -C "$prx_foundation" rev-parse HEAD 2>/dev/null || true)
-source_ps5_mesa= source_ps5_vulkan= source_ps5vk= source_ps5_opengl_sdk=
-[ -z "$ps5opengl_sdk" ] ||
+source_ps5_mesa= source_ps5_vulkan= source_radv_payload_sdk= source_ps5vk=
+source_ps5_opengl_sdk= source_ps5_opengl=
+if [ -n "$ps5opengl_sdk" ]; then
     source_ps5_opengl_sdk=$(sha256sum "$ps5opengl_sdk/manifest.sha256" | cut -c1-64)
+    # An SDK installed inside its ps5-opengl checkout (make sdk's
+    # build/sdk/ps5-opengl-gl46) names the commit it was built from.
+    source_ps5_opengl=$(git -C "$ps5opengl_sdk" rev-parse HEAD 2>/dev/null || true)
+fi
 link_objects() {
     python3 - "$work/make.log" "$1" <<'PY'
 import shlex, sys
@@ -558,6 +563,8 @@ if [ "$prx_status" = 0 ]; then
             vulkan_status="libvulkan.prx from RADV, PS5_Mesa $revision"
             source_ps5_mesa=$revision
             source_ps5_vulkan=$(git -C "$radv" rev-parse HEAD 2>/dev/null || true)
+            source_radv_payload_sdk=$(cat "$radv/.deps/native/ps5-payload-sdk/.ps5-sdk-revision" \
+                2>/dev/null || true)
         else
             prx_status=1
             vulkan_status="RADV link failed (see $prx/libvulkan.link.log)"
@@ -572,8 +579,9 @@ if [ "$prx_status" = 0 ]; then
 fi
 
 if PW_SOURCE_PRX_FOUNDATION=${source_prx_foundation:-} PW_SOURCE_PS5_MESA=${source_ps5_mesa:-} \
-    PW_SOURCE_PS5_VULKAN=${source_ps5_vulkan:-} PW_SOURCE_PS5VK=${source_ps5vk:-} \
-    PW_SOURCE_PS5_OPENGL_SDK=${source_ps5_opengl_sdk:-} \
+    PW_SOURCE_PS5_VULKAN=${source_ps5_vulkan:-} PW_SOURCE_RADV_PAYLOAD_SDK=${source_radv_payload_sdk:-} \
+    PW_SOURCE_PS5VK=${source_ps5vk:-} PW_SOURCE_PS5_OPENGL_SDK=${source_ps5_opengl_sdk:-} \
+    PW_SOURCE_PS5_OPENGL=${source_ps5_opengl:-} \
     python3 - "$build" "$work/make.log" "$work/report.json" "$sdk" "$WINE_COMMIT" "$prx" "$prx_status" \
     $ordered <<'PY'
 import hashlib, json, os, re, shutil, subprocess, sys
@@ -679,10 +687,12 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
 # The patched PE modules, beside the PRXs.
 result["pe"] = {str(path.relative_to(Path(prx).parent / "pe")): hashlib.sha256(path.read_bytes()).hexdigest()
                 for path in sorted((Path(prx).parent / "pe").glob("*-windows/*.dll"))}
-# Commits of the PRX foundation, PS5_Mesa and PS5_Vulkan; SHA-256 of the ps5vk
-# archive and of the OpenGL SDK's manifest. Null when not linked.
+# Commits of the PRX foundation, PS5_Mesa, PS5_Vulkan, the payload SDK RADV
+# was linked with and ps5-opengl; SHA-256 of the ps5vk archive and of the
+# OpenGL SDK's manifest. Null when not linked or not recorded.
 result["sources"] = {key: os.environ.get(f"PW_SOURCE_{key.upper()}") or None
-                     for key in ("prx_foundation", "ps5_mesa", "ps5_vulkan", "ps5vk", "ps5_opengl_sdk")}
+                     for key in ("prx_foundation", "ps5_mesa", "ps5_vulkan", "radv_payload_sdk", "ps5vk",
+                                 "ps5_opengl_sdk", "ps5_opengl")}
 Path(report).write_text(json.dumps(result, indent=2) + "\n")
 for target, entry in result["targets"].items():
     print(f"{target}: built={entry['built']} malloc={entry.get('malloc', '-')} "

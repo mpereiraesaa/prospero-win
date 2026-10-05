@@ -117,9 +117,10 @@ MIT-licensed (`LICENSES/Mesa-MIT.txt`); the copyright holders are named in
 each source file, and individual files may carry other permissive terms
 (see Mesa's `docs/license.rst` and its `licenses/` directory at the
 revision in `SOURCES.txt`). It is linked for the console by
-[PS5_Vulkan](https://github.com/mpereiraesaa/PS5_Vulkan), which is
-GPL-3.0-or-later, so `libvulkan.prx` as a whole is distributed under the
-GPL, version 3.
+[PS5_Vulkan](https://github.com/mpereiraesaa/PS5_Vulkan) with the
+[PS5_PayloadSDK](https://github.com/mihawk-99/PS5_PayloadSDK) fork's platform
+layer, both GPL-3.0-or-later, so `libvulkan.prx` as a whole is distributed
+under the GPL, version 3.
 
 ## OpenGL, when included
 

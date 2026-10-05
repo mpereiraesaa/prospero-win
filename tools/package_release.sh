@@ -156,9 +156,12 @@ lines = [
 ]
 if vulkan:
     lines += [f"RADV (libvulkan.prx)  https://github.com/mpereiraesaa/PS5_Mesa  commit {sources['ps5_mesa']}",
-              f"  linked by https://github.com/mpereiraesaa/PS5_Vulkan  commit {sources.get('ps5_vulkan') or 'not recorded'}"]
+              f"  linked by https://github.com/mpereiraesaa/PS5_Vulkan  commit {sources.get('ps5_vulkan') or 'not recorded'}",
+              "  with the payload SDK and platform layer  https://github.com/mihawk-99/PS5_PayloadSDK"
+              f"  commit {sources.get('radv_payload_sdk') or 'not recorded'}"]
 if sources.get("ps5_opengl_sdk"):
-    lines += ["OpenGL (in win32u.prx)  https://github.com/mpereiraesaa/ps5-opengl",
+    lines += ["OpenGL (in win32u.prx)  https://github.com/mpereiraesaa/ps5-opengl"
+              f"  commit {sources.get('ps5_opengl') or 'not recorded'}",
               f"  SDK manifest SHA-256 {sources['ps5_opengl_sdk']}"]
 else:
     lines += ["OpenGL  not included"]
