@@ -136,6 +136,7 @@ tools/build_wowprospero.sh             # the 32-bit CPU: wowprospero.dll
 tools/package_release.sh --title dist/PPSA99995 --wine-ps5 .deps/wine-ps5 \
     --host-wine <host Wine install>/usr \
     --cpu-dll <Wine build>/dlls/wowprospero/x86_64-windows/wowprospero.dll \
+    --lapy-release build/native/lapy-helper-release.json \
     --out release --zip
 ```
 
@@ -147,6 +148,15 @@ own libraries (X11, GStreamer, pcap, scanners).
 `eboot.bin` and every `.prx` are marked executable: the console refuses to
 exec an eboot, or to load a module, without that permission, and the zip
 keeps the modes.
+
+The folder also carries the licences of everything in it: `LICENSE`,
+[`THIRD_PARTY.md`](../THIRD_PARTY.md), which says what each part is and
+under which licence, and `LICENSES/`, which adds the texts Wine and FreeType
+ship to the ones in this repository. `SOURCES.txt` records the source
+revision of each part, read from the builds themselves (the Wine build's
+`report.json` and the helper's `release.json`). Packaging stops if one of
+those is missing, or if `libvulkan.prx` is not the RADV build the notices
+describe.
 
 ## Making a release
 
@@ -167,7 +177,10 @@ and take hours; GitHub only drafts the release and hosts the file.
 `SHA256SUMS` file, and refuses a zip that holds a `dev.conf` or any `.exe`.
 The draft's text comes from `.github/release-notes.md`, followed by the
 merged pull requests since the previous tag. Before you publish, install
-the zip on a console and run a game from a clean `/data/homebrew`.
+the zip on a console and run a game from a clean `/data/homebrew`, and
+check that `SOURCES.txt` names published revisions only: every repository it
+lists must hold that commit publicly, because it is how players get the
+source the licences promise them.
 
 ## DBT work on the host
 

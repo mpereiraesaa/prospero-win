@@ -16,6 +16,10 @@ include/prospero_win.h
 include/prospero_win_vm.h
 LICENSE
 LICENSING.md
+LICENSES/Apache-2.0-WITH-LLVM-exception.txt
+LICENSES/GPL-3.0.txt
+LICENSES/Lapy-MIT.txt
+LICENSES/Mesa-MIT.txt
 Makefile
 native/pw_agc_ps5.c
 native/pw_agc_ps5.h
@@ -39,6 +43,7 @@ native/ps5log/ps5log.h
 native/ps5log/ps5log_ps5_net.c
 native/ps5log/ps5log_ps5_net.h
 NOTICE.md
+THIRD_PARTY.md
 PUBLICATION_ALLOWLIST.txt
 README.md
 sce_sys/icon0.png
