@@ -177,7 +177,8 @@ tools/publish_release.sh --tag v0.1.0 --zip release/PPSA99995.zip --publish
 The zip is built on your machine because the PS5 builds need the payload SDK
 and take hours; GitHub only drafts the release and hosts the file.
 `publish_release.sh` uploads it as `prospero-win-<tag>.zip` with a
-`SHA256SUMS` file, and refuses a zip that holds a `dev.conf` or any `.exe`.
+`SHA256SUMS` file, and refuses a zip that holds a `dev.conf` or any `.exe`
+other than Wine's own programs, which sit beside its DLLs.
 The draft's text comes from `.github/release-notes.md`, followed by the
 merged pull requests since the previous tag. Before you publish, install
 the zip on a console and run a game from a clean `/data/homebrew`, and

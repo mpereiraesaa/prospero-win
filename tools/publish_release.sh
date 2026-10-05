@@ -25,8 +25,10 @@ case $tag in v[0-9]*) ;; *) fail "--tag must be a version tag such as v0.1.0" ;;
 [ -f "$zip" ] || fail "--zip: no file '$zip'"
 listing=$(unzip -Z1 "$zip") || fail "--zip: '$zip' is not a zip"
 echo "$listing" | grep -q '^PPSA99995/eboot\.bin$' || fail "--zip: no PPSA99995/eboot.bin in '$zip'"
-# The builder's log destination and Windows programs never ship.
-if echo "$listing" | grep -Eq '(^|/)dev\.conf$|\.exe$'; then
+# The builder's log destination and Windows programs never ship, except
+# Wine's own programs (wineboot.exe, rundll32.exe, ...) beside its DLLs.
+if echo "$listing" | grep -Ev '^PPSA99995/win/wine/lib/wine/(i386|x86_64)-windows/[^/]+\.exe$' |
+    grep -Eq '(^|/)dev\.conf$|\.exe$'; then
     fail "--zip: '$zip' holds a dev.conf or an .exe; rebuild it with tools/package_release.sh"
 fi
 gh release view "$tag" >/dev/null 2>&1 || fail "no release $tag yet: push the tag and wait for the Release workflow"
