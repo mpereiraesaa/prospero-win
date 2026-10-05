@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Code that guest stores change, with no notification, on writable pages
  * (PwX86SourceViewWritable): blocks translated from there check their
- * source on every entry, as a processor sees code it writes. */
+ * source on every entry, as a processor sees code it writes; or, as
+ * wowprospero runs them where it can (smc_pages.h), trust it while its host
+ * page is write-protected, and a write faults and discards them. */
 #define _GNU_SOURCE
 #include "../src/pw_x86_engine.h"
 #include "../src/pw_x86_reencode.h"
 #include "../src/pw_vm_posix.h"
+#include "../wine/wowprospero/smc_pages.h"
+#include <time.h>
 #include <assert.h>
 #include <signal.h>
 #include <stdint.h>
@@ -32,8 +36,37 @@ static int view(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes)
     return PW_OK;
 }
 
-/* [low + WRITABLE, low + WRITABLE + 0x1000) is writable; trusting: none is. */
+/* Write protection as wowprospero does it, over 16 KiB host pages as on the
+ * PS5: the guest is 16 KiB aligned, so CODE, WRITABLE and HOOK share the
+ * first host page. */
+enum { HOST_PAGE = 0x4000 };
+static PwSmcPages smc;
+static unsigned protecting;
+static volatile int smc_retry;
+static volatile uint64_t smc_generation;
+static PwX86State *current_state;
+
+static int host_protect(void *address, size_t bytes, int prot)
+{
+    return mprotect(address, bytes, prot);
+}
+
+static uint64_t now_ms(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
+}
+
+/* [low + WRITABLE, low + WRITABLE + 0x1000) is writable; trusting: none is.
+ * protecting: a writable page whose host page could be write-protected is
+ * trusted too. */
 static unsigned trusting;
+static int trust_writable(uint32_t address)
+{
+    return protecting && pw_smc_protect(&smc, address, PROT_READ | PROT_WRITE | PROT_EXEC);
+}
+
 static int view_writable(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes, size_t *writable_from)
 {
     const uint32_t first = low + WRITABLE, end = first + 0x1000;
@@ -41,8 +74,12 @@ static int view_writable(void *opaque, uint32_t pc, const uint8_t **data, size_t
 
     *writable_from = SIZE_MAX;
     if (trusting || status != PW_OK) return status;
-    if (pc >= first && pc < end) *writable_from = 0;
-    else if (pc < first && first - pc < *bytes) *writable_from = first - pc;
+    if (pc >= first && pc < end) { if (!trust_writable(pc)) *writable_from = 0; }
+    else if (pc < first && first - pc < *bytes) {
+        /* As wowprospero, which looks at the next page only when a block
+         * may reach it. */
+        if (first - pc >= PW_X86_ENGINE_MAX_SOURCE || !trust_writable(first)) *writable_from = first - pc;
+    }
     return status;
 }
 
@@ -63,6 +100,16 @@ static void on_fault(int sig, siginfo_t *info, void *context)
     uintptr_t rsp, target;
 
     (void)sig;
+    /* A write to write-protected code: every translation goes, and
+     * translated code stops at the write (wowprospero's smc_write_fault). */
+    if (pw_smc_fault(&smc, (uintptr_t)info->si_addr)) {
+        smc_generation++;
+        if (current && (target = pw_x86_engine_fault_redirect(current, (uintptr_t)uc->uc_mcontext.gregs[REG_RIP]))) {
+            smc_retry = 1;
+            uc->uc_mcontext.gregs[REG_RIP] = (greg_t)target;
+        } else if (current_state) current_state->chain_budget = 1;
+        return;
+    }
     if (current && pw_x86_engine_call_stack_fault(current, (uintptr_t)info->si_addr, &rsp)) {
         uc->uc_mcontext.gregs[REG_RSP] = (greg_t)rsp;
         return;
@@ -124,6 +171,9 @@ typedef struct Run {
     unsigned steps;
     uint64_t compiles, stale, retired, revived;
     unsigned verified, verified_writable, verified_elsewhere;
+    /* With protecting: pages protected, write faults, pages sent back to
+     * the checks, and engine resets the faults caused. */
+    uint64_t protects, faults, demotions, resets;
 } Run;
 
 /* Run the guest from low + CODE until it returns to SENTINEL, with no memory
@@ -132,8 +182,15 @@ static Run run(unsigned config)
 {
     PwX86Engine engine;
     PwX86StepReport report;
+    uint64_t seen;
+    uint32_t generation = 1;
     Run r;
 
+    if (protecting) {
+        static const PwSmcOps ops = { host_protect, now_ms };
+        assert(!pw_smc_init(&smc, HOST_PAGE, &ops));
+    }
+    seen = smc_generation;
     setup(&engine, config);
     memset(&r, 0, sizeof(r));
     r.state.eip = low + CODE;
@@ -148,12 +205,34 @@ static Run run(unsigned config)
     pw_guest_fp_init(&r.state.fp);
     memcpy(guest + STACK_TOP, &(uint32_t){ SENTINEL }, 4);
     current = &engine;
+    current_state = &r.state;
     r.status = PW_OK;
     while (r.steps < 200000 && r.state.eip != SENTINEL && r.status == PW_OK) {
+        /* As wowprospero's run(): a flush is noticed between steps, and a
+         * write stopped at by the handler runs again from new translations. */
+        if (seen != smc_generation) {
+            seen = smc_generation;
+            pw_x86_engine_fp_sync(&engine, &r.state);
+            assert(pw_x86_engine_reset(&engine, ++generation) == PW_OK);
+            r.resets++;
+        }
         r.status = pw_x86_engine_step(&engine, &r.state, &report);
         r.steps++;
+        if (r.status == PW_ERR_VM && smc_retry) {
+            smc_retry = 0;
+            pw_x86_engine_fp_sync(&engine, &r.state);
+            r.status = PW_OK;
+        }
     }
     current = NULL;
+    current_state = NULL;
+    if (protecting) {
+        r.protects = smc.protects;
+        r.faults = smc.faults;
+        r.demotions = smc.demotions;
+        pw_smc_destroy(&smc);
+        assert(!mprotect(guest, SPAN, PROT_READ | PROT_WRITE | PROT_EXEC));
+    }
     pw_x86_engine_fp_sync(&engine, &r.state);
     r.compiles = engine.compiles;
     r.stale = engine.stale_blocks;
@@ -201,8 +280,13 @@ static void test_rewritten_function(void)
     size_t n = 0;
 
     for (unsigned config = 0; config < CONFIGS; config++) {
-        for (trusting = 0; trusting < 2; trusting++) {
+        /* Checked, trusting, and write-protected as wowprospero does it
+         * (with fault markers; the emitter's blocks stop at their next exit). */
+        for (unsigned mode = 0; mode < 3; mode++) {
             static const uint8_t f1[] = { 0xb8, 1, 0, 0, 0, 0xc3 };    /* mov eax, 1; ret */
+            trusting = mode == 1;
+            protecting = mode == 2;
+            if (protecting && config == REENCODE) continue;
             reset_code();
             place(WRITABLE, f1, sizeof(f1));
             n = 0;
@@ -229,6 +313,18 @@ static void test_rewritten_function(void)
                 fprintf(stderr, "%s: status %d eip +%x trusting %u\n", names[config], r.status, r.state.eip - low, trusting);
             assert(r.status == PW_OK && r.state.eip == SENTINEL);
             assert(r.state.gpr[3] == 1);
+            if (protecting) {
+                /* No block checks itself; each rewrite faulted once, on the
+                 * page protected again when f was translated anew. */
+                assert(r.state.gpr[6] == 2 && r.state.gpr[5] == 0 && r.state.gpr[0] == 0xffffffffu);
+                if (r.verified || r.stale || r.faults != 3 || r.resets != 3 || r.protects != 4)
+                    fprintf(stderr, "%s: verified %u stale %llu faults %llu resets %llu protects %llu\n", names[config],
+                            r.verified, (unsigned long long)r.stale, (unsigned long long)r.faults,
+                            (unsigned long long)r.resets, (unsigned long long)r.protects);
+                assert(!r.verified && !r.stale);
+                assert(r.faults == 3 && r.resets == 3 && !r.demotions && r.protects == 4);
+                continue;
+            }
             if (trusting) {
                 /* Read-only code: no block checks itself, so the first f
                  * runs every time, as the engine was promised. */
@@ -244,6 +340,7 @@ static void test_rewritten_function(void)
         }
     }
     trusting = 0;
+    protecting = 0;
 }
 
 /* Mod Loader's hook of CText::Get (fxt.hpp's GxtHook): g() starts with a
@@ -353,6 +450,105 @@ static void test_modloader_hook(void)
         }
 }
 
+/* Mod Loader's toggle with write protection: the first writes fault, each
+ * discarding every translation, until the page goes back to the checks;
+ * from then on it runs as it does with them, at depth one. */
+static void test_modloader_protected(void)
+{
+    protecting = 1;
+    for (unsigned config = 0; config < CONFIGS; config++) {
+        if (config == REENCODE) continue;
+        for (unsigned indirect = 0; indirect < 2; indirect++) {
+            Run few = modloader(config, indirect, 3), many = modloader(config, indirect, 40);
+            assert(few.faults == PW_SMC_DEMOTE_FAULTS && few.demotions == 1);
+            assert(many.faults == PW_SMC_DEMOTE_FAULTS && many.demotions == 1);
+            assert(many.verified_writable && many.resets == PW_SMC_DEMOTE_FAULTS);
+        }
+    }
+    protecting = 0;
+}
+
+/* CLEO's pattern: code patched once, then run many times. Patched before it
+ * ever ran, nothing faults; patched after it ran (and its page was
+ * protected), the patch faults once. Either way the loop runs with no
+ * check: no block keeps a copy of its source. */
+static void test_written_once(void)
+{
+    const uint32_t f = low + WRITABLE, calls = 1000;
+
+    protecting = 1;
+    for (unsigned config = 0; config < CONFIGS; config++) {
+        if (config == REENCODE) continue;
+        for (unsigned early = 0; early < 2; early++) {
+            static const uint8_t f1[] = { 0xb8, 1, 0, 0, 0, 0xc3 };    /* mov eax, 1; ret */
+            uint8_t main[64];
+            size_t n = 0;
+
+            reset_code();
+            place(WRITABLE, f1, sizeof(f1));
+            if (!early) { main[n++] = 0xe8; put32(main + n, f - (low + CODE + n + 4)); n += 4; }  /* call f */
+            main[n++] = 0xc6; main[n++] = 0x05; put32(main + n, f + 1); n += 4;
+            main[n++] = 2;                                                         /* mov byte [f+1], 2 */
+            main[n++] = 0xb9; put32(main + n, calls); n += 4;                      /* mov ecx, calls */
+            main[n++] = 0x31; main[n++] = 0xdb;                                    /* xor ebx, ebx */
+            const size_t loop = n;
+            main[n++] = 0x51;                                                      /* push ecx */
+            main[n++] = 0xe8; put32(main + n, f - (low + CODE + n + 4)); n += 4;   /* call f */
+            main[n++] = 0x01; main[n++] = 0xc3;                                    /* add ebx, eax */
+            main[n++] = 0x59;                                                      /* pop ecx */
+            main[n++] = 0x49;                                                      /* dec ecx */
+            main[n++] = 0x75; main[n] = (uint8_t)(loop - (n + 1)); n++;            /* jnz loop */
+            main[n++] = 0xc3;
+            place(CODE, main, n);
+            Run r = run(config);
+            assert(r.status == PW_OK && r.state.eip == SENTINEL);
+            assert(r.state.gpr[3] == 2 * calls);
+            assert(!r.verified && !r.stale && !r.demotions);
+            assert(r.faults == (early ? 0u : 1u) && r.resets == r.faults);
+        }
+    }
+    protecting = 0;
+}
+
+/* Data written all the time next to code, in the same host page (a packed
+ * executable's writable code section): the page faults a few times, then
+ * goes back to the checks, and every result stays right. */
+static void test_data_next_to_code(void)
+{
+    const uint32_t f = low + WRITABLE, counter = low + WRITABLE + 0x800, calls = 50;
+
+    protecting = 1;
+    for (unsigned config = 0; config < CONFIGS; config++) {
+        static const uint8_t f1[] = { 0xb8, 1, 0, 0, 0, 0xc3 };        /* mov eax, 1; ret */
+        uint8_t main[64];
+        size_t n = 0;
+
+        if (config == REENCODE) continue;
+        reset_code();
+        place(WRITABLE, f1, sizeof(f1));
+        memset(guest + WRITABLE + 0x800, 0, 4);
+        main[n++] = 0xb9; put32(main + n, calls); n += 4;                      /* mov ecx, calls */
+        main[n++] = 0x31; main[n++] = 0xdb;                                    /* xor ebx, ebx */
+        const size_t loop = n;
+        main[n++] = 0xff; main[n++] = 0x05; put32(main + n, counter); n += 4;  /* inc dword [counter] */
+        main[n++] = 0x51;                                                      /* push ecx */
+        main[n++] = 0xe8; put32(main + n, f - (low + CODE + n + 4)); n += 4;   /* call f */
+        main[n++] = 0x01; main[n++] = 0xc3;                                    /* add ebx, eax */
+        main[n++] = 0x59;                                                      /* pop ecx */
+        main[n++] = 0x49;                                                      /* dec ecx */
+        main[n++] = 0x75; main[n] = (uint8_t)(loop - (n + 1)); n++;            /* jnz loop */
+        main[n++] = 0xc3;
+        place(CODE, main, n);
+        Run r = run(config);
+        uint32_t count;
+        memcpy(&count, guest + WRITABLE + 0x800, 4);
+        assert(r.status == PW_OK && r.state.eip == SENTINEL);
+        assert(r.state.gpr[3] == calls && count == calls);
+        assert(r.faults == PW_SMC_DEMOTE_FAULTS && r.demotions == 1 && r.verified_writable);
+    }
+    protecting = 0;
+}
+
 /* A block that starts in read-only code and runs on into the writable page
  * checks its source; one that ends before it does not. */
 static void test_reaching_writable(void)
@@ -372,13 +568,23 @@ static void test_reaching_writable(void)
         Run r = run(config);
         assert(r.status == PW_OK && r.state.eip == SENTINEL && r.state.gpr[0] == 5);
         assert(r.verified == 1 && !r.verified_writable && !r.stale);
+        if (config == REENCODE) continue;
+        /* Write-protected, it trusts the writable page too. */
+        protecting = 1;
+        r = run(config);
+        protecting = 0;
+        assert(r.status == PW_OK && r.state.eip == SENTINEL && r.state.gpr[0] == 5);
+        assert(!r.verified && r.protects == 1 && !r.faults);
     }
 }
 
 int main(void)
 {
-    guest = mmap(NULL, SPAN, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    /* Aligned to the host page write protection uses. */
+    guest = mmap(NULL, SPAN + HOST_PAGE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT,
+                 -1, 0);
     assert(guest != MAP_FAILED);
+    guest = (uint8_t *)(((uintptr_t)guest + HOST_PAGE - 1) & ~(uintptr_t)(HOST_PAGE - 1));
     low = (uint32_t)(uintptr_t)guest;
     call_stack_region = mmap(NULL, PW_X86_ENGINE_CALL_STACK_GUARD + CALL_STACK_BYTES, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -397,8 +603,12 @@ int main(void)
     }
     test_rewritten_function();
     test_modloader_hook();
+    test_modloader_protected();
+    test_written_once();
+    test_data_next_to_code();
     test_reaching_writable();
     printf("x86 self-modifying code passed: rewritten functions, Mod Loader's hook toggle, "
-           "blocks reaching writable code, read-only code unchecked\n");
+           "blocks reaching writable code, read-only code unchecked, write-protected code "
+           "(written once, toggled, next to data)\n");
     return 0;
 }

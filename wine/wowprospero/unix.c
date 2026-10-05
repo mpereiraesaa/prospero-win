@@ -37,6 +37,7 @@
 #include "pw_guest_fp.h"
 #include "pw_x86_hostexec.h"
 #include "code_pages.h"
+#include "smc_pages.h"
 #include "thread_budget.h"
 #include "tsc_clock.h"
 #include "host_memory.h"
@@ -80,6 +81,11 @@ struct pw_thread
     double tsc_per_us;       /* measured at the last report */
     uint32_t n_unix, n_sys, n_other, n_unix_long, n_resets, n_flushes, last_reason;
     PwX86HotspotProfile *profile;
+    /* Set by the fault handler when it sent this thread's translated code to
+     * the refused-access path of a write to a page that was write-protected
+     * for its translations (smc_pages.h): run() then carries on at that
+     * write instead of reporting a fault. */
+    volatile int smc_retry;
     uint64_t profile_last_tsc;  /* TSC at the last report (tsc_clock.h) */
     uint64_t execution_clock_cost, execution_clock_resolution;
 };
@@ -97,7 +103,8 @@ static uint64_t next_cache_report_id;
  * not mapped) stays Wine's, as before. The handler reads the translators'
  * code ranges from this table rather than thread-local storage. */
 enum { MAX_ARENAS = 1024 };
-static struct { uintptr_t low, high; PwX86Engine *engine; PwX86State *state; PwX86HotspotProfile *profile; } arenas[MAX_ARENAS];
+static struct { uintptr_t low, high; PwX86Engine *engine; PwX86State *state; PwX86HotspotProfile *profile;
+                volatile int *retry; } arenas[MAX_ARENAS];
 #ifndef __PROSPERO__
 static struct sigaction wine_segv;
 #endif
@@ -115,6 +122,10 @@ static volatile uint64_t code_generation = 1;
 static volatile uint64_t protect_generation = 1;
 static PwX86CodePages code_pages;
 static volatile int flush_lock;
+/* Writable guest code write-protected on the host instead of checked on
+ * every entry (smc_pages.h); off without fault markers, whose handler
+ * resolves the faults, or with PW_WOW_SMC_PROTECT=0. */
+static PwSmcPages smc;
 
 static const ULONG readable_mask = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
                                    PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
@@ -159,32 +170,162 @@ static int readable( uintptr_t address, int *writable )
     return 1;
 }
 
-/* The source span at pc, and how far into it the bytes stay read-only.
+/* The host protection Wine gives a page of Windows protection protect
+ * (get_unix_prot in Wine's virtual.c). */
+static int smc_unix_prot( ULONG protect )
+{
+    switch (protect & 0xff)
+    {
+    case PAGE_READONLY: return PROT_READ;
+    case PAGE_READWRITE: case PAGE_WRITECOPY: return PROT_READ | PROT_WRITE;
+    case PAGE_EXECUTE: case PAGE_EXECUTE_READ: return PROT_READ | PROT_EXEC;
+    case PAGE_EXECUTE_READWRITE: case PAGE_EXECUTE_WRITECOPY: return PROT_READ | PROT_WRITE | PROT_EXEC;
+    default: return 0;
+    }
+}
+
+/* Whether [offset, offset + bytes) of the i386 image at image lies in
+ * sections that hold code. Data sections are left alone: the kernel writes
+ * into a buffer there (a read() into a static array) without a fault the
+ * handler could resolve, so their host pages must stay writable. */
+static int smc_image_code( uintptr_t image, uintptr_t offset, uintptr_t bytes )
+{
+    const uint8_t *base = (const uint8_t *)image;
+    MEMORY_BASIC_INFORMATION info;
+    uint32_t nt, table;
+    uint16_t sections, optional;
+
+    if (NtQueryVirtualMemory( NtCurrentProcess(), (void *)image, MemoryBasicInformation, &info, sizeof(info), NULL ) ||
+        info.State != MEM_COMMIT || !(info.Protect & readable_mask) || (info.Protect & PAGE_GUARD))
+        return 0;
+    if (base[0] != 'M' || base[1] != 'Z') return 0;
+    memcpy( &nt, base + 0x3c, 4 );
+    if (nt > 0x1000 - 24 || memcmp( base + nt, "PE\0\0", 4 )) return 0;
+    memcpy( &sections, base + nt + 6, 2 );
+    memcpy( &optional, base + nt + 20, 2 );
+    table = nt + 24 + optional;
+    if (table + 40u * sections > 0x1000) return 0;
+    for (uintptr_t at = offset; at < offset + bytes; at += 0x1000)
+    {
+        int code = 0;
+
+        for (unsigned k = 0; k < sections && !code; k++)
+        {
+            const uint8_t *row = base + table + 40 * k;
+            uint32_t size, address, flags;
+
+            memcpy( &size, row + 8, 4 );
+            memcpy( &address, row + 12, 4 );
+            memcpy( &flags, row + 36, 4 );
+            size = (size + 0xfff) & ~0xfffu;
+            code = at >= address && at - address < size && (flags & (0x20 | 0x20000000));  /* CNT_CODE, MEM_EXECUTE */
+        }
+        if (!code) return 0;
+    }
+    return 1;
+}
+
+/* Whether the host page at base qualifies for write protection: every guest
+ * page in it committed, in the same i386 image, in its code sections, with
+ * no guard page; *committed says whether all of them are committed and
+ * *prot is the host protection Wine gives the host page (the union of its
+ * guest pages'). Image pages only: a write watch (MEM_WRITE_WATCH private
+ * memory) would lose its write fault to the handler. */
+static int smc_qualifies( uintptr_t base, int *committed, int *prot )
+{
+    MEMORY_BASIC_INFORMATION info;
+    uintptr_t image = 0, region_end = 0;
+
+    *committed = 1;
+    *prot = 0;
+    for (uintptr_t page = base; page < base + smc.host_page; page += 0x1000)
+    {
+        if (page >= region_end)
+        {
+            if (NtQueryVirtualMemory( NtCurrentProcess(), (void *)page, MemoryBasicInformation, &info,
+                                      sizeof(info), NULL ))
+            {
+                *committed = 0;
+                return 0;
+            }
+            region_end = (uintptr_t)info.BaseAddress + info.RegionSize;
+        }
+        if (info.State != MEM_COMMIT) { *committed = 0; return 0; }
+        if (info.Type != MEM_IMAGE || (info.Protect & (PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE)) ||
+            !smc_unix_prot( info.Protect ))
+            return 0;
+        if (!image) image = (uintptr_t)info.AllocationBase;
+        else if (image != (uintptr_t)info.AllocationBase) return 0;
+        *prot |= smc_unix_prot( info.Protect );
+    }
+    return (*prot & PROT_WRITE) && image && image <= base &&
+           smc_image_code( image, base - image, smc.host_page );
+}
+
+/* Whether translations of [address, address + bytes), on a writable page,
+ * may trust their source: its host page is write-protected (now, if it
+ * qualifies). The span is marked as trusted first, so a write that faults
+ * from the moment of protection finds its translations marked. */
+static int smc_trust( uintptr_t address, size_t bytes )
+{
+    int state = pw_smc_state( &smc, address ), committed, prot;
+
+    if (!pw_smc_enabled( &smc )) return 0;
+    if (state == PW_SMC_NONE)
+    {
+        const uintptr_t base = address & ~(smc.host_page - 1);
+
+        if (!smc_qualifies( base, &committed, &prot ))
+        {
+            pw_smc_ineligible( &smc, address );
+            return 0;
+        }
+        pw_x86_code_pages_mark( &code_pages, address, bytes );
+        return pw_smc_protect( &smc, address, prot );
+    }
+    if (state != PW_SMC_PROTECTED) return 0;
+    pw_x86_code_pages_mark( &code_pages, address, bytes );
+    return 1;
+}
+
+/* The source span at pc, and how far into it the bytes may change unnoticed.
  * Translations of read-only bytes trust them: a later protection change
- * tells flush() whether they may have changed. Translations that reach
- * writable bytes check their source whenever they are entered instead, as
- * a processor sees code that is written without any call (Mod Loader puts
- * its hook in and out of San Andreas's CText::Get around every call it
- * passes on, with plain stores to code it unprotected once). */
+ * tells flush() whether they may have changed. So do translations of
+ * writable code whose host page could be write-protected (smc_trust): a
+ * write to it faults, and the fault handler discards them. Translations that
+ * reach other writable bytes check their source whenever they are entered
+ * instead, as a processor sees code that is written without any call (Mod
+ * Loader puts its hook in and out of San Andreas's CText::Get around every
+ * call it passes on, with plain stores to code it unprotected once, often
+ * enough that its page soon goes back to the checks). */
 static int source_view_writable( void *opaque, uint32_t pc, const uint8_t **source, size_t *bytes,
                                  size_t *writable_from )
 {
     const uintptr_t page = 0x1000;
-    uintptr_t end = ((uintptr_t)pc | (page - 1)) + 1;
-    int writable, next_writable;
+    uintptr_t end = ((uintptr_t)pc | (page - 1)) + 1, first;
+    int writable, next_writable = 0, two = 0;
 
     if (pc < 0x10000 || !readable( pc, &writable )) return PW_ERR_NOT_FOUND;
-    *writable_from = writable ? 0 : SIZE_MAX;
     if (end - pc < PW_X86_ENGINE_MAX_SOURCE && end < 0x100000000ull && readable( end, &next_writable ))
     {
-        if (!writable && next_writable) *writable_from = end - pc;
         end += page;
+        two = 1;
     }
     *source = (const uint8_t *)(uintptr_t)pc;
     *bytes = end - pc;
     if (*bytes > PW_X86_ENGINE_MAX_SOURCE) *bytes = PW_X86_ENGINE_MAX_SOURCE;
-    /* Whatever a translation may read from; flush() keys on these marks. */
-    pw_x86_code_pages_mark( &code_pages, pc, *writable_from < *bytes ? *writable_from : *bytes );
+    first = two ? end - page - pc : *bytes;
+    if (first > *bytes) first = *bytes;
+    /* Whatever a translation may read from; flush() and the fault handler
+     * key on these marks. */
+    *writable_from = SIZE_MAX;
+    if (!writable) pw_x86_code_pages_mark( &code_pages, pc, first );
+    else if (!smc_trust( pc, first )) *writable_from = 0;
+    if (*writable_from && first < *bytes)
+    {
+        if (!next_writable) pw_x86_code_pages_mark( &code_pages, pc + first, *bytes - first );
+        else if (!smc_trust( pc + first, *bytes - first )) *writable_from = first;
+    }
     if (*writable_from < *bytes) pw_x86_code_pages_mark_checked( &code_pages, pc, *bytes );
     return PW_OK;
 }
@@ -545,6 +686,42 @@ static uintptr_t *context_rip( void *context )
 #endif
 }
 
+/* A write to a guest page whose host page we write-protected for its
+ * translations (smc_pages.h), from translated code, Wine, or any thread:
+ * the page gets its permission back and, if translations were read from
+ * it, every thread discards its translations before the write resumes.
+ * A write from this thread's translated code leaves it at the write, so the
+ * code after it, which may call what was just written, is translated anew:
+ * a re-encoded block at the access's refused-access path, where run()
+ * carries on (smc_retry); an emitted block at its next linked exit. 1 when
+ * the fault was ours. */
+static int smc_write_fault( uintptr_t address, void *context )
+{
+    uintptr_t *rip = context_rip( context ), base;
+
+    if (!pw_smc_fault( &smc, address )) return 0;
+    base = address & ~(smc.host_page - 1);
+    if (!pw_x86_code_pages_any( &code_pages, base, smc.host_page )) return 1;
+    __atomic_add_fetch( &smc.flushes, 1, __ATOMIC_RELAXED );
+    __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
+    for (unsigned int i = 0; i < MAX_ARENAS && rip; i++)
+    {
+        uintptr_t high = __atomic_load_n( &arenas[i].high, __ATOMIC_ACQUIRE );
+        uintptr_t low = __atomic_load_n( &arenas[i].low, __ATOMIC_ACQUIRE );
+        uintptr_t target;
+
+        if (!low || !high || *rip < low || *rip >= high) continue;
+        if ((target = pw_x86_engine_fault_redirect( arenas[i].engine, *rip )) && arenas[i].retry)
+        {
+            *arenas[i].retry = 1;
+            *rip = target;
+        }
+        else arenas[i].state->chain_budget = 1;
+        break;
+    }
+    return 1;
+}
+
 /* Resumes a fault at a marked access outside the guest range at the
  * access's refused-access path; nonzero when it did. */
 static int redirect_fault( siginfo_t *info, void *context )
@@ -554,6 +731,7 @@ static int redirect_fault( siginfo_t *info, void *context )
     PwX86State *state = NULL;
     uint32_t eip;
 
+    if (smc_write_fault( address, context )) return 1;
     for (unsigned int i = 0; i < MAX_ARENAS && !target; i++)
     {
         uintptr_t high = __atomic_load_n( &arenas[i].high, __ATOMIC_ACQUIRE );
@@ -879,6 +1057,7 @@ static void register_arena( struct pw_thread *thread, int add )
                 __atomic_store_n(&arenas[i].profile, NULL, __ATOMIC_RELEASE);
                 arenas[i].engine = &thread->engine;
                 arenas[i].state = &thread->state;
+                arenas[i].retry = &thread->smc_retry;
                 __atomic_store_n( &arenas[i].high, low + thread->engine.code.bytes, __ATOMIC_RELEASE );
                 return;
             }
@@ -891,6 +1070,49 @@ static void register_arena( struct pw_thread *thread, int add )
             return;
         }
     }
+}
+
+#ifdef __PROSPERO__
+/* wine/ps5/pw_wine_dmem_ps5.c, in ntdll.prx: the mprotect Wine's own calls go
+ * through (direct memory needs sceKernelMprotect). */
+extern int __wine_ps5_mprotect( void *addr, size_t len, int prot );
+#endif
+
+static int smc_host_protect( void *address, size_t bytes, int prot )
+{
+#ifdef __PROSPERO__
+    return __wine_ps5_mprotect( address, bytes, prot );
+#else
+    return mprotect( address, bytes, prot );
+#endif
+}
+
+/* From the fault handler only. */
+static uint64_t smc_now_ms( void )
+{
+    struct timespec now;
+
+    if (clock_gettime( CLOCK_MONOTONIC, &now )) return 0;
+    return now.tv_sec * 1000ull + now.tv_nsec / 1000000;
+}
+
+/* Write protection for writable code needs the fault handler (fault
+ * markers). PW_WOW_SMC_PROTECT=0, or on the console the file
+ * /data/prospero-win/pw_wow_smc_check, keeps every such page on the checks. */
+static void smc_start( void )
+{
+    static const PwSmcOps ops = { smc_host_protect, smc_now_ms };
+    const char *option = getenv( "PW_WOW_SMC_PROTECT" );
+
+    if (!fault_markers || (option && !strcmp( option, "0" ))) return;
+#ifdef __PROSPERO__
+    {
+        struct stat st;
+        if (!stat( "/data/prospero-win/pw_wow_smc_check", &st )) return;
+    }
+#endif
+    if (pw_smc_init( &smc, host_memory.page, &ops ))
+        fprintf( stderr, "wowprospero: no memory to write-protect code; writable code is checked\n" );
 }
 
 static NTSTATUS process_init( void *args )
@@ -928,6 +1150,7 @@ static NTSTATUS process_init( void *args )
 #endif
         }
     }
+    smc_start();
     profile_start();
     return STATUS_SUCCESS;
 }
@@ -976,7 +1199,8 @@ static void cache_report( struct pw_thread *thread, uint64_t wall, unsigned fina
     fprintf( stderr, "wowprospero cache: tid=%04x instance=%llu cumulative=1 time_ns=%llu final=%u "
              "generation=%u capacity=%u occupied=%llu arena_used=%zu arena_bytes=%zu "
              "hits=%llu misses=%llu probes=%llu max_probe=%u publishes=%llu resets=%llu "
-             "stale=%llu retired=%llu revived=%llu\n",
+             "stale=%llu retired=%llu revived=%llu smc_protects=%llu smc_faults=%llu smc_flushes=%llu "
+             "smc_demotions=%llu\n",
              (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
              (unsigned long long)thread->cache_report_id, (unsigned long long)wall, final,
              cache->generation, cache->capacity,
@@ -985,7 +1209,10 @@ static void cache_report( struct pw_thread *thread, uint64_t wall, unsigned fina
              (unsigned long long)cache->misses, (unsigned long long)cache->lookup_probes,
              cache->max_probe, (unsigned long long)cache->publishes,
              (unsigned long long)cache->resets, (unsigned long long)thread->engine.stale_blocks,
-             (unsigned long long)thread->engine.retired_total, (unsigned long long)thread->engine.revived_blocks );
+             (unsigned long long)thread->engine.retired_total, (unsigned long long)thread->engine.revived_blocks,
+             (unsigned long long)smc.protects, (unsigned long long)__atomic_load_n( &smc.faults, __ATOMIC_RELAXED ),
+             (unsigned long long)__atomic_load_n( &smc.flushes, __ATOMIC_RELAXED ),
+             (unsigned long long)__atomic_load_n( &smc.demotions, __ATOMIC_RELAXED ) );
 }
 
 static void timing_report( struct pw_thread *thread, uint64_t tsc )
@@ -1094,6 +1321,17 @@ static NTSTATUS run( void *args )
     sync_fp_in( thread, ctx );
     for (;;)
     {
+        /* A flush since the last step, from another thread's notification
+         * or a write to write-protected code (smc_write_fault). */
+        generation = __atomic_load_n( &code_generation, __ATOMIC_ACQUIRE );
+        if (thread->generation != generation)
+        {
+            thread->n_flushes++;
+            thread->generation = generation;
+            pw_x86_engine_fp_sync( &thread->engine, state );
+            reset_thread_engine( thread );
+            pw_x86_hostexec_reset( &thread->hostexec );
+        }
         if (state->eip == params->bop) { params->reason = PW_WOW_SYSCALL; break; }
         if (state->eip == params->unix_bop) { params->reason = PW_WOW_UNIXCALL; break; }
         if (thread->trace) thread->ring[thread->ring_pos++ & 63] = state->eip;
@@ -1113,6 +1351,14 @@ static NTSTATUS run( void *args )
         }
         status = pw_x86_engine_step( &thread->engine, state, &report );
         if (status == PW_OK) continue;
+        if (status == PW_ERR_VM && thread->smc_retry)
+        {
+            /* Stopped at a write to write-protected code, which the handler
+             * made writable again: run it, from translations made now. */
+            thread->smc_retry = 0;
+            pw_x86_engine_fp_sync( &thread->engine, state );
+            continue;
+        }
         if (status == PW_ERR_UNSUPPORTED)
         {
             const uint8_t *source;
@@ -1172,12 +1418,54 @@ static int code_pages_stale( uint64_t address, uint64_t size )
             can_read = committed && (info.Protect & readable_mask) && !(info.Protect & PAGE_GUARD);
             writable = committed && (info.Protect & writable_mask);
         }
-        if (!committed ||
-            pw_x86_code_page_protect_stale( &code_pages, page, writable,
+        if (!committed) return 1;
+        /* Write-protected for its translations: any write since has faulted
+         * and discarded them (flush() protects it again if it must). */
+        if (can_read && pw_smc_state( &smc, base ) == PW_SMC_PROTECTED) continue;
+        if (pw_x86_code_page_protect_stale( &code_pages, page, writable,
                                             can_read ? (const uint8_t *)base : NULL ))
             return 1;
     }
     return 0;
+}
+
+/* The host pages a notification touched, after it (smc_pages.h): Wine has
+ * applied the new protection, which may have given write permission back,
+ * or freed them. A protected page is protected again or forgotten. A page
+ * translated while read-only that has just been made writable is protected
+ * now: its bytes cannot have changed while it was read-only, and from here
+ * on a write faults, so its trusting translations stay right (CLEO makes
+ * code it patches writable and never restores it). Size 0: only the pages
+ * we track. */
+static void smc_refresh_page( uintptr_t base, int may_protect )
+{
+    int committed, prot, qualifies, state = pw_smc_state( &smc, base );
+
+    if (state == PW_SMC_NONE)
+    {
+        if (may_protect && pw_x86_code_pages_any( &code_pages, base, smc.host_page ) &&
+            smc_qualifies( base, &committed, &prot ))
+            pw_smc_protect( &smc, base, prot );
+        return;
+    }
+    qualifies = smc_qualifies( base, &committed, &prot );
+    pw_smc_refresh( &smc, base, committed, qualifies, prot );
+}
+
+static void smc_refresh( uint64_t address, uint64_t size )
+{
+    if (!pw_smc_enabled( &smc )) return;
+    if (!size)
+    {
+        uint32_t count = __atomic_load_n( &smc.tracked_count, __ATOMIC_ACQUIRE );
+
+        for (uint32_t i = 0; i < count; i++) smc_refresh_page( pw_smc_base( &smc, smc.tracked[i] ), 0 );
+        return;
+    }
+    if (address >= 0x100000000ull) return;
+    if (size > 0x100000000ull - address) size = 0x100000000ull - address;
+    for (uint64_t base = address & ~(uint64_t)(smc.host_page - 1); base < address + size; base += smc.host_page)
+        smc_refresh_page( (uintptr_t)base, 1 );
 }
 
 /* A memory notification (protection change, free, instruction-cache flush),
@@ -1187,7 +1475,9 @@ static int code_pages_stale( uint64_t address, uint64_t size )
  * re-translates the same code over and over. Every thread discards its
  * translations only when the range overlaps a page translated code was read
  * from and that page may have changed (code_pages_stale), or its extent is
- * unknown (size 0: an unmapped view or a whole-cache flush).
+ * unknown (size 0: an unmapped view or a whole-cache flush). A page that is
+ * write-protected for its translations never may have: a write to it faults
+ * and discards them (smc_write_fault).
  *
  * Marks are cleared before the generation moves, under a lock, so a thread
  * that saw the new generation marks pages after the clear: a mark is lost
@@ -1204,6 +1494,7 @@ static NTSTATUS flush( void *args )
         pw_x86_code_pages_clear( &code_pages );
         __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
     }
+    smc_refresh( params ? params->address : 0, params ? params->size : 0 );
     __atomic_store_n( &flush_lock, 0, __ATOMIC_RELEASE );
     return STATUS_SUCCESS;
 }
