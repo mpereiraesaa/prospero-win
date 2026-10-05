@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-#define _DEFAULT_SOURCE  /* usleep */
+#define _DEFAULT_SOURCE  /* usleep, CLOCK_THREAD_CPUTIME_ID */
 #include "../wine/ps5/pw_wine_sink.h"
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static int calls,fail_next;
@@ -42,28 +43,49 @@ static int title_release(void *context)
     }
     return -1;
 }
+static uint64_t thread_cpu_ns(void)
+{
+    struct timespec t;
+    assert(!clock_gettime(CLOCK_THREAD_CPUTIME_ID,&t));
+    return (uint64_t)t.tv_sec*1000000000u+(uint64_t)t.tv_nsec;
+}
+/* CPU time each thread spent while the release was pending: a thread that
+ * spins on the sink (a busy-wait or a trylock loop) uses all of it. */
+enum { TITLE_FRAMES=200, BUSY_LIMIT_NS=40000000 };
+static uint64_t title_main_cpu_ns;
 static void *title_main(void *arg)
 {
     uint32_t frame[4*3]={0};
-    PwWinePad pad={0};
+    PwWinePad pad={0},seen;
     PwWineInput e={PW_WINE_INPUT_KEY,0x20,0,0,1},out;
     uint32_t left,right;
     (void)arg;
     while(!__atomic_load_n(&title_request,__ATOMIC_ACQUIRE))sched_yield();
-    /* A frame of the main loop before it gets to the request: the pad,
-     * keys, rumble, and a GDI frame from a Wine thread. Each of these
-     * waited for the release to give up before the lock was split. */
-    pad.buttons=0x1000;pw_wine_set_pad(&pad);
-    assert(!pw_wine_post_input(&e) && pw_wine_next_input(&out) && out.code==0x20);
-    (void)pw_wine_rumble(&left,&right);
-    assert(pw_wine_present(frame,4,3,16)==0);
+    /* The main loop's frames while the request waits (here 200 of them, a
+     * millisecond apart): the pad, keys, rumble, a GDI frame from a Wine
+     * thread and the game reading the pad. Each of these waited for the
+     * release to give up before the lock was split; none may spin either. */
+    const uint64_t cpu=thread_cpu_ns();
+    for(int i=0;i<TITLE_FRAMES;i++) {
+        pad.buttons=(uint16_t)(0x1000+(i&1));pw_wine_set_pad(&pad);
+        assert(pw_wine_pad(&seen) && seen.buttons==pad.buttons);
+        assert(!pw_wine_post_input(&e) && pw_wine_next_input(&out) && out.code==0x20);
+        (void)pw_wine_rumble(&left,&right);
+        assert(pw_wine_present(frame,4,3,16)==0);
+        usleep(1000);
+    }
+    title_main_cpu_ns=thread_cpu_ns()-cpu;
     __atomic_store_n(&title_closed,1,__ATOMIC_RELEASE);
     __atomic_store_n(&title_main_done,1,__ATOMIC_RELEASE);
     return NULL;
 }
+typedef struct { int status; uint64_t cpu_ns; } DriverRelease;
 static void *driver_release(void *arg)
 {
-    *(int *)arg=pw_wine_release_display();
+    DriverRelease *d=arg;
+    const uint64_t cpu=thread_cpu_ns();
+    d->status=pw_wine_release_display();
+    d->cpu_ns=thread_cpu_ns()-cpu;
     return NULL;
 }
 
@@ -88,16 +110,21 @@ static void test_display_release(void)
      * it, and two surfaces asking at once get one release between them. */
     pw_wine_set_display_release(title_release,NULL);
     pthread_t main_thread,drivers[2];
-    int status[2]={7,7};
+    DriverRelease release_of[2]={{7,0},{7,0}};
     assert(!pthread_create(&main_thread,NULL,title_main,NULL));
-    for(int i=0;i<2;i++)assert(!pthread_create(&drivers[i],NULL,driver_release,&status[i]));
+    for(int i=0;i<2;i++)assert(!pthread_create(&drivers[i],NULL,driver_release,&release_of[i]));
     for(int i=0;i<2;i++)assert(!pthread_join(drivers[i],NULL));
     assert(!pthread_join(main_thread,NULL));
-    assert(status[0]==0 && status[1]==0 && title_calls==1 && title_main_done);
+    assert(release_of[0].status==0 && release_of[1].status==0 && title_calls==1 && title_main_done);
+    /* About 200 ms passed; nobody spun through them. The callback polls
+     * every millisecond like the title's, the second driver sleeps on the
+     * release lock. */
+    assert(title_main_cpu_ns<BUSY_LIMIT_NS);
+    assert(release_of[0].cpu_ns<BUSY_LIMIT_NS && release_of[1].cpu_ns<BUSY_LIMIT_NS);
     pw_wine_sink_stats(&s);assert(s.display_released);
     /* Frames still reach the title, which shows them while no swapchain
      * presents. */
-    assert(pw_wine_present(frame,4,3,16)==0 && calls==before+4);
+    assert(pw_wine_present(frame,4,3,16)==0 && calls==before+3+TITLE_FRAMES);
     /* Once released, the title is not asked again. */
     assert(pw_wine_release_display()==0 && title_calls==1 && release_calls==1);
 }
