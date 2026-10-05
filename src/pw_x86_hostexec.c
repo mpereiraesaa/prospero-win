@@ -574,6 +574,32 @@ static int stack_memory_form(PwX86State *s, const uint8_t *src, size_t n)
     return PW_OK;
 }
 
+/* MOV between memory and ESP (89 /4, 8B /4), which the planner refuses
+ * since the host runs on its own stack: an SEH prologue stores ESP in
+ * fs:[0] this way. Register forms are the translator's. */
+static int esp_memory_form(PwX86State *s, const uint8_t *src, size_t n)
+{
+    size_t at = 0;
+    unsigned fs = 0;
+    uint32_t address;
+    int len;
+
+    while (at < n && at < 4 && (src[at] == 0x64 || src[at] == 0x2e || src[at] == 0x3e ||
+                                src[at] == 0x26 || src[at] == 0x36)) {
+        fs |= src[at] == 0x64;
+        at++;
+    }
+    if (at + 1 >= n || (src[at] != 0x89 && src[at] != 0x8b)) return PW_ERR_UNSUPPORTED;
+    if (((src[at + 1] >> 3) & 7) != 4 || (src[at + 1] >> 6) == 3) return PW_ERR_UNSUPPORTED;
+    len = modrm_address(s, src + at + 1, n - at - 1, &address);
+    if (len < 0) return len;
+    if (fs) address += s->fs_base;
+    if (src[at] == 0x89) memcpy((void *)(uintptr_t)address, &s->gpr[4], 4);
+    else memcpy(&s->gpr[4], (const void *)(uintptr_t)address, 4);
+    s->eip += (uint32_t)(at + 1 + (size_t)len);
+    return PW_OK;
+}
+
 /* PUSHFD (9C) and POPFD (9D) use the guest stack implicitly too. PUSHFD
  * stores the guest's arithmetic, DF, AC and ID bits with the always-set
  * bit 1 and IF; POPFD takes back only those bits, so the ID toggle that
@@ -701,6 +727,54 @@ static int segment_stack_form(PwX86State *s, const uint8_t *src, size_t n)
     return PW_OK;
 }
 
+/* An address-size prefix (67) with a direct 16-bit address, [disp16] or a
+ * 16-bit moffs, as old MSVC SEH prologues use on the TIB (67 64 FF 36 00 00
+ * pushes fs:[0]); CLEO 4's plugins carry them. 64-bit mode has no 16-bit
+ * addressing, but the address is just the zero-extended displacement, so the
+ * same instruction with a 32-bit [disp32] does the same. Writes it to wide
+ * and returns its length, or 0 when src is not one of these forms: only
+ * MOVs, PUSH/POP of memory and two-operand ALU forms, whose lengths are
+ * known; other 16-bit modes ([bx+si]...) stay refused. */
+static size_t addr16_direct_form(const uint8_t *src, size_t n, uint8_t *wide, size_t *from)
+{
+    size_t at = 0, out = 0, imm = 0;
+    unsigned addr16 = 0, opsize = 0;
+    uint8_t op;
+
+    for (; at < n && at < 4; at++) {
+        if (src[at] == 0x67) { addr16 = 1; continue; }
+        if (src[at] == 0x66) opsize = 1;
+        else if (src[at] != 0x26 && src[at] != 0x2e && src[at] != 0x36 && src[at] != 0x3e &&
+                 src[at] != 0x64 && src[at] != 0x65 && src[at] != 0xf0)
+            break;
+        wide[out++] = src[at];
+    }
+    if (!addr16 || at >= n) return 0;
+    op = src[at];
+    if (op >= 0xa0 && op <= 0xa3) {
+        if (at + 3 > n) return 0;
+        wide[out++] = op;
+        wide[out++] = src[at + 1]; wide[out++] = src[at + 2]; wide[out++] = 0; wide[out++] = 0;
+        *from = at + 3;
+        return out;
+    }
+    switch (op) {
+    case 0xc6: case 0x80: case 0x83: imm = 1; break;
+    case 0xc7: case 0x81: imm = opsize ? 2 : 4; break;
+    case 0x88: case 0x89: case 0x8a: case 0x8b: case 0x8f: case 0xff: case 0x85:
+    case 0x01: case 0x03: case 0x09: case 0x0b: case 0x21: case 0x23: case 0x29:
+    case 0x2b: case 0x31: case 0x33: case 0x39: case 0x3b: break;
+    default: return 0;
+    }
+    if (at + 4 + imm > n || (src[at + 1] & 0xc7) != 0x06) return 0;   /* mod 00, rm 110 */
+    wide[out++] = op;
+    wide[out++] = (uint8_t)((src[at + 1] & 0x38) | 0x05);          /* [disp32] */
+    wide[out++] = src[at + 2]; wide[out++] = src[at + 3]; wide[out++] = 0; wide[out++] = 0;
+    memcpy(wide + out, src + at + 4, imm);
+    *from = at + 4 + imm;
+    return out + imm;
+}
+
 int pw_x86_hostexec_step(PwX86HostExec *h, PwX86State *s, const uint8_t *src, size_t n)
 {
     PwX86HostExecPlan plan;
@@ -710,13 +784,24 @@ int pw_x86_hostexec_step(PwX86HostExec *h, PwX86State *s, const uint8_t *src, si
     int status;
 
     if (!h || !h->initialized || !s || !src) return PW_ERR_PRECONDITION;
+    {
+        uint8_t wide[16];
+        size_t from = 0, to = addr16_direct_form(src, n, wide, &from);
+
+        if (to) {
+            status = pw_x86_hostexec_step(h, s, wide, to);
+            if (status == PW_OK) s->eip -= (uint32_t)(to - from);   /* it stepped over to bytes */
+            return status;
+        }
+    }
     if (cpuid_form(s, src, n) == PW_OK) {
         h->executed++;
         return PW_OK;
     }
     status = pw_x86_hostexec_plan(s, src, n, &plan);
     if (status == PW_ERR_UNSUPPORTED &&
-        (stack_memory_form(s, src, n) == PW_OK || flags_stack_form(s, src, n) == PW_OK ||
+        (stack_memory_form(s, src, n) == PW_OK || esp_memory_form(s, src, n) == PW_OK ||
+         flags_stack_form(s, src, n) == PW_OK ||
          segment_stack_form(s, src, n) == PW_OK || all_registers_form(s, src, n) == PW_OK ||
          ecx_branch_form(s, src, n) == PW_OK)) {
         h->executed++;

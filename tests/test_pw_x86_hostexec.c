@@ -128,6 +128,35 @@ static void test_integer_forms(void)
     assert(s.gpr[4] == addr(0x8000) && s.eip == 0x1004);
     assert(s.eflags == (0x00200000u | 0x880 | 0x2));        /* OF, SF; ID kept; no TF or IOPL */
 
+    /* 67 64: an MSVC SEH prologue with 16-bit addresses on the TIB, as CLEO
+     * 4's plugins have it: push fs:[0], mov fs:[0], eax/ecx/esp, pop fs:[0].
+     * Each runs as its [disp32] form, and EIP moves by the original length. */
+    reset_state(&s);
+    memcpy(guest + 0x4000, &(uint32_t){0x0031e700u}, 4);   /* fs:[0], the SEH chain */
+    assert(run(&s, (const uint8_t[]){0x67, 0x64, 0xff, 0x36, 0x00, 0x00}, 6) == PW_OK);
+    assert(s.gpr[4] == addr(0x7ffc) && s.eip == 0x1006);
+    assert(!memcmp(guest + 0x7ffc, &(uint32_t){0x0031e700u}, 4));
+    s.gpr[0] = 0x11112222u;
+    assert(run(&s, (const uint8_t[]){0x67, 0x64, 0xa3, 0x00, 0x00}, 5) == PW_OK);
+    assert(s.eip == 0x100b && !memcmp(guest + 0x4000, &(uint32_t){0x11112222u}, 4));
+    s.gpr[1] = 0x33334444u;
+    assert(run(&s, (const uint8_t[]){0x67, 0x64, 0x89, 0x0e, 0x00, 0x00}, 6) == PW_OK);
+    assert(s.eip == 0x1011 && !memcmp(guest + 0x4000, &(uint32_t){0x33334444u}, 4));
+    assert(run(&s, (const uint8_t[]){0x67, 0x64, 0x89, 0x26, 0x00, 0x00}, 6) == PW_OK);
+    assert(s.eip == 0x1017 && !memcmp(guest + 0x4000, &s.gpr[4], 4));
+    assert(run(&s, (const uint8_t[]){0x67, 0x64, 0x8f, 0x06, 0x00, 0x00}, 6) == PW_OK);
+    assert(s.eip == 0x101d && s.gpr[4] == addr(0x8000));
+    assert(!memcmp(guest + 0x4000, &(uint32_t){0x0031e700u}, 4));
+    /* A displacement and an immediate: mov dword fs:[0x18], 0x55. */
+    assert(run(&s, (const uint8_t[]){0x67, 0x64, 0xc7, 0x06, 0x18, 0x00, 0x55, 0, 0, 0}, 10) == PW_OK);
+    assert(s.eip == 0x1027 && !memcmp(guest + 0x4018, &(uint32_t){0x55}, 4));
+    /* mov esp, fs:[0x20] the other way. */
+    memcpy(guest + 0x4020, &(uint32_t){addr(0x7000)}, 4);
+    assert(run(&s, (const uint8_t[]){0x64, 0x8b, 0x25, 0x20, 0, 0, 0}, 7) == PW_OK);
+    assert(s.gpr[4] == addr(0x7000) && s.eip == 0x102e);
+    /* Other 16-bit address modes stay refused: push fs:[bx+si]. */
+    assert(run(&s, (const uint8_t[]){0x67, 0x64, 0xff, 0x30}, 4) == PW_ERR_UNSUPPORTED);
+
     /* 98: cwde, and CF from a memory ADD, merged into the guest flags. */
     reset_state(&s);
     s.gpr[0] = 0x0000ff80;
