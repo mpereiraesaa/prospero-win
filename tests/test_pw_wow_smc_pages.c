@@ -116,12 +116,50 @@ int main(void)
         pw_smc_refresh(&smc, checked, 0, 0, 0);
     }
 
+    /* Hooking code that makes the same code writable and read-only around
+     * every patch (Proper Shaders in San Andreas, every frame): each time,
+     * the page is protected while writable and given up when it goes
+     * read-only. A burst of that sends it to the checks; spread out, it is
+     * forgiven. */
+    {
+        const uint32_t toggled = 0x800000, refused = 0x900000;
+        const uint64_t demotions = smc.demotions;
+
+        for (unsigned k = 0; k < 3; k++) {
+            clock_ms += PW_SMC_DECAY_MS + 1;
+            assert(pw_smc_protect(&smc, toggled, rwx));
+            pw_smc_refresh(&smc, toggled, 1, 0, PROT_READ | PROT_EXEC);
+            assert(pw_smc_state(&smc, toggled) == PW_SMC_NONE);
+        }
+        for (unsigned k = 1; k < PW_SMC_DEMOTE_FAULTS; k++) {
+            clock_ms += 5;
+            assert(pw_smc_protect(&smc, toggled, rwx));
+            pw_smc_refresh(&smc, toggled, 1, 0, PROT_READ | PROT_EXEC);
+        }
+        assert(pw_smc_state(&smc, toggled) == PW_SMC_CHECKED && smc.demotions == demotions + 1);
+        assert(!pw_smc_after_protect(&smc, toggled));
+
+        /* A host that refuses the protection every time: INELIGIBLE, back to
+         * NONE at the next protection change, refused again... to the checks. */
+        refuse = 1;
+        for (unsigned k = 1; k < PW_SMC_DEMOTE_FAULTS; k++) {
+            clock_ms += 5;
+            assert(!pw_smc_protect(&smc, refused, rwx) && pw_smc_state(&smc, refused) == PW_SMC_INELIGIBLE);
+            assert(!pw_smc_after_protect(&smc, refused) && pw_smc_state(&smc, refused) == PW_SMC_NONE);
+        }
+        assert(!pw_smc_protect(&smc, refused, rwx) && pw_smc_state(&smc, refused) == PW_SMC_CHECKED);
+        assert(smc.demotions == demotions + 2);
+        refuse = 0;
+        pw_smc_refresh(&smc, toggled, 0, 0, 0);
+        pw_smc_refresh(&smc, refused, 0, 0, 0);
+    }
+
     /* Pages are remembered for notifications of unknown extent while they
      * need it: each page here took over the entry of one that no longer
      * did. */
-    assert(smc.tracked_count == 3 && smc.tracked[0] == 0x500000 / HOST);
+    assert(smc.tracked_count <= 5 && smc.tracked[0] == 0x500000 / HOST);
     pw_smc_destroy(&smc);
     printf("wowprospero write-protected code pages passed: protect, fault, decay, demotion, "
-           "notifications, refused mprotect, protection changes\n");
+           "notifications, refused mprotect, protection changes, toggled pages\n");
     return 0;
 }

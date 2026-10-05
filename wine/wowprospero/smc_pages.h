@@ -170,6 +170,27 @@ static inline int pw_smc_track(PwSmcPages *smc, uint32_t index)
     return 1;
 }
 
+/* One more strike against a page under the lock: a fault, or a protection
+ * that did not hold (refused, or given up at the next notification). One
+ * strike is forgiven per PW_SMC_DECAY_MS. 1 when the page has had enough
+ * and goes to the checks, which the caller records. */
+static inline int pw_smc_strike(PwSmcPages *smc, PwSmcPage *page)
+{
+    uint64_t now = smc->ops.now_ms();
+    uint32_t elapsed = (uint32_t)now - page->last_ms, forgiven = elapsed / PW_SMC_DECAY_MS;
+
+    page->faults = page->faults > forgiven ? (uint8_t)(page->faults - forgiven) : 0;
+    if (page->faults < 255) page->faults++;
+    page->last_ms = (uint32_t)now;
+    return page->faults >= PW_SMC_DEMOTE_FAULTS;
+}
+
+static inline void pw_smc_demote(PwSmcPages *smc, PwSmcPage *page)
+{
+    __atomic_store_n(&page->state, PW_SMC_CHECKED, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&smc->demotions, 1, __ATOMIC_RELAXED);
+}
+
 /* Write-protect the host page holding address, which qualifies (the caller
  * checked) and whose host protection is prot (PROT_* with PROT_WRITE). 1
  * when it is protected now, or already was; 0 when it may not be, and then
@@ -199,6 +220,8 @@ static inline int pw_smc_protect(PwSmcPages *smc, uint64_t address, int prot)
             __atomic_store_n(&page->state, PW_SMC_PROTECTED, __ATOMIC_RELEASE);
             smc->protects++;
             result = 1;
+        } else if (pw_smc_strike(smc, page)) {
+            pw_smc_demote(smc, page);  /* refused again and again */
         } else {
             __atomic_store_n(&page->state, PW_SMC_INELIGIBLE, __ATOMIC_RELEASE);
         }
@@ -229,8 +252,7 @@ static inline int pw_smc_fault(PwSmcPages *smc, uint64_t address)
 {
     uint32_t index;
     PwSmcPage *page;
-    uint64_t now;
-    uint32_t elapsed, forgiven;
+    int demote;
 
     if (!pw_smc_enabled(smc) || address >= 0x100000000ull) return 0;
     index = pw_smc_index(smc, address);
@@ -244,16 +266,10 @@ static inline int pw_smc_fault(PwSmcPages *smc, uint64_t address)
         pw_smc_unspin(smc);
         return 1;
     }
-    now = smc->ops.now_ms();
-    elapsed = (uint32_t)now - page->last_ms;
-    forgiven = elapsed / PW_SMC_DECAY_MS;
-    page->faults = page->faults > forgiven ? (uint8_t)(page->faults - forgiven) : 0;
-    if (page->faults < 255) page->faults++;
-    page->last_ms = (uint32_t)now;
+    demote = pw_smc_strike(smc, page);
     pw_smc_restore(smc, index);
-    if (page->faults >= PW_SMC_DEMOTE_FAULTS) {
-        __atomic_store_n(&page->state, PW_SMC_CHECKED, __ATOMIC_RELEASE);
-        __atomic_add_fetch(&smc->demotions, 1, __ATOMIC_RELAXED);
+    if (demote) {
+        pw_smc_demote(smc, page);
     } else {
         __atomic_store_n(&page->state, PW_SMC_NONE, __ATOMIC_RELEASE);
     }
@@ -289,6 +305,10 @@ static inline void pw_smc_refresh(PwSmcPages *smc, uint64_t address, int committ
                 pw_smc_restore(smc, index);
                 __atomic_store_n(&page->state, PW_SMC_INELIGIBLE, __ATOMIC_RELEASE);
             }
+        } else if (pw_smc_strike(smc, page)) {
+            /* Protected and given up again and again: hooking code making
+             * the same code writable and read-only around every patch. */
+            pw_smc_demote(smc, page);
         } else {
             __atomic_store_n(&page->state, PW_SMC_NONE, __ATOMIC_RELEASE);
         }
