@@ -959,7 +959,14 @@ video output, so the title hands its own over first. The driver calls
 thread has closed the title's VideoOut (logged as `PW_WINE64 display released
 to vulkan`). From then on the sink passes no more GDI frames to the title,
 and the sink statistics show `display_released`. A game runs in its own
-process, so the release lasts until the game exits.
+process, so the release lasts until the game exits. The callback runs under
+a lock of its own, not the one input and the pad's state go through: the
+main thread posts those while the callback waits for it (the pad every frame
+in `xinput` mode), and with one lock for both it blocked until the callback
+gave up after 5 s. Every Vulkan game in `xinput` mode then started 5.5 s
+late with its first surface refused (`the title kept the video output`,
+`VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`), which DXVK recovered from at its next
+present.
 
 Until Wine installs its own handlers, a fault is reported with its RIP
 (read at ucontext +224) and the ntdll segment it falls in. Once a second

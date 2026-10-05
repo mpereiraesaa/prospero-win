@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
+#define _DEFAULT_SOURCE  /* usleep */
 #include "../wine/ps5/pw_wine_sink.h"
 #include <assert.h>
 #include <pthread.h>
@@ -26,6 +27,46 @@ static int release(void *context)
     return release_status;
 }
 
+/* The title's callback as native/wine64_main.c has it: it asks the main
+ * thread to close the video output and waits, a bounded time, until it has.
+ * Its main thread keeps posting input and the pad's state meanwhile. */
+static int title_request,title_closed,title_calls,title_main_done;
+static int title_release(void *context)
+{
+    (void)context;
+    __atomic_add_fetch(&title_calls,1,__ATOMIC_ACQ_REL);
+    __atomic_store_n(&title_request,1,__ATOMIC_RELEASE);
+    for(int waited=0;waited<2000;waited++) {
+        if(__atomic_load_n(&title_closed,__ATOMIC_ACQUIRE))return 0;
+        usleep(1000);
+    }
+    return -1;
+}
+static void *title_main(void *arg)
+{
+    uint32_t frame[4*3]={0};
+    PwWinePad pad={0};
+    PwWineInput e={PW_WINE_INPUT_KEY,0x20,0,0,1},out;
+    uint32_t left,right;
+    (void)arg;
+    while(!__atomic_load_n(&title_request,__ATOMIC_ACQUIRE))sched_yield();
+    /* A frame of the main loop before it gets to the request: the pad,
+     * keys, rumble, and a GDI frame from a Wine thread. Each of these
+     * waited for the release to give up before the lock was split. */
+    pad.buttons=0x1000;pw_wine_set_pad(&pad);
+    assert(!pw_wine_post_input(&e) && pw_wine_next_input(&out) && out.code==0x20);
+    (void)pw_wine_rumble(&left,&right);
+    assert(pw_wine_present(frame,4,3,16)==0);
+    __atomic_store_n(&title_closed,1,__ATOMIC_RELEASE);
+    __atomic_store_n(&title_main_done,1,__ATOMIC_RELEASE);
+    return NULL;
+}
+static void *driver_release(void *arg)
+{
+    *(int *)arg=pw_wine_release_display();
+    return NULL;
+}
+
 /* Vulkan takes the video output once; frames stop reaching the title. Last
  * in main: the release lasts for the process. */
 static void test_display_release(void)
@@ -43,13 +84,22 @@ static void test_display_release(void)
     assert(release_seen==&context_tag);
     pw_wine_sink_stats(&s);assert(!s.display_released);
     assert(pw_wine_present(frame,4,3,16)==0 && calls==before+2);
-    release_status=0;assert(pw_wine_release_display()==0 && release_calls==2);
+    /* The title's main thread uses the sink while the callback waits for
+     * it, and two surfaces asking at once get one release between them. */
+    pw_wine_set_display_release(title_release,NULL);
+    pthread_t main_thread,drivers[2];
+    int status[2]={7,7};
+    assert(!pthread_create(&main_thread,NULL,title_main,NULL));
+    for(int i=0;i<2;i++)assert(!pthread_create(&drivers[i],NULL,driver_release,&status[i]));
+    for(int i=0;i<2;i++)assert(!pthread_join(drivers[i],NULL));
+    assert(!pthread_join(main_thread,NULL));
+    assert(status[0]==0 && status[1]==0 && title_calls==1 && title_main_done);
     pw_wine_sink_stats(&s);assert(s.display_released);
     /* Frames still reach the title, which shows them while no swapchain
      * presents. */
-    assert(pw_wine_present(frame,4,3,16)==0 && calls==before+3);
+    assert(pw_wine_present(frame,4,3,16)==0 && calls==before+4);
     /* Once released, the title is not asked again. */
-    assert(pw_wine_release_display()==0 && release_calls==2);
+    assert(pw_wine_release_display()==0 && title_calls==1 && release_calls==1);
 }
 
 static int audio_calls,audio_fail;

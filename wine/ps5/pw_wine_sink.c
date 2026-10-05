@@ -11,6 +11,7 @@ static PwWinePresentSink sink;
 static void *sink_context;
 static PwWineDisplayRelease display_release;
 static void *display_context;
+static pthread_mutex_t release_lock=PTHREAD_MUTEX_INITIALIZER;
 static PwWineInput queue[PW_WINE_INPUT_QUEUE];
 static uint32_t head,count;
 static PwWineSinkStats stats;
@@ -55,12 +56,26 @@ void pw_wine_set_display_release(PwWineDisplayRelease release,void *context)
 }
 int pw_wine_release_display(void)
 {
-    int status=0;
-    /* Under the frame lock: no frame is being shown while the title lets go. */
+    PwWineDisplayRelease release;
+    void *context;
+    int status=0,released;
+    /* The title's callback waits for its main thread to close the video
+     * output, and that thread posts input and the pad's state here while it
+     * runs (the pad every frame): the callback must not hold the lock they
+     * take, or the main thread blocks until the title gives up. Releases
+     * are serialised by a lock of their own, so a second caller waits for
+     * the first one's answer. */
+    pthread_mutex_lock(&release_lock);
     pthread_mutex_lock(&lock);
-    if(!stats.display_released && display_release)status=display_release(display_context);
-    if(!status)stats.display_released=1;
+    released=stats.display_released;release=display_release;context=display_context;
     pthread_mutex_unlock(&lock);
+    if(!released && release)status=release(context);
+    if(!status) {
+        pthread_mutex_lock(&lock);
+        stats.display_released=1;
+        pthread_mutex_unlock(&lock);
+    }
+    pthread_mutex_unlock(&release_lock);
     return status;
 }
 int pw_wine_present(const void *bgra,uint32_t width,uint32_t height,uint32_t stride)
