@@ -299,7 +299,16 @@ static inline void pw_smc_refresh(PwSmcPages *smc, uint64_t address, int committ
     pw_smc_enter(smc, &saved);
     switch (page->state) {
     case PW_SMC_PROTECTED:
-        if (qualifies && (prot & PROT_WRITE)) {
+        if (qualifies && (prot & PROT_WRITE) && pw_smc_strike(smc, page)) {
+            /* Protected again and again at notifications that wrote
+             * nothing: hooking code toggling the protection of code it
+             * reads or rewrites unchanged. Give the page its permission
+             * back and leave it to the checks; the caller discards the
+             * translations that trusted it (smc->demotions moved). */
+            page->prot = (uint8_t)prot;
+            pw_smc_restore(smc, index);
+            pw_smc_demote(smc, page);
+        } else if (qualifies && (prot & PROT_WRITE)) {
             page->prot = (uint8_t)prot;
             if (smc->ops.protect((void *)pw_smc_base(smc, index), smc->host_page, prot & ~PROT_WRITE)) {
                 pw_smc_restore(smc, index);

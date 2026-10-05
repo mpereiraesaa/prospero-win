@@ -1492,6 +1492,17 @@ static void smc_refresh( uint64_t address, uint64_t size )
         smc_refresh_page( (uintptr_t)base, 1 );
 }
 
+/* A page a notification sent to the checks (smc_pages.h) gave up its write
+ * protection without a fault: translations that trusted it would not see
+ * a write from now on, so every thread discards its translations, as after
+ * a write fault on it. Rare: once per page. Under flush_lock. */
+static void smc_demotion_flush( uint64_t demotions )
+{
+    if (__atomic_load_n( &smc.demotions, __ATOMIC_ACQUIRE ) == demotions) return;
+    pw_x86_code_pages_clear( &code_pages );
+    __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
+}
+
 /* smc_refresh after a protection change that succeeded, which commits and
  * decommits nothing: a page sent to the checks stays there and one that
  * did not qualify is considered afresh without its pages being queried
@@ -1522,15 +1533,18 @@ static void smc_refresh_known( uint64_t address, uint64_t size )
 static NTSTATUS flush( void *args )
 {
     const struct pw_wow_flush_params *params = args;
+    uint64_t demotions;
 
     __atomic_add_fetch( &protect_generation, 1, __ATOMIC_SEQ_CST );
     while (__atomic_exchange_n( &flush_lock, 1, __ATOMIC_ACQUIRE )) __builtin_ia32_pause();
+    demotions = __atomic_load_n( &smc.demotions, __ATOMIC_ACQUIRE );
     if (!params || !params->size || code_pages_stale( params->address, params->size ))
     {
         pw_x86_code_pages_clear( &code_pages );
         __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
     }
     smc_refresh( params ? params->address : 0, params ? params->size : 0 );
+    smc_demotion_flush( demotions );
     __atomic_store_n( &flush_lock, 0, __ATOMIC_RELEASE );
     return STATUS_SUCCESS;
 }
@@ -1543,15 +1557,18 @@ static NTSTATUS flush( void *args )
 static NTSTATUS protect( void *args )
 {
     const struct pw_wow_protect_params *params = args;
+    uint64_t demotions;
 
     __atomic_add_fetch( &protect_generation, 1, __ATOMIC_SEQ_CST );
     while (__atomic_exchange_n( &flush_lock, 1, __ATOMIC_ACQUIRE )) __builtin_ia32_pause();
+    demotions = __atomic_load_n( &smc.demotions, __ATOMIC_ACQUIRE );
     if (!params->size || code_pages_stale_known( params->address, params->size, params->prot ))
     {
         pw_x86_code_pages_clear( &code_pages );
         __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
     }
     smc_refresh_known( params->address, params->size );
+    smc_demotion_flush( demotions );
     __atomic_store_n( &flush_lock, 0, __ATOMIC_RELEASE );
     return STATUS_SUCCESS;
 }

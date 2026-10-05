@@ -154,12 +154,36 @@ int main(void)
         pw_smc_refresh(&smc, refused, 0, 0, 0);
     }
 
+    /* A protected page whose host page stays writable through every
+     * notification (other guest pages in it are writable) is protected
+     * again each time; a burst of that, with no write ever faulting, gives
+     * it its permission back and sends it to the checks. */
+    {
+        const uint32_t kept = 0xa00000;
+        const uint64_t demotions = smc.demotions;
+        unsigned before;
+
+        clock_ms += PW_SMC_DECAY_MS * 10;
+        assert(pw_smc_protect(&smc, kept, rwx));
+        for (unsigned k = 1; k < PW_SMC_DEMOTE_FAULTS; k++) {
+            before = call_count;
+            pw_smc_refresh(&smc, kept, 1, 1, rwx);
+            assert(pw_smc_state(&smc, kept) == PW_SMC_PROTECTED);
+            assert(call_count == before + 1 && calls[before].prot == (PROT_READ | PROT_EXEC));
+        }
+        before = call_count;
+        pw_smc_refresh(&smc, kept, 1, 1, rwx);
+        assert(pw_smc_state(&smc, kept) == PW_SMC_CHECKED && smc.demotions == demotions + 1);
+        assert(call_count == before + 1 && calls[before].address == kept && calls[before].prot == rwx);
+        pw_smc_refresh(&smc, kept, 0, 0, 0);
+    }
+
     /* Pages are remembered for notifications of unknown extent while they
      * need it: each page here took over the entry of one that no longer
      * did. */
     assert(smc.tracked_count <= 5 && smc.tracked[0] == 0x500000 / HOST);
     pw_smc_destroy(&smc);
     printf("wowprospero write-protected code pages passed: protect, fault, decay, demotion, "
-           "notifications, refused mprotect, protection changes, toggled pages\n");
+           "notifications, refused mprotect, protection changes, toggled pages, kept-writable pages\n");
     return 0;
 }
