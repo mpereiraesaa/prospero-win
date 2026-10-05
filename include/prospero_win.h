@@ -7,7 +7,6 @@
  * <stddef.h>, <stdint.h> and <string.h>: no libc locale, no case-folding
  * helper and no allocator is imported from the platform, so a placeholder
  * or subtly wrong Prospero export cannot reach the loader path.
- * See docs/PORTING_PLAYBOOK.md, principle 1, in the laboratory repository.
  */
 #ifndef PROSPERO_WIN_H
 #define PROSPERO_WIN_H

@@ -3,9 +3,10 @@
 ## Licence
 
 prospero-win is LGPL-2.1-or-later; see `LICENSE` and `LICENSING.md`. Every
-source file carries an SPDX identifier. The vendored `ps5log` client below
-is distributed under the same terms and digest-pinned rather than modified
-implicitly.
+source file carries an SPDX identifier. `native/pw_videoout_ps5.c` also
+includes code adapted from SDL under the zlib licence (see below), and the
+`wine_sync_ordinary` test program and its build script are MIT-licensed, as
+their SPDX lines say.
 
 ## Independently authored
 
@@ -18,7 +19,8 @@ are written for this project. No proprietary SDK file is copied into it.
 
 Wine is LGPL-2.1-or-later, like this project. The patches in `wine/patches`
 apply to the pinned upstream revision at build time. Two modules are derived
-from Wine source and say so in their headers, keeping the original notices:
+from Wine source and say so in their headers, keeping the original copyright
+and licence notices:
 the PE side of the WoW64 CPU backend (`wine/wowprospero/cpu.c`, from
 `dlls/wow64cpu`) and the PS5 audio driver (`wine/wineps5`, whose stream,
 buffer and timing code follows `dlls/wineoss.drv`).
@@ -37,9 +39,17 @@ and its contributors.
 
 ## Reused components
 
-- `native/ps5log/` is the vendored `ps5log/1` client used by the native
-  runtime. It is pinned by SHA-256 in `tools/audit_publication.py`; an
-  intentional update must revise the client and its recorded digests together.
+- `native/ps5log/` is the `ps5log/1` logging client the native runtime uses
+  to stream its log lines to a PC. It was written by prospero-win's author
+  for his own PS5 homebrew tools and is included here under this project's
+  LGPL-2.1-or-later. It is pinned by SHA-256 in `tools/audit_publication.py`;
+  an intentional update must revise the client and its recorded digests
+  together.
+- The pixel-address permutation in `native/pw_videoout_ps5.c`, which turns a
+  linear frame into the tiled layout VideoOut scans out, is adapted from the
+  tilemap code of SDL's PS5 video backend, Copyright (C) 2026 John Törnblom,
+  under the zlib licence. The file keeps that notice in full; the rest of it is
+  this project's own code.
 - The native shell, linker script, CRT and signing tool come from
   [BlackBearReloaded's PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate),
   pinned by commit in `tools/build_native.sh` and fetched at build time.
@@ -47,8 +57,8 @@ and its contributors.
 
 ## Measured platform facts reused
 
-Several design decisions follow limits the laboratory measured on FW 12.02
-for its own ports rather than anything discovered here: the libc heap
+Several design decisions follow limits measured on the console on FW 12.02
+while porting other software, before this project started: the libc heap
 ceiling and the resulting use of anonymous mappings for large allocations,
 the unusability of libc directory listing on the read-only application
 image, the measured support for read-write to read-execute transitions, and

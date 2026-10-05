@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 import unittest
 from pathlib import Path
 import sys

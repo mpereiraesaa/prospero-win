@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Reject broken or escaping local Markdown links in public documentation."""
 
 from __future__ import annotations

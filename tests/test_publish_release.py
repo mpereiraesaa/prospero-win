@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """tools/publish_release.sh with a fake gh: what it refuses to upload, the
 asset's name and checksum, and when it publishes the draft."""
 

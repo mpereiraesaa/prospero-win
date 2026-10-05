@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "ps5log_ps5_net.h"
 
 #include <errno.h>

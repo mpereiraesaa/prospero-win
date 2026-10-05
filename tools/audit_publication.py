@@ -30,13 +30,13 @@ PINNED_SHA256 = {
     "sce_sys/icon0.png":
         "def1c924fcd9f74e4cb8dce2ae66ae2111f0f9c0be99973855d55bfdda1202d0",
     "native/ps5log/ps5log.h":
-        "394af67d0f8b60b3335deb53396e52855ea2daa50ca914a456ea7663f48900c6",
+        "05373177e2c1cd348848014139646e8b35306da673ff5c0a9089c1247eda394f",
     "native/ps5log/ps5log.c":
-        "7e83ad95057279b60b36d59793baabf2eab5726d15f013f44920294d14d83f13",
+        "4ac6dc819ce48bcc4a613f119a53d7cbb5fa7974a77436ccb19b18b4fcf800d2",
     "native/ps5log/ps5log_ps5_net.h":
-        "57b8889c8653af6f7bcb008db637713995f878bfc0848ee04087070868a3c9d9",
+        "90693d535a033991dd201e81ef576eafb0edac55ca7c8e2b329e643b50458637",
     "native/ps5log/ps5log_ps5_net.c":
-        "9a1b8657add0f4d261c36a162145b220d71a9328d330dfcb49829e688e09fc59",
+        "d6ea249349bf2a085efa90adfd55f23f2ec9c10cb3df49bbdb8f26bf62fa37d6",
 }
 GENERATED_ROOTS = {".deps", "build", "dist", "release"}
 FORBIDDEN_PARTS = {"captures", "dumps", "ghidra", "sessions", "win"}

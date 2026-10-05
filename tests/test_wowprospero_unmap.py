@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Execute the CPU backend's real notification code with controlled VM replies."""
 import pathlib
 import os

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Keep public compatibility status independent of numbered project phases."""
 
 from pathlib import Path

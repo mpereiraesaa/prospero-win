@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Fetch the one-shot Lapy helper from the repository's latest GitHub release."""
 import argparse
 import json

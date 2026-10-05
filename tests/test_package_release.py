@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """tools/package_release.sh on fake inputs: the app folder's layout, what is
 left out (the builder's dev.conf, import libraries, PC-only drivers) and what
 the PS5 build overrides."""

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 CC ?= cc
 CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Werror
 BUILD := build/host

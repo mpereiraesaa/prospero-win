@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 #ifndef PS5LOG_PS5_NET_H
 #define PS5LOG_PS5_NET_H
 

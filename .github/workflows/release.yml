@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 name: Release
 
 # Pushing a version tag (v0.1.0) checks that tag and opens a draft release

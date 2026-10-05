@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /*
  * ps5log: single-header TCP/UDP line-stream logger for PS5 homebrew
  * (payloads and native titles). Streams one record per line to a

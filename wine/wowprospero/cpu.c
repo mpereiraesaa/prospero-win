@@ -12,7 +12,25 @@
  * syscall_32to64 and unix_call_32to64 do.
  *
  * Derived from Wine dlls/wow64cpu/cpu.c (LGPL-2.1-or-later), pinned revision
- * 490f6d5dcbb2a5047345b8af88d114bbcaad69a8.
+ * 490f6d5dcbb2a5047345b8af88d114bbcaad69a8, whose notice follows.
+ *
+ * WoW64 CPU support
+ *
+ * Copyright 2021 Alexandre Julliard
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
 #include <emmintrin.h>

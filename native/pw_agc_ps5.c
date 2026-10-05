@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-/* Minimal PS5 AGC DMA presenter.  The packet ordering follows the independently
- * validated FW 12.02 contracts recorded by the homebrew_ps5 laboratory:
+/* Minimal PS5 AGC DMA presenter.  The packet ordering follows the order
+ * measured on the console on FW 12.02:
  * wait-safe -> memory DMA (L2, synchronized) -> SetFlip -> RELEASE_MEM fence. */
 #include "pw_agc_ps5.h"
 #include "pw_agc_submit_lifecycle.h"
