@@ -627,9 +627,14 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   that holds it: scaled with its aspect ratio kept, centred, with black bars
   where the shapes differ (`wsi/videoout: a 1440x960 swapchain presents
   scaled to 1620x1080 at (150, 0) of 1920x1080 framebuffers`). The hardware
-  cursor follows the image there. ps5vk takes only 1920x1080, so with ps5vk
-  a game's desktop should be 1920x1080. When Wine has to create a host swapchain larger than
-  the window it adds `VkSwapchainPresentScalingCreateInfoEXT` in front of
+  cursor follows the image there. This needs PS5_Mesa `9d3cd41` or later
+  (PS5_Vulkan #3); with older builds those sizes were refused, leaked direct
+  memory on every retry and crashed DXVK. On the console, GTA IV switching
+  1920x1080 -> 1280x720 -> 1920x1080 was measured (2026-10-05); 1440x960
+  and a 4K output with a scaled swapchain are not tested on hardware yet.
+  ps5vk takes only 1920x1080, so with ps5vk a game's desktop should be
+  1920x1080. When Wine has to create a host swapchain larger than the
+  window it adds `VkSwapchainPresentScalingCreateInfoEXT` in front of
   the application's structures (patch 0456); dropping them crashed DXVK's
   swapchain in Mesa's WSI.
 - **DLLs.** DXVK's DLLs go beside the game, and its profile sets
@@ -742,7 +747,12 @@ four-colour 1920x1080 pattern for 30 frames.
 
 The pixel, draw and `vkmap` rows ran on PS5_Mesa `cedb774` before the
 scaling change; D3D11 draw x64, D3D9 draw x86 and the probe ran again after
-it. Swapchain sizes other than 1920x1080 and 3840x2160 are untested.
+it. On 2026-10-05, with `libvulkan.prx` from PS5_Mesa `9d3cd41` (SHA-256
+`d2f0a02b…`), Half-Life 2's `+timedemoquit` at 1920x1080 ran at 59.84 fps
+on the unchanged native path, and GTA IV (DXVK 2.6.2) switched display modes
+1920x1080 -> 1280x720 -> 1920x1080 with the 1280x720 swapchain presented
+scaled into 1920x1080 framebuffers, no Buffer Resolution Error and no crash.
+Other scaled sizes are tested only on the host model.
 
 ## Imports a title does not get
 
