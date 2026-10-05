@@ -2036,6 +2036,206 @@ static void test_refused_bit_count_reads(void)
             }
 }
 
+static uint32_t native_xlat(uint32_t eax, uint32_t base)
+{
+    uint64_t before, after;
+    __asm__ volatile("pushfq; popq %2; addr32 xlatb; pushfq; popq %3"
+                     : "+a"(eax), "+b"(base), "=&r"(before), "=&r"(after) : : "memory");
+    assert(!((before ^ after) & 0xcd5));
+    return eax;
+}
+
+/* Each immutable single instruction must publish once and reuse the block.
+ * The old host fallback is an independent oracle for valid FS pushes; native
+ * XLAT checks byte indexing/partial EAX, including a translated FS base. */
+static void main_coverage_form(unsigned kind, unsigned form, unsigned marked)
+{
+    uint8_t code[8]; size_t bytes = 0;
+    if(kind == 0) {
+        code[bytes++] = 0x64; code[bytes++] = 0xff;
+        if(form == 8) { code[bytes++] = 0x35; memset(code+bytes,0,4); bytes += 4; }
+        else if(form == 9) { code[bytes++] = 0x74; code[bytes++] = 0xb3; code[bytes++] = 0x10; }
+        else {
+            code[bytes++] = (uint8_t)(0x70 | form);
+            if(form == 4) code[bytes++] = 0x24;
+            code[bytes++] = 0x23;
+        }
+    } else if(kind == 1) {
+        if(form) code[bytes++] = 0x64;
+        code[bytes++] = 0xd7;
+    } else code[bytes++] = form ? 0xfd : 0xfc;
+    memcpy(guest+CODE,code,bytes); memset(guest+CODE+bytes,0xcc,DATA-CODE-bytes);
+    PwVmBackend vm; PwX86Engine engine; PwX86CacheEntry entries[16];
+    assert(pw_vm_posix_backend(&vm) == PW_OK);
+    assert(pw_x86_engine_init(&engine,&vm,entries,16,16384,1,view,NULL) == PW_OK);
+    assert(pw_x86_engine_set_quantum(&engine,1) == PW_OK);
+    assert(pw_x86_engine_set_counters(&engine,0) == PW_OK);
+    assert(pw_x86_engine_set_flat_memory(&engine,low,low+SPAN) == PW_OK);
+    assert(pw_x86_engine_set_reencode(&engine,1) == PW_OK);
+    assert(pw_x86_engine_set_native_fp(&engine,marked) == PW_OK);
+    assert(pw_x86_engine_set_fault_markers(&engine,marked) == PW_OK);
+    static const unsigned indices[] = {0,1,127,128,255,17,64};
+    for(unsigned i=0;i<7;++i) {
+        PwX86State state,expected; PwX86StepReport report; initial(&state);
+        state.eflags=0x2|0x8d5|(i&1?0x400:0);
+        uint32_t value=0xdead0000u|i;
+        if(kind == 0) {
+            uint32_t address;
+            state.fs_base=0x80;
+            if(form == 8) { state.fs_base=low+DATA+0x23; address=state.fs_base; }
+            else if(form == 9) {
+                state.gpr[3]=low+DATA-0x80; state.gpr[6]=3;
+                address=state.fs_base+state.gpr[3]+state.gpr[6]*4+0x10;
+            } else {
+                if(form != 4) state.gpr[form]=low+DATA;
+                address=state.fs_base+state.gpr[form]+0x23;
+            }
+            memcpy((void *)(uintptr_t)address,&value,4);
+            expected=state; expected.gpr[4]-=4;
+            PwX86State fallback=state;
+            assert(pw_x86_hostexec_step(&hostexec,&fallback,code,bytes) == PW_OK);
+            assert(!memcmp(fallback.gpr,expected.gpr,sizeof(expected.gpr)));
+            assert(fallback.eflags == expected.eflags);
+            memset((void *)(uintptr_t)expected.gpr[4],0x5a,4);
+        } else if(kind == 1) {
+            state.fs_base=form?low:0;
+            state.gpr[3]=(form?0:low)+DATA;
+            state.gpr[0]=0xaabbcc00u|indices[i];
+            guest[DATA+indices[i]]=(uint8_t)(i*29);
+            expected=state;
+            expected.gpr[0]=native_xlat(state.gpr[0],state.gpr[3]+state.fs_base);
+            assert(expected.gpr[0]==((state.gpr[0]&0xffffff00u)|(i*29)));
+        } else {
+            expected=state;
+            expected.eflags=(state.eflags&~0x400u)|(form?0x400:0);
+        }
+        expected.eip += (uint32_t)bytes;
+        assert(pw_x86_engine_step(&engine,&state,&report) == PW_OK);
+        uint64_t host_flags; __asm__ volatile("pushfq; popq %0":"=r"(host_flags));
+        assert(!(host_flags&0x400));
+        pw_x86_engine_fp_sync(&engine,&state);
+        assert(state.eip == expected.eip && state.eflags == expected.eflags);
+        assert(!memcmp(state.gpr,expected.gpr,sizeof(state.gpr)));
+        assert(report.instructions == 1 && report.cache_hit == (i != 0));
+        if(kind == 0) { uint32_t pushed;memcpy(&pushed,(void *)(uintptr_t)state.gpr[4],4);assert(pushed==value); }
+    }
+    assert(engine.reencoded_blocks==1 && engine.compiles==1 && engine.cache.publishes==1);
+    assert(engine.cache.misses==1 && engine.cache.hits==6);
+    assert(pw_x86_engine_destroy(&engine)==PW_OK);
+}
+
+static void test_main_instruction_coverage(void)
+{
+    for(unsigned marked=0;marked<2;++marked) {
+        for(unsigned form=0;form<10;++form) main_coverage_form(0,form,marked);
+        for(unsigned form=0;form<2;++form) {
+            main_coverage_form(1,form,marked);
+            main_coverage_form(2,form,marked);
+        }
+    }
+    /* Both backends preserve CMP flags across the guest-only DF changes. */
+    const uint8_t direction[]={0x39,0xd1,0xfd,0x0f,0x92,0xc0,0xfc,0xc3};
+    compare(direction,sizeof(direction));
+    const uint8_t backward[]={0xfd,0xb9,3,0,0,0,0xf3,0xa4,0xfc,0xc3};
+    compare(backward,sizeof(backward));
+    uint8_t mixed[]={0xbb,0,0,0,0,0xb8,1,0xcc,0xbb,0xaa,
+                     0xd7,0xd7,0x64,0xff,0x33,0x59,0x89,0xc2,0xc3};
+    uint32_t base=low+DATA;memcpy(mixed+1,&base,4);
+    compare(mixed,sizeof(mixed));
+    /* Adding these opcodes must not admit locked/repeated forms or an FS
+     * register push. Incomplete memory operands remain refused as well. */
+    const uint8_t refused[][4]={{0xf0,0xd7},{0xf3,0xd7},{0xf0,0xfc},
+                               {0xf3,0xfd},{0x64,0xff,0xf0},{0x64,0xff},
+                               {0x64,0xff,0x74,0x24}};
+    const unsigned lengths[]={2,2,2,2,3,2,4};
+    PwX86TranslateOptions options={.flat_low=low,.flat_high=low+SPAN,.no_counters=1};
+    uint8_t out[16384];PwX86Block block;
+    for(unsigned i=0;i<sizeof(lengths)/sizeof(lengths[0]);++i) {
+        assert(pw_x86_reencode(refused[i],lengths[i],low+CODE,out,sizeof(out),&block,&options)!=PW_OK);
+        assert(pw_x86_translate_opts(refused[i],lengths[i],low+CODE,out,sizeof(out),&block,&options)!=PW_OK);
+    }
+    /* FS source refusal and stack-destination refusal are both atomic. */
+    for(unsigned destination=0;destination<2;++destination) {
+        const uint8_t code[]={0x64,0xff,0x35,0,0,0,0};
+        memcpy(guest+CODE,code,sizeof(code));memset(guest+CODE+sizeof(code),0xcc,DATA-CODE-sizeof(code));
+        PwVmBackend vm;PwX86Engine engine;PwX86CacheEntry entries[16];
+        assert(pw_vm_posix_backend(&vm)==PW_OK);
+        assert(pw_x86_engine_init(&engine,&vm,entries,16,16384,1,view,NULL)==PW_OK);
+        assert(pw_x86_engine_set_counters(&engine,0)==PW_OK);
+        assert(pw_x86_engine_set_flat_memory(&engine,low,low+SPAN)==PW_OK);
+        assert(pw_x86_engine_set_reencode(&engine,1)==PW_OK);
+        PwX86State state;PwX86StepReport report;initial(&state);
+        state.eflags=0xad7;state.fs_base=destination?low+DATA:low+SPAN-3;
+        if(destination) state.gpr[4]=low+SPAN+1;
+        PwX86State before=state;
+        assert(pw_x86_engine_step(&engine,&state,&report)==PW_ERR_VM);
+        assert(state.eip==before.eip && state.eflags==before.eflags);
+        assert(!memcmp(state.gpr,before.gpr,sizeof(state.gpr)));
+        assert(state.fault_address==low+SPAN-3 && state.fault_width==4 && state.fault_write==destination);
+        assert(pw_x86_engine_destroy(&engine)==PW_OK);
+    }
+    for(unsigned fs=0;fs<2;++fs) {
+        uint8_t code[]={0x64,0xd7};unsigned offset=fs?0:1;
+        memcpy(guest+CODE,code+offset,2-offset);memset(guest+CODE+2-offset,0xcc,DATA-CODE-2+offset);
+        PwVmBackend vm;PwX86Engine engine;PwX86CacheEntry entries[16];
+        assert(pw_vm_posix_backend(&vm)==PW_OK);
+        assert(pw_x86_engine_init(&engine,&vm,entries,16,16384,1,view,NULL)==PW_OK);
+        assert(pw_x86_engine_set_counters(&engine,0)==PW_OK);
+        assert(pw_x86_engine_set_flat_memory(&engine,low,low+SPAN)==PW_OK);
+        assert(pw_x86_engine_set_reencode(&engine,1)==PW_OK);
+        PwX86State state;PwX86StepReport report;initial(&state);
+        state.eflags=0xad7;state.fs_base=fs?low:0;state.gpr[3]=(fs?0:low)+SPAN;state.gpr[0]=0xaabbcc00;
+        PwX86State before=state;
+        assert(pw_x86_engine_step(&engine,&state,&report)==PW_ERR_VM);
+        assert(state.eip==before.eip && state.eflags==before.eflags);
+        assert(!memcmp(state.gpr,before.gpr,sizeof(state.gpr)));
+        assert(state.fault_address==low+SPAN && state.fault_width==1 && !state.fault_write);
+        assert(pw_x86_engine_destroy(&engine)==PW_OK);
+    }
+}
+
+/* A later XOR makes CMP's flags dead on successful execution. A refused read
+ * must still expose those flags, not the incoming state or the later XOR. */
+static void test_main_coverage_cold_flags(void)
+{
+    for(unsigned reencode=0;reencode<2;++reencode)
+        for(unsigned form=0;form<4;++form) {
+            uint8_t code[16]={0x39,0xd1};size_t bytes=2;
+            if(form<2) {
+                const uint8_t push[]={0x64,0xff,0x35,0,0,0,0};
+                memcpy(code+bytes,push,sizeof(push));bytes+=sizeof(push);
+            } else {
+                if(form==3) code[bytes++]=0x64;
+                code[bytes++]=0xd7;
+            }
+            code[bytes++]=0x31;code[bytes++]=0xc0;code[bytes++]=0xc3;
+            memset(guest+CODE,0xcc,DATA-CODE);memcpy(guest+CODE,code,bytes);
+            PwVmBackend vm;PwX86Engine engine;PwX86CacheEntry entries[16];
+            assert(pw_vm_posix_backend(&vm)==PW_OK);
+            assert(pw_x86_engine_init(&engine,&vm,entries,16,16384,1,view,NULL)==PW_OK);
+            assert(pw_x86_engine_set_counters(&engine,0)==PW_OK);
+            assert(pw_x86_engine_set_flat_memory(&engine,low,low+SPAN)==PW_OK);
+            assert(pw_x86_engine_set_reencode(&engine,reencode)==PW_OK);
+            PwX86State state;PwX86StepReport report;initial(&state);
+            state.gpr[1]=1;state.gpr[2]=2;state.gpr[0]=0xaabbcc00;state.eflags=0xed7;
+            state.fs_base=form==0?low+SPAN-3:form==1?low+DATA:form==3?low:0;
+            if(form==1) state.gpr[4]=low+SPAN+1;
+            if(form>=2) state.gpr[3]=(form==3?0:low)+SPAN;
+            PwX86State before=state;
+            assert(pw_x86_engine_step(&engine,&state,&report)==PW_ERR_VM);
+            assert(state.eip==before.eip+2 && state.eflags==0x697);
+            assert(!memcmp(state.gpr,before.gpr,sizeof(state.gpr)));
+            /* The emitter's existing stack-bound exit reports only status;
+             * source guards and the re-encoder also report access metadata. */
+            if(form!=1 || reencode) {
+                assert(state.fault_address==low+SPAN-(form<2?3:0));
+                assert(state.fault_width==(form<2?4:1) && state.fault_write==(form==1));
+            }
+            assert(engine.reencoded_blocks==reencode);
+            assert(pw_x86_engine_destroy(&engine)==PW_OK);
+        }
+}
+
 int main(void)
 {
     guest = mmap(NULL, SPAN, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -2087,6 +2287,8 @@ int main(void)
     test_native_fp_gpr();
     test_native_fp_emitter();
     test_refused_bit_count_reads();
+    test_main_instruction_coverage();
+    test_main_coverage_cold_flags();
     test_fault();
     test_divide();
     test_divide_errors();

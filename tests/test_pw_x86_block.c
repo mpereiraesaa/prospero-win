@@ -1992,6 +1992,83 @@ static void prefixed_padding_tests(void)
     }
 }
 
+static void main_instruction_coverage_tests(void)
+{
+    PwX86State saved=state;
+    const uint32_t table=state.stack_low+0x100;
+    const uint8_t push_fs[]={0x64,0xff,0x35,0,0,0,0};
+    const uint8_t push_esp[]={0x64,0xff,0x74,0x24,0x10};
+    const uint8_t push_sib[]={0x64,0xff,0x74,0xb3,0x10};
+    const uint8_t xlat[]={0xd7},fs_xlat[]={0x64,0xd7};
+    for(unsigned mode=0;mode<4;++mode) {
+        uint32_t value=0xdead1234;
+        state=saved;state.gpr[4]=state.stack_high-0x200;
+        state.fs_base=table;state.eflags=0xad7;
+        memcpy((void *)(uintptr_t)table,&value,4);
+        uint32_t esp=state.gpr[4];
+        assert(run_mode(push_fs,sizeof(push_fs),0x9500,mode&1,mode>>1)==0);
+        assert(state.gpr[4]==esp-4 && state.eflags==0xad7);
+        uint32_t pushed;memcpy(&pushed,(void *)(uintptr_t)state.gpr[4],4);assert(pushed==value);
+        state=saved;state.fs_base=0x20;state.gpr[4]=state.stack_high-0x200;state.eflags=0xad7;
+        esp=state.gpr[4];memcpy((void *)(uintptr_t)(esp+0x30),&value,4);
+        assert(run_mode(push_esp,sizeof(push_esp),0x9510,mode&1,mode>>1)==0);
+        assert(state.gpr[4]==esp-4 && state.eflags==0xad7);
+        memcpy(&pushed,(void *)(uintptr_t)state.gpr[4],4);assert(pushed==value);
+        state=saved;state.fs_base=0x20;state.gpr[3]=table-0x20;state.gpr[6]=3;
+        state.gpr[4]=state.stack_high-0x200;state.eflags=0xad7;
+        memcpy((void *)(uintptr_t)(table+0x1c),&value,4);
+        assert(run_mode(push_sib,sizeof(push_sib),0x9520,mode&1,mode>>1)==0);
+        memcpy(&pushed,(void *)(uintptr_t)state.gpr[4],4);assert(pushed==value && state.eflags==0xad7);
+        for(unsigned fs=0;fs<2;++fs) for(unsigned index=0;index<256;++index) {
+            state=saved;state.fs_base=fs?table:0;state.gpr[3]=fs?0:table;
+            state.gpr[0]=0xaabbcc00u|index;state.eflags=0xad7;
+            uint8_t byte=(uint8_t)(index*17+91);*(uint8_t *)(uintptr_t)(table+index)=byte;
+            assert(run_mode(fs?fs_xlat:xlat,fs?sizeof(fs_xlat):sizeof(xlat),0x9530,mode&1,mode>>1)==0);
+            assert(state.gpr[0]==(0xaabbcc00u|byte) && state.eflags==0xad7);
+        }
+        const uint8_t direction[]={0x39,0xd1,0xfd,0x0f,0x92,0xc0,0xfc};
+        /* Repeated implicit operands must work with real resident registers,
+         * rather than only the allocator's one-instruction bypass. */
+        uint8_t resident[]={0xb8,1,0xcc,0xbb,0xaa,0xbb,0,0,0,0,
+                            0x64,0xd7,0x64,0xd7,0x64,0xff,0x33,0x59,0x89,0xc2};
+        uint32_t base=table-0x20;memcpy(resident+6,&base,4);
+        for(unsigned i=0;i<256;++i) *(uint8_t *)(uintptr_t)(table+i)=(uint8_t)(i*17+91);
+        uint32_t first;memcpy(&first,(void *)(uintptr_t)table,4);
+        state=saved;state.fs_base=0x20;state.gpr[4]=state.stack_high-0x200;state.eflags=0xad7;
+        assert(run_mode(resident,sizeof(resident),0x9538,mode&1,mode>>1)==0);
+        uint32_t result=0xaabbcc00u|(uint8_t)((uint8_t)(17+91)*17+91);
+        assert(state.gpr[0]==result && state.gpr[2]==result && state.gpr[1]==first);
+        assert(state.gpr[3]==base && state.gpr[4]==saved.stack_high-0x200 && state.eflags==0xad7);
+        PwX86Block resident_block;
+        assert(backend.protect(NULL,&code,0,code.bytes,PW_PROT_READ|PW_PROT_WRITE)==PW_OK);
+        assert(pw_x86_translate_ext(resident,sizeof(resident),0x9538,code.write_base,code.bytes,
+                                   &resident_block,mode&1,mode>>1)==PW_OK);
+        if(mode&1) assert((resident_block.entry_contract.resident_mask&9)==9);
+        state=saved;state.gpr[1]=1;state.gpr[2]=2;state.eflags=0xad7;
+        assert(run_mode(direction,sizeof(direction),0x9540,mode&1,mode>>1)==0);
+        assert((state.gpr[0]&255)==1 && state.eflags==0x297);
+        const uint8_t backward[]={0xfd,0xf3,0xa4,0xfc};
+        state=saved;state.gpr[6]=table+2;state.gpr[7]=table+0x82;state.gpr[1]=3;state.eflags=0xad7;
+        memcpy((void *)(uintptr_t)table,"abc",3);
+        assert(run_mode(backward,sizeof(backward),0x9550,mode&1,mode>>1)==0);
+        assert(!memcmp((void *)(uintptr_t)(table+0x80),"abc",3));
+        assert(state.gpr[6]==table-1 && state.gpr[7]==table+0x7f && state.gpr[1]==0 && state.eflags==0xad7);
+        uint64_t host_flags;__asm__ volatile("pushfq;popq %0":"=r"(host_flags));assert(!(host_flags&0x400));
+        /* Invalid source reads preserve all flags and guest registers. */
+        state=saved;state.fs_base=state.stack_high-3;state.gpr[4]=state.stack_high-0x200;state.eflags=0xad7;
+        PwX86State before=state;
+        assert(run_mode(push_fs,sizeof(push_fs),0x9560,mode&1,mode>>1)==-1);
+        assert(state.eip==0x9560 && state.eflags==before.eflags);
+        assert(!memcmp(state.gpr,before.gpr,sizeof(state.gpr)));
+        state=saved;state.gpr[3]=state.stack_high;state.gpr[0]=0xaabbcc00;state.eflags=0xad7;
+        before=state;
+        assert(run_mode(xlat,sizeof(xlat),0x9570,mode&1,mode>>1)==-1);
+        assert(state.eip==0x9570 && state.eflags==before.eflags);
+        assert(!memcmp(state.gpr,before.gpr,sizeof(state.gpr)));
+    }
+    state=saved;
+}
+
 int main(int argc, char **argv)
 {
     assert(pw_vm_posix_backend(&backend)==PW_OK);
@@ -2444,6 +2521,7 @@ int main(int argc, char **argv)
     absolute_tests();
     lock_prefix_tests();
     bit_and_cmov_tests();
+    main_instruction_coverage_tests();
     sse_and_scan_tests();
     optimization_safety_tests();
     push_operand_tests();

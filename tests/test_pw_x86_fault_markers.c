@@ -453,6 +453,38 @@ static void test_fault_table(void)
     assert(!pw_x86_fault_table_path(code, 40, 0));
 }
 
+/* New implicit-address reads must recover the same guest state through an
+ * actual host fault as through the flat guard, including guest DF. */
+static void test_main_instruction_faults(void)
+{
+    uint8_t fs_source[]={0x39,0xd1,0xfd,0x64,0xff,0x35,0x40,0,0,0,0x31,0xc0,0xc3};
+    uint8_t fs_stack[]={0x39,0xd1,0xfd,0xbc,0x20,0,0,0,
+                        0x64,0xff,0x35,0,0,0,0,0x31,0xc0,0xc3};
+    uint32_t address=low+DATA,value=0xdead1234;
+    memcpy(fs_stack+11,&address,4);memcpy(guest+DATA,&value,4);
+    uint8_t xlat[]={0xbb,0x40,0,0,0,0xb8,3,0xcc,0xbb,0xaa,
+                    0x39,0xd1,0xfd,0xd7,0x31,0xc0,0xc3};
+    uint8_t fs_xlat[]={0xbb,0x40,0,0,0,0xb8,3,0xcc,0xbb,0xaa,
+                       0x39,0xd1,0xfd,0x64,0xd7,0x31,0xc0,0xc3};
+    const uint8_t *programs[]={fs_source,fs_stack,xlat,fs_xlat};
+    const size_t sizes[]={sizeof(fs_source),sizeof(fs_stack),sizeof(xlat),sizeof(fs_xlat)};
+    const uint32_t offsets[]={3,8,13,13},addresses[]={0x40,0x1c,0x43,0x43};
+    for(unsigned stack=0;stack<2;++stack) {
+        host_call_stack=stack;
+        for(unsigned i=0;i<4;++i) {
+            compare("FS push/XLAT",programs[i],sizes[i],offsets[i],addresses[i],i==1,-1);
+            Run guarded=run(programs[i],sizes[i],0),marked=run(programs[i],sizes[i],1);
+            assert((guarded.state.eflags&0x400) && (marked.state.eflags&0x400));
+            assert(marked.state.fault_width==(i<2?4:1));
+            if(i==1) assert(marked.state.gpr[4]==0x20);
+            if(i>=2) assert(marked.state.gpr[0]==0xaabbcc03);
+            uint64_t host_flags;__asm__ volatile("pushfq;popq %0":"=r"(host_flags));
+            assert(!(host_flags&0x400));
+        }
+    }
+    host_call_stack=0;
+}
+
 int main(void)
 {
     struct sigaction action;
@@ -497,6 +529,7 @@ int main(void)
     test_multiple_fault_paths();
     test_divide();
     test_high_bytes_and_bit_strings();
+    test_main_instruction_faults();
     printf("fault markers passed: loads, stores, a locked read-modify-write, push and pop faulting "
            "on the null page report the guard's EIP, registers, flags and fault; every copied addressing "
            "and stack form matches the guard; the engine finds each access's path and nothing else; div's divisor load faults like any other, "

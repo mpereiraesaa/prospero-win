@@ -1673,6 +1673,10 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
         if (padding) {
             length = (size_t)padding;
             d->op = 0x90;
+        } else if(op==0xd7) {
+            length=1;can_fault=1;
+        } else if(op==0xfc || op==0xfd) {
+            length=1;
         } else if(op==0x66 && bytes-cursor>=2 && source[cursor+1]==0xf3) {
             if(bytes-cursor<3)DECODE_FAIL(PW_ERR_TRUNCATED);
             if(source[cursor+2]!=0xa5 && source[cursor+2]!=0xab)DECODE_FAIL(PW_ERR_UNSUPPORTED);
@@ -2157,6 +2161,8 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
             if (bytes-cursor < 2) DECODE_FAIL(PW_ERR_TRUNCATED);
             if (source[cursor+1]==0xa1 || source[cursor+1]==0xa3) {
                 length=6;can_fault=1;
+            } else if (source[cursor+1]==0xd7) {
+                length=2;can_fault=1;
             } else if (source[cursor+1]==0xff) {
                 /*
                  * "call dword ptr fs:[disp32]": Wine's *other* syscall stub
@@ -2166,12 +2172,13 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
                  * installs it - the same dispatcher the "mov edx, <thunk>"
                  * stubs reach, so the boundary is identical.
                  */
-                if (bytes-cursor < 7) DECODE_FAIL(PW_ERR_TRUNCATED);
-                if (source[cursor+2] != 0x15) DECODE_FAIL(PW_ERR_UNSUPPORTED);
-                fs_call=1;
-                length=7;
-                can_fault=1;
-                terminal=1;
+                int result=decode_operand(source+cursor+2,bytes-cursor-2,&operand);
+                if(result!=PW_OK)DECODE_FAIL(result);
+                if(operand.mod!=3 && operand.reg==6) {
+                    length=2+operand.bytes;can_fault=1;
+                } else if(source[cursor+2]==0x15) {
+                    fs_call=1;length=7;can_fault=1;terminal=1;
+                } else DECODE_FAIL(PW_ERR_UNSUPPORTED);
             } else if (source[cursor+1]==0x8b || source[cursor+1]==0x89) {
                 /*
                  * FS-prefixed absolute dword operand: "mov r32, fs:[disp32]"
@@ -2296,6 +2303,10 @@ int pw_x86_translate_opts(const uint8_t *source, size_t bytes, uint32_t pc,
         if (op == 0xa0 || op == 0xa1 || op == 0xa2 || op == 0xa3)
             gpr_uses[0]++;
         if (op == 0x6a || op == 0x68 || op == 0xe8) gpr_uses[4] += 2;
+        if (op == 0x64 && source[cursor+1] == 0xff && !fs_call) gpr_uses[4] += 2;
+        if (op == 0xd7 || (op == 0x64 && source[cursor+1] == 0xd7)) {
+            gpr_uses[0]++;gpr_uses[3]++;
+        }
         if (op == 0xc3 || op == 0xc2) gpr_uses[4] += 2;
         if (op == 0xd3 || (double_shift & 1)) gpr_uses[1]++;
         if (string_op) { gpr_uses[1]++; gpr_uses[6]++; gpr_uses[7]++; }
@@ -3448,6 +3459,27 @@ analyze_and_emit:
                 effective_address(&e,&operand,&block->exit_contract);memory_address(&e,1);
                 byte(&e,0xc7);byte(&e,0x00);word(&e,value);
             }
+        } else if(op==0xd7 || (op==0x64 && source[cursor+1]==0xd7)) {
+            /* The byte index is AL, while EBX supplies the table base.
+             * Evaluate the address before overwriting AL; preserve EAX's
+             * upper three bytes and all guest flags. */
+            load_guest_byte_eax(&e,&block->exit_contract,0);
+            load_guest_reg_ecx(&e,&block->exit_contract,3);
+            byte(&e,0x8d);byte(&e,0x04);byte(&e,0x08); /* lea eax,[rax+rcx] */
+            if(op==0x64) {
+                byte(&e,0x03);byte(&e,0x47);byte(&e,offsetof(PwX86State,fs_base));
+            }
+            memory_address_width(&e,0,1);
+            byte(&e,0x0f);byte(&e,0xb6);byte(&e,0x08); /* movzx ecx,byte [rax] */
+            load_guest_reg(&e,&block->exit_contract,0);
+            byte(&e,0x88);byte(&e,0xc8);              /* mov al,cl */
+            store_guest_reg(&e,&block->exit_contract,0);
+        } else if(op==0xfc || op==0xfd) {
+            /* The string helpers read guest DF from state; leave host DF
+             * clear and every arithmetic flag/deferred value unchanged. */
+            byte(&e,0x80);byte(&e,op==0xfd?0x4f:0x67);
+            byte(&e,(uint8_t)(offsetof(PwX86State,eflags)+1));
+            byte(&e,op==0xfd?0x04:0xfb);
         } else if (op == 0x64 || op==0xa0 || op==0xa1 || op==0xa2 ||
                    op==0xa3) {
             if (fs_call) {
@@ -3465,6 +3497,16 @@ analyze_and_emit:
                 push_imm(&e,next,&block->exit_contract);
                 byte(&e,0x89); byte(&e,0x4f);
                 byte(&e,offsetof(PwX86State,eip));
+            } else if(op==0x64 && source[cursor+1]==0xff) {
+                /* FS applies to the source only. Resolve it against the old
+                 * ESP before reserving the ordinary guest stack dword. */
+                effective_address(&e,&operand,&block->exit_contract);
+                byte(&e,0x03);byte(&e,0x47);byte(&e,offsetof(PwX86State,fs_base));
+                memory_address_width(&e,0,4);
+                byte(&e,0x8b);byte(&e,0x08); /* mov ecx,[rax] */
+                stack_address(&e,1,&block->exit_contract);
+                byte(&e,0x89);byte(&e,0x08);
+                store_guest_reg(&e,&block->exit_contract,4);
             } else if (op == 0x64 &&
                 (source[cursor+1]==0x8b || source[cursor+1]==0x89)) {
                 const unsigned reg=(unsigned)((source[cursor+2]>>3)&7u);

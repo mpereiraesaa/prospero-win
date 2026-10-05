@@ -181,7 +181,7 @@ static void ea_lea(Out *o, unsigned dst, const Ea *e)
 typedef enum Kind {
     K_RM = 1, K_PLAIN, K_INCDEC, K_MOVIMM, K_XCHGA, K_BSWAP, K_NOP, K_LEA,
     K_PUSH, K_PUSHIMM, K_PUSHRM, K_POP, K_LEAVE, K_CALL, K_CALLRM, K_RET,
-    K_JMP, K_JMPRM, K_JCC, K_STR, K_DIV, K_BITS,
+    K_JMP, K_JMPRM, K_JCC, K_STR, K_DIV, K_BITS, K_XLAT, K_DF,
 } Kind;
 enum { REG8 = 1, REG32, EXT };      /* what the ModRM reg field names */
 enum { RM8 = 1, RMW, RMRAW };       /* what a register-form rm names (RMRAW: xmm, mm, st, as is) */
@@ -327,6 +327,10 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
             in->kind = K_PLAIN;
             if ((op & 7) == 4) IMM(1); else IMM(z);
         }
+    } else if (op == 0xd7) {
+        in->kind = K_XLAT; in->width = 1; in->use = ALL_FLAGS;
+    } else if (op == 0xfc || op == 0xfd) {
+        in->kind = K_DF; in->reg = op == 0xfd; in->use = ALL_FLAGS;
     } else if (op >= 0x40 && op <= 0x4f) {
         in->kind = K_INCDEC; in->reg = op & 7; in->def = 0x8d4;
     } else if (op >= 0x50 && op <= 0x5f) {
@@ -649,7 +653,9 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
     if (in->rep && !rep_ok) return 0;
     in->len = (uint8_t)i;
     /* fs only on a memory operand; lock only on a read-modify-write of one. */
-    if (in->fs && !((in->kind == K_RM || in->kind == K_DIV || in->kind == K_BITS) && in->mod != 3)) return 0;
+    if (in->fs && !((in->kind == K_RM || in->kind == K_DIV || in->kind == K_BITS ||
+                        in->kind == K_PUSHRM) && in->mod != 3) && in->kind != K_XLAT) return 0;
+    if (in->fs && in->kind == K_PUSHRM) in->use = ALL_FLAGS;
     if (in->lock && !lockable(in)) return 0;
     return encodable(in);
 }
@@ -744,6 +750,18 @@ static void guard_r11(Ctx *c, unsigned width, unsigned write, unsigned keep)
     cold->pc = c->here;
     cold->width = (uint8_t)width; cold->write = (uint8_t)write; cold->saved = (uint8_t)keep;
     if (keep) restore_flags(o);
+}
+
+/* Guard a synthesized address (XLAT); the existing bit-string path has
+ * already applied its signed offset and keeps calling guard_r11 directly. */
+static void guard_address(Ctx *c, unsigned fs, unsigned width, unsigned write, unsigned keep)
+{
+    Out *o = &c->o;
+    if (fs) {
+        load_state(o, R9, offsetof(PwX86State, fs_base));
+        b(o, 0x47); b(o, 0x8d); b(o, 0x1c); b(o, 0x0b); /* lea r11d, [r11+r9] */
+    }
+    guard_r11(c, width, write, keep);
 }
 
 /* r11 = the guest address of e, with the guest's fs base when fs is set. */
@@ -907,7 +925,7 @@ static void load_r10(Out *o) { b(o, 0x45); b(o, 0x8b); b(o, 0x13); }
 static void operand_r10(Ctx *c, const Inst *in, unsigned keep)
 {
     if (in->mod == 3) { rr(&c->o, 0x89, 0, R10, host_of[in->rm]); return; }
-    guard(c, &in->ea, 4, 0, keep);
+    guard_fs(c, &in->ea, in->fs, 4, 0, keep);
     load_r10(&c->o);
 }
 
@@ -1222,7 +1240,7 @@ static const uint8_t df_set[256] = {
 
 /* A string instruction as the host's: rdi holds the state and edi is r13,
  * so the two swap around it, and a 0x67 prefix makes it use esi, edi and
- * ecx, the guest's own. Re-encoded code never changes DF, so the guest's is
+ * ecx, the guest's own. Guest DF is stored in state, so the guest's is
  * PwX86State.eflags': std before it when set (found without flags through
  * df_set and jrcxz, the count kept in r9), cld after it, since the host
  * runs with DF clear. A fault outside the guest range inside it is not
@@ -1618,6 +1636,7 @@ static int can_fault(const Inst *in)
     case K_PUSH: case K_PUSHIMM: case K_PUSHRM: case K_POP: case K_LEAVE:
     case K_CALL: case K_CALLRM: case K_RET: return 1;
     case K_JMPRM: return in->mod != 3;
+    case K_XLAT: return 1;
     default: return 0;
     }
 }
@@ -1758,6 +1777,20 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
         case K_PUSHRM:
             operand_r10(&c, in, keep);
             emit_push(&c, R10, 0, keep);
+            break;
+        case K_XLAT:
+            b(o, 0x44); b(o, 0x0f); b(o, 0xb6); b(o, 0xd0); /* movzx r10d, al */
+            b(o, 0x46); b(o, 0x8d); b(o, 0x1c); b(o, 0x13); /* lea r11d,[rbx+r10] */
+            guard_address(&c, in->fs, 1, 0, 1);
+            b(o, 0x41); b(o, 0x8a); b(o, 0x03);            /* mov al,[r11] */
+            break;
+        case K_DF:
+            /* Change only guest DF; host DF remains clear for the C ABI. */
+            save_flags(o);
+            b(o, 0x80); b(o, in->reg ? 0x4f : 0x67);
+            b(o, (uint8_t)(offsetof(PwX86State, eflags) + 1));
+            b(o, in->reg ? 0x04 : 0xfb);
+            restore_flags(o);
             break;
         case K_POP: {
             const Ea top = { 4, -1, 0, 0 };
