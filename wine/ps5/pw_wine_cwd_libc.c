@@ -15,7 +15,11 @@
  * (pw_wine_cwd.h), and the calls that create a file (open() and openat()
  * with O_CREAT, fopen() to write or append) read the link table of its
  * directory first; link() is EPERM and statfs() ENOSYS, as fstatfs() is in
- * pw_wine_compat. */
+ * pw_wine_compat.
+ *
+ * The calls that can add, remove or rename a name count a change once the
+ * kernel call returns, and pw_cwd_scan_directory() lists directories for
+ * Wine's lookups of names that are not found; see pw_wine_cwd.h. */
 #include "pw_wine_cwd.h"
 #include <dirent.h>
 #include <errno.h>
@@ -163,12 +167,20 @@ static int save_table(const char *link)
     parent_of(link, directory);
     if ((size = pw_cwd_links_format(directory, text, sizeof(text))) < 0) return -1;
     table_of(directory, table, sizeof(table));
-    if (!size) return __real_unlink(table) && errno != ENOENT ? -1 : 0;
+    if (!size) {
+        status = __real_unlink(table) && errno != ENOENT ? -1 : 0;
+        pw_cwd_changed();
+        return status;
+    }
     snprintf(next, sizeof(next), "%s.new", table);
-    if ((fd = __real_open(next, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) return -1;
+    fd = __real_open(next, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    pw_cwd_changed();
+    if (fd < 0) return -1;
     status = write(fd, text, (size_t)size) == size ? 0 : -1;
     if (__real_close(fd)) status = -1;
-    return status ? -1 : __real_rename(next, table);
+    if (!status) status = __real_rename(next, table);
+    pw_cwd_changed();
+    return status;
 }
 
 /* lstat() of a virtual link: its directory's device, owner and times. */
@@ -289,6 +301,28 @@ static int open_null_copy(int flags)
     return fd;
 }
 
+/* An open that may create its file counts a change only when it did, so a
+ * file opened again and again to append a line drops no listing. Without
+ * O_EXCL the file is opened as it is first, then created exclusively, and
+ * one that appears in between is opened again. Anything else (O_EXCL asked
+ * for, another refusal, a name that keeps changing) makes the call as asked
+ * and counts it when it succeeds. */
+static int open_counting(const char *full, int flags, mode_t mode)
+{
+    int fd = -1, tries;
+
+    if (!(flags & O_CREAT)) return __real_open(full, flags);
+    for (tries = 0; !(flags & O_EXCL) && tries < 4; tries++) {
+        if ((fd = __real_open(full, flags & ~O_CREAT)) >= 0) return fd;
+        if (errno != ENOENT) break;
+        if ((fd = __real_open(full, flags | O_EXCL, mode)) >= 0) break;
+        if (errno != EEXIST) break;
+    }
+    if (fd < 0 && (fd = __real_open(full, flags, mode)) < 0) return fd;
+    pw_cwd_changed();
+    return fd;
+}
+
 static int open_resolved(struct resolved *r, int flags, mode_t mode)
 {
     int fd;
@@ -298,7 +332,7 @@ static int open_resolved(struct resolved *r, int flags, mode_t mode)
         return fd;
     }
     if ((flags & O_CREAT) && load_parent_table(r)) return -1;
-    while ((fd = __real_open(r->full, flags, mode)) < 0 && reload(r)) {}
+    while ((fd = open_counting(r->full, flags, mode)) < 0 && reload(r)) {}
     if (fd >= 0) pw_cwd_track(fd, r->full);
     return fd;
 }
@@ -341,6 +375,7 @@ FILE *__wrap_fopen(const char *path, const char *mode)
     if (resolve(&r, path, 1)) return NULL;
     if (mode && strpbrk(mode, "wa") && load_parent_table(&r)) return NULL;
     while (!(file = __real_fopen(r.full, mode)) && reload(&r)) {}
+    if (mode && strpbrk(mode, "wa")) pw_cwd_changed();
     return file;
 }
 
@@ -392,6 +427,7 @@ static int mkdir_resolved(struct resolved *r, mode_t mode)
     int result;
 
     while ((result = __real_mkdir(r->full, mode)) && reload(r)) {}
+    pw_cwd_changed();
     return result;
 }
 
@@ -412,6 +448,7 @@ static int rmdir_resolved(struct resolved *r)
     int result;
 
     while ((result = __real_rmdir(r->full)) && reload(r)) {}
+    pw_cwd_changed();
     return result;
 }
 
@@ -428,6 +465,7 @@ static int unlink_resolved(struct resolved *r)
             return save_table(folded);
         }
     } while ((result = __real_unlink(r->full)) && reload(r));
+    pw_cwd_changed();
     return result;
 }
 
@@ -456,6 +494,7 @@ static int rename_resolved(struct resolved *from, struct resolved *to)
     int result;
 
     while ((result = __real_rename(from->full, to->full)) && (reload(from) | reload(to))) {}
+    pw_cwd_changed();
     return result;
 }
 
@@ -589,5 +628,80 @@ DIR *__wrap_opendir(const char *path)
 
     if (resolve(&r, path, 1)) return NULL;
     while (!(result = __real_opendir(r.full)) && reload(&r)) {}
+    return result;
+}
+
+/* The names of the directory r names, read whole: NUL-terminated in a
+ * buffer the caller frees. 0, or -1 with errno. */
+static int read_names(const struct resolved *r, char **names, size_t *bytes, size_t *count)
+{
+    struct dirent *entry;
+    size_t size = 4096;
+    DIR *dir;
+    int fd, saved;
+
+    *bytes = *count = 0;
+    if ((fd = __real_open(r->full, O_RDONLY)) < 0) return -1;
+    if (!(dir = fdopendir(fd))) {
+        saved = errno;
+        __real_close(fd);
+        errno = saved;
+        return -1;
+    }
+    if (!(*names = malloc(size))) {
+        closedir(dir);
+        errno = ENOMEM;
+        return -1;
+    }
+    while ((entry = readdir(dir))) {
+        size_t length = strlen(entry->d_name) + 1;
+
+        if (*bytes + length > size) {
+            char *bigger;
+
+            while (*bytes + length > size) size *= 2;
+            if (!(bigger = realloc(*names, size))) {
+                free(*names);
+                closedir(dir);
+                errno = ENOMEM;
+                return -1;
+            }
+            *names = bigger;
+        }
+        memcpy(*names + *bytes, entry->d_name, length);
+        *bytes += length;
+        ++*count;
+    }
+    closedir(dir);
+    return 0;
+}
+
+int pw_cwd_scan_directory(int dirfd, const char *path, pw_cwd_visit visit, void *context,
+                          unsigned int *flags)
+{
+    /* Read first: a change counted after this may be missing from the names. */
+    unsigned long changes_before = pw_cwd_changes();
+    char folded[PW_CWD_PATH_MAX], *names, *name;
+    struct resolved r;
+    struct stat st;
+    size_t bytes, count, i;
+    int result = 0, reparse_names = 0;
+
+    *flags = 0;
+    if (resolve_at(&r, dirfd, path, 1) || stat_resolved(&r, &st)) return -1;
+    if (!S_ISDIR(st.st_mode)) { errno = ENOTDIR; return -1; }
+    if (pw_cwd_fold(r.full, folded, sizeof(folded))) return -1;
+    load_table(folded);
+    if (!pw_cwd_listing_visit(&st, changes_before, visit, context, &result, &reparse_names)) {
+        if (read_names(&r, &names, &bytes, &count)) return -1;
+        for (i = 0, name = names; i < count; i++, name += strlen(name) + 1) {
+            reparse_names |= name[0] && name[strlen(name) - 1] == '?';
+            if (!result) result = visit(name, context);
+        }
+        pw_cwd_listing_store(&st, changes_before, names, bytes, count);
+        free(names);
+    }
+    if (!result && !reparse_names && !pw_cwd_links_end_with(folded, '?'))
+        *flags |= PW_CWD_NO_REPARSE_NAMES;
     return result;
 }

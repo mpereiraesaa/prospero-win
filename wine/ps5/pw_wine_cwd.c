@@ -399,3 +399,183 @@ int pw_cwd_links_parse(const char *directory, const char *text, size_t length)
     }
     return added;
 }
+
+int pw_cwd_links_end_with(const char *directory, char c)
+{
+    size_t i, length = strlen(directory);
+    int found = 0;
+
+    pthread_rwlock_rdlock(&cwd_lock);
+    for (i = 0; i < link_count && !found; i++) {
+        const char *path = links[i].path;
+        size_t path_length = strlen(path);
+
+        found = parent_length(path) == length && !strncmp(path, directory, length) &&
+                path[path_length - 1] == c;
+    }
+    pthread_rwlock_unlock(&cwd_lock);
+    return found;
+}
+
+/* The count of name changes: this module's own until another module's is
+ * shared with it. */
+static unsigned long own_changes;
+static unsigned long *changes = &own_changes;
+
+unsigned long *pw_cwd_changes_counter(void)
+{
+    return __atomic_load_n(&changes, __ATOMIC_ACQUIRE);
+}
+
+void pw_cwd_share_changes(unsigned long *counter)
+{
+    if (!counter) return;
+    __atomic_store_n(&changes, counter, __ATOMIC_RELEASE);
+    /* whatever the other module kept was read before these calls counted there */
+    pw_cwd_changed();
+}
+
+unsigned long pw_cwd_changes(void)
+{
+    return __atomic_load_n(pw_cwd_changes_counter(), __ATOMIC_ACQUIRE);
+}
+
+void pw_cwd_changed(void)
+{
+    __atomic_add_fetch(pw_cwd_changes_counter(), 1, __ATOMIC_ACQ_REL);
+}
+
+/* Kept listings: names NUL-terminated, in readdir() order. */
+struct listing {
+    dev_t dev;
+    ino_t ino;
+    struct timespec mtime, ctime;
+    unsigned long changes, used;
+    char *names;
+    size_t bytes, count;
+    int reparse_names;
+};
+static pthread_rwlock_t listing_lock = PTHREAD_RWLOCK_INITIALIZER;
+static struct listing listings[PW_CWD_MAX_LISTINGS];
+static int listings_on;
+static unsigned long listing_clock;
+static struct pw_cwd_listing_stats stats;
+
+static void count(unsigned long *counter)
+{
+    __atomic_add_fetch(counter, 1, __ATOMIC_RELAXED);
+}
+
+static int same_time(const struct timespec *a, const struct timespec *b)
+{
+    return a->tv_sec == b->tv_sec && a->tv_nsec == b->tv_nsec;
+}
+
+void pw_cwd_listings_enable(int enable)
+{
+    char *old[PW_CWD_MAX_LISTINGS];
+    size_t i;
+
+    pthread_rwlock_wrlock(&listing_lock);
+    __atomic_store_n(&listings_on, !!enable, __ATOMIC_RELEASE);
+    for (i = 0; i < PW_CWD_MAX_LISTINGS; i++) {
+        old[i] = enable ? NULL : listings[i].names;
+        if (!enable) memset(&listings[i], 0, sizeof(listings[i]));
+    }
+    pthread_rwlock_unlock(&listing_lock);
+    for (i = 0; i < PW_CWD_MAX_LISTINGS; i++) free(old[i]);
+}
+
+int pw_cwd_listing_visit(const struct stat *dir, unsigned long changes_before, pw_cwd_visit visit,
+                         void *context, int *result, int *reparse_names)
+{
+    struct listing *found = NULL;
+    size_t i;
+
+    count(&stats.scans);
+    if (!__atomic_load_n(&listings_on, __ATOMIC_ACQUIRE)) {
+        count(&stats.reads);
+        return 0;
+    }
+    pthread_rwlock_rdlock(&listing_lock);
+    for (i = 0; i < PW_CWD_MAX_LISTINGS && !found; i++) {
+        struct listing *l = &listings[i];
+
+        if (l->names && l->dev == dir->st_dev && l->ino == dir->st_ino) found = l;
+    }
+    /* Read before anything that has changed since, and from the same
+     * directory as far as its times tell. */
+    if (found && (found->changes != changes_before || !same_time(&found->mtime, &dir->st_mtim) ||
+                  !same_time(&found->ctime, &dir->st_ctim)))
+        found = NULL;
+    if (found) {
+        const char *name = found->names;
+
+        /* readers share the lock: the stamp is the one field they write */
+        __atomic_store_n(&found->used, __atomic_add_fetch(&listing_clock, 1, __ATOMIC_RELAXED),
+                         __ATOMIC_RELAXED);
+        *result = 0;
+        for (i = 0; i < found->count && !*result; i++, name += strlen(name) + 1)
+            *result = visit(name, context);
+        *reparse_names = found->reparse_names;
+        count(&stats.hits);
+    }
+    pthread_rwlock_unlock(&listing_lock);
+    if (!found) count(&stats.reads);
+    return found != NULL;
+}
+
+void pw_cwd_listing_store(const struct stat *dir, unsigned long changes_before, const char *names,
+                          size_t bytes, size_t count_of_names)
+{
+    struct listing *slot = NULL, *oldest = NULL;
+    char *copy, *old = NULL;
+    const char *name = names;
+    int reparse_names = 0;
+    size_t i;
+
+    if (!__atomic_load_n(&listings_on, __ATOMIC_ACQUIRE) || bytes > PW_CWD_LISTING_BYTES) return;
+    if (!(copy = malloc(bytes ? bytes : 1))) return;
+    memcpy(copy, names, bytes);
+    for (i = 0; i < count_of_names; i++, name += strlen(name) + 1)
+        reparse_names |= name[0] && name[strlen(name) - 1] == '?';
+    pthread_rwlock_wrlock(&listing_lock);
+    if (!listings_on) {        /* turned off meanwhile */
+        pthread_rwlock_unlock(&listing_lock);
+        free(copy);
+        return;
+    }
+    for (i = 0; i < PW_CWD_MAX_LISTINGS && !slot; i++) {
+        struct listing *l = &listings[i];
+
+        if (!l->names || (l->dev == dir->st_dev && l->ino == dir->st_ino)) slot = l;
+        else if (!oldest || l->used < oldest->used) oldest = l;
+    }
+    if (!slot) {
+        slot = oldest;
+        count(&stats.evictions);
+    }
+    old = slot->names;
+    slot->dev = dir->st_dev;
+    slot->ino = dir->st_ino;
+    slot->mtime = dir->st_mtim;
+    slot->ctime = dir->st_ctim;
+    slot->changes = changes_before;
+    slot->used = __atomic_add_fetch(&listing_clock, 1, __ATOMIC_RELAXED);
+    slot->names = copy;
+    slot->bytes = bytes;
+    slot->count = count_of_names;
+    slot->reparse_names = reparse_names;
+    pthread_rwlock_unlock(&listing_lock);
+    count(&stats.stores);
+    free(old);
+}
+
+void pw_cwd_listing_stats(struct pw_cwd_listing_stats *out)
+{
+    out->scans = __atomic_load_n(&stats.scans, __ATOMIC_RELAXED);
+    out->hits = __atomic_load_n(&stats.hits, __ATOMIC_RELAXED);
+    out->reads = __atomic_load_n(&stats.reads, __ATOMIC_RELAXED);
+    out->stores = __atomic_load_n(&stats.stores, __ATOMIC_RELAXED);
+    out->evictions = __atomic_load_n(&stats.evictions, __ATOMIC_RELAXED);
+}
