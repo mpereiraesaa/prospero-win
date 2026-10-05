@@ -381,6 +381,52 @@ def check_console_user(root: Path) -> None:
     assert not (console / REMOTE_PREFIX / "drive_c/users/prospero/AppData").exists()
 
 
+def check_pull_home_links(root: Path) -> None:
+    """A pull never writes through Wine's links into the PC's home: the
+    folder becomes a real one in the prefix, as it is on the console."""
+    library, console, fast = new_game(root, "home-links")
+    prefix = library / "prefixes/game"
+    home = root / "home-links/home"
+    settings = "GTA San Andreas User Files/gta_sa.set"
+    (home / "Documents" / settings).parent.mkdir(parents=True)
+    (home / "Documents" / settings).write_bytes(b"PC settings")
+    documents = prefix / "drive_c/users/prospero/Documents"
+    os.symlink(str(home / "Documents"), documents)
+    remote = DirRemote(console)
+    assert pw_prefix.main(["push", "game", *fast], remote) == 0
+    remote_documents = console / REMOTE_PREFIX / "drive_c/users/prospero/Documents"
+    assert remote_documents.is_dir() and not any(remote_documents.iterdir())
+    # The game saves its settings on the console, and they are pulled.
+    (remote_documents / settings).parent.mkdir()
+    (remote_documents / settings).write_bytes(b"console settings")
+    with contextlib.redirect_stdout(io.StringIO()) as output:
+        assert pw_prefix.main(["pull", "game", *fast], remote) == 0
+    assert "drive_c/users/prospero/Documents linked out of the prefix" in output.getvalue()
+    assert (home / "Documents" / settings).read_bytes() == b"PC settings"
+    assert sorted(path.name for path in home.rglob("*")) == ["Documents", "GTA San Andreas User Files",
+                                                             "gta_sa.set"]
+    assert not documents.is_symlink() and documents.is_dir()
+    assert (documents / settings).read_bytes() == b"console settings"
+    assert manifest(library)[f"drive_c/users/prospero/Documents/{settings}"][0] == len(b"console settings")
+    # Links inside the prefix still round-trip, and the next push sends nothing new.
+    assert os.readlink(prefix / "dosdevices/c:") == "../drive_c"
+    remote.writes.clear()
+    assert pw_prefix.main(["push", "game", *fast], remote) == 0
+    assert not [w for w in remote.writes if "/drive_c/" in w]
+    assert (console / REMOTE_PREFIX / "dosdevices/.pw-symlinks").read_text() == "c:\t../drive_c\nz:\t/\n"
+    # A file that would still land outside the prefix, through z:, is refused.
+    escape = root / "home-links/escape"
+    key = f"dosdevices/z:/{escape.relative_to('/')}/file"
+    (console / REMOTE_PREFIX / key).parent.mkdir(parents=True)
+    (console / REMOTE_PREFIX / key).write_bytes(b"x")
+    with contextlib.redirect_stderr(io.StringIO()) as errors, contextlib.redirect_stdout(io.StringIO()):
+        assert pw_prefix.main(["pull", "game", *fast], remote) == 1
+    assert f"outside the prefix through a link: {key}" in errors.getvalue()
+    assert not escape.exists()
+    assert os.readlink(prefix / "dosdevices/z:") == "/"
+    assert key not in manifest(library)
+
+
 def check_ftp_without_self() -> None:
     """Connecting asks ftpsrv to stop converting SELF containers; a server
     without that command (zftpd answers 500) is used as it is."""
@@ -497,6 +543,7 @@ def main() -> int:
         check_trust_size(root)
         check_ps5upload(root)
         check_console_user(root)
+        check_pull_home_links(root)
     check_ftp_without_self()
     print("pw_prefix passed")
     return 0

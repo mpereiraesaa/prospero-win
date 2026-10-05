@@ -25,7 +25,9 @@ A title cannot make symbolic links, so prospero-win keeps them per directory
 in a .pw-symlinks table (NAME<TAB>TARGET lines, wine/ps5/pw_wine_cwd.h). A
 push writes each directory's links inside the prefix there (dosdevices' c:
 and z:), and links that leave the prefix (Wine's Desktop or Documents into
-the PC's home) become empty directories.
+the PC's home) become empty directories. A pull never writes through such
+a link: it replaces the link with a real directory inside the prefix, as on
+the console, and refuses a file that would still land outside the prefix.
 
 --transport ps5upload sends the game's files through ps5upload's payload
 (github.com/phantomptr/ps5upload) instead of FTP, using its
@@ -250,6 +252,13 @@ def file_entry(key: str, path: Path) -> list:
     return reader.entry()
 
 
+def link_inside(link: Path, target: str, root: Path) -> bool:
+    """Whether push keeps link in a .pw-symlinks table rather than making it
+    an empty directory: z:'s "/" and links that stay inside the prefix."""
+    return target == "/" or (not target.startswith("/") and
+                             (link.parent / target).resolve().is_relative_to(root))
+
+
 def local_tree(prefix: Path) -> tuple[dict[str, Path], set[str], dict[str, dict[str, str]]]:
     """The prefix's files, directories and per-directory link tables."""
     files, dirs, links = {}, {""}, {}
@@ -265,9 +274,7 @@ def local_tree(prefix: Path) -> tuple[dict[str, Path], set[str], dict[str, dict[
                 target = os.readlink(entry.path)
                 if target.startswith("/dev"):
                     continue    # serial and parallel ports: nothing on a console
-                inside = target == "/" or (not target.startswith("/") and
-                                           (Path(entry.path).parent / target).resolve().is_relative_to(root))
-                if inside:
+                if link_inside(Path(entry.path), target, root):
                     links.setdefault(relative, {})[entry.name] = target
                 else:
                     dirs.add(key)   # a link out of the prefix: an empty directory
@@ -530,6 +537,29 @@ class Sync:
                 found[key] = size
         return found
 
+    def local_path(self, key: str) -> Path | None:
+        """Where a pulled file goes, never outside the prefix. A directory on
+        the way that is a link out of it (Wine's Documents into the PC's
+        home) is a real directory on the console: it becomes one here too,
+        so the file lands in the prefix and the PC's home is left alone.
+        None when the path still leads out of the prefix (through z:)."""
+        root = self.prefix.resolve()
+        current = self.prefix
+        *parents, name = key.split("/")
+        for part in parents:
+            current = current / part
+            if current.is_symlink():
+                target = os.readlink(current)
+                if not link_inside(current, target, root):
+                    log(f"{current.relative_to(self.prefix)} linked out of the prefix, to {target}: "
+                        "made a folder in the prefix instead, as on the console")
+                    current.unlink()
+                    current.mkdir()
+        local = current / name
+        if not local.parent.resolve().is_relative_to(root):
+            return None
+        return local
+
     def fetch(self, key: str, local: Path) -> tuple[list, bool]:
         """Brings one console file to local if it differs; its entry, and whether it did."""
         target = f"{self.remote_prefix}/{key}"
@@ -539,6 +569,8 @@ class Sync:
             if local.is_file() and file_entry(key, local)[1] == entry[1]:
                 return entry, False
             local.parent.mkdir(parents=True, exist_ok=True)
+            if local.is_symlink():
+                local.unlink()  # the console's file, not what the link points to
             local.write_bytes(to_pc(key, data))
             return entry, True
         partial = self.manifest_path.with_name(f"{self.slug}.pull")
@@ -567,9 +599,12 @@ class Sync:
             raise SyncError(f"the console has no {self.remote_prefix}")
         known = (self.manifest or {}).get("files", {})
         remote = self.walk_remote()
-        pulled, fetched = {}, 0
+        pulled, fetched, refused = {}, 0, []
         for key, size in sorted(remote.items()):
-            local = self.prefix / key
+            local = self.local_path(key)
+            if local is None:
+                refused.append(key)
+                continue
             if key in known and known[key][0] == size and key not in REGISTRY and local.is_file():
                 pulled[key] = known[key]
                 continue
@@ -577,6 +612,9 @@ class Sync:
             fetched += changed
         self.save(pulled)
         log(f"pulled {self.slug}: {fetched} of {len(remote)} files changed on the console")
+        if refused:
+            raise SyncError(f"not pulled, as they would be written outside the prefix through a link: "
+                            f"{', '.join(refused)}")
 
     def status(self) -> None:
         known = (self.manifest or {}).get("files", {})

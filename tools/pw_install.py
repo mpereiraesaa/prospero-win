@@ -235,6 +235,25 @@ class Installer:
             os.unlink(reg.name)
 
     @staticmethod
+    def unlink_home_folders(prefix: Path) -> None:
+        """wineboot links the prefix's Desktop, Documents, Downloads, Music,
+        Pictures and Videos to the PC user's own folders. The console has
+        real folders there, and what a game saves in them belongs to the
+        prefix, not the PC's home: each link out of the prefix becomes an
+        empty folder."""
+        users = prefix / "drive_c" / "users"
+        root = prefix.resolve()
+        for user in sorted(users.iterdir()) if users.is_dir() else ():
+            if user.is_symlink() or not user.is_dir():
+                continue
+            for entry in sorted(user.iterdir()):
+                if entry.is_symlink() and not entry.resolve().is_relative_to(root):
+                    target = os.readlink(entry)
+                    entry.unlink()
+                    entry.mkdir()
+                    log(f"{entry.relative_to(prefix)}: an empty folder in the prefix instead of a link to {target}")
+
+    @staticmethod
     def reg_value(value, kind: str) -> str:
         if kind == "REG_SZ":
             return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -260,6 +279,7 @@ class Installer:
             if not task.get("install_mono"):
                 env["WINEDLLOVERRIDES"] += ";mscoree="
             self.run([self.wine, "wineboot", "--init"], env)
+            self.unlink_home_folders(Path(env["WINEPREFIX"]))
         elif name == "wineexec":
             executable = self.path(str(task["executable"]))
             if not executable.is_absolute():
@@ -482,6 +502,8 @@ class Installer:
             self.directive(step)
         if not (self.gamedir / "system.reg").is_file():
             raise InstallError("no prefix was created: the script needs a create_prefix task")
+        # Again, in case a later step ran wineboot and linked them back.
+        self.unlink_home_folders(self.gamedir)
         dxvk_dlls = self.install_dxvk()
         profile = self.library / "profiles" / f"{self.slug}.profile"
         profile.parent.mkdir(parents=True, exist_ok=True)

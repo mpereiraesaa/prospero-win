@@ -26,7 +26,12 @@ echo "wine $* | prefix=$WINEPREFIX | overrides=$WINEDLLOVERRIDES | user=$USER" >
 case "$1" in
 wineboot)
     mkdir -p "$WINEPREFIX/drive_c/windows/system32" "$WINEPREFIX/drive_c/windows/syswow64"
-    echo WINE REGISTRY > "$WINEPREFIX/system.reg"; echo WINE REGISTRY > "$WINEPREFIX/user.reg" ;;
+    echo WINE REGISTRY > "$WINEPREFIX/system.reg"; echo WINE REGISTRY > "$WINEPREFIX/user.reg"
+    # As the real one does: the user's folders link to the PC's home.
+    mkdir -p "$WINEPREFIX/drive_c/users/$USER" "$WINEPREFIX/dosdevices"
+    ln -sfn ../drive_c "$WINEPREFIX/dosdevices/c:"
+    ln -sfn "$FAKE_HOME" "$WINEPREFIX/drive_c/users/$USER/Desktop"
+    ln -sfn "$FAKE_HOME/Documents" "$WINEPREFIX/drive_c/users/$USER/Documents" ;;
 regedit) cat "$3" >> "$WINEPREFIX/user.reg" ;;
 *) [ -f "$1.sh" ] && sh "$1.sh" "$@"; exit "${FAKE_EXIT:-0}" ;;
 esac
@@ -103,6 +108,10 @@ def main() -> int:
         (root / "wine" / "wineserver").chmod(0o755)
         log = root / "calls.log"
         os.environ["FAKE_LOG"] = str(log)
+        home = root / "home"
+        (home / "Documents").mkdir(parents=True)
+        (home / "Documents/mine.txt").write_text("the PC user's")
+        os.environ["FAKE_HOME"] = str(home)
         setup = root / "setup.exe"
         setup.write_bytes(pe(32))
         # The "installer" writes the game into the prefix, as a real one would.
@@ -131,6 +140,13 @@ def main() -> int:
         assert "wine wineboot --init" in calls and ";mshtml=" in calls and ";mscoree=" in calls
         assert "ddraw=n" in calls and "winemenubuilder.exe=d" in calls
         assert "user=prospero" in calls
+        # The user's folders are real, empty folders in the prefix, as on the
+        # console; links inside the prefix stay, and the PC's home is untouched.
+        for folder in ("Desktop", "Documents"):
+            user_folder = prefix / "drive_c/users/prospero" / folder
+            assert user_folder.is_dir() and not user_folder.is_symlink() and not any(user_folder.iterdir())
+        assert os.readlink(prefix / "dosdevices/c:") == "../drive_c"
+        assert sorted(path.name for path in home.rglob("*")) == ["Documents", "mine.txt"]
         assert (prefix / "installer-args").read_text().split()[1:] == ["/S", "/LANG=es"]
         registry = (prefix / "user.reg").read_text()
         assert '"reswidth"=dword:00000a00' in registry

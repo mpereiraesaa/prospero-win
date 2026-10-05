@@ -22,6 +22,11 @@ It prints the path of its `wine` when it's done. Installs run as the user
 `prospero`, as the PS5 app does, so the prefix's user folder is
 `C:\users\prospero` on both.
 
+Normally Wine points a new prefix's Desktop, Documents, Downloads, Music,
+Pictures and Videos at the same folders in your own home folder. The
+installer replaces them with empty folders inside the prefix, so the game's
+saves and settings stay in the prefix and never mix with your own files.
+
 ## Installing a game: Warcraft III as the example
 
 Each game has a recipe in
@@ -133,6 +138,10 @@ python3 tools/pw_prefix.py pull warcraft-iii-reign-of-chaos --library ~/prospero
 python3 tools/pw_prefix.py status warcraft-iii-reign-of-chaos --library ~/prospero-library --host <PS5 IP>
 ```
 
+A pull only writes inside the game's prefix in your library. It never
+changes files in your home folder, even if the game keeps its saves in
+Documents (see Symbolic links, below).
+
 A push refuses to overwrite a PS5 prefix that changed since your last sync,
 so you don't lose saves by accident. `--force` overrides that when you really
 mean it.
@@ -242,6 +251,13 @@ the executable, its arguments and its working folder.
   - links inside the prefix (the `c:` and `z:` drives) are written there;
   - links pointing outside it (Wine's Desktop and Documents into your home
     folder) become empty folders.
+
+  A pull never writes through a link into your home folder. If an older
+  prefix still has Wine's links, the pull turns each one it needs into a
+  real folder inside the prefix, just like on the PS5, and puts the game's
+  files there. Your own folder and its files are left as they are. If a file
+  would still end up outside the prefix, the pull skips it, names it and
+  reports an error.
 - **The one registry difference:** the PS5 can't run 32-bit code directly, so
   the prefix's WoW64 CPU setting
   (`HKLM\Software\Microsoft\Wow64\x86`) names prospero-win's translator
