@@ -252,7 +252,18 @@ reports it and puts the console back as it was.
   each as a press and a release, through the same path as a USB keyboard.
 - **The saved log.** Every run is saved on the console in
   `/data/prospero-win/logs` (see [Getting a log](GETTING_STARTED.md#getting-a-log)),
-  so the result can be read afterwards without a PC listening.
+  so the retained result can be read afterwards without a PC listening.
+  The console keeps only the latest two 1 MiB chunks of each session. For a
+  long or noisy run, start `pw_gameplay_run.py` before gameplay: it accumulates
+  records during polling and saves them with `--save`, including chunks that
+  have since rotated away. Records are deduplicated by sequence within the
+  same session identity; partial lines wait for a later poll, and raw fault
+  records are retained. A capture over 64 MiB is refused rather than trimmed.
+  Polling interruptions or rotation faster than polling can still lose data.
+  The summary reports the retained time span and internal sequence gaps;
+  a gap-free tail alone does not prove that the beginning was captured.
+  Compare only matching gameplay windows actually present in both logs;
+  the general FPS summary does not select a fixed benchmark window.
 
 ### Running one
 

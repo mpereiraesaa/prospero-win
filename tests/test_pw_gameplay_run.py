@@ -134,6 +134,71 @@ assert "fps after loading: average 56.0, minimum 48.0, at 59 or more 2/3" in sum
 assert "fps after loading: none (never 20 or more)" in run.summarize(VULKAN.split("\n", 1)[0])
 assert "fps: no PW_GL or Wine fps records (it never presented, or ran without --fps)" in run.summarize("")
 
+# Successive FTP snapshots keep the beginning after more than two chunks
+# rotate away, without double-counting overlap or admitting a partial record.
+header = GAME.split("\n", 1)[0]
+capture = run.SessionCapture(header)
+rows = GAME.splitlines(keepends=True)[1:]
+capture.add((header + "\n" + "".join(rows[:4]) + rows[4][:20]).encode())
+assert len(capture.records) == 4 and not capture.finished
+capture.add((header + "\n" + "".join(rows[2:8])).encode())
+capture.add((header + "\n" + "".join(rows[6:])).encode())
+assert capture.text() == GAME and capture.finished
+capture.add((header.replace("pid=7", "pid=8") + "\n" + rows[0]).encode())
+assert capture.text() == GAME  # a stale previous chunk belongs to another run
+raw_fault = "PW_WINE64 fault signal=0x000000000000000b\n"
+capture.add((header + "\n" + raw_fault).encode())
+capture.add((header + "\n" + raw_fault).encode())
+assert capture.text().count(raw_fault) == 1
+try:
+    capture.add((header + "\n" + rows[0].replace("profile id=cs16", "profile id=other")).encode())
+    raise AssertionError("conflicting record accepted")
+except SystemExit as stop:
+    assert "conflicting records" in str(stop)
+bounded = run.SessionCapture(header)
+bounded.bytes = 64 * 1024 * 1024  # exercise admission without allocating 64 MiB
+try:
+    bounded.add((header + "\n" + rows[0]).encode())
+    raise AssertionError("capture budget ignored")
+except SystemExit as stop:
+    assert "exceeded 64 MiB" in str(stop)
+assert "0 missing between records" in "\n".join(run.summarize(GAME))
+assert "1 missing between records" in "\n".join(run.summarize(GAME.replace(rows[4], "")))
+
+class RotatingConsole(Console):
+    """Advance an active game on each poll; only two chunks remain on disk."""
+
+    def read(self, path):
+        if path.endswith("logs/next.txt"):
+            self.polls += 1
+            if self.polls >= 2:
+                # Start at a process-wide sequence other than one, as real
+                # launcher/game sessions do. Finish on the fourth snapshot.
+                stage = min(self.polls - 2, 3)
+                chunks = [[row.replace(f"seq={n} ", f"seq={n + 90} ")
+                           for n, row in enumerate(rows, 1)][a:b]
+                          for a, b in [(0, 3), (3, 6), (6, 8), (8, 10)]]
+                (self.root / "logs/session-3.log").write_text(header + "\n" + "".join(chunks[stage]))
+                if stage:
+                    (self.root / "logs/session-3.previous.log").write_text(header + "\n" + "".join(chunks[stage - 1]))
+                (self.root / "logs/next.txt").write_text("4\n")
+            return (self.root / "logs/next.txt").read_bytes()
+        return super().read(path)
+
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory) / "console"
+    library(root)
+    saved = Path(directory) / "saved"
+    console = RotatingConsole(root)
+    code, output = main(console, "--save", str(saved))
+    assert code == 0, output
+    collected = (saved / "counter-strike-16-1790000000.log").read_text()
+    assert len(run.re.findall(r"(?m)^REC seq=", collected)) == 10
+    assert "seq=91 " in collected and "seq=100 " in collected
+    assert "fps after loading: average 55.0" in output and "0 missing between records" in output
+    assert "seq=91 " not in (root / "logs/session-3.previous.log").read_text()
+    assert not (root / "pw_script_keys").exists()
+
 for bad in ("noequals", "/abs=x", "a/../b=x"):
     try:
         run.parse_append(bad)

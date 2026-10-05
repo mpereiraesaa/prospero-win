@@ -25,8 +25,9 @@ waits for it, and puts everything back:
 - --runtime installs another build of the translator (wowprospero.prx)
   in the app's folder (--app) for the run, to compare it with the one the
   app has;
-- when the run's saved session (logs/session-N.log, with profile=SLUG)
-  ends, it is copied to --save and summarized: frame rate (PW_GL, or
+- the run's saved session (logs/session-N.log, with profile=SLUG) is
+  accumulated while it runs, before old chunks rotate away. When it
+  ends, the collected records are copied to --save and summarized: frame rate (PW_GL, or
   Wine's fps channel), the keys sent, timing lines, the CPU time each
   busy thread spent in translated code (pw_exec_cpu.py) and how the
   session ended. --fetch copies other files from the library, such as the
@@ -215,6 +216,57 @@ def session_header(text: str) -> dict[str, str]:
     return dict(field.split("=", 1) for field in first.split()[1:] if "=" in field)
 
 
+class SessionCapture:
+    """Deduplicate complete records from successive snapshots of one session.
+
+    Sequence numbers are process-wide, so the first number need not be one.
+    Matching the entire repeated header keeps reused slots and stale previous
+    chunks out. Raw emergency records have no sequence but must be retained.
+    """
+
+    def __init__(self, header: str):
+        self.header = header
+        self.records: dict[int, str] = {}
+        self.raw: dict[str, None] = {}
+        self.bytes = len(header.encode()) + 1
+        self.finished = False
+
+    def add(self, data: bytes | None) -> None:
+        if not data:
+            return
+        text = data.decode("utf-8", "replace")
+        header, separator, body = text.partition("\n")
+        if not separator or header != self.header:
+            return
+        # A file being written may end halfway through a record. Its completed
+        # version will be picked up on a later poll, not counted twice.
+        for line in body.splitlines(keepends=True):
+            if not line.endswith("\n"):
+                continue
+            match = re.match(r"REC seq=(\d+) t=", line)
+            if match:
+                sequence = int(match[1])
+                if sequence in self.records:
+                    if self.records[sequence] != line:
+                        raise SystemExit("pw_gameplay_run: conflicting records for one session sequence")
+                    continue
+                self.records[sequence] = line
+                if re.search(r" PW_WINE64 session_end reason=\S+\n$", line):
+                    self.finished = True
+            else:
+                if line in self.raw:
+                    continue
+                self.raw[line] = None
+            self.bytes += len(line.encode())
+            # Bound host memory even if a debug channel floods an unattended
+            # run. Refuse an incomplete benchmark rather than silently trim it.
+            if self.bytes > 64 * 1024 * 1024:
+                raise SystemExit("pw_gameplay_run: session capture exceeded 64 MiB; reduce debug output")
+
+    def text(self) -> str:
+        return self.header + "\n" + "".join(self.records[n] for n in sorted(self.records)) + "".join(self.raw)
+
+
 def summarize(text: str) -> list[str]:
     """The run's frame rate, keys, timing and ending, from a saved session."""
     fps = [float(value) for value in re.findall(r"PW_GL frames=\d+ fps=([0-9.]+)", text)]
@@ -230,6 +282,14 @@ def summarize(text: str) -> list[str]:
     ending = re.findall(r"session_end reason=(\S+)", text)
     macro = re.search(r"PW_WINE64 script input status=(\S+) events=(\d+) bad_line=(\d+)", text)
     lines = []
+    records = re.findall(r"(?m)^REC seq=(\d+) t=([0-9.]+) ", text)
+    coverage = []
+    if records:
+        numbers = sorted({int(n) for n, _ in records})
+        missing = sum(b - a - 1 for a, b in zip(numbers, numbers[1:]))
+        stamps = [float(t) for _, t in records]
+        coverage.append(f"capture: {len(numbers)} sequenced records, {max(stamps) - min(stamps):.1f} s retained, "
+                        f"{missing} missing between records; beginning coverage is not inferred")
     if macro:
         done = replayed[-1][0] if replayed else "0"
         synced = "synced" if "PW_WINE64 script input synced" in text else "never synced"
@@ -260,6 +320,7 @@ def summarize(text: str) -> list[str]:
     else:
         lines.append("fps: no PW_GL or Wine fps records (it never presented, or ran without --fps)")
     lines += [f"timing: {line}" for line in timing[-3:]]
+    lines += coverage
     threads = estimates(text)
     if threads:
         lines.append("translated CPU: " + "; ".join(describe(thread) for thread in busiest(threads, 3)))
@@ -395,14 +456,26 @@ class Run:
     def wait(self, first: int) -> str | None:
         """The text of the first finished session of SLUG from index first on."""
         deadline = time.monotonic() + self.args.wait
+        captures: dict[int, SessionCapture] = {}
         while time.monotonic() < deadline:
             current = self.next_session()
             index = first
             while index != current:
-                text = (self.read(f"logs/session-{index}.log") or b"").decode("utf-8", "replace")
-                if session_header(text).get("profile") == self.profile_id and "session_end reason=" in text:
-                    previous = self.read(f"logs/session-{index}.previous.log")
-                    return (previous.decode("utf-8", "replace") if previous else "") + text
+                data = self.read(f"logs/session-{index}.log")
+                text = (data or b"").decode("utf-8", "replace")
+                if session_header(text).get("profile") == self.profile_id and "\n" in text:
+                    header = text.split("\n", 1)[0]
+                    capture = captures.get(index)
+                    if capture is None or capture.header != header:
+                        capture = captures[index] = SessionCapture(header)
+                    numbers = re.findall(rb"(?m)^REC seq=(\d+) t=", data or b"")
+                    # The previous chunk is needed only at the first snapshot
+                    # or after rotation has left a gap ahead of collected data.
+                    if not capture.records or (numbers and int(numbers[0]) > max(capture.records) + 1):
+                        capture.add(self.read(f"logs/session-{index}.previous.log"))
+                    capture.add(data)
+                    if capture.finished:
+                        return capture.text()
                 index = (index + 1) % SESSIONS
             time.sleep(self.args.poll)
         return None
