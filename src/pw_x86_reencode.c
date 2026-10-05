@@ -334,6 +334,12 @@ static int decode(const uint8_t *s, size_t avail, uint32_t pc, Inst *in, unsigne
         in->kind = K_XLAT; in->width = 1; in->use = ALL_FLAGS;
     } else if (op == 0xfc || op == 0xfd) {
         in->kind = K_DF; in->reg = op == 0xfd; in->use = ALL_FLAGS;
+    } else if (op == 0xf5 || op == 0xf8 || op == 0xf9) {
+        /* cmc, clc, stc: the host's own on the guest's CF. San Andreas's
+         * plugins set or clear CF in every hook stub, which ended a block
+         * and sent the instruction to the host fallback each time. */
+        in->kind = K_PLAIN; in->def = CF;
+        if (op == 0xf5) in->use = CF;
     } else if (op >= 0x40 && op <= 0x4f) {
         in->kind = K_INCDEC; in->reg = op & 7; in->def = 0x8d4;
     } else if (op >= 0x50 && op <= 0x5f) {

@@ -71,6 +71,7 @@ typedef struct Run {
     int status;
     uint64_t reencoded, chain_slots, stale;
     unsigned steps, verified;
+    unsigned host_steps;  /* instructions run by the host fallback */
 } Run;
 
 static unsigned unbounded;  /* pw_x86_engine_set_unbounded_chains for run() */
@@ -166,6 +167,7 @@ static Run execute(PwX86Engine *engine, const uint8_t *code, size_t bytes)
     current = engine;
     r.status = PW_OK;
     r.steps = 0;
+    r.host_steps = 0;
     for (unsigned i = 0; i < 100000 && r.state.eip != 0xdead0000u; i++, r.steps++) {
         r.status = pw_x86_engine_step(engine, &r.state, &step);
         if (r.status == PW_ERR_UNSUPPORTED && hostexec_fallback) {
@@ -173,7 +175,10 @@ static Run execute(PwX86Engine *engine, const uint8_t *code, size_t bytes)
             const uint8_t *at = (const uint8_t *)(uintptr_t)r.state.eip;
             pw_x86_commit_canonical_flags(&r.state);
             pw_x86_engine_fp_sync(engine, &r.state);
-            if ((r.status = pw_x86_hostexec_step(&hostexec, &r.state, at, 15)) == PW_OK) continue;
+            if ((r.status = pw_x86_hostexec_step(&hostexec, &r.state, at, 15)) == PW_OK) {
+                r.host_steps++;
+                continue;
+            }
         }
         if (r.status != PW_OK) break;
     }
@@ -2630,6 +2635,58 @@ static void test_flags_and_all_registers(void)
     }
 }
 
+/* cmc, clc and stc in re-encoded blocks: the plugins San Andreas loads set
+ * or clear CF in every hook stub, and each one used to end its block and run
+ * on the host. Against the emitter (which still hands them to the host) and
+ * as wowprospero runs them, with CF read back by adc, sbb, setc and a
+ * conditional jump, and the other flags left as the compare set them. */
+static void test_carry_flag_ops(void)
+{
+    static const uint8_t code[] = {
+        0xf9,                               /* stc */
+        0x83, 0xd0, 0x00,                   /* adc eax, 0: +1 */
+        0xf8,                               /* clc */
+        0x83, 0xd1, 0x00,                   /* adc ecx, 0: +0 */
+        0xf5,                               /* cmc: CF 0 -> 1 */
+        0x83, 0xda, 0x00,                   /* sbb edx, 0: -1 */
+        0x39, 0xc0,                         /* cmp eax, eax: ZF, no CF */
+        0xf9,                               /* stc: CF, ZF kept */
+        0x0f, 0x92, 0xc3,                   /* setc bl */
+        0x0f, 0x94, 0xc7,                   /* setz bh */
+        0x66, 0xf5,                         /* cmc with an operand-size prefix */
+        0x72, 0x01,                         /* jc +1 (not taken) */
+        0x45,                               /* inc ebp */
+        0x39, 0xd1,                         /* cmp ecx, edx */
+        0xf5,                               /* cmc on a compare's CF */
+        0x0f, 0x92, 0xc2,                   /* setc dl */
+        0x2e, 0xf8,                         /* clc behind a cs override */
+        0x0f, 0x92, 0xc6,                   /* setc dh */
+        0xc3,
+    };
+    /* A lock, rep or fs prefix still refuses them, as it did before. */
+    static const uint8_t refused[][2] = { { 0xf0, 0xf9 }, { 0xf3, 0xf8 }, { 0xf2, 0xf5 }, { 0x64, 0xf9 } };
+    PwX86TranslateOptions options = { .flat_low = low, .flat_high = low + SPAN, .no_counters = 1 };
+    uint8_t out[16384];
+    PwX86Block block;
+    Run emitter, production;
+
+    hostexec_fallback = 1;
+    compare(code, sizeof(code));
+    emitter = run(code, sizeof(code), 0);
+    production = run_production(code, sizeof(code));
+    hostexec_fallback = 0;
+    assert(emitter.host_steps == 7);         /* the emitter leaves all seven to the host */
+    assert(production.host_steps == 0);      /* the re-encoder takes them in its blocks */
+    assert(production.state.gpr[0] == 0x11111111u + 1);
+    assert(production.state.gpr[1] == 0x22222222u);
+    assert(production.state.gpr[3] == ((0x44444444u & 0xffff0000u) | 0x0101u));
+    assert(production.state.gpr[5] == 0x66666666u + 1);
+    for (unsigned i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        assert(pw_x86_reencode(refused[i], 2, low + CODE, out, sizeof(out), &block, &options) != PW_OK);
+    }
+    assert(pw_x86_reencode(code, 1, low + CODE, out, sizeof(out), &block, &options) == PW_OK);
+}
+
 int main(void)
 {
     guest = mmap(NULL, SPAN, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -2684,6 +2741,7 @@ int main(void)
     test_main_instruction_coverage();
     test_main_coverage_cold_flags();
     test_flags_and_all_registers();
+    test_carry_flag_ops();
     test_fault();
     test_divide();
     test_divide_errors();
@@ -2696,7 +2754,7 @@ int main(void)
     test_bit_string_oracle();
     printf("reencode passed: options, register remapping, xchg, atomics and segments, memory operands, flags across links, "
            "stack and calls, emitter hand-over, indirect targets, pinned returns, unbounded chains, call stack, superblocks, predicted calls, strings, native FP, fault state, "
-           "div and idiv in every form with their divide errors, ah-bh beside memory, bit strings in reach and at the guard's edges, "
+           "div and idiv in every form with their divide errors, cmc clc stc, ah-bh beside memory, bit strings in reach and at the guard's edges, "
            "pushfd, popfd, pushad and popad against the processor, against the emitter and the host\n");
     return 0;
 }
