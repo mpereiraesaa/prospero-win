@@ -1,9 +1,10 @@
 # Image-view file descriptor lifetime
 
-Status: experimental. Patch 0870 is default off; patch 0880 proposes a
-default-on selection alongside the shared mutex backend. Native/sanitizer
-checks, complete SDK server builds and ordinary console application comparisons pass. Broader
-section-lifetime and debugger behavior still needs real Wine coverage.
+Status: experimental. Patch 0880 selects 0870's image-view cleanup by default
+alongside the shared mutex backend, following console acceptance of the
+combined runtime pair. Native/sanitizer checks, complete SDK builds and
+ordinary console comparisons pass. Broader section-lifetime and debugger
+behavior still needs real Wine coverage.
 
 The 600-second fixed-route console capture records 68 image descriptor
 releases, 22/22 replay steps and no recorded file-limit error. The regular
@@ -19,6 +20,18 @@ the lower absolute result than earlier ~59.8 runs affects all three arms.
 The module comparison does not show a timing regression. These measurements
 use the accepted NTDLL and the image-FD server candidate; they are not a
 shared-mutex performance comparison or evidence of the 58/50 FPS goal.
+
+The later combined default-on pair passes the ordinary image-section PE
+fixture on both reference and candidate modules: six cases and 147 checks,
+with Wine-exit. The fixture checks later views from a live section, retained
+views after section closure, independent section/view lifetimes, file sharing
+until the final view closes, and unchanged data/anonymous mappings. The
+combined pair also passes the mutex fixture, HL2, load and 600-second city
+checks reported by the console owner. That city capture averages 53.1
+approximate FPS with a 45.4 sampled minimum in the 200–440-second window,
+reports no file-limit error and retains the 94.7-second load proxy. It includes
+other runtime and translator changes, so it does not isolate this option's
+performance. See [the combined acceptance receipt](SHARED_MUTEX_BACKEND.md).
 
 Wine retains an FD object for each nonremovable image view. That object
 also carries file sharing restrictions, its inode, names and the reserved
@@ -53,8 +66,10 @@ Already attached debuggers prevent release. If a debugger attaches after
 release, its image event has no file handle for that metadata-only view.
 The image name and information remain available. The patch deliberately
 does not reopen by filename: rename, unlink or replacement could make the
-path refer to another file. This observable limitation needs console and
-debugger review before enabling the option by default.
+path refer to another file. This observable limitation remains in the
+accepted console default. Disable the option when later debugger attachment
+requires the original image-file handle; the ordinary fixture does not
+validate that debugger workflow.
 
 Select `WINE_PS5_IMAGE_VIEW_FD_RELEASE=1`, or place exactly `1` with an
 optional final newline in the prefix-local `pw_image_view_fd_release`.
@@ -62,8 +77,9 @@ An explicit environment value overrides the file. With 0880, an absent
 setting in a valid prefix defaults on. An explicit `0` disables cleanup;
 malformed settings, read errors, other open errors and an unavailable prefix
 directory keep it off. The setting is read once and preserves `errno`;
-non-PS5 builds always retain existing behavior. Matching-pair HL2, load and
-600-second gameplay gates are pending for the combined default-on revision.
+non-PS5 builds always retain existing behavior. The combined default-on
+revision was accepted and merged after the console checks recorded above.
+Later revisions still require their own matching-pair comparisons.
 
 `python3 tests/test_wine_image_view_fds.py` compiles the actual patched
 selection, release, census, mapping destruction, reuse and debugger-file

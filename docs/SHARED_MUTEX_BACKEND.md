@@ -1,15 +1,15 @@
 # Shared mutex backend
 
 Status: experimental Unix client/server backend implemented, build-tested
-and measured on the console. Patch 0880 proposes default-on selection for
-compatible direct-call modules; its new revision still needs console gates.
+and measured on the console. Patch 0880 selects it by default for compatible
+direct-call modules after console acceptance of the combined runtime pair.
 Patch 0810 supplies server authority/lifetime hooks; 0820 adds the native ABI,
 client cache and the original default-off switch. Native fixtures and SDK
 pair builds pass. The original matching pair has completed ordinary 480-second and
 600-second console runs. The ordinary 32-bit Wine fixture passes on the
 default pair and on the candidate pair with the switch off and on. Broader
-asynchronous thread/signal contracts remain unproven. Default-on selection
-is a separate proposal and requires matching-revision console validation.
+asynchronous thread/signal contracts remain unproven; the ordinary fixtures
+and gameplay runs do not establish those contracts.
 
 The performance target remains the full fixed GTA IV route at 1920×1080,
 60 Hz, profiling off, average at least 58 FPS and minimum at least 50 FPS,
@@ -55,6 +55,30 @@ loading operation. The console owner reports HL2 timedemo results of
 59.84 FPS with the shared switch off and 59.81 FPS with it on, both with
 Wine-exit. Later cold-admission, retained-cell-cap and dump changes were
 not part of these measured runs; they need separate review and comparisons.
+
+### Combined default-on runtime acceptance
+
+The console owner accepted the combined default-on pair on 2026-10-04:
+server `0633d7c8` and NTDLL `853070a1`. It includes shared mutex selection,
+image-view descriptor cleanup and the one-file `/dev/null` wrapper. The
+600-second city run also uses the signed-bit-offset/high-byte translator
+and cached computer-name DLLs. Its 200–440-second window averages 53.1
+approximate FPS with a minimum sampled value of 45.4; the 460–600-second
+window averages 52.7 with a minimum of 50.2. No file-limit error was reported,
+and the same allocation-based load proxy remains 94.7 seconds. Sample counts
+were not supplied in this receipt. The full 58/50 FPS target remains unmet.
+
+The ordinary mutex PE v2 fixture passes 11 cases and 174 checks on the
+combined pair with Wine-exit. The ordinary image-section PE fixture passes
+six cases and 147 checks on both the reference and combined pairs, also
+with Wine-exit. HL2 reports 59.36 FPS with Wine-exit against the same-console
+reference's 59.38. These are owner-reported console receipts; they validate
+the accepted combined configuration, rather than attributing its timing
+to an individual default switch or to the translator alone.
+
+The corresponding changes merged as #354 and #355. The later event/semaphore
+extension, its retained-cell budget and profiler clock-gating candidate are
+not part of these accepted modules or measurements.
 
 ## Ownership and mode changes
 
@@ -149,14 +173,14 @@ The older typed `pw_mutex_fast` switch stays independently default off.
 `WINE_PS5_SERVER_DIRECT=0` disables both. The setting is read once during
 connection and the switch file is closed immediately.
 
-The measured results above used explicit selection with the original
-0820 modules. They support the default-on proposal but do not validate its
-new matching server/NTDLL pair. Patch 0880 also selects image-view descriptor
-cleanup by default, with its independent explicit off switch; see
-[the lifetime contract](IMAGE_VIEW_FD_LIFETIME.md). Require matching OFF/default-ON module receipts,
-ordinary PE semantics, HL2 timedemo/clean exit, load and 600-second gameplay
-results before merging the default-selection change. The 58/50 FPS target
-remains unchanged.
+The original mutex-only results above used explicit selection with the
+0820 modules. The combined default-on acceptance is recorded separately.
+Patch 0880 also selects image-view descriptor cleanup by default, with its
+independent explicit off switch; see
+[the lifetime contract](IMAGE_VIEW_FD_LIFETIME.md). Subsequent runtime changes
+still require matching module identities, ordinary PE semantics, HL2
+timedemo/clean exit, load and 600-second gameplay comparisons. Default-on
+acceptance does not establish the separate 58/50 FPS target.
 
 The client discovers `pw_wineserver_mutex_backend` and validates version,
 structure size, word size, native pointer size and both required pointers.
@@ -245,8 +269,8 @@ Copying the headers uniformly first shifted 17 assertion line constants
 from 121 to 126 after 0770's five declaration lines; a control-only `#line`
 directive preserves the accepted diagnostic positions. Candidate headers
 use their actual source positions and receive no such directive. The signed
-server-only candidate was preparation evidence; the complete pair below
-still requires the owner's source/runtime checks before deployment.
+server-only candidate was preparation evidence; it is not interchangeable
+with the later complete pair accepted on the console.
 
 `python3 tests/test_wine_shared_mutex_client.py` compiles the exact added
 client bodies and native ABI header from 0820. It also compiles the actual added
@@ -271,6 +295,6 @@ unit against private, consistent headers. Its baseline arms reproduce both
 accepted module hashes byte-for-byte. Applied source and transitive header
 pins, layout probes and separate module hashes accompany the pair. The
 server control retains the previously documented assertion-line metadata
-mapping; no candidate header is rewritten. Full source review and the
-owner's real Wine matrix remain required before runtime acceptance or a
-default-on decision.
+mapping; no candidate header is rewritten. The ordinary Wine matrix and
+combined default-on acceptance are recorded above. They do not validate
+later source revisions or establish the broader asynchronous contracts.

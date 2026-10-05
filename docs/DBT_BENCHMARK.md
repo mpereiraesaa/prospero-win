@@ -1018,3 +1018,21 @@ flags for every faulting memory instruction.
 
 Periodic translated-run percentages describe wall-time attribution. They
 do not measure thread CPU utilization or the number of cores freed.
+
+## Fixed-route console results and runtime defaults
+
+The console owner accepted the combined shared-mutex/image-view defaults
+and one-file `/dev/null` wrapper after ordinary PE semantics, HL2 with
+Wine-exit, loading and 600-second gameplay checks on 2026-10-04. With the
+signed-bit-offset/high-byte translator and cached computer-name DLLs, the
+GTA IV city run reports 53.1 mean approximate FPS and a 45.4 sampled minimum
+over the fixed 200–440-second window. This remains below the 58-mean/50-minimum
+target at the accepted goal settings and with profiling off.
+
+These figures describe the combined runtime configuration. They do not
+attribute the improvement to one translator change, convert profiling wall
+time into CPU time, or validate later event/semaphore or profiler candidates.
+The [shared-mutex acceptance receipt](SHARED_MUTEX_BACKEND.md) records the
+configuration and regression checks; the
+[image-view lifetime contract](IMAGE_VIEW_FD_LIFETIME.md) describes the
+descriptor policy and its retained debugger limitation.
