@@ -15,6 +15,7 @@ Profiles, controller presets and install recipes live in
 | OpenArena 0.8.8 | Playable, above 60 fps | 32-bit | OpenGL | USB keyboard/mouse |
 | Warcraft III: Reign of Chaos 1.27a | Playable, above 60 fps | 32-bit | DXVK / RADV | DualSense, USB keyboard/mouse |
 | Half-Life 2 | Playable, 60 fps at High settings | 32-bit | DXVK / RADV | DualSense, USB keyboard/mouse |
+| Grand Theft Auto IV: The Complete Edition | Playable, about 55 fps in the city | 32-bit | DXVK / RADV | DualSense |
 | Space Cadet Pinball | Playable | 32-bit | GDI | DualSense |
 | Wine Minesweeper | Playable | 64-bit, native | GDI | DualSense |
 
@@ -26,6 +27,14 @@ DualSense, and an automated run reached the canals; both held 60 fps, which
 is the console's 60 Hz output, with High texture, model and water detail, 4x
 MSAA, 16x anisotropic filtering and HDR. One known issue: the menu logo shows
 an apostrophe where its ² should be.
+
+Grand Theft Auto IV: The Complete Edition runs its open city at 1920x1080
+on the console's 60 Hz output at roughly 54–55 fps. Quiet streets come close
+to 59 fps; gunfights and crowded areas dip into the mid-40s. Getting into
+the game takes about 90–95 seconds of loading. The FusionFix mod works too,
+but it needs Microsoft's own D3DX9 and D3DCompiler DLLs, and with its default
+settings the city runs about 22% slower. The game's profile in
+prospero-win-profiles explains the setup and the optional mods.
 
 OpenGL games need a runtime built with the optional PS5 OpenGL SDK; see
 [the OpenGL build notes](docs/WINE_PS5_BUILD.md#opengl).

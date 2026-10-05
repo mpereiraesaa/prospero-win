@@ -48,6 +48,8 @@ See [controls](docs/CONTROLS.md) for input modes and mappings, and
 
 - **Half-Life 2:** 60 FPS at High settings, tested with DualSense through
   Kleiner's lab.
+- **Grand Theft Auto IV: The Complete Edition:** around 55 FPS in the open
+  city at 1080p, with DualSense.
 - **Half-Life, Counter-Strike 1.6 and OpenArena:** playable above 60 FPS.
 - **Warcraft III:** playable above 60 FPS, with DualSense or keyboard and
   mouse.
