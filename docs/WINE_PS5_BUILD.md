@@ -100,6 +100,7 @@ before evaluating a candidate built from that cache.
 | 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
 | 0790 | `server`, `ntdll`: opt-in immediate mutex acquire/release using the authoritative server object without request marshalling or waiter allocation; see [Immediate mutex calls](#immediate-mutex-calls) |
 | 0890 | `ntdll`: before starting the in-process server, give it ntdll's count of name changes (its `pw_cwd_share_changes` export), since the server creates, renames and deletes the files of ntdll's handles, and keep 0160's listings only when it took it. `WINE_PS5_DIR_LISTINGS=0` turns them off; the log says which |
+| 0899 | `include`: list the PS5 sync headers (0810, 0820, 0885, 0887) in `include/Makefile.in`, which makedep needs to resolve them; configure failed without it |
 
 ## Allocator
 

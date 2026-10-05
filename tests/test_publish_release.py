@@ -44,11 +44,16 @@ def main() -> int:
             return subprocess.run(["sh", str(SCRIPT), *args], capture_output=True, text=True, env=env)
 
         good = root / "good.zip"
-        make_zip(good, "PPSA99995/eboot.bin", "PPSA99995/win/wine/lib/wine/x86_64-unix/ntdll.prx")
+        # Wine's own programs ship beside its DLLs; any other .exe is a game's.
+        make_zip(good, "PPSA99995/eboot.bin", "PPSA99995/win/wine/lib/wine/x86_64-unix/ntdll.prx",
+                 "PPSA99995/win/wine/lib/wine/i386-windows/wineboot.exe",
+                 "PPSA99995/win/wine/lib/wine/x86_64-windows/rundll32.exe")
         with_conf = root / "conf.zip"
         make_zip(with_conf, "PPSA99995/eboot.bin", "PPSA99995/dev.conf")
         with_exe = root / "exe.zip"
         make_zip(with_exe, "PPSA99995/eboot.bin", "PPSA99995/game/war3.exe")
+        nested_exe = root / "nested-exe.zip"
+        make_zip(nested_exe, "PPSA99995/eboot.bin", "PPSA99995/win/wine/lib/wine/i386-windows/game/war3.exe")
         no_title = root / "empty.zip"
         make_zip(no_title, "other/eboot.bin")
 
@@ -58,6 +63,7 @@ def main() -> int:
             (("--tag", "v0.1.0", "--zip", str(no_title)), "no PPSA99995/eboot.bin"),
             (("--tag", "v0.1.0", "--zip", str(with_conf)), "dev.conf or an .exe"),
             (("--tag", "v0.1.0", "--zip", str(with_exe)), "dev.conf or an .exe"),
+            (("--tag", "v0.1.0", "--zip", str(nested_exe)), "dev.conf or an .exe"),
             (("--tag", "v0.1.0", "--zip", str(good)), "no release v0.1.0"),
             (("--tag", "v0.1.0", "--zip", str(good), "--force"), "unknown argument --force"),
         ]

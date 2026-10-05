@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 5 Oct 2026 18:00:00 +0200
+Subject: [PATCH] include: List the PS5 sync headers for makedep.
+
+Patches 0810, 0820, 0885 and 0887 add wine/ps5_mutex_word.h,
+wine/ps5_mutex_backend.h, wine/ps5_sync_word.h and
+wine/ps5_sync_backend.h under include/, and server.c, thread.c and the
+server include them. Wine's makedep resolves an included header only
+through include/Makefile.in's list, so configure stopped with
+"server.c:330: error: wine/ps5_mutex_backend.h: No such file or
+directory" on both the console and the host build. List them.
+
+ include/Makefile.in | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/include/Makefile.in b/include/Makefile.in
+index 27d71a11f5..9e923b8d72 100644
+--- a/include/Makefile.in
++++ b/include/Makefile.in
+@@ -1141,4 +1141,8 @@ SOURCES = \
+ 	wine/orpc.idl \
+ 	wine/plugplay.idl \
++	wine/ps5_mutex_backend.h \
++	wine/ps5_mutex_word.h \
++	wine/ps5_sync_backend.h \
++	wine/ps5_sync_word.h \
+ 	wine/rbtree.h \
+ 	wine/schrpc.idl \

@@ -92,12 +92,98 @@ int main(void)
     assert(!pw_smc_protect(&smc, 0x500000, rwx) && pw_smc_state(&smc, 0x500000) == PW_SMC_INELIGIBLE);
     refuse = 0;
 
+    /* After a protection change that succeeded: a page at the checks stays
+     * there and needs nothing; one that did not qualify is NONE again, with
+     * no host call; NONE and PROTECTED pages need the full refresh. */
+    {
+        const unsigned before = call_count;
+        const uint32_t checked = 0x600000, ineligible = 0x700000;
+
+        for (unsigned k = 0; k < PW_SMC_DEMOTE_FAULTS; k++) {
+            clock_ms += 10;
+            assert(pw_smc_protect(&smc, checked, rwx) && pw_smc_fault(&smc, checked));
+        }
+        assert(pw_smc_state(&smc, checked) == PW_SMC_CHECKED);
+        assert(!pw_smc_after_protect(&smc, checked + 0x123) && pw_smc_state(&smc, checked) == PW_SMC_CHECKED);
+        pw_smc_ineligible(&smc, ineligible);
+        assert(!pw_smc_after_protect(&smc, ineligible) && pw_smc_state(&smc, ineligible) == PW_SMC_NONE);
+        assert(pw_smc_after_protect(&smc, ineligible));                 /* NONE */
+        assert(pw_smc_protect(&smc, ineligible, rwx));
+        assert(pw_smc_after_protect(&smc, ineligible));                 /* PROTECTED */
+        assert(!pw_smc_after_protect(&smc, 0x100000000ull));
+        assert(call_count == before + 2 * PW_SMC_DEMOTE_FAULTS + 1);   /* only the protects and faults */
+        pw_smc_refresh(&smc, ineligible, 0, 0, 0);
+        pw_smc_refresh(&smc, checked, 0, 0, 0);
+    }
+
+    /* Hooking code that makes the same code writable and read-only around
+     * every patch (Proper Shaders in San Andreas, every frame): each time,
+     * the page is protected while writable and given up when it goes
+     * read-only. A burst of that sends it to the checks; spread out, it is
+     * forgiven. */
+    {
+        const uint32_t toggled = 0x800000, refused = 0x900000;
+        const uint64_t demotions = smc.demotions;
+
+        for (unsigned k = 0; k < 3; k++) {
+            clock_ms += PW_SMC_DECAY_MS + 1;
+            assert(pw_smc_protect(&smc, toggled, rwx));
+            pw_smc_refresh(&smc, toggled, 1, 0, PROT_READ | PROT_EXEC);
+            assert(pw_smc_state(&smc, toggled) == PW_SMC_NONE);
+        }
+        for (unsigned k = 1; k < PW_SMC_DEMOTE_FAULTS; k++) {
+            clock_ms += 5;
+            assert(pw_smc_protect(&smc, toggled, rwx));
+            pw_smc_refresh(&smc, toggled, 1, 0, PROT_READ | PROT_EXEC);
+        }
+        assert(pw_smc_state(&smc, toggled) == PW_SMC_CHECKED && smc.demotions == demotions + 1);
+        assert(!pw_smc_after_protect(&smc, toggled));
+
+        /* A host that refuses the protection every time: INELIGIBLE, back to
+         * NONE at the next protection change, refused again... to the checks. */
+        refuse = 1;
+        for (unsigned k = 1; k < PW_SMC_DEMOTE_FAULTS; k++) {
+            clock_ms += 5;
+            assert(!pw_smc_protect(&smc, refused, rwx) && pw_smc_state(&smc, refused) == PW_SMC_INELIGIBLE);
+            assert(!pw_smc_after_protect(&smc, refused) && pw_smc_state(&smc, refused) == PW_SMC_NONE);
+        }
+        assert(!pw_smc_protect(&smc, refused, rwx) && pw_smc_state(&smc, refused) == PW_SMC_CHECKED);
+        assert(smc.demotions == demotions + 2);
+        refuse = 0;
+        pw_smc_refresh(&smc, toggled, 0, 0, 0);
+        pw_smc_refresh(&smc, refused, 0, 0, 0);
+    }
+
+    /* A protected page whose host page stays writable through every
+     * notification (other guest pages in it are writable) is protected
+     * again each time; a burst of that, with no write ever faulting, gives
+     * it its permission back and sends it to the checks. */
+    {
+        const uint32_t kept = 0xa00000;
+        const uint64_t demotions = smc.demotions;
+        unsigned before;
+
+        clock_ms += PW_SMC_DECAY_MS * 10;
+        assert(pw_smc_protect(&smc, kept, rwx));
+        for (unsigned k = 1; k < PW_SMC_DEMOTE_FAULTS; k++) {
+            before = call_count;
+            pw_smc_refresh(&smc, kept, 1, 1, rwx);
+            assert(pw_smc_state(&smc, kept) == PW_SMC_PROTECTED);
+            assert(call_count == before + 1 && calls[before].prot == (PROT_READ | PROT_EXEC));
+        }
+        before = call_count;
+        pw_smc_refresh(&smc, kept, 1, 1, rwx);
+        assert(pw_smc_state(&smc, kept) == PW_SMC_CHECKED && smc.demotions == demotions + 1);
+        assert(call_count == before + 1 && calls[before].address == kept && calls[before].prot == rwx);
+        pw_smc_refresh(&smc, kept, 0, 0, 0);
+    }
+
     /* Pages are remembered for notifications of unknown extent while they
      * need it: each page here took over the entry of one that no longer
      * did. */
-    assert(smc.tracked_count == 1 && smc.tracked[0] == 0x500000 / HOST);
+    assert(smc.tracked_count <= 5 && smc.tracked[0] == 0x500000 / HOST);
     pw_smc_destroy(&smc);
     printf("wowprospero write-protected code pages passed: protect, fault, decay, demotion, "
-           "notifications, refused mprotect\n");
+           "notifications, refused mprotect, protection changes, toggled pages, kept-writable pages\n");
     return 0;
 }

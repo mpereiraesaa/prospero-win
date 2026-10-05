@@ -1501,6 +1501,30 @@ static int code_pages_stale( uint64_t address, uint64_t size )
     return 0;
 }
 
+/* code_pages_stale for a protection change that succeeded: every page in
+ * the range is committed and has protection prot, so no page is queried. */
+static int code_pages_stale_known( uint64_t address, uint64_t size, ULONG prot )
+{
+    const int can_read = (prot & readable_mask) && !(prot & PAGE_GUARD);
+    const int writable = (prot & writable_mask) != 0;
+    uint32_t first, last;
+
+    if (!pw_x86_code_pages_any( &code_pages, address, size ) ||
+        !pw_code_pages_span( address, size, &first, &last ))
+        return 0;
+    for (uint32_t page = first; page <= last; page++)
+    {
+        uintptr_t base = (uintptr_t)page << PW_X86_CODE_PAGE_SHIFT;
+
+        if (!pw_x86_code_page_marked( &code_pages, page )) continue;
+        if (can_read && pw_smc_state( &smc, base ) == PW_SMC_PROTECTED) continue;
+        if (pw_x86_code_page_protect_stale( &code_pages, page, writable,
+                                            can_read ? (const uint8_t *)base : NULL ))
+            return 1;
+    }
+    return 0;
+}
+
 /* The host pages a notification touched, after it (smc_pages.h): Wine has
  * applied the new protection, which may have given write permission back,
  * or freed them. A protected page is protected again or forgotten. A page
@@ -1540,6 +1564,29 @@ static void smc_refresh( uint64_t address, uint64_t size )
         smc_refresh_page( (uintptr_t)base, 1 );
 }
 
+/* A page a notification sent to the checks (smc_pages.h) gave up its write
+ * protection without a fault: translations that trusted it would not see
+ * a write from now on, so every thread discards its translations, as after
+ * a write fault on it. Rare: once per page. Under flush_lock. */
+static void smc_demotion_flush( uint64_t demotions )
+{
+    if (__atomic_load_n( &smc.demotions, __ATOMIC_ACQUIRE ) == demotions) return;
+    pw_x86_code_pages_clear( &code_pages );
+    __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
+}
+
+/* smc_refresh after a protection change that succeeded, which commits and
+ * decommits nothing: a page sent to the checks stays there and one that
+ * did not qualify is considered afresh without its pages being queried
+ * (pw_smc_after_protect); the others are refreshed as after any change. */
+static void smc_refresh_known( uint64_t address, uint64_t size )
+{
+    if (!pw_smc_enabled( &smc ) || address >= 0x100000000ull) return;
+    if (size > 0x100000000ull - address) size = 0x100000000ull - address;
+    for (uint64_t base = address & ~(uint64_t)(smc.host_page - 1); base < address + size; base += smc.host_page)
+        if (pw_smc_after_protect( &smc, base )) smc_refresh_page( (uintptr_t)base, 1 );
+}
+
 /* A memory notification (protection change, free, instruction-cache flush),
  * after the fact. The loader protects and frees memory hundreds of times while
  * it maps and relocates DLLs, and hooking code unprotects game code to read or
@@ -1558,15 +1605,42 @@ static void smc_refresh( uint64_t address, uint64_t size )
 static NTSTATUS flush( void *args )
 {
     const struct pw_wow_flush_params *params = args;
+    uint64_t demotions;
 
     __atomic_add_fetch( &protect_generation, 1, __ATOMIC_SEQ_CST );
     while (__atomic_exchange_n( &flush_lock, 1, __ATOMIC_ACQUIRE )) __builtin_ia32_pause();
+    demotions = __atomic_load_n( &smc.demotions, __ATOMIC_ACQUIRE );
     if (!params || !params->size || code_pages_stale( params->address, params->size ))
     {
         pw_x86_code_pages_clear( &code_pages );
         __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
     }
     smc_refresh( params ? params->address : 0, params ? params->size : 0 );
+    smc_demotion_flush( demotions );
+    __atomic_store_n( &flush_lock, 0, __ATOMIC_RELEASE );
+    return STATUS_SUCCESS;
+}
+
+/* flush() for a protection change the PE side reports with its outcome
+ * (BTCpuNotifyMemoryProtect): the same decisions, from the protection the
+ * pages were given rather than from querying them. Hooking code toggles a
+ * few bytes of game code between writable and not around every patch, and
+ * on the PS5 the queries made each of those notifications cost about 30 us. */
+static NTSTATUS protect( void *args )
+{
+    const struct pw_wow_protect_params *params = args;
+    uint64_t demotions;
+
+    __atomic_add_fetch( &protect_generation, 1, __ATOMIC_SEQ_CST );
+    while (__atomic_exchange_n( &flush_lock, 1, __ATOMIC_ACQUIRE )) __builtin_ia32_pause();
+    demotions = __atomic_load_n( &smc.demotions, __ATOMIC_ACQUIRE );
+    if (!params->size || code_pages_stale_known( params->address, params->size, params->prot ))
+    {
+        pw_x86_code_pages_clear( &code_pages );
+        __atomic_add_fetch( &code_generation, 1, __ATOMIC_SEQ_CST );
+    }
+    smc_refresh_known( params->address, params->size );
+    smc_demotion_flush( demotions );
     __atomic_store_n( &flush_lock, 0, __ATOMIC_RELEASE );
     return STATUS_SUCCESS;
 }
@@ -1611,6 +1685,7 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     flush,
     thread_term,
     dump,
+    protect,
 };
 
 C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == pw_wow_funcs_count );
