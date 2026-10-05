@@ -207,6 +207,32 @@ wowprospero timing: tid=0024 run=16.5% unix=82.0% (310336/s 2.64us) sys=1.4% (17
   (the code cache filled up, or code was unloaded). Both should stay near
   zero while a game runs.
 
+After each timing line, a `wowprospero calls` line names the calls that took
+the most of that thread's time, one line for system calls and one for Unix
+calls, as `number/calls per second/share of wall time`:
+
+```
+wowprospero calls: tid=0140 sys_top 0x105/170/s/20.9% 0x50/1573/s/1.8% ... dropped=0
+wowprospero calls: tid=016c unix_top f4f0:730/99687/s/6.2% f4f0:55/20081/s/4.0% ... dropped=0
+```
+
+System call numbers are Wine's 32-bit ones (`dlls/ntdll/ntsyscalls.h`, and
+`dlls/win32u/win32syscalls.h` from 0x1000). A few that matter:
+`0x105` NtWaitForAlertByThreadId is a thread waiting for another thread (a
+critical section, an SRW lock or a condition variable), `0x34`
+NtDelayExecution is `Sleep` (a frame limiter spinning on `Sleep(0)` shows it
+next to `0x31` NtQueryPerformanceCounter), and `0x4` NtWaitForSingleObject is
+a wait on an event or a handle. A Unix call is shown as a library tag (bits 4
+to 19 of its handle; the same for every call into one library) and the
+library's function number; for winevulkan, the number is the position in
+`enum unix_call` in `dlls/winevulkan/loader_thunks.h`, counted from 0.
+`dropped` counts calls that found the per-thread table full; it should be 0.
+
+In GTA San Andreas with Proper Shaders, these lines showed the main thread
+spending a fifth of its time in `0x105`: it was waiting for DXVK's
+command-stream thread, which a per-frame read-back of one pixel forced it to
+drain.
+
 Compare the same scene on the PC and on the PS5. A game that is slow only
 on the PS5 shows which part grew. Half-Life is an example. On the PC it ran
 at about 75 fps with `run=67% unix=24% (1870000/s 0.13us)`. On the PS5 it

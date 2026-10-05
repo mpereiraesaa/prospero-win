@@ -40,6 +40,7 @@
 #include "smc_pages.h"
 #include "thread_budget.h"
 #include "tsc_clock.h"
+#include "call_top.h"
 #include "host_memory.h"
 
 /* The guest range every translated access is checked against (load_state). */
@@ -80,6 +81,10 @@ struct pw_thread
     uint64_t wall_window;
     double tsc_per_us;       /* measured at the last report */
     uint32_t n_unix, n_sys, n_other, n_unix_long, n_resets, n_flushes, last_reason;
+    /* The same time by call: the system call number, or the Unix call's
+     * library tag and function code (timing_call_key). */
+    uint32_t last_call;
+    PwCallTop sys_top, unix_top;
     PwX86HotspotProfile *profile;
     /* Set by the fault handler when it sent this thread's translated code to
      * the refused-access path of a write to a page that was write-protected
@@ -1215,6 +1220,8 @@ static void cache_report( struct pw_thread *thread, uint64_t wall, unsigned fina
              (unsigned long long)__atomic_load_n( &smc.demotions, __ATOMIC_RELAXED ) );
 }
 
+static void timing_report_calls( struct pw_thread *thread, double cycles, double seconds );
+
 static void timing_report( struct pw_thread *thread, uint64_t tsc )
 {
     uint64_t wall = timing_now_ns();
@@ -1236,12 +1243,53 @@ static void timing_report( struct pw_thread *thread, uint64_t tsc )
                  thread->n_sys ? thread->t_sys / per_us / thread->n_sys : 0.0,
                  100.0 * thread->t_other / cycles, thread->n_other,
                  100.0 * thread->t_unix_long / cycles, thread->n_unix_long, thread->n_resets, thread->n_flushes );
+    if (thread->n_unix + thread->n_sys > 1000) timing_report_calls( thread, cycles, seconds );
+    else
+    {
+        pw_call_top_clear( &thread->sys_top );
+        pw_call_top_clear( &thread->unix_top );
+    }
     thread->t_window = tsc;
     thread->wall_window = wall;
     thread->t_inside = thread->t_unix = thread->t_sys = thread->t_other = thread->t_unix_long = 0;
     thread->n_unix_long = 0;
     thread->tsc_per_us = per_us;
     thread->n_unix = thread->n_sys = thread->n_other = thread->n_resets = thread->n_flushes = 0;
+}
+
+/* The calls that took the most of the window's time, from the same TSC
+ * intervals as the timing line: each as number/count/share of wall time.
+ * System calls are wow64 numbers (0x1000 and up are win32u); a Unix call is
+ * the library tag (bits 4..19 of its handle) and the function code. */
+static void timing_report_calls( struct pw_thread *thread, double cycles, double seconds )
+{
+    static const struct { const char *name; size_t offset; } kinds[] =
+    {
+        { "sys_top", offsetof(struct pw_thread, sys_top) },
+        { "unix_top", offsetof(struct pw_thread, unix_top) },
+    };
+    char line[512];
+
+    for (unsigned k = 0; k < ARRAY_SIZE(kinds); k++)
+    {
+        PwCallTop *top = (PwCallTop *)((char *)thread + kinds[k].offset);
+        PwCallTopSlot rows[10];
+        unsigned n = pw_call_top_rank( top, rows, ARRAY_SIZE(rows) );
+        int at = 0;
+
+        for (unsigned i = 0; i < n && at >= 0 && at < (int)sizeof(line); i++)
+        {
+            uint32_t key = rows[i].key - 1;
+
+            if (k) at += snprintf( line + at, sizeof(line) - at, " %04x:%u/%.0f/s/%.1f%%", key >> 16,
+                                   key & 0xffff, rows[i].count / seconds, 100.0 * rows[i].cycles / cycles );
+            else at += snprintf( line + at, sizeof(line) - at, " %#x/%.0f/s/%.1f%%", key,
+                                 rows[i].count / seconds, 100.0 * rows[i].cycles / cycles );
+        }
+        if (n) fprintf( stderr, "wowprospero calls: tid=%04x %s%s dropped=%u\n",
+                        (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread, kinds[k].name, line, top->dropped );
+        pw_call_top_clear( top );
+    }
 }
 
 /* At run()'s start: the time since the previous run returned. */
@@ -1259,15 +1307,38 @@ static void timing_enter( struct pw_thread *thread )
         /* A call that blocks (a wait for the display, say) rather than works. */
         thread->t_unix += outside;
         thread->n_unix++;
+        pw_call_top_add( &thread->unix_top, thread->last_call, outside );
         if (thread->tsc_per_us && outside > 1000 * thread->tsc_per_us)
         {
             thread->t_unix_long += outside;
             thread->n_unix_long++;
         }
     }
-    else if (thread->last_reason == PW_WOW_SYSCALL) { thread->t_sys += outside; thread->n_sys++; }
+    else if (thread->last_reason == PW_WOW_SYSCALL)
+    {
+        thread->t_sys += outside;
+        thread->n_sys++;
+        pw_call_top_add( &thread->sys_top, thread->last_call, outside );
+    }
     else { thread->t_other += outside; thread->n_other++; }
     thread->t_mark = tsc;
+}
+
+/* What run() returned for, as the key timing_enter files the time outside
+ * under: the system call number in EAX, or for a Unix call the arguments
+ * ntdll's dispatcher left on the stack (return address, 64-bit handle,
+ * code), as cpu.c reads them. */
+static uint32_t timing_call_key( const PwX86State *state, uint32_t reason )
+{
+    if (reason == PW_WOW_SYSCALL) return state->gpr[0];
+    if (reason == PW_WOW_UNIXCALL)
+    {
+        const UINT *stack = ULongToPtr( state->gpr[4] );
+        UINT64 handle = *(const UINT64 *)(stack + 1);
+
+        return (uint32_t)((handle >> 4) & 0xffff) << 16 | (stack[3] & 0xffff);
+    }
+    return 0;
 }
 
 /* At run()'s return; a report about every 2^34 cycles (5 to 10 s). */
@@ -1278,6 +1349,7 @@ static void timing_leave( struct pw_thread *thread, uint32_t reason )
     thread->t_inside += tsc - thread->t_mark;
     thread->t_mark = tsc;
     thread->last_reason = reason;
+    thread->last_call = timing_call_key( &thread->state, reason );
     if (tsc - thread->t_window > (1ull << 34)) timing_report( thread, tsc );
 }
 
