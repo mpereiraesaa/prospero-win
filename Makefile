@@ -80,6 +80,7 @@ $(eval $(call test_rule,test_pw_x86_block,tests/test_pw_x86_block.c src/pw_x86_b
 $(eval $(call test_rule,test_pw_x86_flat,tests/test_pw_x86_flat.c src/pw_x86_block.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,))
 $(eval $(call test_rule,test_pw_x86_cache,tests/test_pw_x86_cache.c src/pw_x86_cache.c,))
 $(eval $(call test_rule,test_pw_x86_code_pages,tests/test_pw_x86_code_pages.c,))
+$(eval $(call test_rule,test_pw_wow_tsc_clock,tests/test_pw_wow_tsc_clock.c,))
 $(eval $(call test_rule,test_pw_wow_thread_budget,tests/test_pw_wow_thread_budget.c src/pw_x86_engine.c src/pw_x86_cache.c src/pw_x86_block.c src/pw_x86_reencode.c src/pw_x86_hostexec.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,-D_DEFAULT_SOURCE -pthread))
 $(eval $(call test_rule,test_pw_x86_hostexec,tests/test_pw_x86_hostexec.c src/pw_x86_hostexec.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,))
 $(eval $(call test_rule,test_pw_x86_engine,tests/test_pw_x86_engine.c src/pw_x86_engine.c src/pw_x86_cache.c src/pw_x86_block.c src/pw_x86_reencode.c src/pw_x87.c src/pw_guest_fp.c src/pw_vm.c src/pw_vm_posix.c,))
@@ -124,7 +125,7 @@ TESTS := test_pw_diagnostics test_pw_x86_hostexec test_pw_app_profile test_pw_pr
 	test_pw_wine_heap test_pw_wine_dmem test_pw_wine_dmem_ps5 test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_script_input test_pw_game_profile test_pw_prefix_temp \
 	test_pw_wine_library test_pw_wine_display test_pw_hid test_pw_hid_ps5 test_pw_spinner test_pw_wine_dl test_pw_wine_sink \
 	test_pw_wine_threads test_pw_wine_compat test_pw_wine_cwd test_pw_ws2_32_libc test_pw_launcher_render test_pw_pad \
-	test_pw_guest_fp test_pw_vm test_pw_x86_block test_pw_x86_flat test_pw_x86_cache test_pw_x86_code_pages test_pw_wow_thread_budget \
+	test_pw_guest_fp test_pw_vm test_pw_x86_block test_pw_x86_flat test_pw_x86_cache test_pw_x86_code_pages test_pw_wow_thread_budget test_pw_wow_tsc_clock \
 	test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_global_residency test_pw_x86_reencode test_pw_x86_fault_markers test_pw_x86_lazyflags \
 	test_pw_guest_call test_pw_x87 test_pw_x87_native test_pw_audio_ps5 test_pw_audio_mix test_pw_agc_submit_lifecycle \
 	test_pw_videoout_layout test_pw_videoout_tile test_pw_pad_ps5 test_pw_data_mount \

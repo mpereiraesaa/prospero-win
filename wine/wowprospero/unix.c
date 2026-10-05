@@ -9,6 +9,7 @@
 #endif
 
 #define _GNU_SOURCE
+#include <errno.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -37,6 +38,7 @@
 #include "pw_x86_hostexec.h"
 #include "code_pages.h"
 #include "thread_budget.h"
+#include "tsc_clock.h"
 #include "host_memory.h"
 
 /* The guest range every translated access is checked against (load_state). */
@@ -77,7 +79,7 @@ struct pw_thread
     double tsc_per_us;       /* measured at the last report */
     uint32_t n_unix, n_sys, n_other, n_unix_long, n_resets, n_flushes, last_reason;
     PwX86HotspotProfile *profile;
-    uint64_t profile_last_dump;
+    uint64_t profile_last_tsc;  /* TSC at the last report (tsc_clock.h) */
     uint64_t execution_clock_cost, execution_clock_resolution;
 };
 
@@ -596,6 +598,10 @@ static void segv_handler( int signal, siginfo_t *info, void *context )
  * No cache of another thread or proprietary guest bytes is read by reporting. */
 static const char *profile_path;
 static uint64_t profile_ticks, profile_unattributed;
+/* The report period runs on the TSC (tsc_clock.h): run() returns too often
+ * for a clock_gettime there, a system call on the PS5. */
+enum { PROFILE_PERIOD_MS = 5000, PROFILE_CALIBRATION_NS = 20000000 };
+static uint64_t profile_tsc_rate, profile_period_ticks;
 #include <sys/time.h>
 #ifndef __PROSPERO__
 #include <dlfcn.h>
@@ -649,6 +655,31 @@ static void profile_handler(int signal, siginfo_t *info, void *context)
     profile_native_sample(rip);
 }
 
+static uint64_t profile_monotonic_ns(void)
+{
+    struct timespec now;
+
+    if(clock_gettime(CLOCK_MONOTONIC, &now)) return 0;
+    return now.tv_sec * 1000000000ull + now.tv_nsec;
+}
+
+/* The TSC's rate against CLOCK_MONOTONIC over about 20 ms, once. Each clock
+ * read is bracketed by two TSC reads and matched to their midpoint, so the
+ * system call's own cost does not bias the rate. */
+static uint64_t profile_calibrate(void)
+{
+    struct timespec pause = { 0, PROFILE_CALIBRATION_NS };
+    uint64_t before, after, tsc0, ns0, tsc1, ns1;
+
+    before = __rdtsc(); ns0 = profile_monotonic_ns(); after = __rdtsc();
+    tsc0 = before + (after - before) / 2;
+    while(nanosleep(&pause, &pause) && errno == EINTR) {}
+    before = __rdtsc(); ns1 = profile_monotonic_ns(); after = __rdtsc();
+    tsc1 = before + (after - before) / 2;
+    if(!ns0 || !ns1 || ns1 - ns0 < PROFILE_CALIBRATION_NS / 2) return 0;
+    return pw_tsc_rate(tsc0, ns0, tsc1, ns1);
+}
+
 static void profile_start(void)
 {
     profile_path = getenv("PW_WOW_PROFILE");
@@ -659,6 +690,16 @@ static void profile_start(void)
     }
 #endif
     if(!profile_path || !*profile_path) { profile_path = NULL; return; }
+    /* Before the timer starts, so no SIGPROF cuts the calibration short. */
+    profile_tsc_rate = profile_calibrate();
+    if(!profile_tsc_rate) {
+        fprintf(stderr, "wowprospero profile: TSC calibration failed\n");
+        profile_path = NULL;
+        return;
+    }
+    profile_period_ticks = pw_tsc_ticks(PROFILE_PERIOD_MS, profile_tsc_rate);
+    fprintf(stderr, "wowprospero profile_clock: tsc_hz=%llu calibration_ms=%u period_ms=%u\n",
+            (unsigned long long)profile_tsc_rate, PROFILE_CALIBRATION_NS / 1000000, PROFILE_PERIOD_MS);
     struct sigaction action;
     struct itimerval timer = { { 0, 1000 }, { 0, 1000 } };
     memset(&action, 0, sizeof(action));
@@ -703,7 +744,7 @@ static void profile_native_dump(uint64_t now, FILE *out)
 {
     uint64_t last = __atomic_load_n(&profile_native_last_dump, __ATOMIC_RELAXED);
     struct profile_native *rows;
-    if(now - last < 5000 || !__atomic_compare_exchange_n(&profile_native_last_dump, &last, now, 0,
+    if(now - last < PROFILE_PERIOD_MS || !__atomic_compare_exchange_n(&profile_native_last_dump, &last, now, 0,
                                                          __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
     rows = malloc(sizeof(profile_native));
     if(!rows) return;
@@ -735,21 +776,20 @@ static void profile_native_dump(uint64_t now, FILE *out)
 static void profile_maybe_dump(void)
 {
     struct pw_thread *thread = self;
-    struct timespec now;
     sigset_t mask, previous;
     PwX86HotspotProfile *snapshot;
-    uint64_t ms, interval, entry_samples = 0, body_samples = 0, exit_samples = 0, emitted_samples = 0;
+    uint64_t tsc, interval, entry_samples = 0, body_samples = 0, exit_samples = 0, emitted_samples = 0;
     unsigned tid = HandleToULong(NtCurrentTeb()->ClientId.UniqueThread);
     FILE *out = stderr;
     char path[512];
 
     if(!thread || !thread->profile) return;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    ms = now.tv_sec * 1000ull + now.tv_nsec / 1000000;
-    if(!thread->profile_last_dump) { thread->profile_last_dump = ms; return; }
-    interval = ms - thread->profile_last_dump;
-    if(interval < 5000) return;
-    thread->profile_last_dump = ms;
+    /* No system call until a report is due: one TSC read and a compare. */
+    tsc = __rdtsc();
+    if(!thread->profile_last_tsc) { thread->profile_last_tsc = tsc; return; }
+    if(tsc - thread->profile_last_tsc < profile_period_ticks) return;
+    interval = pw_tsc_ms(tsc - thread->profile_last_tsc, profile_tsc_rate);
+    thread->profile_last_tsc = tsc;
     snapshot = malloc(sizeof(*snapshot));
     if(!snapshot) return;
     sigemptyset(&mask);
@@ -789,7 +829,7 @@ static void profile_maybe_dump(void)
                 tid, row->guest_pc, (unsigned long long)row->samples, (unsigned long long)row->entry,
                 (unsigned long long)row->body, (unsigned long long)row->exit, (unsigned long long)row->emitted);
     }
-    profile_native_dump(ms, out);
+    profile_native_dump(pw_tsc_ms(tsc, profile_tsc_rate), out);
     if(out != stderr) fclose(out);
     free(snapshot);
 }

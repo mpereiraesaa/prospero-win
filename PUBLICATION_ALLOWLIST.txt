@@ -83,6 +83,7 @@ tests/test_pw_x86_block.c
 tests/test_pw_x86_cache.c
 tests/test_pw_x86_code_pages.c
 tests/test_pw_wow_thread_budget.c
+tests/test_pw_wow_tsc_clock.c
 tests/test_pw_x86_flat.c
 tests/test_pw_x86_engine.c
 tests/test_pw_x86_chaining.c
@@ -145,6 +146,7 @@ tests/test_wowprospero_contract.py
 tests/test_wowprospero_unmap.py
 wine/wowprospero/code_pages.h
 wine/wowprospero/thread_budget.h
+wine/wowprospero/tsc_clock.h
 wine/wowprospero/host_memory.h
 wine/wowprospero/cpu.c
 wine/wowprospero/unix.c

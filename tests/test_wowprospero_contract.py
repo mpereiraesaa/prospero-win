@@ -9,7 +9,10 @@ index. Both are versioned data:
 - every export named in `wowprospero.spec` has a definition in `cpu.c`, and
   the exports wow64 calls unconditionally are present;
 - `enum pw_wow_funcs` in `wowprospero.h` and `__wine_unix_call_funcs[]` in
-  `unix.c` list the same entries in the same order.
+  `unix.c` list the same entries in the same order;
+- the profiler and timing code that runs at every return from `run()` reads
+  the TSC, never the system clock: on the PS5 a clock read is a system call,
+  and run() returns hundreds of thousands of times a second.
 
 When the pinned Wine checkout is available, the spec is also compared with the
 `GET_PTR( BTCpu... )` list in `dlls/wow64/syscall.c`, so a new optional hook is
@@ -40,6 +43,10 @@ EXPORT_RE = re.compile(r"^@\s+stdcall\s+(?:-\S+\s+)*([A-Za-z_][A-Za-z0-9_]*)\(",
 ENUM_RE = re.compile(r"enum pw_wow_funcs\s*\{(.*?)\};", re.S)
 TABLE_RE = re.compile(r"__wine_unix_call_funcs\[\]\s*=\s*\{(.*?)\};", re.S)
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Called at every return from run(); a clock read belongs only in the
+# once-per-period report they call.
+PER_EXIT = ("profile_maybe_dump", "timing_leave")
+CLOCK_READ_RE = re.compile(r"\b(?:clock_gettime|gettimeofday|timing_now_ns|profile_monotonic_ns)\s*\(")
 GET_PTR_RE = re.compile(r"GET_PTR\(\s*((?:BTCpu|__wine_get_unix_opcode)[A-Za-z0-9_]*)\s*\)")
 
 
@@ -92,6 +99,27 @@ def check_unix_table() -> int:
     return len(handlers)
 
 
+def function_body(source: str, name: str) -> str:
+    match = re.search(rf"^static [^;{{]*\b{name}\s*\([^)]*\)\s*\{{", source, re.M)
+    if not match:
+        fail(f"{name} not found in unix.c")
+    depth, start = 1, match.end()
+    for index in range(start, len(source)):
+        depth += {"{": 1, "}": -1}.get(source[index], 0)
+        if not depth:
+            return source[start:index]
+    fail(f"{name} has no closing brace")
+    return ""
+
+
+def check_per_exit_clock() -> None:
+    source = UNIX_SIDE.read_text(encoding="utf-8")
+    for name in PER_EXIT:
+        read = CLOCK_READ_RE.search(function_body(source, name))
+        if read:
+            fail(f"{name} runs at every run() exit and must not call {read.group(0).rstrip('( ')}")
+
+
 def check_pinned(names: list[str]) -> str:
     source = wine_source()
     if not source:
@@ -110,6 +138,7 @@ def main() -> None:
     names = exports()
     check_exports(names)
     count = check_unix_table()
+    check_per_exit_clock()
     note = check_pinned(names)
     print(f"wowprospero contract passed: {len(names)} exports, {count} unix calls; {note}")
 

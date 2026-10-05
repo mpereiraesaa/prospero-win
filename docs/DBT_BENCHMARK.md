@@ -638,6 +638,14 @@ The per-thread `outside=0` does not imply
 that the process spent no time in native code. Compare identical workloads
 and use the timing split alongside these records.
 
+The profiler times its 5-second windows with the TSC, not the system clock:
+it checks the window at every return from `run()`, and on the PS5 a
+`clock_gettime` is a system call, which made profiled runs slower than the
+game they measured. When profiling starts, it calibrates the TSC against
+`CLOCK_MONOTONIC` over 20 ms and logs the result once, as
+`wowprospero profile_clock: tsc_hz=… calibration_ms=20 period_ms=5000`.
+`interval_ms` is the window's TSC delta at that rate.
+
 Each thread owns a bounded 4096-slot histogram. The signal handler resolves
 the interrupted PC immediately, before an arena reset can reuse its address.
 It uses no compiler TLS access, allocation, formatting or source-byte reads.
