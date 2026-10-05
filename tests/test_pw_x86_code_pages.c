@@ -91,13 +91,35 @@ int main(void)
     code[0][0x124] = 0x90;
     assert(pw_x86_code_page_protect_stale(&pages, ro, 1, code[0]));
     pw_x86_code_pages_clear(&pages);
-    /* Writable when translated, with no digest: taken as changed. */
+    /* Writable when translated: the translations check their source, so no
+     * change of protection or bytes makes them stale while they can read
+     * it (CLEO leaves code writable; Framerate Vigilante unprotects, reads
+     * and restores it every frame; Mod Loader writes its hook in and out). */
+    pw_x86_code_pages_mark_checked(&pages, (uint64_t)rw << 12, 16);
+    assert(pw_x86_code_pages_any(&pages, (uint64_t)rw << 12, 1));
+    assert(pw_x86_code_page_marked(&pages, rw) && !pw_x86_code_page_marked(&pages, rw + 1));
+    for (int frame = 0; frame < 3; frame++) {
+        code[1][frame] ^= 0xff;
+        assert(!pw_x86_code_page_protect_stale(&pages, rw, 1, code[1]));
+        assert(!pw_x86_code_page_protect_stale(&pages, rw, 0, code[1]));
+    }
+    assert(!pages.writable[rw / 64] && !pages.words[rw / 64]);
+    /* Unreadable or freed: the checks would fault reading it. */
+    assert(pw_x86_code_page_protect_stale(&pages, rw, 0, NULL));
+    assert(pw_x86_code_page_protect_stale(&pages, rw, 1, NULL));
+    /* A trusting translation from the same page keeps its own rules. */
     pw_x86_code_pages_mark(&pages, (uint64_t)rw << 12, 16);
-    pw_x86_code_pages_mark_writable(&pages, (uint64_t)rw << 12, 16);
+    assert(!pw_x86_code_page_protect_stale(&pages, rw, 1, code[1]));
+    code[1][7] ^= 0xff;
     assert(pw_x86_code_page_protect_stale(&pages, rw, 0, code[1]));
-    assert(pw_x86_code_page_protect_stale(&pages, rw, 1, code[1]));
     pw_x86_code_pages_clear(&pages);
-    assert(!pages.writable[rw / 64]);
+    assert(!pages.writable[rw / 64] && !pages.checked[rw / 64]);
+    assert(!pw_x86_code_pages_any(&pages, (uint64_t)rw << 12, 1));
+    /* Read-only and unreadable now, with only trusting translations: they
+     * never read their source again. */
+    pw_x86_code_pages_mark(&pages, (uint64_t)ro << 12, 16);
+    assert(!pw_x86_code_page_protect_stale(&pages, ro, 0, NULL));
+    pw_x86_code_pages_clear(&pages);
     /* Unreadable when made writable, or when checked: taken as changed. */
     pw_x86_code_pages_mark(&pages, (uint64_t)ro << 12, 16);
     assert(pw_x86_code_page_protect_stale(&pages, ro, 1, NULL));
@@ -122,6 +144,7 @@ int main(void)
 
     /* NULL is ignored. */
     pw_x86_code_pages_mark(NULL, 0x1000, 1);
+    pw_x86_code_pages_mark_checked(NULL, 0x1000, 1);
     assert(!pw_x86_code_pages_any(NULL, 0x1000, 1));
     pw_x86_code_pages_clear(NULL);
     printf("x86 code pages passed\n");

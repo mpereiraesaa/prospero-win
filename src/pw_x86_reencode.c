@@ -7,6 +7,9 @@
 enum {
     ALL_FLAGS = 0x8d5, CF = 0x001,
     MAX_INSTS = 32, MAX_COLD = 2 * MAX_INSTS,
+    /* Compares a source check needs at most: 8 bytes each, the last one
+     * overlapping, over the longest source a block takes. */
+    MAX_VERIFY = 15 * MAX_INSTS / 8 + 1,
     /* Host scratch: r8 (flag save), r9 (guard), r10 (values), r11
      * (addresses and link slots), r14 (saved flags). */
     R8 = 8, R9 = 9, R10 = 10, R11 = 11, R12 = 12, R13 = 13, R14 = 14,
@@ -699,6 +702,11 @@ typedef struct Ctx {
     unsigned side_count;
     size_t side_rel[MAX_INSTS];
     uint32_t side_target[MAX_INSTS];
+    /* The source check (PwX86TranslateOptions.verify_source): each
+     * compare's rip-relative operand and the source offset it reads, and
+     * each jne to the stale exit. */
+    unsigned verify_count;
+    size_t verify_rel[MAX_VERIFY], verify_at[MAX_VERIFY], verify_jne[MAX_VERIFY];
 } Ctx;
 
 static void save_flags(Out *o)
@@ -1591,6 +1599,88 @@ static void emit_side_exits(Ctx *c)
     b(o, 0x31); b(o, 0xc0); b(o, 0xc3);                             /* xor eax, eax; ret */
 }
 
+/* One compare of the source check: width bytes at source offset at, read
+ * through r10 into r11 and compared with the copy (patched by
+ * emit_source_copy); a difference jumps to the stale exit. */
+static void emit_verify_compare(Ctx *c, unsigned width, size_t at)
+{
+    Out *o = &c->o;
+
+    if (c->verify_count >= MAX_VERIFY) { o->failed = 1; return; }
+    switch (width) {
+    case 8: b(o, 0x4d); b(o, 0x8b); break;                          /* mov r11, [r10+at] */
+    case 4: b(o, 0x45); b(o, 0x8b); break;                          /* mov r11d, [r10+at] */
+    case 2: b(o, 0x45); b(o, 0x0f); b(o, 0xb7); break;              /* movzx r11d, word [r10+at] */
+    default: b(o, 0x45); b(o, 0x0f); b(o, 0xb6); break;             /* movzx r11d, byte [r10+at] */
+    }
+    b(o, 0x9a); w32(o, (uint32_t)at);
+    switch (width) {
+    case 8: b(o, 0x4c); b(o, 0x3b); break;                          /* cmp r11, [rip+copy] */
+    case 4: b(o, 0x44); b(o, 0x3b); break;                          /* cmp r11d, [rip+copy] */
+    case 2: b(o, 0x66); b(o, 0x44); b(o, 0x3b); break;              /* cmp r11w, [rip+copy] */
+    default: b(o, 0x44); b(o, 0x3a); break;                         /* cmp r11b, [rip+copy] */
+    }
+    b(o, 0x1d);
+    c->verify_rel[c->verify_count] = o->n; w32(o, 0);
+    c->verify_at[c->verify_count] = at;
+    b(o, 0x0f); b(o, 0x85);                                         /* jne stale */
+    c->verify_jne[c->verify_count++] = o->n; w32(o, 0);
+}
+
+/* The source check at the chain entry: the bytes the block was translated
+ * from at source, compared with the copy after the block. The guest's
+ * flags are saved first (r8, r14, as the guards do) and put back only
+ * when the block reads them before it sets them (keep); the stale exit
+ * always puts them back, since the current bytes may read them. Uses
+ * only the scratch registers. */
+static void emit_verify(Ctx *c, const uint8_t *source, size_t bytes, unsigned keep)
+{
+    Out *o = &c->o;
+    unsigned width = bytes >= 8 ? 8 : bytes >= 4 ? 4 : bytes >= 2 ? 2 : 1;
+
+    save_flags(o);
+    b(o, 0x49); b(o, 0xba); w64(o, (uint64_t)(uintptr_t)source);   /* movabs r10, source */
+    for (size_t at = 0; at + width <= bytes; at += width) emit_verify_compare(c, width, at);
+    if (bytes % width) emit_verify_compare(c, width, bytes - width);
+    if (keep) restore_flags(o);
+    /* Passed: other versions may be tried again on a later failure. */
+    b(o, 0xc7); b(o, 0x87); w32(o, (uint32_t)offsetof(PwX86State, verify_hops));
+    w32(o, PW_X86_REENCODE_VERIFY_HOPS);                            /* mov dword [rdi+hops], n */
+}
+
+/* The stale exit, then the copy of the source the check compares with. */
+static void emit_source_copy(Ctx *c, PwX86Block *block, const uint8_t *source, size_t bytes)
+{
+    Out *o = &c->o;
+    size_t copy, to_exit[3];
+
+    if (!c->verify_count) return;
+    for (unsigned k = 0; k < c->verify_count; k++) land32(o, c->verify_jne[k]);
+    /* Another translation of this PC, while hops last (the flags are in r14). */
+    b(o, 0x49); b(o, 0xbb); block->redirect_patch_offset = o->n; w64(o, 0); /* movabs r11, slot */
+    b(o, 0x4c); b(o, 0x89); b(o, 0x9f); w32(o, (uint32_t)offsetof(PwX86State, stale_slot)); /* mov [rdi+stale_slot], r11 */
+    b(o, 0x4d); b(o, 0x85); b(o, 0xdb);                             /* test r11, r11 */
+    to_exit[0] = jump8(o, 0x74);                                    /* jz exit */
+    b(o, 0xff); b(o, 0x8f); w32(o, (uint32_t)offsetof(PwX86State, verify_hops)); /* dec dword [rdi+hops] */
+    to_exit[1] = jump8(o, 0x7e);                                    /* jle exit */
+    b(o, 0x4d); b(o, 0x8b); b(o, 0x1b);                             /* mov r11, [r11] */
+    b(o, 0x4d); b(o, 0x85); b(o, 0xdb);                             /* test r11, r11 */
+    to_exit[2] = jump8(o, 0x74);                                    /* jz exit */
+    restore_flags(o);
+    b(o, 0x41); b(o, 0xff); b(o, 0xe3);                             /* jmp r11 */
+    for (unsigned k = 0; k < 3; k++) land8(o, to_exit[k]);
+    restore_flags(o);
+    emit_leave(o, c->call_stack);
+    store_state_imm(o, offsetof(PwX86State, eip), c->block_pc);
+    b(o, 0xb8); w32(o, PW_X86_REENCODE_STALE); b(o, 0xc3);          /* mov eax, STALE; ret */
+    while (o->n % 8) b(o, 0xcc);
+    copy = o->n;
+    for (size_t k = 0; k < bytes; k++) b(o, source[k]);
+    for (unsigned k = 0; k < c->verify_count; k++)
+        put32(o, c->verify_rel[k], (uint32_t)(copy + c->verify_at[k] - (c->verify_rel[k] + 4)));
+    block->source_copy_offset = copy;
+}
+
 static void emit_cold_paths(Ctx *c, PwX86Block *block)
 {
     Out *o = &c->o;
@@ -1649,7 +1739,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     Inst insts[MAX_INSTS];
     uint32_t live[MAX_INSTS];
     unsigned count = 0, superblocks;
-    size_t cursor = 0;
+    size_t cursor = 0, verify;
     Ctx c;
 
     if (!source || !bytes || !output || !capacity || !block || !options)
@@ -1703,6 +1793,9 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     block->canonical_entry_offset = 0;
     emit_enter(&c.o, c.call_stack);
     block->chain_entry_offset = c.o.n;
+    /* Source that may change unnoticed: every entry checks it first. */
+    verify = options->verify_source && cursor > options->verify_from ? cursor : 0;
+    if (verify) emit_verify(&c, source, verify, (insts[0].use | (live[0] & ~insts[0].def)) != 0);
 
     cursor = 0;
     for (unsigned k = 0; k < count; k++) {
@@ -1922,6 +2015,7 @@ int pw_x86_reencode(const uint8_t *source, size_t bytes, uint32_t pc,
     emit_side_exits(&c);
     emit_divide_stubs(&c);
     emit_cold_paths(&c, block);
+    emit_source_copy(&c, block, source, verify);
     if (c.o.failed) return PW_ERR_LIMIT;
     block->instructions = count;
     block->source_bytes = cursor;

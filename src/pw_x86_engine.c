@@ -2,6 +2,7 @@
 #include "pw_x86_engine.h"
 #include "pw_x86_reencode.h"
 #include "pw_guest_fp.h"
+#include <stdint.h>
 #include <string.h>
 
 /* A zero tag would match guest PC zero and jump through an empty pointer.
@@ -100,6 +101,82 @@ int pw_x86_engine_set_quantum(PwX86Engine *engine, uint32_t quantum)
     if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
     engine->quantum = quantum;
     return PW_OK;
+}
+
+int pw_x86_engine_set_source_view_writable(PwX86Engine *engine, PwX86SourceViewWritable view)
+{
+    if(!engine || !engine->initialized) return PW_ERR_PRECONDITION;
+    engine->source_view_writable = view;
+    return PW_OK;
+}
+
+/* Whether entry's source still holds the bytes it was translated from. */
+static int source_current(const PwX86Engine *engine, const PwX86CacheEntry *entry)
+{
+    return !memcmp(entry->source, (const uint8_t *)engine->code.exec_base + entry->code_offset +
+                   entry->source_copy_offset, entry->source_bytes);
+}
+
+/* The block at pc found its source changed: retire it unless it is a newer
+ * block than the one that ran (one reached through a link into a retired
+ * block) and still current. */
+static void retire_stale(PwX86Engine *engine, uint32_t pc)
+{
+    PwX86CacheEntry *entry = NULL;
+
+    engine->stale_blocks++;
+    if(pw_x86_cache_lookup_mut(&engine->cache, pc, &entry) != PW_OK || !entry->verify ||
+       source_current(engine, entry))
+        return;
+    entry->retired = 1;
+    engine->retired_blocks++;
+    engine->retired_total++;
+}
+
+/* A retired block of pc whose source holds its bytes again, brought back. */
+static int revive(PwX86Engine *engine, uint32_t pc, const PwX86CacheEntry **found)
+{
+    PwX86CacheEntry *entry;
+    uint32_t cursor = 0;
+
+    if(!engine->retired_blocks) return PW_ERR_NOT_FOUND;
+    while(pw_x86_cache_next_retired(&engine->cache, pc, &cursor, &entry) == PW_OK) {
+        if(!source_current(engine, entry)) continue;
+        entry->retired = 0;
+        engine->retired_blocks--;
+        engine->revived_blocks++;
+        *found = entry;
+        return PW_OK;
+    }
+    return PW_ERR_NOT_FOUND;
+}
+
+/* The block whose redirect slot a stale exit left (PwX86State.stale_slot). */
+static PwX86CacheEntry *redirect_owner(PwX86Engine *engine, uintptr_t slot)
+{
+    const uintptr_t base = (uintptr_t)engine->cache.entries;
+    PwX86CacheEntry *entry;
+
+    if(slot < base || slot >= base + engine->cache.capacity * sizeof(*entry)) return NULL;
+    entry = &engine->cache.entries[(slot - base) / sizeof(*entry)];
+    if(slot != (uintptr_t)&entry->redirect || !entry->used || entry->generation != engine->cache.generation ||
+       entry->verify != PW_X86_VERIFY_ENTRY)
+        return NULL;
+    return entry;
+}
+
+/* The block a link slot belongs to, retired or not. */
+static PwX86CacheEntry *slot_owner(PwX86Engine *engine, const PwX86LinkSlot *slot)
+{
+    const uintptr_t at = (uintptr_t)slot, base = (uintptr_t)engine->cache.entries;
+    PwX86CacheEntry *entry;
+
+    if(at < base || at >= base + engine->cache.capacity * sizeof(*entry)) return NULL;
+    entry = &engine->cache.entries[(at - base) / sizeof(*entry)];
+    if(!entry->used || entry->generation != engine->cache.generation ||
+       (slot != &entry->link_slots[0] && slot != &entry->link_slots[1]))
+        return NULL;
+    return entry;
 }
 
 int pw_x86_engine_set_chaining(PwX86Engine *engine, unsigned enabled)
@@ -418,8 +495,10 @@ int pw_x86_engine_set_indirect(PwX86Engine *engine, unsigned enabled)
 
 static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry)
 {
-    const uint8_t *source=NULL;size_t available=0;
-    int status=engine->source_view(engine->source_opaque,pc,&source,&available);
+    const uint8_t *source=NULL;size_t available=0,writable_from=SIZE_MAX;
+    int status=engine->source_view_writable
+        ? engine->source_view_writable(engine->source_opaque,pc,&source,&available,&writable_from)
+        : engine->source_view(engine->source_opaque,pc,&source,&available);
     if(status!=PW_OK)return status;
     if(!source || !available)return PW_ERR_NOT_FOUND;
     if(available>PW_X86_ENGINE_MAX_SOURCE)available=PW_X86_ENGINE_MAX_SOURCE;
@@ -433,7 +512,8 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         engine->reencode_enabled ? engine->chain_targets : NULL,
         engine->residency_enabled ? engine->global_resident : (uint8_t)0,
         engine->fault_markers, engine->unbounded_chains, engine->call_stack_base != NULL,
-        engine->superblocks, engine->native_fp, engine->call_predict };
+        engine->superblocks, engine->native_fp, engine->call_predict,
+        writable_from < available, writable_from };
     int last = PW_ERR_UNSUPPORTED;
     if (engine->reencode_enabled) {
         last = pw_x86_reencode(source, available, pc, scratch, sizeof(scratch), &best, &options);
@@ -443,21 +523,43 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         last = pw_x86_translate_opts(source, available, pc, scratch, sizeof(scratch), &best, &options);
     if (last != PW_OK) return last;
     if (!best.instructions) return PW_ERR_TRUNCATED;
+    uint8_t verify=PW_X86_VERIFY_NONE;
+    if(best.source_copy_offset) verify=PW_X86_VERIFY_ENTRY;
+    else if(writable_from<best.source_bytes) {
+        /* An emitted block checks its source in the dispatcher, from a copy
+         * after its code; nothing links to it. */
+        const size_t copy=(best.code_bytes+7)&~(size_t)7;
+        if(copy+best.source_bytes>sizeof(scratch))return PW_ERR_LIMIT;
+        memset(scratch+best.code_bytes,0xcc,copy-best.code_bytes);
+        memcpy(scratch+copy,source,best.source_bytes);
+        best.code_bytes=copy+best.source_bytes;
+        best.source_copy_offset=copy;
+        verify=PW_X86_VERIFY_DISPATCH;
+    }
     if(best.code_bytes>engine->cache.arena_bytes-engine->cache.cursor)return PW_ERR_LIMIT;
 
-    /* If chaining is enabled and exit is chainable, patch link slot addresses in scratch */
-    if(best.exit.chainable && engine->chaining_enabled) {
+    /* The entry the block will be published in, for the addresses of its
+     * link slots and its redirect slot (retired blocks of pc stay where
+     * they are). */
+    PwX86CacheEntry *cand = NULL;
+    {
         uint32_t hash=pc*2654435761u;hash^=hash>>16;
         uint32_t slot=hash%engine->cache.capacity;
-        PwX86CacheEntry *cand = NULL;
         for(uint32_t probe=0; probe<engine->cache.capacity; probe++) {
             PwX86CacheEntry *c=&engine->cache.entries[slot];
-            if(!c->used || (c->generation==engine->cache.generation && c->guest_pc==pc)) {
+            if(!c->used || (c->generation==engine->cache.generation && c->guest_pc==pc && !c->retired)) {
                 cand = c;
                 break;
             }
             slot=(slot+1)%engine->cache.capacity;
         }
+    }
+    if(cand && best.redirect_patch_offset) {
+        uintptr_t redirect = (uintptr_t)&cand->redirect;
+        memcpy(scratch + best.redirect_patch_offset, &redirect, sizeof(redirect));
+    }
+    /* If chaining is enabled and exit is chainable, patch link slot addresses in scratch */
+    if(best.exit.chainable && engine->chaining_enabled) {
         if(cand) {
             uintptr_t taken_slot = (uintptr_t)&cand->link_slots[0].target_code;
             memcpy(scratch + best.exit.target_patch_offset, &taken_slot, sizeof(taken_slot));
@@ -496,6 +598,9 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
 
     /* Initialize link slot stubs */
     PwX86CacheEntry *e_mut = (PwX86CacheEntry *)*entry;
+    e_mut->source = source;
+    e_mut->verify = verify;
+    e_mut->redirect = NULL;
     map_block(engine, e_mut);
     uint8_t *exec_base = (uint8_t *)engine->code.exec_base;
     if(best.exit.chainable) {
@@ -518,6 +623,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
         if(engine->chaining_enabled) {
             PwX86CacheEntry *tgt = NULL;
             if(pw_x86_cache_lookup_mut(&engine->cache, best.exit.target_pc, &tgt) == PW_OK &&
+               tgt->verify != PW_X86_VERIFY_DISPATCH &&
                may_link(engine, &e_mut->exit_contract, &tgt->entry_contract)) {
                 engine->attempted_links++;
                 if(pw_x86_contracts_match(&e_mut->exit_contract, &tgt->entry_contract)) {
@@ -535,6 +641,7 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
             }
             if(best.exit.kind == PW_X86_EXIT_CONDITIONAL) {
                 if(pw_x86_cache_lookup_mut(&engine->cache, best.exit.fallthrough_pc, &tgt) == PW_OK &&
+                   tgt->verify != PW_X86_VERIFY_DISPATCH &&
                    may_link(engine, &e_mut->exit_contract, &tgt->entry_contract)) {
                     engine->attempted_links++;
                     if(pw_x86_contracts_match(&e_mut->exit_contract, &tgt->entry_contract)) {
@@ -570,7 +677,8 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
             uint32_t *next = &cand->pending_next[side];
 
             if(!slot->is_linked && slot->target_pc != pc) { link = next; continue; }
-            if(!slot->is_linked && may_link(engine, &cand->exit_contract, &e_mut->entry_contract)) {
+            if(!slot->is_linked && e_mut->verify != PW_X86_VERIFY_DISPATCH &&
+               may_link(engine, &cand->exit_contract, &e_mut->entry_contract)) {
                 engine->attempted_links++;
                 if(pw_x86_contracts_match(&cand->exit_contract, &e_mut->entry_contract)) {
                     slot->target_code = exec_base + e_mut->code_offset + e_mut->chain_entry_offset;
@@ -613,39 +721,28 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
         PwX86LinkSlot *last_slot = (PwX86LinkSlot *)state->last_exit_slot;
         if(last_slot->target_pc == state->eip && !last_slot->is_linked) {
             PwX86CacheEntry *target_entry = NULL;
-            if(pw_x86_cache_lookup_mut(&engine->cache, state->eip, &target_entry) == PW_OK) {
-                PwX86CacheEntry *source_entry = NULL;
-                if(engine->native_fp &&
-                   (pw_x86_cache_lookup_mut(&engine->cache, last_slot->source_pc, &source_entry) != PW_OK ||
-                    !may_link(engine, &source_entry->exit_contract, &target_entry->entry_contract)))
+            if(pw_x86_cache_lookup_mut(&engine->cache, state->eip, &target_entry) == PW_OK &&
+               target_entry->verify != PW_X86_VERIFY_DISPATCH) {
+                /* The slot's own block, which may be a retired one. */
+                PwX86CacheEntry *source_entry = slot_owner(engine, last_slot);
+                if(!source_entry || (engine->native_fp &&
+                   !may_link(engine, &source_entry->exit_contract, &target_entry->entry_contract)))
                     goto dispatch;
-                source_entry = NULL;
-                size_t reconcile_offset = 0;
-                if(pw_x86_cache_lookup_mut(&engine->cache, last_slot->source_pc, &source_entry) == PW_OK) {
-                    if(last_slot == &source_entry->link_slots[0]) {
-                        reconcile_offset = source_entry->exit.target_reconcile_offset;
-                    } else if(last_slot == &source_entry->link_slots[1]) {
-                        reconcile_offset = source_entry->exit.fallthrough_reconcile_offset;
-                    }
-                }
+                size_t reconcile_offset = last_slot == &source_entry->link_slots[0]
+                    ? source_entry->exit.target_reconcile_offset
+                    : source_entry->exit.fallthrough_reconcile_offset;
                 engine->attempted_links++;
-                if(source_entry && pw_x86_contracts_match(&source_entry->exit_contract, &target_entry->entry_contract)) {
+                if(pw_x86_contracts_match(&source_entry->exit_contract, &target_entry->entry_contract)) {
                     last_slot->target_code = (uint8_t *)engine->code.exec_base + target_entry->code_offset + target_entry->chain_entry_offset;
                     last_slot->canonical_code = (uint8_t *)engine->code.exec_base + target_entry->code_offset + target_entry->canonical_entry_offset;
                     last_slot->is_reconciled = 0;
-                } else if(source_entry) {
+                } else {
                     last_slot->target_code = (uint8_t *)engine->code.exec_base + source_entry->code_offset + reconcile_offset;
                     last_slot->canonical_code = (uint8_t *)engine->code.exec_base + target_entry->code_offset + target_entry->canonical_entry_offset;
                     last_slot->is_reconciled = 1;
-                } else {
-                    last_slot->target_code = (uint8_t *)engine->code.exec_base + target_entry->code_offset + target_entry->canonical_entry_offset;
-                    last_slot->canonical_code = (uint8_t *)engine->code.exec_base + target_entry->code_offset + target_entry->canonical_entry_offset;
-                    last_slot->is_reconciled = 0;
                 }
                 last_slot->is_linked = 1;
-                if(source_entry && (last_slot == &source_entry->link_slots[0] ||
-                                    last_slot == &source_entry->link_slots[1]))
-                    sync_direct(engine, source_entry, last_slot == &source_entry->link_slots[1]);
+                sync_direct(engine, source_entry, last_slot == &source_entry->link_slots[1]);
                 engine->successful_links++;
             }
         }
@@ -654,10 +751,16 @@ int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *re
 dispatch:;
     const PwX86CacheEntry *entry=NULL;
     int status=pw_x86_cache_lookup(&engine->cache,state->eip,&entry);
+    if(status==PW_OK && entry->verify==PW_X86_VERIFY_DISPATCH && !source_current(engine,entry)) {
+        retire_stale(engine,state->eip);
+        status=PW_ERR_NOT_FOUND;
+    }
     if(status==PW_OK)report->cache_hit=1;
     else if(status==PW_ERR_NOT_FOUND) {
-        status=compile(engine,state->eip,&entry);
-        if(status!=PW_OK)return status;
+        if(revive(engine,state->eip,&entry)!=PW_OK) {
+            status=compile(engine,state->eip,&entry);
+            if(status!=PW_OK)return status;
+        }
     } else return status;
 
     report->instructions=entry->instructions;report->source_bytes=entry->source_bytes;
@@ -665,7 +768,8 @@ dispatch:;
     if(engine->indirect_enabled) {
         /* The indirect table enters any block at its canonical entry, from
          * emitted code; with native FP, only emitted blocks go there. */
-        if(!(engine->native_fp && pw_x86_reencoded(&entry->entry_contract))) {
+        if(!(engine->native_fp && pw_x86_reencoded(&entry->entry_contract)) &&
+           entry->verify!=PW_X86_VERIFY_DISPATCH) {
             PwX86IndirectTarget *target=&engine->indirect_targets[
                 pw_x86_indirect_slot(entry->guest_pc,PW_X86_ENGINE_INDIRECT_SLOTS-1)];
             target->guest_pc=entry->guest_pc;
@@ -695,6 +799,8 @@ dispatch:;
     state->reg_spills = 0;
 
     state->call_stack_top = engine->call_stack_top;
+    state->verify_hops = PW_X86_REENCODE_VERIFY_HOPS;
+    state->stale_slot = 0;
     void *code_entry=(uint8_t *)engine->code.exec_base+entry->code_offset+entry->canonical_entry_offset;
     int invoked;
     uint64_t execution_begin=0;
@@ -728,6 +834,25 @@ dispatch:;
         engine->execution_samples++;
         if(!execution_begin || !end || end<execution_begin)engine->execution_clock_errors++;
         else engine->execution_ns+=end-execution_begin;
+    }
+
+    /* A block in the chain found its source changed and stopped at its own
+     * PC: the next step translates the current bytes. */
+    if(invoked==PW_X86_REENCODE_STALE) {
+        PwX86CacheEntry *stale=redirect_owner(engine,state->stale_slot);
+        const PwX86CacheEntry *current=NULL;
+        retire_stale(engine,state->eip);
+        invoked=0;
+        /* Whatever still enters the stale block (a link, a predicted call)
+         * goes on from its failed check to the translation that matches
+         * now, without coming back here. */
+        if(stale && stale->guest_pc==state->eip &&
+           (pw_x86_cache_lookup(&engine->cache,state->eip,&current)==PW_OK ||
+            revive(engine,state->eip,&current)==PW_OK ||
+            compile(engine,state->eip,&current)==PW_OK) &&
+           current!=stale && current->verify==PW_X86_VERIFY_ENTRY)
+            stale->redirect=(const uint8_t *)engine->code.exec_base+current->code_offset+
+                            current->chain_entry_offset;
     }
 
     /* The block a failed step entered, for the fault report. Taken only on
@@ -855,6 +980,7 @@ int pw_x86_engine_reset(PwX86Engine *engine,uint32_t generation)
         memset(engine->block_map,0,
                ((discarded_bytes+PW_X86_ENGINE_FAULT_GRANULE-1)/PW_X86_ENGINE_FAULT_GRANULE)*sizeof(uint32_t));
     engine->last_published=0;
+    engine->retired_blocks=0;
     /* The published extent is now writable. Stub emission or the next
      * compile seals its own pages; no live entry survives a successful reset. */
     engine->sealed=0;

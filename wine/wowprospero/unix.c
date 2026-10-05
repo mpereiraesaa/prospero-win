@@ -159,26 +159,41 @@ static int readable( uintptr_t address, int *writable )
     return 1;
 }
 
-static int source_view( void *opaque, uint32_t pc, const uint8_t **source, size_t *bytes )
+/* The source span at pc, and how far into it the bytes stay read-only.
+ * Translations of read-only bytes trust them: a later protection change
+ * tells flush() whether they may have changed. Translations that reach
+ * writable bytes check their source whenever they are entered instead, as
+ * a processor sees code that is written without any call (Mod Loader puts
+ * its hook in and out of San Andreas's CText::Get around every call it
+ * passes on, with plain stores to code it unprotected once). */
+static int source_view_writable( void *opaque, uint32_t pc, const uint8_t **source, size_t *bytes,
+                                 size_t *writable_from )
 {
     const uintptr_t page = 0x1000;
     uintptr_t end = ((uintptr_t)pc | (page - 1)) + 1;
     int writable, next_writable;
 
     if (pc < 0x10000 || !readable( pc, &writable )) return PW_ERR_NOT_FOUND;
+    *writable_from = writable ? 0 : SIZE_MAX;
     if (end - pc < PW_X86_ENGINE_MAX_SOURCE && end < 0x100000000ull && readable( end, &next_writable ))
     {
+        if (!writable && next_writable) *writable_from = end - pc;
         end += page;
-        writable |= next_writable;
     }
     *source = (const uint8_t *)(uintptr_t)pc;
     *bytes = end - pc;
     if (*bytes > PW_X86_ENGINE_MAX_SOURCE) *bytes = PW_X86_ENGINE_MAX_SOURCE;
     /* Whatever a translation may read from; flush() keys on these marks. */
-    pw_x86_code_pages_mark( &code_pages, pc, *bytes );
-    /* Before the protection check in flush() can trust a read-only page. */
-    if (writable) pw_x86_code_pages_mark_writable( &code_pages, pc, *bytes );
+    pw_x86_code_pages_mark( &code_pages, pc, *writable_from < *bytes ? *writable_from : *bytes );
+    if (*writable_from < *bytes) pw_x86_code_pages_mark_checked( &code_pages, pc, *bytes );
     return PW_OK;
+}
+
+static int source_view( void *opaque, uint32_t pc, const uint8_t **source, size_t *bytes )
+{
+    size_t writable_from;
+
+    return source_view_writable( opaque, pc, source, bytes, &writable_from );
 }
 
 /* Zeroed memory above the guest's 4 GiB, from Wine's own virtual memory
@@ -241,6 +256,7 @@ static int setup_thread( void *context, const PwWowThreadBudget *budget )
     if (pw_x86_engine_init( &thread->engine, &thread->vm, thread->entries, budget->entries,
                             budget->arena_bytes, (uint32_t)code_generation, source_view, NULL ) == PW_OK)
     {
+        pw_x86_engine_set_source_view_writable( &thread->engine, source_view_writable );
         if (pw_x86_hostexec_init( &thread->hostexec, &thread->vm, budget->hostexec_bytes ) == PW_OK)
             return 0;
         pw_x86_engine_destroy( &thread->engine );
@@ -959,7 +975,8 @@ static void cache_report( struct pw_thread *thread, uint64_t wall, unsigned fina
 
     fprintf( stderr, "wowprospero cache: tid=%04x instance=%llu cumulative=1 time_ns=%llu final=%u "
              "generation=%u capacity=%u occupied=%llu arena_used=%zu arena_bytes=%zu "
-             "hits=%llu misses=%llu probes=%llu max_probe=%u publishes=%llu resets=%llu\n",
+             "hits=%llu misses=%llu probes=%llu max_probe=%u publishes=%llu resets=%llu "
+             "stale=%llu retired=%llu revived=%llu\n",
              (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
              (unsigned long long)thread->cache_report_id, (unsigned long long)wall, final,
              cache->generation, cache->capacity,
@@ -967,7 +984,8 @@ static void cache_report( struct pw_thread *thread, uint64_t wall, unsigned fina
              cache->cursor, cache->arena_bytes, (unsigned long long)cache->hits,
              (unsigned long long)cache->misses, (unsigned long long)cache->lookup_probes,
              cache->max_probe, (unsigned long long)cache->publishes,
-             (unsigned long long)cache->resets );
+             (unsigned long long)cache->resets, (unsigned long long)thread->engine.stale_blocks,
+             (unsigned long long)thread->engine.retired_total, (unsigned long long)thread->engine.revived_blocks );
 }
 
 static void timing_report( struct pw_thread *thread, uint64_t tsc )

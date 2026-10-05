@@ -38,6 +38,13 @@ static int view(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes)
     return PW_OK;
 }
 
+/* view() with every byte writable: each block checks its source on entry. */
+static int view_writable(void *opaque, uint32_t pc, const uint8_t **data, size_t *bytes, size_t *writable_from)
+{
+    *writable_from = 0;
+    return view(opaque, pc, data, bytes);
+}
+
 static void initial(PwX86State *s)
 {
     memset(s, 0, sizeof(*s));
@@ -61,8 +68,8 @@ typedef struct Run {
     PwX86State state;
     uint8_t data[0x1000];
     int status;
-    uint64_t reencoded, chain_slots;
-    unsigned steps;
+    uint64_t reencoded, chain_slots, stale;
+    unsigned steps, verified;
 } Run;
 
 static unsigned unbounded;  /* pw_x86_engine_set_unbounded_chains for run() */
@@ -83,6 +90,8 @@ static unsigned call_predict;
 /* run()'s re-encoder with fault markers, which only a test of a fault
  * (test_pw_x86_fault_markers.c) needs a handler for. */
 static unsigned fault_markers;
+/* run()'s source is writable (view_writable). */
+static unsigned all_writable;
 static PwVmBackend posix;
 
 static int writable_commit(void *context, const PwVmRegion *region, size_t offset, size_t bytes, unsigned protection)
@@ -136,6 +145,7 @@ static void setup(PwX86Engine *engine, PwX86CacheEntry *entries, unsigned reenco
     assert(pw_x86_engine_set_call_predict(engine, call_predict && superblocks) == PW_OK);
     assert(pw_x86_engine_set_native_fp(engine, native_fp && reencode) == PW_OK);
     assert(pw_x86_engine_set_fault_markers(engine, fault_markers && reencode) == PW_OK);
+    assert(pw_x86_engine_set_source_view_writable(engine, all_writable ? view_writable : NULL) == PW_OK);
     if (call_stack && reencode)
         assert(pw_x86_engine_set_call_stack(engine, call_stack_region + PW_X86_ENGINE_CALL_STACK_GUARD,
                                             CALL_STACK_BYTES) == PW_OK);
@@ -170,6 +180,10 @@ static Run execute(PwX86Engine *engine, const uint8_t *code, size_t bytes)
     pw_x86_engine_fp_sync(engine, &r.state);
     memcpy(r.data, guest + DATA, sizeof(r.data));
     r.reencoded = engine->reencoded_blocks;
+    r.stale = engine->stale_blocks;
+    r.verified = 0;
+    for (unsigned k = 0; k < engine->cache.capacity; k++)
+        r.verified += engine->cache.entries[k].used && engine->cache.entries[k].verify;
     r.chain_slots = 0;
     for (unsigned k = 0; engine->chain_targets && k < PW_X86_REENCODE_CHAIN_ENTRIES; k++)
         r.chain_slots += engine->chain_targets[k].host_code != NULL;
@@ -235,15 +249,30 @@ static Run run_production(const uint8_t *code, size_t bytes)
     return r;
 }
 
+/* As run_production, from writable source: every block checks its source
+ * (PwX86TranslateOptions.verify_source) on every entry, and none finds it
+ * changed. */
+static Run run_production_writable(const uint8_t *code, size_t bytes)
+{
+    Run r;
+    all_writable = 1;
+    r = run_production(code, bytes);
+    all_writable = 0;
+    return r;
+}
+
 /* Both backends give the same result, and so does the re-encoder on a call
- * stack, with superblocks, and as wowprospero runs it; the re-encoder took
- * some blocks. */
+ * stack, with superblocks, and as wowprospero runs it, from read-only and
+ * writable source; the re-encoder took some blocks. */
 static void compare(const uint8_t *code, size_t bytes)
 {
     Run emitter = run(code, bytes, 0), reencoded = run(code, bytes, 1), stacked = run_call_stack(code, bytes);
     Run super = run_superblocks(code, bytes), production = run_production(code, bytes);
+    Run checked = run_production_writable(code, bytes);
     same(&super, &emitter);
     same(&production, &emitter);
+    same(&checked, &emitter);
+    assert(checked.reencoded && checked.verified && !checked.stale && !production.verified);
     assert(production.reencoded);
     assert(super.reencoded);
     if (emitter.status != PW_OK || emitter.state.eip != 0xdead0000u)

@@ -12,6 +12,14 @@ enum { PW_X86_ENGINE_MAX_SOURCE=15*32, PW_X86_ENGINE_MAX_CODE=16384,
  * remains alive and unchanged for the engine generation. */
 typedef int (*PwX86SourceView)(void *opaque,uint32_t guest_pc,
                                const uint8_t **source,size_t *bytes);
+/* A source view that also says where the span may change unnoticed: from
+ * *writable_from bytes into it (its page is writable), or nowhere when
+ * *writable_from >= *bytes. Blocks whose source reaches that far check it
+ * whenever they are entered (PwX86TranslateOptions.verify_source); the
+ * span must stay mapped and readable for the generation, but not unchanged. */
+typedef int (*PwX86SourceViewWritable)(void *opaque,uint32_t guest_pc,
+                                       const uint8_t **source,size_t *bytes,
+                                       size_t *writable_from);
 /* Optional owner-thread CPU clock in nanoseconds; zero means unavailable. */
 typedef uint64_t (*PwX86ExecutionClock)(void *opaque);
 
@@ -38,7 +46,13 @@ typedef struct PwX86Engine {
     PwVmRegion code;
     PwX86Cache cache;
     PwX86SourceView source_view;
+    PwX86SourceViewWritable source_view_writable;
     void *source_opaque;
+    /* Blocks that found their source changed, of them those retired, and
+     * retired blocks whose source came back (totals survive resets); the
+     * retired blocks of this generation. */
+    uint64_t stale_blocks, retired_total, revived_blocks;
+    uint32_t retired_blocks;
     uint64_t dispatches,retired_instructions,compiles;
     PwX86ExecutionClock execution_clock;
     void *execution_clock_opaque;
@@ -117,6 +131,15 @@ int pw_x86_engine_init(PwX86Engine *,const PwVmBackend *,
                        PwX86CacheEntry *,uint32_t,size_t,uint32_t,
                        PwX86SourceView,void *);
 int pw_x86_engine_set_quantum(PwX86Engine *, uint32_t);
+/* Translate from now on through view, which says where the source may change
+ * unnoticed (PwX86SourceViewWritable), with the init's opaque; NULL returns
+ * to the init's view, which promises the source never changes. A block from
+ * writable source checks it on every entry: a re-encoded one at its chain
+ * entry, an emitted one in the dispatcher (nothing links to it). When the
+ * check fails the block is retired and the current bytes translated, or an
+ * earlier retired block of the same PC whose source matches them again
+ * comes back; links into a retired block stay, and it keeps checking. */
+int pw_x86_engine_set_source_view_writable(PwX86Engine *, PwX86SourceViewWritable view);
 int pw_x86_engine_set_chaining(PwX86Engine *, unsigned);
 int pw_x86_engine_set_residency(PwX86Engine *, unsigned);
 int pw_x86_engine_set_lazy_flags(PwX86Engine *, unsigned);

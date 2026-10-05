@@ -42,7 +42,8 @@ int pw_x86_cache_lookup_mut(PwX86Cache *cache,uint32_t guest_pc,PwX86CacheEntry 
             record_probes(cache,probe);cache->misses++;*entry=NULL;
             return PW_ERR_NOT_FOUND;
         }
-        if(candidate->generation==cache->generation && candidate->guest_pc==guest_pc) {
+        if(candidate->generation==cache->generation && candidate->guest_pc==guest_pc &&
+           !candidate->retired) {
             record_probes(cache,probe);cache->hits++;*entry=candidate;return PW_OK;
         }
         slot=(slot+1)%cache->capacity;
@@ -66,7 +67,8 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
     for(uint32_t probe=0;probe<cache->capacity;probe++) {
         PwX86CacheEntry *candidate=&cache->entries[slot];
         if(!candidate->used){available=1;break;}
-        if(candidate->generation==cache->generation && candidate->guest_pc==guest_pc)
+        if(candidate->generation==cache->generation && candidate->guest_pc==guest_pc &&
+           !candidate->retired)
             return PW_ERR_STATE;
         slot=(slot+1)%cache->capacity;
     }
@@ -81,7 +83,8 @@ int pw_x86_cache_publish(PwX86Cache *cache,uint32_t guest_pc,const PwX86Block *b
         .entry_contract=block->entry_contract,
         .exit_contract=block->exit_contract,
         .exit=block->exit,.pending_head=pending_head,
-        .fault_table_offset=block->fault_table_offset,.exit_offset=block->exit_offset,.used=1};
+        .fault_table_offset=block->fault_table_offset,.exit_offset=block->exit_offset,
+        .source_copy_offset=block->source_copy_offset,.used=1};
     cache->entries[slot].link_slots[0]=(PwX86LinkSlot){
         .target_pc=block->exit.target_pc,.source_pc=guest_pc,.target_code=NULL,.canonical_code=NULL,.is_linked=0,.is_reconciled=0};
     cache->entries[slot].link_slots[1]=(PwX86LinkSlot){
@@ -100,4 +103,21 @@ int pw_x86_cache_reset(PwX86Cache *cache,uint32_t generation)
        generation==cache->generation)return PW_ERR_PRECONDITION;
     memset(cache->entries,0,sizeof(*cache->entries)*cache->capacity);
     cache->generation=generation;cache->cursor=0;cache->occupied=0;cache->resets++;return PW_OK;
+}
+
+int pw_x86_cache_next_retired(PwX86Cache *cache,uint32_t guest_pc,uint32_t *cursor,PwX86CacheEntry **entry)
+{
+    if(!cache || !cache->entries || !cache->generation || !cursor || !entry)
+        return PW_ERR_PRECONDITION;
+    const uint32_t first=first_slot(cache,guest_pc);
+    for(uint32_t probe=*cursor;probe<cache->capacity;probe++) {
+        PwX86CacheEntry *candidate=&cache->entries[(first+probe)%cache->capacity];
+        if(!candidate->used)break;
+        if(candidate->generation==cache->generation && candidate->guest_pc==guest_pc &&
+           candidate->retired) {
+            *cursor=probe+1;*entry=candidate;return PW_OK;
+        }
+    }
+    *cursor=cache->capacity;*entry=NULL;
+    return PW_ERR_NOT_FOUND;
 }

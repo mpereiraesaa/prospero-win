@@ -33,7 +33,25 @@ typedef struct PwX86CacheEntry {
     size_t exit_offset;         /* PwX86Block.exit_offset */
     uint32_t arena_next;        /* the next block in the arena, as index + 1 */
     unsigned used;
+    /* A block whose source may change unnoticed keeps a copy of it at
+     * source_copy_offset in its code (PwX86Block.source_copy_offset) and
+     * checks it, at its chain entry (PW_X86_VERIFY_ENTRY) or, for a block
+     * nothing may link to, in the dispatcher (PW_X86_VERIFY_DISPATCH);
+     * source is where it was translated from. */
+    const uint8_t *source;
+    size_t source_copy_offset;
+    uint8_t verify;
+    /* With PW_X86_VERIFY_ENTRY: the chain entry of another translation of
+     * the same PC that a failed check goes on to (PwX86State.verify_hops),
+     * or NULL. */
+    const void *redirect;
+    /* A block whose source changed: lookups pass over it, but its code and
+     * link slots stay for the generation, since links into it remain and
+     * it still checks itself; it comes back if its source does. */
+    uint8_t retired;
 } PwX86CacheEntry;
+
+enum { PW_X86_VERIFY_NONE = 0, PW_X86_VERIFY_ENTRY = 1, PW_X86_VERIFY_DISPATCH = 2 };
 
 typedef struct PwX86Cache {
     PwX86CacheEntry *entries;
@@ -56,4 +74,7 @@ int pw_x86_cache_lookup_mut(PwX86Cache *,uint32_t,PwX86CacheEntry **);
 int pw_x86_cache_publish(PwX86Cache *,uint32_t,const PwX86Block *,size_t,
                          const PwX86CacheEntry **);
 int pw_x86_cache_reset(PwX86Cache *,uint32_t);
+/* The retired blocks of guest_pc in this generation, one per call: *cursor
+ * starts at 0. PW_OK with the next one, PW_ERR_NOT_FOUND after the last. */
+int pw_x86_cache_next_retired(PwX86Cache *,uint32_t,uint32_t *cursor,PwX86CacheEntry **);
 #endif

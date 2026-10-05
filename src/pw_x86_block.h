@@ -86,6 +86,14 @@ typedef struct PwX86State {
      * Linux, others on the PS5). 0 leaves Windows' own values. Last in the
      * structure: the emitter addresses the fields above by offset. */
     uint16_t selector[6];
+    /* A block that verifies its source (PwX86TranslateOptions.verify_source)
+     * and finds it changed goes on to the block its redirect slot names
+     * (PwX86Block.redirect_patch_offset), another translation of the same
+     * PC, while verify_hops lasts: each failed check spends one and each
+     * passed check refills it, so versions that all fail stop. When it
+     * stops it leaves its redirect slot here for the engine. */
+    uintptr_t stale_slot;
+    uint32_t verify_hops;
 } PwX86State;
 
 uint32_t pw_x86_compute_canonical_flags(const PwX86DeferredFlags *df, uint32_t prev_eflags);
@@ -132,6 +140,13 @@ typedef struct PwX86Block {
     PwX86ExitDesc exit;
     size_t fault_table_offset;  /* the fault table, or 0 (see below) */
     size_t exit_offset;         /* where the exit code starts (0: not recorded) */
+    /* A copy of the block's source bytes in its code, or 0: the block
+     * verifies its source (PwX86TranslateOptions.verify_source). */
+    size_t source_copy_offset;
+    /* The imm64 of the movabs that loads the address of the block's redirect
+     * slot (a pointer to a chain entry, or NULL), which the owner patches;
+     * 0 without a source check. */
+    size_t redirect_patch_offset;
 } PwX86Block;
 
 /* Initial bounded DBT subset: push immediate/register/memory, pop register,
@@ -250,6 +265,15 @@ typedef struct PwX86TranslateOptions {
      * the caller's code must stay writable while it runs, as with
      * superblocks. Other targets keep the lookup. */
     unsigned call_predict;
+    /* Source that may change under the translation without any notice
+     * (its page is writable): a re-encoded block whose source reaches
+     * verify_from bytes or further from its start compares its source
+     * bytes with the copy it keeps, every time it is entered, at its chain
+     * entry (which its canonical entry falls into), so every way in passes
+     * the check. On a difference it stops at its own first instruction,
+     * the guest state untouched, and returns PW_X86_REENCODE_STALE. */
+    unsigned verify_source;
+    size_t verify_from;
 } PwX86TranslateOptions;
 
 /* The fault table of a re-encoded block with fault markers, at

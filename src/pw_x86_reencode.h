@@ -59,6 +59,12 @@ enum { PW_X86_REENCODE_HOST_BASE = 16, PW_X86_REENCODE_CHAIN_SLOTS = 65536,
  * or overflows. The engine's step reports it as PW_ERR_UNSUPPORTED. */
 enum { PW_X86_REENCODE_HOST_STEP = 0x100 };
 
+/* What a block that verifies its source (PwX86TranslateOptions.verify_source)
+ * returns when its source no longer matches the copy it was translated from:
+ * state->eip is the block's guest PC and nothing of the block has run. The
+ * engine retires the block and translates the current bytes. */
+enum { PW_X86_REENCODE_STALE = 0x200, PW_X86_REENCODE_VERIFY_HOPS = 8 };
+
 /* Whether a translated block came from this backend. */
 static inline int pw_x86_reencoded(const PwX86RegContract *contract)
 {

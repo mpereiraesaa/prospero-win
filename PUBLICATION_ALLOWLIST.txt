@@ -90,6 +90,7 @@ tests/test_pw_x86_chaining.c
 tests/test_pw_x86_residency.c
 tests/test_pw_x86_global_residency.c
 tests/test_pw_x86_reencode.c
+tests/test_pw_x86_smc.c
 tests/test_pw_x86_fault_markers.c
 tests/test_pw_x86_lazyflags.c
 tests/test_pw_x87.c
