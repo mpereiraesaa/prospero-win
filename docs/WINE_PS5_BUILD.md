@@ -107,6 +107,7 @@ before evaluating a candidate built from that cache.
 | 0894 | `win32u`: its WORD, WCHAR and BYTE system call arguments are extended before the call, as ntdll already does for its BOOLEANs; the clang-built Unix side assumes it and the Windows ABI does not promise it, so a caller that set only the low bytes could pass another character to `NtUserVkKeyScanEx` |
 | 0895 | `ntdll`: also reserve 0x68000000-0x7f000000, which Linux leaves to its own libraries, so the i386 builtin DLLs and a game's DLLs there are direct memory instead of fixed mappings of flexible memory (Battle.net's DLLs held 279 MiB of it) |
 | 0896 | `ntdll`: a process that terminates itself without `ExitProcess`'s first call (an unhandled exception, once winedbg cannot start) ends the other threads first and leaves through `exit()`, so the title's exit handlers restart it into its launcher instead of `_exit()` taking the title down |
+| 0897 | `ntdll`: a reservation at a fixed address outside the reserved areas is handed to the direct-memory allocator until it is unmapped, so committing it backs its pages; the console does not back a bare reservation when it is protected, and the first write to such a commit faulted (Steam's protection layer on 64-bit games) |
 | 0899 | `include`: list the PS5 sync headers (0810, 0820, 0885, 0887) in `include/Makefile.in`, which makedep needs to resolve them; configure failed without it |
 
 ## Allocator
