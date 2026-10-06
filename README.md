@@ -126,6 +126,20 @@ It doesn't bypass DRM or anti-cheat, it doesn't load kernel drivers, and it
 doesn't ship games. Please don't open issues or pull requests with Windows
 binaries, game files or keys.
 
+## Credits
+
+- [BlackBearReloaded](https://github.com/blackbearreloaded) created the PS5
+  Native App Boilerplate the app is built on, and the PS5 OpenGL port that
+  OpenGL games run through.
+- [mihawk-99](https://github.com/mihawk-99) found and fixed several problems
+  with Wine on the PS5 that prospero-win now includes: the floating-point
+  state after a handled exception, memory reserved at a fixed address,
+  decommitted memory, memory and processor usage reports, directory change
+  notifications, and how threads share the console's CPUs.
+
+Third-party code and its licences are listed in the
+[third-party notices](NOTICE.md).
+
 ## License
 
 [LGPL-2.1-or-later](LICENSE), like Wine. See the [licensing notes](LICENSING.md)
