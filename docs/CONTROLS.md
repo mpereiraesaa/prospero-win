@@ -103,6 +103,26 @@ preset instead. Keyboard and mouse input through DirectInput should work,
 since it comes from the same place as normal Windows input, but it hasn't
 been tested.
 
+### A second player
+
+A game that two people play on one PC keyboard, each with their own keys,
+can give the second player a DualSense too. The profile names a second
+keyboard preset in its `[input]` section:
+
+```ini
+[input]
+preset = atomic-bomberman
+player2 = atomic-bomberman-p2
+```
+
+The second DualSense has to be signed in as another PS5 user (a second
+account or a guest): the app opens the pad of a signed-in user other than
+the one who started it, and looks again every few seconds while there is
+none, so the second player can sign in after the game has started. Its
+buttons send keys through `player2`'s preset only: it never acts as an Xbox
+controller and never moves the pointer, and closing the game with
+Options + Create stays the first player's.
+
 ## Closing a game
 
 Hold **Options + Create** for a second on the DualSense. The game is asked
