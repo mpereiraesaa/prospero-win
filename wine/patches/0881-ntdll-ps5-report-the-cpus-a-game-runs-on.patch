@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 6 Oct 2026 19:00:00 +0200
+Subject: [PATCH] ntdll: Report the CPUs a PS5 game may run on.
+
+Wine took the number of processors from sysconf, 16 on the console. A
+game process runs on CPUs 0-12 only (its affinity is 0x1fff), and threads
+of one priority there never share a CPU: measured with a probe, 13 busy
+threads all start at once, a 14th waits until one of them stops, and 20
+leave 7 waiting. A program that starts a worker per reported CPU, as
+modern engines and DXVK's compiler pool do, therefore had three that did
+not run until another blocked. Report the CPUs the process may run on,
+from cpuset_getaffinity, and keep sysconf's count if the call fails.
+
+  dlls/ntdll/unix/system.c | 25 +++++++++++++++++++++++++
+  1 file changed, 25 insertions(+)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index a4e8292..a8b5939 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -1764,6 +1764,28 @@ static void get_random( void *buf, ULONG len )
+  *
+  * Init a couple of places with CPU related information.
+  */
++#ifdef __PROSPERO__
++/* sys/cpuset.h's cpuset_t is wider than the set the console's kernel takes,
++ * which is 64 bits wide (measured), so declare the call with that. */
++extern int cpuset_getaffinity( int level, int which, id_t id, size_t size, ULONGLONG *mask );
++
++/* A game runs on CPUs 0-12 of the console's 16 (measured: its affinity is
++ * 0x1fff), and threads of one priority there never share a CPU, so a program
++ * that starts a worker per reported CPU would have three that do not run
++ * until another blocks. Report the CPUs the process may run on instead of
++ * the ones online. */
++static long ps5_process_cpus( long online )
++{
++    ULONGLONG mask = 0;
++
++    if (cpuset_getaffinity( 3 /* CPU_LEVEL_WHICH */, 2 /* CPU_WHICH_PID */, -1, sizeof(mask), &mask ) || !mask)
++        return online;
++    /* Windows numbers CPUs from 0 and so does the console: a set that is not
++     * 0..n-1 keeps the highest one, so every CPU the process has is named. */
++    return 64 - __builtin_clzll( mask );
++}
++#endif
++
+ void init_cpu_info(void)
+ {
+     long num;
+@@ -1775,6 +1797,9 @@ void init_cpu_info(void)
+         num = 1;
+         WARN("Failed to detect the number of processors.\n");
+     }
++#ifdef __PROSPERO__
++    num = ps5_process_cpus( num );
++#endif
+ #elif defined(CTL_HW) && defined(HW_NCPU)
+     int mib[2];
+     size_t len = sizeof(num);

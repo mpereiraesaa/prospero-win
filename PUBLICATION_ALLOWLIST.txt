@@ -409,3 +409,6 @@ wine/patches/0889-ntdll-ps5-processor-times-from-the-process.patch
 tests/test_wine_directory_changes.py
 tests/wine_directory_changes.c
 wine/patches/0884-server-ps5-poll-for-directory-changes.patch
+tests/test_wine_sched_probe.py
+tests/wine_sched_probe.c
+wine/patches/0881-ntdll-ps5-report-the-cpus-a-game-runs-on.patch

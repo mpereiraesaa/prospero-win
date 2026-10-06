@@ -157,6 +157,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_wine_decommit_zero.py
 	python3 tests/test_wine_seh_fp_state.py
 	python3 tests/test_wine_narrow_syscall_args.py
+	python3 tests/test_wine_sched_probe.py
 	python3 tests/test_wine_fixed_reserve.py
 	python3 tests/test_wine_process_counters.py
 	python3 tests/test_wine_processor_times.py
@@ -208,6 +209,7 @@ wine-check: test
 	python3 tests/test_wine_decommit_zero.py
 	python3 tests/test_wine_seh_fp_state.py
 	python3 tests/test_wine_narrow_syscall_args.py
+	python3 tests/test_wine_sched_probe.py
 	python3 tests/test_wine_fixed_reserve.py
 	python3 tests/test_wine_process_counters.py
 	python3 tests/test_wine_processor_times.py
