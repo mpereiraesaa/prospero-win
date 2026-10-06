@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Fetch the one-shot Lapy helper from the repository's latest GitHub release."""
+"""Fetch the one-shot Lapy helper from the GitHub release the build pins."""
 import argparse
 import json
 import hashlib
@@ -18,12 +18,11 @@ def fetch(url: str, destination: Path) -> None:
             output.write(chunk)
 
 
-def select_latest_release(releases: list[dict]) -> dict:
-    published = [release for release in releases if not release.get("draft")]
-    if not published:
-        raise ValueError("the repository has no published releases")
-    return max(published, key=lambda release:
-               release.get("published_at") or release.get("created_at") or "")
+def verify_pinned_elf(elf: Path, expected_sha256: str) -> None:
+    """Reject a helper whose bytes are not the pinned ones."""
+    actual = hashlib.sha256(elf.read_bytes()).hexdigest()
+    if actual != expected_sha256.lower():
+        raise ValueError(f"lapy.elf is {actual}, the pin is {expected_sha256}")
 
 
 def validate_helper_manifest(manifest: dict, elf: Path, protocol: Path,
@@ -35,40 +34,49 @@ def validate_helper_manifest(manifest: dict, elf: Path, protocol: Path,
             manifest.get("target_title") != target_title or
             manifest.get("elf_sha256") != actual_elf_sha256 or
             manifest.get("protocol_sha256") != actual_protocol_sha256):
-        raise ValueError("latest Lapy release manifest, title or digest does not match")
+        raise ValueError("Lapy release manifest, title or digest does not match")
     features = manifest.get("features")
     if not isinstance(features, list) or "root_layout_probe_retry" not in features:
         raise ValueError(
-            "latest Lapy helper lacks required feature: root_layout_probe_retry")
+            "Lapy helper lacks required feature: root_layout_probe_retry")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True, help="GitHub owner/repository")
+    parser.add_argument("--tag", required=True, help="the pinned release tag")
+    parser.add_argument("--sha256", required=True, help="the pinned lapy.elf SHA-256")
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo):
         parser.error("--repo must be owner/repository")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.tag):
+        parser.error("--tag must be a release tag")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", args.sha256):
+        parser.error("--sha256 must be a SHA-256 digest")
 
-    api = f"https://api.github.com/repos/{args.repo}/releases?per_page=100"
+    api = f"https://api.github.com/repos/{args.repo}/releases/tags/{args.tag}"
     try:
         request = Request(api, headers={
             "Accept": "application/vnd.github+json",
             "User-Agent": "prospero-win-build/1",
         })
         with urlopen(request, timeout=30) as response:
-            release = select_latest_release(json.load(response))
+            release = json.load(response)
+        if release.get("draft"):
+            raise ValueError(f"release {args.tag} of {args.repo} is a draft")
         assets = {asset.get("name"): asset.get("browser_download_url")
                   for asset in release.get("assets", [])}
         required = ("lapy.elf", "lapy-manifest.json")
         missing = [name for name in required if not assets.get(name)]
         if missing:
             raise ValueError(
-                f"latest release {release.get('tag_name', '?')} of {args.repo} "
+                f"release {args.tag} of {args.repo} "
                 f"does not publish required assets: {', '.join(missing)}")
         args.out.mkdir(parents=True, exist_ok=True)
         for name in required:
             fetch(assets[name], args.out / name)
+        verify_pinned_elf(args.out / "lapy.elf", args.sha256)
         metadata = {
             "repository": args.repo,
             "tag_name": release.get("tag_name"),
@@ -82,7 +90,7 @@ def main() -> int:
         return 0
     except (HTTPError, URLError, TimeoutError, OSError, ValueError,
             json.JSONDecodeError) as error:
-        print(f"Could not fetch latest Lapy helper release: {error}", file=sys.stderr)
+        print(f"Could not fetch Lapy helper release {args.tag}: {error}", file=sys.stderr)
         return 1
 
 

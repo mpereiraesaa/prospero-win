@@ -3,26 +3,36 @@ import unittest
 from pathlib import Path
 import sys
 import tempfile
+import hashlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.fetch_lapy_helper import select_latest_release, validate_helper_manifest
+from tools.fetch_lapy_helper import validate_helper_manifest, verify_pinned_elf
 
 
-class SelectLatestReleaseTests(unittest.TestCase):
-    def test_selects_newest_published_prerelease(self):
-        releases = [
-            {"tag_name": "v1.0.0", "published_at": "2026-09-29T10:00:00Z"},
-            {"tag_name": "v1.1.0-rc1", "published_at": "2026-10-02T10:00:00Z",
-             "prerelease": True},
-            {"tag_name": "v1.2.0-draft", "created_at": "2026-10-03T10:00:00Z",
-             "draft": True},
-        ]
+class PinnedElfTests(unittest.TestCase):
+    def test_accepts_the_pinned_bytes_in_either_case(self):
+        with tempfile.TemporaryDirectory() as directory:
+            elf = Path(directory) / "lapy.elf"
+            elf.write_bytes(b"pinned helper")
+            digest = hashlib.sha256(b"pinned helper").hexdigest()
+            verify_pinned_elf(elf, digest)
+            verify_pinned_elf(elf, digest.upper())
 
-        self.assertEqual(select_latest_release(releases)["tag_name"], "v1.1.0-rc1")
+    def test_rejects_other_bytes_and_names_both_digests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            elf = Path(directory) / "lapy.elf"
+            elf.write_bytes(b"newer helper")
+            pinned = hashlib.sha256(b"pinned helper").hexdigest()
+            actual = hashlib.sha256(b"newer helper").hexdigest()
+            with self.assertRaisesRegex(ValueError, f"{actual}.*{pinned}"):
+                verify_pinned_elf(elf, pinned)
 
-    def test_fails_if_repository_has_no_published_release(self):
-        with self.assertRaisesRegex(ValueError, "no published releases"):
-            select_latest_release([{"tag_name": "draft", "draft": True}])
+    def test_rejects_an_empty_download(self):
+        with tempfile.TemporaryDirectory() as directory:
+            elf = Path(directory) / "lapy.elf"
+            elf.write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, "the pin is"):
+                verify_pinned_elf(elf, hashlib.sha256(b"pinned helper").hexdigest())
 
 
 class HelperManifestTests(unittest.TestCase):
@@ -33,7 +43,6 @@ class HelperManifestTests(unittest.TestCase):
             protocol = root / "lapy_elevation_protocol.h"
             elf.write_bytes(b"tested helper")
             protocol.write_bytes(b"wire ABI")
-            import hashlib
             manifest = {
                 "mode": "elf-helper",
                 "target_title": "PPSA99995",

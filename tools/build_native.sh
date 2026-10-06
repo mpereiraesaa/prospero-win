@@ -19,12 +19,18 @@
 #   PW_WINE64_WAIT_WATCHDOG 1 turns on Wine's wait watchdog (patch 0680) in
 #                          every game: a snapshot of the server's waits every
 #                          two seconds, for diagnosing stalls (default 0)
-#   Lapy helper             fetched from the latest published GitHub release
+#   Lapy helper             fetched from the GitHub release pinned below
+#                          (lapy_release, lapy_elf_sha256)
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 pin=9c0b994a048521af6fb84c73ded364504fe250e9
 url=https://github.com/mpereiraesaa/ps5-native-app-boilerplate.git
+# The one-shot /data helper bundled with the title: a published release of
+# mpereiraesaa/PS5-Lapy-JB-Daemon and the SHA-256 of its lapy.elf. Bump both
+# together, after the new helper has run on a console.
+lapy_release=v0.3.2-experimental
+lapy_elf_sha256=43fab6d8045b525403f025a7b15e313aeaeac174bba6bff19a32b0000293c647
 foundation=${PS5_NATIVE_FOUNDATION:-$root/.deps/ps5-native-app-boilerplate}
 dev_conf=${PS5LOG_DEV_CONF:-$root/dev.conf}
 native_mode=${PW_NATIVE_MODE:-wine64}
@@ -50,11 +56,12 @@ title_id=PPSA99995
 helper_download=$(mktemp -d "${TMPDIR:-/tmp}/prospero-lapy-helper.XXXXXX")
 trap 'rm -rf -- "$helper_download"' EXIT
 python3 "$root/tools/fetch_lapy_helper.py" \
-    --repo mpereiraesaa/PS5-Lapy-JB-Daemon --out "$helper_download"
+    --repo mpereiraesaa/PS5-Lapy-JB-Daemon --tag "$lapy_release" \
+    --sha256 "$lapy_elf_sha256" --out "$helper_download"
 lapy_helper_elf="$helper_download/lapy.elf"
 helper_magic=$(od -An -tx1 -N4 "$lapy_helper_elf" | tr -d ' \n')
 [[ $helper_magic == 7f454c46 ]] || {
-    echo "latest Lapy release helper is not an ELF file" >&2
+    echo "Lapy release $lapy_release helper is not an ELF file" >&2
     exit 2
 }
 python3 - "$root" "$lapy_helper_elf" "$helper_download/lapy-manifest.json" \

@@ -95,9 +95,11 @@ tools/build_wine_ps5.sh --check-patches   # validate the Wine patch series
 tools/build_wine_ps5.sh                   # Wine's PRXs, fonts and report.json
 ```
 
-The native-title build resolves the most recently published release, including
-prereleases, of `mpereiraesaa/PS5-Lapy-JB-Daemon` on each run and requires its `lapy.elf` and
-`lapy-manifest.json` assets. It verifies the ELF and protocol digests before
+The native-title build downloads the release of
+`mpereiraesaa/PS5-Lapy-JB-Daemon` pinned in `tools/build_native.sh`
+(`lapy_release`) on each run and requires its `lapy.elf` and
+`lapy-manifest.json` assets. It checks the ELF against the pinned SHA-256
+(`lapy_elf_sha256`) and verifies the ELF and protocol digests before
 staging the helper in `dist/PPSA99995`; the manifest must also declare the
 `root_layout_probe_retry` feature. A release without it is rejected, with no
 local stale-helper fallback.

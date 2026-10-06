@@ -810,12 +810,14 @@ logs the failure and returns to Home without loading profiles or starting
 Wine. Each launcher/game `LoadExec` process performs its own request through
 the same startup point.
 
-The title build fetches the helper and manifest from the most recently
-published release of `mpereiraesaa/PS5-Lapy-JB-Daemon` every time, including
-prereleases. It does not use a local cached ELF or silently fall back to an
-older release. The release must include
-`lapy.elf` and `lapy-manifest.json`; the build verifies the ELF digest, title
-ID and shared protocol digest before staging it:
+The title build fetches the helper and manifest from one pinned release of
+`mpereiraesaa/PS5-Lapy-JB-Daemon` every time: `lapy_release` in
+`tools/build_native.sh`, with the SHA-256 of its `lapy.elf` beside it
+(`lapy_elf_sha256`). A newer release is not picked up until both are bumped,
+and the build does not use a local cached ELF. The release must include
+`lapy.elf` and `lapy-manifest.json`; the build checks the ELF against the pin
+and the manifest, and the title ID and shared protocol digest, before staging
+it:
 
 ~~~sh
 tools/build_native.sh
@@ -824,10 +826,11 @@ tools/build_native.sh
 The helper release is built from the Lapy fork with
 `PS5_PAYLOAD_SDK=<sdk> make owned-helper TARGET_TITLE=PPSA99995`. Upload the
 resulting `lapy.elf` and `manifest.json` (renamed to `lapy-manifest.json`) as
-assets on a published latest release. The native title build stages the
+assets on a published release, then bump `lapy_release` and `lapy_elf_sha256`
+once the helper has run on a console. The native title build stages the
 downloaded helper beside `eboot.bin`; release packaging copies it into the
-application image automatically. If the latest release lacks either asset or
-has incompatible hashes, the build stops instead of using stale bytes.
+application image automatically. If the pinned release lacks either asset or
+has other hashes, the build stops instead of using other bytes.
 It also rejects manifests that do not declare `root_layout_probe_retry`, the
 bounded retry added after a counter-delta probe was obscured by concurrent
 vnode activity.
