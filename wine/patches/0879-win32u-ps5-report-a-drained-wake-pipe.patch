@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Wed, 7 Oct 2026 01:00:00 +0200
+Subject: [PATCH] win32u: Report the wake pipe as handled in the PS5 driver.
+
+The PS5 driver registers the title's wake pipe as the queue fd of every
+GUI thread, so a byte sets QS_DRIVER on all their queues while one
+thread drains the pipe and takes the events; a byte can also arrive
+after the event it announces was already taken. A thread that then
+finds nothing returned FALSE, so win32u neither cleared its QS_DRIVER
+nor re-armed its fd, and wait_message looped on the signalled queue: a
+zero-timeout MsgWaitForMultipleObjectsEx, which DirectInput makes on
+every GetDeviceState, spun until the next input. Atomic Bomberman
+stalled while a button was held and went on when it was released.
+Report the pipe as handled whenever it was read; a byte still in it
+makes the re-armed fd fire again.
+---
+ dlls/win32u/ps5drv.c | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
+index 9c4ab5b247..f3ef69003d 100644
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -543,6 +543,7 @@ static BOOL ps5_ProcessEvents( DWORD mask )
+     struct ps5_input event;
+     HWND hwnd = NtUserGetForegroundWindow();
+     UINT processed = 0;
++    BOOL polled = FALSE;
+ 
+     if (!next_input) return FALSE;
+     if (!hwnd && (hwnd = last_shown_window()))
+@@ -556,7 +557,11 @@ static BOOL ps5_ProcessEvents( DWORD mask )
+         /* drain the wake pipe first: input posted from now on wakes again */
+         char buffer[64];
+         int fd = input_fd();
+-        if (fd != -1) while (read( fd, buffer, sizeof(buffer) ) > 0) {}
++        if (fd != -1)
++        {
++            while (read( fd, buffer, sizeof(buffer) ) > 0) {}
++            polled = TRUE;
++        }
+     }
+     while (processed < PS5_INPUT_BATCH && next_input( &event ))
+     {
+@@ -579,7 +584,14 @@ static BOOL ps5_ProcessEvents( DWORD mask )
+             break;
+         }
+     }
+-    return processed != 0;
++    /* The wake pipe is every GUI thread's queue fd, so a byte sets QS_DRIVER
++     * on all their queues while one of them drains it and takes the events;
++     * a byte can also come after its event was taken here. Either way this
++     * thread finds nothing, and unless it reports the fd as handled, win32u
++     * neither clears its QS_DRIVER nor re-arms the fd: a zero-timeout
++     * message wait (DirectInput's GetDeviceState) then spins until the next
++     * input. A byte still in the pipe makes the re-armed fd fire again. */
++    return processed != 0 || polled;
+ }
+ 
+ /***********************************************************************
