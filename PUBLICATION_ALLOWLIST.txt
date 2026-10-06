@@ -403,3 +403,6 @@ wine/patches/0897-ntdll-ps5-back-fixed-reservations-with-direct-memory.patch
 tests/test_wine_process_counters.py
 tests/wine_process_counters.c
 wine/patches/0898-ntdll-ps5-process-memory-counters-from-the-views.patch
+tests/test_wine_processor_times.py
+tests/wine_processor_times.c
+wine/patches/0889-ntdll-ps5-processor-times-from-the-process.patch

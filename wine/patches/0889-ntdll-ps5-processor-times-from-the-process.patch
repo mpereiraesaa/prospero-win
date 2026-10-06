@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 6 Oct 2026 19:00:00 +0200
+Subject: [PATCH] ntdll: Report PS5 processor times from the process's own times.
+
+SystemProcessorPerformanceInformation (GetSystemTimes, per-CPU usage)
+reads kern.cp_times on FreeBSD, which a title is refused, and fell back
+to made-up numbers in which a CPU's kernel time was below its idle time.
+A title is the only user process it can see, so take each CPU to have
+spent this process's CPU time evenly among the CPUs and the rest of the
+time since boot idle, with idle counted in kernel time as on Windows.
+From PS5_Proton (mihawk-99, its patch 0906).
+
+  dlls/ntdll/unix/system.c | 25 +++++++++++++++++++++++++
+  1 file changed, 25 insertions(+)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index 77d9c3f..a4e8292 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -3543,6 +3543,31 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
+                 fclose(cpuinfo);
+             }
+         }
++#elif defined(__PROSPERO__)
++        {
++            /* A title cannot read the console's per-CPU counters (kern.cp_times is refused), and the
++             * title is the only user process it can see: each CPU is taken to have spent this
++             * process's CPU time evenly among the CPUs, and the rest of the time since the console
++             * started as idle. Idle time counts in the kernel time, as on Windows. */
++            struct timespec uptime;
++            struct rusage usage;
++            unsigned int n = min( peb->NumberOfProcessors, out_cpus );
++
++            if (n && !clock_gettime( CLOCK_MONOTONIC, &uptime ) && !getrusage( RUSAGE_SELF, &usage ))
++            {
++                ULONGLONG total = (ULONGLONG)uptime.tv_sec * 10000000 + uptime.tv_nsec / 100;
++                ULONGLONG user = ((ULONGLONG)usage.ru_utime.tv_sec * 1000000 + usage.ru_utime.tv_usec) * 10 / n;
++                ULONGLONG sys = ((ULONGLONG)usage.ru_stime.tv_sec * 1000000 + usage.ru_stime.tv_usec) * 10 / n;
++                ULONGLONG idle = total > user + sys ? total - user - sys : 0;
++
++                for (cpus = 0; cpus < n; cpus++)
++                {
++                    sppi[cpus].IdleTime.QuadPart = idle;
++                    sppi[cpus].KernelTime.QuadPart = sys + idle;
++                    sppi[cpus].UserTime.QuadPart = user;
++                }
++            }
++        }
+ #elif defined(__FreeBSD__) || defined (__FreeBSD_kernel__)
+         {
+             static int clockrate_name[] = { CTL_KERN, KERN_CLOCKRATE };
