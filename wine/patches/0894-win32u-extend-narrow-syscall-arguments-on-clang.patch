@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 6 Oct 2026 17:00:00 +0200
+Subject: [PATCH] win32u: Extend narrow system call arguments when built with
+ clang on x86-64.
+
+Clang assumes that an argument narrower than 32 bits arrives extended to
+32 bits; the Windows x64 ABI leaves the bits above it undefined. ntdll
+wraps its syscalls with such arguments for this, but win32u wraps none
+on x86-64. Its WORD, WCHAR and BYTE arguments (NtGdiDoPalette,
+NtUserSelectPalette, NtUserSetClassWord, NtUserSetLayeredWindowAttributes,
+NtUserSetWindowFNID, NtUserSetWindowWord and NtUserVkKeyScanEx) could be
+read with stale bits above them from a caller that set only their low
+bytes. Wrap them as ntdll does: extend, then jump to the function. The
+PS5 side of Wine is built with clang; nothing changes in a gcc build.
+PS5_Proton found the gap (mihawk-99, its patch 0917).
+
+  dlls/win32u/syscall.c | 29 +++++++++++++++++++++++++++++
+  1 file changed, 29 insertions(+)
+
+diff --git a/dlls/win32u/syscall.c b/dlls/win32u/syscall.c
+index ca1be72..3d89b9b 100644
+--- a/dlls/win32u/syscall.c
++++ b/dlls/win32u/syscall.c
+@@ -36,6 +36,35 @@
+ 
+ ULONG_PTR zero_bits = 0;
+ 
++#if defined(__x86_64__) && defined(__clang__)
++
++/* Clang assumes that parameters narrower than 32 bits arrive extended by the
++ * caller; the Windows ABI leaves the bits above them undefined. */
++
++#define WRAP_FUNC(name,code) \
++    extern NTSTATUS wrap_##name(void); \
++    __ASM_GLOBAL_FUNC( wrap_##name, code "jmp " __ASM_NAME(#name) )
++
++WRAP_FUNC( NtGdiDoPalette, "movzwl %si,%esi\n\tmovzwl %dx,%edx\n\t" ) /* WORD, WORD */
++WRAP_FUNC( NtUserSelectPalette, "movzwl %dx,%edx\n\t" ) /* WORD */
++WRAP_FUNC( NtUserSetClassWord, "movzwl %dx,%edx\n\t" ) /* WORD */
++WRAP_FUNC( NtUserSetLayeredWindowAttributes, "movzbl %dl,%edx\n\t" ) /* BYTE */
++WRAP_FUNC( NtUserSetWindowFNID, "movzwl %si,%esi\n\t" ) /* WORD */
++WRAP_FUNC( NtUserSetWindowWord, "movzwl %dx,%edx\n\t" ) /* WORD */
++WRAP_FUNC( NtUserVkKeyScanEx, "movzwl %di,%edi\n\t" ) /* WCHAR */
++
++#define NtGdiDoPalette wrap_NtGdiDoPalette
++#define NtUserSelectPalette wrap_NtUserSelectPalette
++#define NtUserSetClassWord wrap_NtUserSetClassWord
++#define NtUserSetLayeredWindowAttributes wrap_NtUserSetLayeredWindowAttributes
++#define NtUserSetWindowFNID wrap_NtUserSetWindowFNID
++#define NtUserSetWindowWord wrap_NtUserSetWindowWord
++#define NtUserVkKeyScanEx wrap_NtUserVkKeyScanEx
++
++#undef WRAP_FUNC
++
++#endif  /* __x86_64__ && __clang__ */
++
+ #if defined(__aarch64__) && defined(__APPLE__)
+ 
+ /* macOS doesn't follow the standard ABI for stack packing: types
