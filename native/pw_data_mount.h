@@ -27,6 +27,9 @@ typedef struct PwDataMountOps {
     /* Non-zero when PW_DATA_MOUNT_PATH is reachable. */
     int (*data_visible)(void);
     void (*sleep_ms)(int ms);
+    /* Non-zero when this process is elevated, not only shown /data by
+     * another payload; NULL treats a visible /data as an elevated one. */
+    int (*elevated)(void);
 } PwDataMountOps;
 
 typedef struct PwDataMountResult {

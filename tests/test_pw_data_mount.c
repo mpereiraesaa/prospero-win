@@ -25,9 +25,12 @@ static int fake_visible(void)
 
 static void fake_sleep(int ms) { sleep_total += ms; }
 
+static int elevated_now;
+static int fake_elevated(void) { return elevated_now; }
+
 int main(void)
 {
-    static const PwDataMountOps ops = {fake_request, fake_visible, fake_sleep};
+    static const PwDataMountOps ops = {fake_request, fake_visible, fake_sleep, NULL};
     PwDataMountResult r;
 
     request_calls = poll_calls = sleep_total = 0;
@@ -61,6 +64,31 @@ int main(void)
     assert(pw_data_mount_request_with(&ops, 7, 300, &r) == -1);
     assert(r.helper_completed == 0 && r.helper_errno == ETIMEDOUT);
     assert(r.data_after == 0 && sleep_total == 0);
+    request_fail = 0;
+
+    /* Visible and elevated: the grant is reused, as without the check. */
+    static const PwDataMountOps checked = {fake_request, fake_visible, fake_sleep, fake_elevated};
+    request_calls = poll_calls = sleep_total = 0;
+    visible_in = 0;
+    elevated_now = 1;
+    assert(pw_data_mount_request_with(&checked, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
+    assert(r.data_before == 1 && r.data_after == 1 && request_calls == 0);
+    assert(sleep_total == 0);
+
+    /* Visible but unelevated (another payload shows /data): ask the helper. */
+    request_calls = poll_calls = sleep_total = 0;
+    elevated_now = 0;
+    assert(pw_data_mount_request_with(&checked, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
+    assert(request_calls == 1 && requested_pid == 2595);
+    assert(r.data_before == 1 && r.helper_completed == 1 && r.data_after == 1);
+    assert(r.waited_ms == 0 && r.settled_ms == PW_DATA_MOUNT_SETTLE_MS);
+
+    /* The helper refusing leaves the visible /data usable, as before. */
+    request_calls = poll_calls = sleep_total = 0;
+    request_fail = 1;
+    assert(pw_data_mount_request_with(&checked, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
+    assert(request_calls == 1 && r.helper_completed == 0 && r.helper_errno == ETIMEDOUT);
+    assert(r.data_before == 1 && r.data_after == 1 && sleep_total == 0);
     request_fail = 0;
 
     assert(pw_data_mount_request_with(NULL, 7, 100, &r) == -1);
