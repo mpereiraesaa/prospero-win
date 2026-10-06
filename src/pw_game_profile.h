@@ -30,6 +30,11 @@
  *   winedebug = +seh,+virtual   ; Wine's debug channels for this game (default:
  *                               ; the title's, err+all,+loaddll,+process)
  *
+ *   [runtime]
+ *   thread_scheduling = true    ; Windows threads take turns and get their
+ *                               ; priorities (WINE_PS5_SCHED=1); true/false
+ *                               ; or 1/0, default false
+ *
  * Buttons: cross circle square triangle l1 r1 l2 r2 l3 r3 up down left
  * right options create touchpad. An input preset file holds only an [input]
  * section; the profile's own [input] lines override it. Unknown sections,
@@ -79,17 +84,30 @@ typedef struct PwGameDisplay {
     int opengl_thread;          /* OpenGL calls run on Mesa's glthread worker */
 } PwGameDisplay;
 
+typedef struct PwGameRuntime {
+    int thread_scheduling;      /* WINE_PS5_SCHED=1 */
+} PwGameRuntime;
+
+/* A variable of Wine's environment; both strings are static. */
+typedef struct PwGameEnv { const char *name, *value; } PwGameEnv;
+enum { PW_GAME_RUNTIME_ENV_MAX = 1 };
+
 typedef struct PwGameProfile {
     PwAppProfile app;
     PwGameDisplay display;
     PwGameInput input;          /* this profile's own [input] lines */
     /* [debug] winedebug: WINEDEBUG for this game, empty for the title's. */
     char winedebug[PW_GAME_WINEDEBUG_CAPACITY];
+    PwGameRuntime runtime;      /* [runtime], everything off by default */
 } PwGameProfile;
 
-/* Parse a whole profile. [application] must come first; [display] and
- * [input] are optional, once each. PW_OK or a PW_ERR_* status. */
+/* Parse a whole profile. [application] must come first; [display],
+ * [input], [debug] and [runtime] are optional, once each. PW_OK or a
+ * PW_ERR_* status. */
 int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *profile);
+/* The variables runtime sets in Wine's environment, into env, which has
+ * room for PW_GAME_RUNTIME_ENV_MAX; how many. */
+size_t pw_game_runtime_env(const PwGameRuntime *runtime, PwGameEnv *env);
 /* An input with nothing bound, keyboard mode, no pointer. */
 void pw_game_input_init(PwGameInput *input);
 /* Parse an input preset file (one [input] section, no preset= line) into

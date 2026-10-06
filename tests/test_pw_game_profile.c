@@ -79,6 +79,29 @@ static void test_profile(void)
     assert(parse(APP "[debug]\nwinedebug = trace+d3d.9,err=all\n", &p) == PW_OK);
 }
 
+/* [runtime]: opt-in settings that reach Wine's environment, off unless set. */
+static void test_runtime(void)
+{
+    PwGameEnv env[PW_GAME_RUNTIME_ENV_MAX];
+    PwGameProfile p;
+
+    assert(parse(APP, &p) == PW_OK);
+    assert(!p.runtime.thread_scheduling && pw_game_runtime_env(&p.runtime, env) == 0);
+    assert(parse(APP "[runtime]\nthread_scheduling = true\n", &p) == PW_OK);
+    assert(p.runtime.thread_scheduling == 1);
+    assert(pw_game_runtime_env(&p.runtime, env) == 1);
+    assert(!strcmp(env[0].name, "WINE_PS5_SCHED") && !strcmp(env[0].value, "1"));
+    /* Among the other sections, in any case. */
+    assert(parse(APP "[display]\nview = desktop\n[runtime]\nThread_Scheduling = 1\n"
+                 "[debug]\nwinedebug = +seh\n", &p) == PW_OK);
+    assert(p.runtime.thread_scheduling == 1);
+    assert(p.display.view == PW_GAME_VIEW_DESKTOP && !strcmp(p.winedebug, "+seh"));
+    /* Turned off explicitly: nothing reaches the environment. */
+    assert(parse(APP "[runtime]\nthread_scheduling = FALSE\n", &p) == PW_OK);
+    assert(!p.runtime.thread_scheduling && pw_game_runtime_env(&p.runtime, env) == 0);
+    assert(pw_game_runtime_env(NULL, env) == 0 && pw_game_runtime_env(&p.runtime, NULL) == 0);
+}
+
 static void test_refusals(void)
 {
     static const char *const bad[] = {
@@ -103,6 +126,16 @@ static void test_refusals(void)
         APP "[debug]\nrelay = on\n",                           /* unknown key */
         APP "[debug]\nwinedebug = +aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",   /* too long */
+        APP "[runtime]\n[runtime]\n",                          /* duplicate section */
+        APP "[runtime]\nthread_scheduling = yes\n",             /* true/false or 1/0 only */
+        APP "[runtime]\nthread_scheduling = 2\n",
+        APP "[runtime]\nthread_scheduling =\n",
+        APP "[runtime]\nthread_scheduling = on\n",
+        APP "[runtime]\nthread_scheduling = 0\nthread_scheduling = 1\n",
+        APP "[runtime]\ntrust_code_pages = 1\n",                /* unknown key */
+        APP "[runtime]\nwinedebug = +seh\n",                    /* another section's key */
+        APP "[display]\nthread_scheduling = 1\n",
+        "[runtime]\nthread_scheduling = 1\n" APP,               /* application not first */
         APP "[display\n",
         APP "[]\n",
         APP "[display]\ncolour = 32\n",                        /* unknown key */
@@ -294,10 +327,11 @@ int main(void)
 {
     test_published_forms();
     test_profile();
+    test_runtime();
     test_refusals();
     test_presets();
     test_default_mode();
     printf("game profile passed: application plus display and input, every binding kind, "
-           "refusals, shared presets overridden by the profile\n");
+           "runtime settings and their environment, refusals, shared presets overridden by the profile\n");
     return 0;
 }

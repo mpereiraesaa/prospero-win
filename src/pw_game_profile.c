@@ -210,7 +210,7 @@ static int display_field(PwGameDisplay *display, uint32_t *seen, const uint8_t *
     return PW_ERR_UNSUPPORTED;
 }
 
-enum { SECTION_NONE, SECTION_APPLICATION, SECTION_DISPLAY, SECTION_INPUT, SECTION_DEBUG };
+enum { SECTION_NONE, SECTION_APPLICATION, SECTION_DISPLAY, SECTION_INPUT, SECTION_DEBUG, SECTION_RUNTIME };
 
 /* One line: its trimmed extent and where the next begins. */
 static size_t next_line(const uint8_t *bytes, size_t length, size_t cursor,
@@ -233,7 +233,8 @@ static int section_of(const uint8_t *begin, const uint8_t *end)
     return is(begin, (size_t)(end - begin), "application") ? SECTION_APPLICATION :
            is(begin, (size_t)(end - begin), "display") ? SECTION_DISPLAY :
            is(begin, (size_t)(end - begin), "input") ? SECTION_INPUT :
-           is(begin, (size_t)(end - begin), "debug") ? SECTION_DEBUG : -1;
+           is(begin, (size_t)(end - begin), "debug") ? SECTION_DEBUG :
+           is(begin, (size_t)(end - begin), "runtime") ? SECTION_RUNTIME : -1;
 }
 
 /* [debug] winedebug = Wine's channel list (e.g. +seh,warn+module,-all):
@@ -256,13 +257,31 @@ static int debug_field(PwGameProfile *profile, const uint8_t *key, size_t key_le
     return PW_OK;
 }
 
+/* [runtime] thread_scheduling: true/false or 1/0, once. */
+static int runtime_field(PwGameRuntime *runtime, uint32_t *seen, const uint8_t *key, size_t key_length,
+                         const uint8_t *v, size_t n)
+{
+    uint32_t bit;
+    int *field, on;
+
+    if (is(key, key_length, "thread_scheduling")) bit = 1u, field = &runtime->thread_scheduling;
+    else return PW_ERR_UNSUPPORTED;
+    if (*seen & bit) return PW_ERR_MALFORMED;
+    if (is(v, n, "true") || is(v, n, "1")) on = 1;
+    else if (is(v, n, "false") || is(v, n, "0")) on = 0;
+    else return PW_ERR_UNSUPPORTED;
+    *field = on;
+    *seen |= bit;
+    return PW_OK;
+}
+
 /* key = value lines of the display/input sections; application lines are
  * left to pw_app_profile. */
 static int parse_sections(const uint8_t *bytes, size_t length, PwGameProfile *profile,
                           PwGameInput *input_only, size_t *application_end)
 {
     int section = SECTION_NONE;
-    uint32_t seen_sections = 0, display_seen = 0;
+    uint32_t seen_sections = 0, display_seen = 0, runtime_seen = 0;
     size_t cursor = 0;
 
     while (cursor < length) {
@@ -293,6 +312,9 @@ static int parse_sections(const uint8_t *bytes, size_t length, PwGameProfile *pr
         if (begin == key_end) return PW_ERR_MALFORMED;
         int status = section == SECTION_DEBUG ?
             debug_field(profile, begin, (size_t)(key_end - begin), value, (size_t)(end - value)) :
+            section == SECTION_RUNTIME ?
+            runtime_field(&profile->runtime, &runtime_seen, begin, (size_t)(key_end - begin),
+                          value, (size_t)(end - value)) :
             section == SECTION_DISPLAY ?
             display_field(&profile->display, &display_seen, begin, (size_t)(key_end - begin),
                           value, (size_t)(end - value)) :
@@ -304,6 +326,15 @@ static int parse_sections(const uint8_t *bytes, size_t length, PwGameProfile *pr
         !(seen_sections & (1u << SECTION_APPLICATION)))
         return PW_ERR_MALFORMED;
     return PW_OK;
+}
+
+size_t pw_game_runtime_env(const PwGameRuntime *runtime, PwGameEnv *env)
+{
+    size_t count = 0;
+
+    if (!runtime || !env) return 0;
+    if (runtime->thread_scheduling) env[count++] = (PwGameEnv){ "WINE_PS5_SCHED", "1" };
+    return count;
 }
 
 void pw_game_input_init(PwGameInput *input)

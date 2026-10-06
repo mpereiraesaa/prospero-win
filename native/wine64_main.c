@@ -886,7 +886,7 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
-    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 7 };
+    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 7 + PW_GAME_RUNTIME_ENV_MAX };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -901,6 +901,8 @@ int main(int argc, char **argv)
     _Static_assert(sizeof(extra) / sizeof(extra[0]) ==
                    WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY,
                    "profile environment capacity changed");
+    _Static_assert(WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY <= PW_WINE_START_MAX_ENV,
+                   "more environment than pw_wine_start sets");
     /* wine, the executable, the profile's argument words, NULL */
     static const char *wine_argv[2 + PW_WINE_LAUNCH_WORDS + 1] = { "wine" };
     static char argument_words[PW_APP_ARGUMENTS_CAPACITY];
@@ -999,6 +1001,15 @@ int main(int argc, char **argv)
          * XInput; this hint makes them read controller 0 through XInput. */
         if (game_input.mode == PW_GAME_INPUT_XINPUT)
             extra[config.extra_env_count++] = (PwWineStartEnv){ "SDL_JOYSTICK_RAWINPUT", "0" };
+        /* [runtime]: opt-in runtime settings for this game. */
+        {
+            PwGameEnv runtime_env[PW_GAME_RUNTIME_ENV_MAX];
+            size_t runtime_count = pw_game_runtime_env(&game->runtime, runtime_env);
+
+            for (size_t i = 0; i < runtime_count; i++)
+                extra[config.extra_env_count++] = (PwWineStartEnv){ runtime_env[i].name, runtime_env[i].value };
+            PS5LOG_LOG("PW_WINE64 runtime thread_scheduling=%d", game->runtime.thread_scheduling);
+        }
         /* [debug] winedebug: this game's channels in place of the title's. */
         if (game->winedebug[0]) {
             extra[0].value = game->winedebug;

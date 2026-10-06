@@ -914,6 +914,13 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     `winedebug = err+all,+seh` for one run. Only a channel list is taken
     (letters, digits and `_ + - , = .`), and the log names it
     (`PW_WINE64 winedebug=`). Change it and push the profile again.
+  - `[runtime]` turns on optional runtime behavior for that game only.
+    It is off unless the profile sets it to `true` (or `1`), and the log
+    shows it (`PW_WINE64 runtime`):
+    - `thread_scheduling = true` sets `WINE_PS5_SCHED=1` (Wine patch 0882):
+      the game's threads take turns on the CPUs, and threads the game raises
+      above normal priority get a higher priority on the console too. It
+      can help a game that keeps many threads busy at once.
   - `mode = xinput` also makes the DualSense the game's XInput controller
     0 (see [XInput controller](#xinput-controller)).
     - Cross, Circle, Square and Triangle are A, B, X and Y. L1/R1 are the
