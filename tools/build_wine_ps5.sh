@@ -433,7 +433,7 @@ if [ "$prx_status" = 0 ]; then
         __wine_ps5_set_segv_hook __wine_ps5_set_segv_unresolved_hook pw_wine_set_display_release pw_wine_release_display
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/win32u_desc.c" __wine_unix_lib_init
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \
-        pw_wineserver_connect pw_wine_thread_register pw_wineserver_call_direct pw_wineserver_try_fast_mutex \
+        pw_wineserver_connect pw_wine_thread_register pw_wine_thread_unregister pw_wineserver_call_direct pw_wineserver_try_fast_mutex \
         pw_wineserver_mutex_backend \
         pw_wineserver_sync_backend \
         pw_cwd_share_changes

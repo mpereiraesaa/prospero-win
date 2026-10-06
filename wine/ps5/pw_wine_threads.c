@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_wine_threads.h"
 #include <errno.h>
+#include <sched.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -35,16 +36,27 @@ void pw_wine_thread_unregister(long tid)
     if(entry)*entry=entries[--count];
     pthread_mutex_unlock(&lock);
 }
+/* The call is made with the table locked: a thread leaves the table before
+ * it exits, so a handle found here is still a live thread's. */
 int pw_wine_thread_kill(pid_t pid,long tid,int signal)
 {
-    pthread_t thread;
-    int found=0,status;
+    int status;
     if(pid!=getpid()){errno=ESRCH;return -1;}
     pthread_mutex_lock(&lock);
     Entry *entry=find_locked(tid);
-    if(entry){thread=entry->thread;found=1;}
+    status=entry?pthread_kill(entry->thread,signal):ESRCH;
     pthread_mutex_unlock(&lock);
-    if(!found){errno=ESRCH;return -1;}
-    if((status=pthread_kill(thread,signal))){errno=status;return -1;}
+    if(status){errno=status;return -1;}
     return 0;
+}
+int pw_wine_thread_set_priority(long tid,int policy,int priority)
+{
+    struct sched_param param={0};
+    int status;
+    param.sched_priority=priority;
+    pthread_mutex_lock(&lock);
+    Entry *entry=find_locked(tid);
+    status=entry?pthread_setschedparam(entry->thread,policy,&param):ESRCH;
+    pthread_mutex_unlock(&lock);
+    return status;
 }

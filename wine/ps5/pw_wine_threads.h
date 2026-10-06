@@ -18,5 +18,8 @@ void pw_wine_thread_unregister(long tid);
 /* thr_kill2 on the registered threads of this process: 0, or -1 with
  * errno ESRCH for another process or an unknown id. */
 int pw_wine_thread_kill(pid_t pid,long tid,int signal);
+/* pthread_setschedparam on a registered thread: 0, or an errno value (ESRCH
+ * for an unknown id, or what the system refused). */
+int pw_wine_thread_set_priority(long tid,int policy,int priority);
 
 #endif

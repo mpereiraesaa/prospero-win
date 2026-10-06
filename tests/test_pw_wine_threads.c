@@ -3,6 +3,7 @@
 #include "../wine/ps5/pw_wine_threads.h"
 #include <assert.h>
 #include <errno.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -36,6 +37,18 @@ int main(void)
     assert(atomic_load(&hits)==1 && pthread_equal(atomic_load(&hit_thread),thread));
     /* Signal 0 checks only. */
     assert(!pw_wine_thread_kill(getpid(),4242,0) && atomic_load(&hits)==1);
+
+    /* A registered thread's scheduling is set: the policy and priority it
+     * already has always are; another may be refused (EPERM) but never
+     * reaches the wrong thread. An unknown id is ESRCH. */
+    {
+        struct sched_param param;int policy,status;
+        assert(!pthread_getschedparam(thread,&policy,&param));
+        assert(!pw_wine_thread_set_priority(4242,policy,param.sched_priority));
+        status=pw_wine_thread_set_priority(4242,SCHED_RR,sched_get_priority_min(SCHED_RR));
+        assert(status==0 || status==EPERM);
+        assert(pw_wine_thread_set_priority(7,policy,param.sched_priority)==ESRCH);
+    }
 
     /* Unknown ids and other processes are ESRCH. */
     errno=0;assert(pw_wine_thread_kill(getpid(),7,SIGUSR1)==-1 && errno==ESRCH);
