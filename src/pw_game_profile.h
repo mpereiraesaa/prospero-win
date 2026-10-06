@@ -25,6 +25,8 @@
  *   mouse_speed = 1200     ; pointer pixels per second at full tilt
  *   cross = space          ; <button> = <key> | mouse_left | mouse_right |
  *   r2 = mouse_left        ;            mouse_middle | vk:0xNN | none
+ *   player2 = pinball-p2   ; a keyboard preset for a second DualSense, the pad
+ *                          ; of another signed-in user (local multiplayer)
  *
  *   [debug]
  *   winedebug = +seh,+virtual   ; Wine's debug channels for this game (default:
@@ -67,6 +69,7 @@ typedef struct PwGameInput {
     uint32_t mouse_speed;
     PwGameBinding bindings[PW_GAME_BUTTON_COUNT];   /* in PW_GAME_BUTTON order */
     char preset[PW_APP_ID_CAPACITY];
+    char player2[PW_APP_ID_CAPACITY];   /* the second pad's preset, profile only */
     uint32_t set;       /* which of mode/mouse/mouse_speed a file set (overlay) */
 } PwGameInput;
 

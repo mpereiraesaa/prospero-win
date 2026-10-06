@@ -40,13 +40,15 @@ static void test_load(void)
     snprintf(directory, sizeof(directory), "%s/input", root);
     assert(!mkdir(directory, 0755));
     write_file("profiles/pinball.profile", APP("pinball", "Pinball")
-               "[display]\ndesktop = 800x600\nscaling = fit\n[input]\npreset = pinball\ncross = enter\n");
+               "[display]\ndesktop = 800x600\nscaling = fit\n[input]\npreset = pinball\ncross = enter\n"
+               "player2 = pinball-p2\n");
     write_file("profiles/solitaire.profile", APP("solitaire", "Solitaire")
                "[input]\nmouse = right_stick\nr2 = mouse_left\npreset = missing\n");
     write_file("profiles/broken.profile", "[application]\nid = broken\n");
     write_file("profiles/Upper.profile", APP("upper", "Upper"));
     write_file("profiles/notes.txt", "not a profile");
     write_file("input/pinball.input", "[input]\nl1 = z\nr1 = slash\ncross = space\n");
+    write_file("input/pinball-p2.input", "[input]\nmode = xinput\ncross = s\n");
 
     assert(pw_wine_library_load(&library, root) == PW_OK);
     assert(library.listed_by == PW_WINE_LIBRARY_SCANNED && library.count == 3 && !library.scan_error);
@@ -71,6 +73,12 @@ static void test_load(void)
     assert(pw_wine_library_input(solitaire, root, &input) == PW_ERR_UNSUPPORTED);
     assert(input.mouse == PW_GAME_STICK_RIGHT);
     assert(pw_wine_library_input(NULL, root, &input) == PW_ERR_PRECONDITION);
+    /* The second pad's preset, keys only even when it asks for XInput. */
+    assert(pw_wine_library_player2_input(pinball, root, &input) == PW_OK);
+    assert(input.bindings[0].code == 'S' && input.mode == PW_GAME_INPUT_KEYBOARD);
+    assert(input.bindings[4].kind == PW_GAME_BIND_UNSET);                       /* not player 1's */
+    assert(pw_wine_library_player2_input(solitaire, root, &input) == PW_ERR_NOT_FOUND);
+    assert(pw_wine_library_player2_input(NULL, root, &input) == PW_ERR_PRECONDITION);
     assert(pw_wine_library_load(NULL, root) == PW_ERR_PRECONDITION);
 
     /* A file larger than any valid profile is refused as too large. */

@@ -19,6 +19,7 @@ extern int scePadOpen(int32_t,int32_t,int32_t,const void *);
 extern int scePadRead(int32_t,PwPadPs5Data *,int32_t);
 extern int scePadClose(int32_t);
 extern int scePadSetVibration(int32_t,const uint8_t *);
+extern int sceUserServiceGetLoginUserIdList(int32_t *);
 static int platform_user_initialize(const void *p){return sceUserServiceInitialize(p);}
 static int platform_foreground_user(int32_t *u){return sceUserServiceGetForegroundUser(u);}
 static int platform_user_terminate(void){return sceUserServiceTerminate();}
@@ -29,6 +30,8 @@ static int platform_pad_read(int32_t h,PwPadPs5Data *s,int32_t n)
 {return scePadRead(h,s,n);}
 static int platform_pad_close(int32_t h){return scePadClose(h);}
 static int platform_pad_set_vibration(int32_t h,const uint8_t m[2]){return scePadSetVibration(h,m);}
+static int platform_login_users(int32_t ids[PW_PAD_PS5_USERS])
+{return sceUserServiceGetLoginUserIdList(ids);}
 #endif
 
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *ops)
@@ -39,7 +42,8 @@ int pw_pad_ps5_platform_ops(PwPadPs5Ops *ops)
 #else
     *ops=(PwPadPs5Ops){platform_user_initialize,platform_foreground_user,
         platform_user_terminate,platform_pad_init,platform_pad_open,
-        platform_pad_read,platform_pad_close,platform_pad_set_vibration};return PW_OK;
+        platform_pad_read,platform_pad_close,platform_pad_set_vibration,
+        platform_login_users};return PW_OK;
 #endif
 }
 
@@ -72,6 +76,25 @@ int pw_pad_ps5_open(PwPadPs5 *pad,const PwPadPs5Ops *ops,
 failed:
     if(pad->owns_user_service){pad->terminate_rc=pad->ops.user_terminate();pad->owns_user_service=0;}
     return PW_ERR_STATE;
+}
+
+int pw_pad_ps5_open_other(PwPadPs5 *pad,const PwPadPs5 *first,
+                          const PwPadKeyMap *map,size_t map_count)
+{
+    int32_t ids[PW_PAD_PS5_USERS];
+    if(!pad || !first || !first->opened || !valid_ops(&first->ops))return PW_ERR_PRECONDITION;
+    memset(pad,0,sizeof(*pad));pad->ops=first->ops;pad->user_id=-1;pad->pad_handle=-1;
+    pad->close_rc=INT_MIN;pad->terminate_rc=INT_MIN;
+    if(!pad->ops.login_users)return PW_ERR_UNSUPPORTED;
+    int status=pw_pad_init(&pad->core,map,map_count);if(status!=PW_OK)return status;
+    for(int i=0;i<PW_PAD_PS5_USERS;i++)ids[i]=-1;
+    if(pad->ops.login_users(ids)<0)return PW_ERR_STATE;
+    for(int i=0;i<PW_PAD_PS5_USERS && pad->user_id<0;i++)
+        if(ids[i]>=0 && ids[i]!=first->user_id)pad->user_id=ids[i];
+    if(pad->user_id<0)return PW_ERR_NOT_FOUND;
+    pad->pad_handle=pad->ops.pad_open(pad->user_id,0,0,NULL);
+    if(pad->pad_handle<0)return PW_ERR_STATE;
+    pad->opened=1;centre_analog(pad);return PW_OK;
 }
 
 /* One native read converted to samples; count<0 reports a read error. */

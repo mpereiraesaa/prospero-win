@@ -920,6 +920,10 @@ int main(int argc, char **argv)
     static PwPadPs5 pad;
     static PwHidPs5 hid;
     static PwGameInput game_input;
+    /* [input] player2: a second signed-in user's DualSense as more keys. */
+    static PwPadPs5 pad2;
+    static PwGameInput game_input2;
+    int player2 = 0, pad2_status = PW_ERR_NOT_FOUND;
     const PwGameProfile *game = NULL;
     int scaling = PW_PRESENT_SCALE_FIT;
     PwWinePointer pointer = { 0, 0 };
@@ -963,6 +967,11 @@ int main(int argc, char **argv)
         snprintf(prefix, sizeof(prefix), "%s/prefix", library_root);
     if (game) {
         int input_status = pw_wine_library_input(game, library_root, &game_input);
+        int input2_status = pw_wine_library_player2_input(game, library_root, &game_input2);
+        player2 = input2_status == PW_OK;
+        if (input2_status != PW_ERR_NOT_FOUND)
+            PS5LOG_LOG("PW_WINE64 player2 preset=%s input=%s", game->input.player2,
+                       pw_result_name(input2_status));
         scaling = (int)game->display.scaling;
         if (game->display.view == PW_GAME_VIEW_DESKTOP) snprintf(view, sizeof(view), "desktop");
         if (game->display.width) {
@@ -1078,6 +1087,9 @@ int main(int argc, char **argv)
         if (pad_status == PW_OK)
             pad_status = pw_pad_ps5_open(&pad, &pad_ops, pad_open_map,
                                          sizeof(pad_open_map) / sizeof(pad_open_map[0]));
+        if (player2 && pad_status == PW_OK)
+            pad2_status = pw_pad_ps5_open_other(&pad2, &pad, pad_open_map,
+                                                sizeof(pad_open_map) / sizeof(pad_open_map[0]));
         /* A USB keyboard and mouse, the foreground user's, as the pad's. */
         if (post_input) {
             int32_t user = pad_status == PW_OK ? pad.user_id : -1;
@@ -1106,6 +1118,9 @@ int main(int argc, char **argv)
                    set_pad != NULL,
                    pw_result_name(video_status),
                    pw_result_name(pad_status), pw_result_name(hid_status));
+        if (player2)
+            PS5LOG_LOG("PW_WINE64 pad2 status=%s user=%d", pw_result_name(pad2_status),
+                       (int)pad2.user_id);
         {
             void (*set_audio)(PwWineAudioSink, void *) = (void (*)(PwWineAudioSink, void *))
                 (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_audio_sink");
@@ -1238,6 +1253,26 @@ int main(int argc, char **argv)
             for (size_t i = 0; i < count; i++) {
                 if (post_input(&events[i]) == 0) posted++;
                 else refused++;
+            }
+            /* The second player's pad: keys only, through its own preset;
+             * a user who signs in later is found by a retry every few
+             * seconds. Closing the game and rumble stay the first pad's. */
+            if (player2 && pad2_status != PW_OK && pad2_status != PW_ERR_UNSUPPORTED &&
+                tick % (3 * PW_WINE64_TICKS_PER_S) == 0) {
+                pad2_status = pw_pad_ps5_open_other(&pad2, &pad, pad_open_map,
+                                                    sizeof(pad_open_map) / sizeof(pad_open_map[0]));
+                if (pad2_status == PW_OK)
+                    PS5LOG_LOG("PW_WINE64 pad2 status=%s user=%d", pw_result_name(pad2_status),
+                               (int)pad2.user_id);
+            }
+            if (pad2_status == PW_OK && pw_pad_ps5_read(&pad2) == PW_OK) {
+                size_t count2 = pw_wine_game_inputs(&game_input2, pad2.core.pressed_edges,
+                                                    pad2.core.released_edges, events,
+                                                    sizeof(events) / sizeof(events[0]) - 1);
+                for (size_t i = 0; i < count2; i++) {
+                    if (post_input(&events[i]) == 0) posted++;
+                    else refused++;
+                }
             }
             /* The rumble the game asked for: XInput's left motor is the
              * DualSense's large one, speeds 0..65535 become 0..255. */
