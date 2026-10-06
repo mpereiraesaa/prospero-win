@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import re
 import shutil
 import struct
 import sys
@@ -97,7 +98,35 @@ script:
 """
 
 
+def check_dxvk_releases() -> None:
+    """Upstream releases and custom builds from the fork, pinned by hash."""
+    url, digest = pw_install.dxvk_release("2.6.2")
+    assert url == "https://github.com/doitsujin/dxvk/releases/download/v2.6.2/dxvk-2.6.2.tar.gz"
+    assert digest == "17761876556afd55736cb895d184f5a1c55d43350f1b1e3b129f8d28706d7992"
+    url, digest = pw_install.dxvk_release("2.6.2-prospero1")
+    assert url == ("https://github.com/mpereiraesaa/dxvk/releases/download/"
+                   "v2.6.2-prospero1/dxvk-2.6.2-prospero1.tar.gz")
+    assert digest == "72a4d7e279f522ad9bac420caf13665bcdd28b297337e1364c31c5bda24ef3f2"
+    # install_dxvk reads dxvk-<version>/x32 and x64 from an archive named
+    # after the release, upstream's layout, which every pinned one follows.
+    for version, (url, digest) in pw_install.DXVK_RELEASES.items():
+        owner = url.split("/")[3]
+        assert owner in ("doitsujin", "mpereiraesaa"), url
+        assert (owner == "mpereiraesaa") == ("-prospero" in version), version
+        assert url.endswith(f"/releases/download/v{version}/dxvk-{version}.tar.gz"), url
+        assert re.fullmatch(r"[0-9a-f]{64}", digest), version
+    for version in ("2.6.2-prospero0", "2.6", ""):
+        try:
+            pw_install.dxvk_release(version)
+        except pw_install.InstallError as error:
+            assert f"dxvk_version {version} is not pinned" in str(error)
+            assert "'2.6.2-prospero1'" in str(error)
+        else:
+            raise AssertionError(f"dxvk_version {version!r} should not resolve")
+
+
 def main() -> int:
+    check_dxvk_releases()
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         wine = root / "wine" / "wine"

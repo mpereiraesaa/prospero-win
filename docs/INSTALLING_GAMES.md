@@ -154,7 +154,8 @@ add a `prospero` block for the PS5 (below), and run it the same way. A few
 things differ from Lutris:
 
 - **Direct3D goes through DXVK.** `wine: {dxvk: true}` installs DXVK 2.6.2
-  into the prefix. Games that use OpenGL instead (`-opengl` and the like) can
+  into the prefix, or the [custom build](#custom-dxvk-builds) the recipe
+  names. Games that use OpenGL instead (`-opengl` and the like) can
   select the experimental PS5 WGL backend when Wine was built with the PS5
   OpenGL SDK.
   Set `prospero: {graphics: opengl}` in the installer; this choice skips DXVK
@@ -171,6 +172,36 @@ If a recipe uses something `pw_install.py` doesn't support, it stops and says
 which step, rather than skip it and leave a half-installed game.
 
 When it works, please send the recipe to prospero-win-profiles.
+
+### Custom DXVK builds
+
+`dxvk_version` normally names an upstream DXVK release. It can also name a
+custom build from [mpereiraesaa/dxvk](https://github.com/mpereiraesaa/dxvk),
+for a game that needs a change upstream doesn't have:
+
+```yaml
+wine:
+  dxvk: true
+  dxvk_version: "2.6.2-prospero1"   # 2.6.2 plus two fixes for San Andreas
+```
+
+Lutris doesn't know these versions, so such a recipe installs with
+`pw_install.py` only. The recipe's comments say what the build changes and
+why the game needs it, and it writes any `dxvk.conf` options the build adds
+next to the game's executable.
+
+To add one:
+
+1. In the fork, branch `prospero/<upstream version>` from the upstream tag
+   (if it doesn't exist yet) and add the changes as ordinary commits. Prefer
+   options that are off unless `dxvk.conf` turns them on.
+2. Tag it `v<upstream version>-prospero<n>` and build it with upstream's
+   `package-release.sh`, which uses upstream's meson cross files. Publish
+   `dxvk-<upstream version>-prospero<n>.tar.gz` (with `x32/` and `x64/`
+   inside, as upstream's) and its SHA-256 as a release, with release notes
+   listing every change. Keep DXVK's zlib `LICENSE`.
+3. Add the version, URL and SHA-256 to `DXVK_RELEASES` in
+   `tools/pw_install.py`, and point the game's recipe at it.
 
 ### The `prospero` block
 

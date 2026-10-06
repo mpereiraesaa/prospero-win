@@ -21,7 +21,10 @@ console needs: the desktop size, scaling and input. LIBRARY mirrors
 DXVK follows Lutris's own keys (`wine: {dxvk: true, dxvk_version: 2.6.2}`):
 the release's DLLs go into the prefix's system32 and syswow64 and are set
 native, in the prefix's registry for the host and in the profile's
-dll_overrides for the title.
+dll_overrides for the title. Besides upstream releases, dxvk_version can name
+a custom build from https://github.com/mpereiraesaa/dxvk (2.6.2-prospero1,
+say) for a game that needs a fix upstream doesn't have; those are pinned by
+hash the same way.
 
 Usage:
     pw_install.py SCRIPT.yml --library DIR --wine PATH [--file ID=PATH ...]
@@ -52,9 +55,16 @@ except ImportError:  # pragma: no cover - reported to the user
     yaml = None
 
 # Pinned downloads: the version Lutris would fetch, checked by hash.
+# DXVK: upstream releases, and custom builds (<upstream version>-prospero<n>)
+# from our fork, each an upstream release plus a few changes some game needs,
+# published in upstream's archive layout. The recipe that uses one says why.
 DXVK_RELEASES = {
     "2.6.2": ("https://github.com/doitsujin/dxvk/releases/download/v2.6.2/dxvk-2.6.2.tar.gz",
               "17761876556afd55736cb895d184f5a1c55d43350f1b1e3b129f8d28706d7992"),
+    # 2.6.2 plus d3d9.asyncSmallReadback and cheaper reference counting in
+    # 32-bit builds (GTA San Andreas with Proper Shaders).
+    "2.6.2-prospero1": ("https://github.com/mpereiraesaa/dxvk/releases/download/v2.6.2-prospero1/dxvk-2.6.2-prospero1.tar.gz",
+                        "72a4d7e279f522ad9bac420caf13665bcdd28b297337e1364c31c5bda24ef3f2"),
 }
 DXVK_DLLS = ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi")
 WINETRICKS = ("20260125", "https://raw.githubusercontent.com/Winetricks/winetricks/20260125/src/winetricks",
@@ -78,6 +88,13 @@ class InstallError(Exception):
 
 def log(message: str) -> None:
     print(f"pw_install: {message}", flush=True)
+
+
+def dxvk_release(version: str) -> tuple[str, str]:
+    """The pinned URL and SHA-256 of a DXVK release or custom build."""
+    if version not in DXVK_RELEASES:
+        raise InstallError(f"dxvk_version {version} is not pinned (known: {sorted(DXVK_RELEASES)})")
+    return DXVK_RELEASES[version]
 
 
 def fetch(url: str, sha256: str, name: str, directory: Path | None = None) -> Path:
@@ -429,9 +446,7 @@ class Installer:
         mode = self.graphics_mode()
         if mode != "dxvk" and not (mode == "auto" and self.dxvk):
             return []
-        if self.dxvk_version not in DXVK_RELEASES:
-            raise InstallError(f"dxvk_version {self.dxvk_version} is not pinned (known: {sorted(DXVK_RELEASES)})")
-        url, digest = DXVK_RELEASES[self.dxvk_version]
+        url, digest = dxvk_release(self.dxvk_version)
         archive = fetch(url, digest, f"dxvk-{self.dxvk_version}.tar.gz")
         env = self.wine_env()
         prefix = Path(env["WINEPREFIX"]) / "drive_c" / "windows"

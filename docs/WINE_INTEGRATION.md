@@ -181,11 +181,22 @@ percentage is claimed without an exact control comparison on PS5.
 ## Graphics boundary
 
 prospero-win will not grow a second native D3D9 renderer. The graphics path is
-unmodified DXVK over the console's Vulkan driver, `ps5-vulkan` or RADV, which
-Wine reaches through `winevulkan` and the PS5 user driver's display-plane
-surface ([Vulkan](WINE_PS5_BUILD.md#vulkan)). Fixes on this side stay in
+DXVK over the console's Vulkan driver, `ps5-vulkan` or RADV, which Wine
+reaches through `winevulkan` and the PS5 user driver's display-plane surface
+([Vulkan](WINE_PS5_BUILD.md#vulkan)). Fixes for the console itself stay in
 Wine's patches (the swapchain chain, WoW64 placed maps, the display's native
 mode), not in DXVK.
+
+By default a game gets an unmodified upstream DXVK release. A game may instead
+pin a custom DXVK build, as people often do for single games on Windows, when
+it needs a change upstream doesn't have: an opt-in `dxvk.conf` option, or a
+CPU saving that matters on the console. Custom builds live in
+[mpereiraesaa/dxvk](https://github.com/mpereiraesaa/dxvk): each is an upstream
+release plus a few commits on a `prospero/<version>` branch, published as a
+release named `v<version>-prospero<n>` in upstream's archive layout, with the
+changes listed in its release notes. GTA San Andreas uses `2.6.2-prospero1`.
+See [Installing games](INSTALLING_GAMES.md#custom-dxvk-builds) for how a
+recipe selects one and how to add a new one.
 
 On the console DXVK 2.6.2's D3D8–D3D11 test programs, x64 and x86, read
 back correct frames on both drivers; on RADV they also draw with shaders
