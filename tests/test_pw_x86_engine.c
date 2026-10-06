@@ -225,8 +225,13 @@ int main(void)
     assert(engine.compiles==1 && engine.protection_calls==2 &&
            engine.protection_bytes==8192);
     assert(engine.execution_ns==10 && engine.execution_calls==1 && clock_reads==2);
+#if defined(__x86_64__) || defined(__i386__)
+    assert(engine.compile_cycles>0);   /* the translation was timed */
+#endif
+    const uint64_t compiled_cycles=engine.compile_cycles;
     assert(pw_x86_engine_step(&engine,&state,&step)==PW_OK);
     assert(step.instructions==2 && step.retired==2 && step.cache_hit);
+    assert(engine.compile_cycles==compiled_cycles);   /* a cache hit translates nothing */
     assert(state.eip==0x1000 && state.gpr[0]==2 && engine.cache.hits==1);
     assert(engine.dispatches==2 && engine.retired_instructions==4);
     assert(engine.compiles==1 && engine.protection_calls==2);

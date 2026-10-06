@@ -53,6 +53,8 @@ typedef struct PwX86Engine {
      * retired blocks whose source came back (totals survive resets); the
      * retired blocks of this generation. */
     uint64_t stale_blocks, retired_total, revived_blocks;
+    /* TSC ticks spent translating and publishing (x86 hosts; 0 elsewhere). */
+    uint64_t compile_cycles;
     uint32_t retired_blocks;
     uint64_t dispatches,retired_instructions,compiles;
     PwX86ExecutionClock execution_clock;

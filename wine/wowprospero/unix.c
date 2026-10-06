@@ -79,6 +79,8 @@ struct pw_thread
      * reason the previous run returned for, since t_window. */
     uint64_t t_mark, t_window, t_inside, t_unix, t_sys, t_other, t_unix_long;
     uint64_t wall_window;
+    /* the engine's translation counters when the window began */
+    uint64_t compiles_window, compile_cycles_window;
     double tsc_per_us;       /* measured at the last report */
     uint32_t n_unix, n_sys, n_other, n_unix_long, n_resets, n_flushes, last_reason;
     /* The same time by call: the system call number, or the Unix call's
@@ -1345,6 +1347,22 @@ static void timing_report( struct pw_thread *thread, uint64_t tsc )
                  thread->n_sys ? thread->t_sys / per_us / thread->n_sys : 0.0,
                  100.0 * thread->t_other / cycles, thread->n_other,
                  100.0 * thread->t_unix_long / cycles, thread->n_unix_long, thread->n_resets, thread->n_flushes );
+    /* Translating happens inside a run, so run= includes it: this row splits
+     * it out, and its share is the window's time spent translating. */
+    {
+        uint64_t compiles = thread->engine.compiles - thread->compiles_window;
+        uint64_t compile_cycles = thread->engine.compile_cycles - thread->compile_cycles_window;
+
+        if (compiles)
+            fprintf( stderr, "wowprospero compile: tid=%04x blocks=%llu (%.0f/s %.2fus) share=%.2f%% "
+                     "total_blocks=%llu total_ms=%.1f\n",
+                     (unsigned)(uintptr_t)NtCurrentTeb()->ClientId.UniqueThread,
+                     (unsigned long long)compiles, compiles / seconds, compile_cycles / per_us / compiles,
+                     100.0 * compile_cycles / cycles, (unsigned long long)thread->engine.compiles,
+                     thread->engine.compile_cycles / per_us / 1000.0 );
+        thread->compiles_window = thread->engine.compiles;
+        thread->compile_cycles_window = thread->engine.compile_cycles;
+    }
     if (thread->n_unix + thread->n_sys > 1000) timing_report_calls( thread, cycles, seconds );
     else
     {

@@ -618,6 +618,22 @@ publication walk and the engine's compile-time chain-patch walk are uncounted.
 They can also traverse long clusters, so these counters do not represent
 all probing work per compiled block. Apply identical diagnostics to both comparison builds, then
 repeat gameplay with diagnostics off to assess reporting overhead.
+## Translation time
+
+Translating happens inside a run, so a timing row's `run=` includes it.
+With `PW_WOW_TIMING`, a `wowprospero compile` row follows each thread's timing
+row whenever that window translated something:
+
+```
+wowprospero compile: tid=0024 blocks=88 (17/s 41.20us) share=0.07% total_blocks=52144 total_ms=2140.3
+```
+
+`blocks` counts the window's published translations, with their rate and
+mean cost; `share` is the window's TSC time spent translating and publishing
+(failed attempts included) over its wall time; the totals are the thread's
+since it started. The engine counts the time with two TSC reads around each
+compile (`PwX86Engine.compile_cycles`), so cache hits cost nothing extra.
+
 ## Thread-owned hotspot sampling
 
 On Linux, set `PW_WOW_PROFILE=1` to log each thread's top 20 translated

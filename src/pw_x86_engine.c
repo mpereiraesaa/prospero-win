@@ -526,7 +526,7 @@ static int read_trusted(void *opaque, uint32_t address, size_t bytes, const uint
     return 1;
 }
 
-static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry)
+static int compile_block(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry)
 {
     const uint8_t *source=NULL;size_t available=0,writable_from=SIZE_MAX;
     int status=engine->source_view_writable
@@ -738,6 +738,26 @@ static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry
     }
 
     engine->compiles++;return PW_OK;
+}
+
+/* Every translation, timed: compile_cycles counts the TSC ticks spent
+ * translating and publishing, so a timing report can tell translating from
+ * running translated code (both happen inside a run). */
+static uint64_t compile_clock(void)
+{
+#if defined(__x86_64__) || defined(__i386__)
+    return __builtin_ia32_rdtsc();
+#else
+    return 0;
+#endif
+}
+
+static int compile(PwX86Engine *engine,uint32_t pc,const PwX86CacheEntry **entry)
+{
+    uint64_t start=compile_clock();
+    int status=compile_block(engine,pc,entry);
+    engine->compile_cycles+=compile_clock()-start;
+    return status;
 }
 
 int pw_x86_engine_step(PwX86Engine *engine,PwX86State *state,PwX86StepReport *report)
