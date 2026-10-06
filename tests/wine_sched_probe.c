@@ -86,7 +86,7 @@ int main(void)
     /* As many busy threads as Windows reports CPUs must all run at once. */
     late = run(info.dwNumberOfProcessors < MAX_THREADS ? (int)info.dwNumberOfProcessors : MAX_THREADS, 0);
     printf("sched-probe verdict=%s\n", late ? "fail" : "pass");
-    
+
     fflush(stdout);
     return 0;
 }
