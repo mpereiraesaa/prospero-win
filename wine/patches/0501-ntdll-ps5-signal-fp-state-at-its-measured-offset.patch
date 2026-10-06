@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 6 Oct 2026 16:00:00 +0200
+Subject: [PATCH] ntdll: Read the PS5 signal frame's FP state at its measured offset.
+
+Wine found a signal's FXSAVE image at mcontext_t's mc_fpstate, which with
+patch 0500's mcontext at ucontext+64 is ucontext+288. The PS5 kernel keeps
+32 more bytes in its mcontext than the SDK header declares. A payload that
+loads known values into MXCSR, XMM0-15 and the YMM upper halves and then
+faults found FXSAVE at +320 (XMM0 at +480, MXCSR 0x9fc0 as loaded), the
+XSAVE header at +832 (XSTATE_BV 7) and the YMM upper halves at +896.
+At +288 there are two pointers and a zero where MXCSR would be. Values the
+handler wrote at +320 were restored by sigreturn.
+
+So an exception's CONTEXT carried MXCSR 0 (all FP exceptions unmasked) and
+XMM registers shifted by two, and a handler that resumed execution through
+NtContinue or an unwind loaded them. Read FXSAVE at +320 and expose the
+extended state that follows it. PS5_Proton found the same offset
+(mihawk-99, its patch 0800).
+
+  dlls/ntdll/unix/signal_x86_64.c | 10 ++++++++++
+  1 file changed, 10 insertions(+)
+
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index d17b306..ee77208 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -296,8 +296,18 @@ __ASM_GLOBAL_FUNC( modify_ldt,
+ #define RSP_sig(context)     (UCONTEXT_MC(context).mc_rsp)
+ #define TRAP_sig(context)    (UCONTEXT_MC(context).mc_trapno)
+ #define ERROR_sig(context)   (UCONTEXT_MC(context).mc_err)
++#ifdef __PROSPERO__
++/* Measured on PS5 FW 12.02 with a payload that faults with known FP state:
++ * the kernel keeps 32 more bytes in mcontext_t than the SDK header declares,
++ * so its FXSAVE image is at ucontext offset 320, not mc_fpstate (288), and
++ * sigreturn restores MXCSR and XMM from there. The XSAVE header follows at
++ * 832 and the YMM upper halves at 896, in the standard (uncompacted) form. */
++#define FPU_sig(context)     ((void *)((char *)(context) + 320))
++#define XState_sig(fpu)      ((XSAVE_AREA_HEADER *)((char *)(fpu) + sizeof(XSAVE_FORMAT)))
++#else
+ #define FPU_sig(context)     ((void *)(UCONTEXT_MC(context).mc_fpstate))
+ #define XState_sig(context)  NULL
++#endif
+ 
+ #elif defined(__NetBSD__)
+ 

@@ -155,6 +155,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_wine_runtime_manifest.py
 	python3 tests/test_wine_protect_writecopy.py
 	python3 tests/test_wine_decommit_zero.py
+	python3 tests/test_wine_seh_fp_state.py
 	python3 tests/test_wine_dib_section.py
 	python3 tests/test_wowprospero_contract.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wowprospero_unmap.py
@@ -200,6 +201,7 @@ wine-check: test
 	python3 tests/test_wine_runtime_manifest.py
 	python3 tests/test_wine_protect_writecopy.py
 	python3 tests/test_wine_decommit_zero.py
+	python3 tests/test_wine_seh_fp_state.py
 	python3 tests/test_wine_dib_section.py
 
 audit:
