@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 6 Oct 2026 23:00:00 +0200
+Subject: [PATCH] win32u: Send the PS5 driver's extended keys with
+ KEYEVENTF_EXTENDEDKEY.
+
+The PS5 driver sends keyboard input with the scan code from
+MAPVK_VK_TO_VSC and no flags. The arrows share their scan codes with
+the keypad, and so do Insert, Delete, Home, End, Page Up and Page Down;
+a PC keyboard sends them with an E0 prefix, which is the extended flag.
+DirectInput reads the scan code and that flag, so a game saw the
+keypad's 8 for VK_UP and its arrow-key bindings never fired. Set the
+flag for the keys a PC keyboard sends as extended.
+---
+ dlls/win32u/ps5drv.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
+index 9c4ab5b247..bed123f29b 100644
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -532,6 +532,23 @@ static void move_cursor( HWND hwnd, INT dx, INT dy )
+     pthread_mutex_unlock( &screen_lock );
+ }
+ 
++/* The keys a PC keyboard sends with an E0 prefix. MAPVK_VK_TO_VSC gives
++ * their scan code without it (the arrows share theirs with the keypad), so
++ * DirectInput, which reads the scan code and the extended flag, would see
++ * the keypad's 8 for VK_UP. */
++static BOOL is_extended_key( WORD vk )
++{
++    switch (vk)
++    {
++    case VK_UP: case VK_DOWN: case VK_LEFT: case VK_RIGHT:
++    case VK_INSERT: case VK_DELETE: case VK_HOME: case VK_END:
++    case VK_PRIOR: case VK_NEXT: case VK_RCONTROL: case VK_RMENU:
++    case VK_LWIN: case VK_RWIN: case VK_APPS: case VK_DIVIDE:
++        return TRUE;
++    }
++    return FALSE;
++}
++
+ static BOOL ps5_ProcessEvents( DWORD mask )
+ {
+     static const DWORD button_flags[3][2] =
+@@ -569,6 +586,7 @@ static BOOL ps5_ProcessEvents( DWORD mask )
+             input.ki.wVk = event.code;
+             input.ki.wScan = NtUserMapVirtualKeyEx( event.code, MAPVK_VK_TO_VSC, NtUserGetKeyboardLayout( 0 ));
+             input.ki.dwFlags = event.down ? 0 : KEYEVENTF_KEYUP;
++            if (is_extended_key( event.code )) input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+             NtUserSendHardwareInput( hwnd, 0, &input, 0 );
+             break;
+         case 2:

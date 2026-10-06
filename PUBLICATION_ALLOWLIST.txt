@@ -413,3 +413,4 @@ tests/test_wine_sched_probe.py
 tests/wine_sched_probe.c
 wine/patches/0881-ntdll-ps5-report-the-cpus-a-game-runs-on.patch
 wine/patches/0882-server-ps5-round-robin-scheduling-and-priorities.patch
+wine/patches/0883-win32u-ps5-send-extended-keys-as-extended.patch
