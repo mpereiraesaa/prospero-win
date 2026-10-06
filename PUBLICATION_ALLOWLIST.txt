@@ -382,9 +382,12 @@ wine/patches/0890-ntdll-ps5-share-name-changes-with-the-server.patch
 wine/patches/0895-ntdll-ps5-reserve-the-low-gap.patch
 wine/patches/0896-ntdll-ps5-leave-through-exit-when-a-process-ends-itself.patch
 wine/patches/0899-include-list-the-ps5-headers-for-makedep.patch
+tests/test_wine_decommit_zero.py
 tests/test_wine_protect_writecopy.py
+tests/wine_decommit_zero.c
 tests/wine_protect_writecopy.c
 wine/patches/0891-ntdll-report-a-re-protected-image-page-as-copied.patch
 tests/test_wine_dib_section.py
 tests/wine_dib_section.c
 wine/patches/0892-win32u-map-a-dib-section-below-the-wow64-limit.patch
+wine/patches/0893-ntdll-clear-decommitted-pages-of-a-shared-host-page.patch
