@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 6 Oct 2026 18:00:00 +0200
+Subject: [PATCH] ntdll: Back PS5 fixed-address reservations with direct
+ memory.
+
+A program that reserves memory at an address of its choosing outside
+Wine's reserved areas gets a bare sceKernelReserveVirtualRange
+reservation. Committing it later only changes its protection, and the
+console does not back a bare reservation when it is protected: the commit
+succeeded and the first access faulted. Steam's protection layer on a
+64-bit game does exactly this.
+
+Give such a reservation to the direct-memory allocator, as the reserved
+areas are, so a commit backs its pages; it is dropped from the allocator
+again when the range is unmapped. PS5_Proton found the gap (mihawk-99,
+its patch 0790).
+
+  dlls/ntdll/unix/virtual.c | 4 ++++
+  1 file changed, 4 insertions(+)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 4a37285..aab8ca3 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -851,6 +851,10 @@ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
+         errno = EEXIST;
+         return MAP_FAILED;
+     }
++    /* Protecting a bare reservation does not back it with memory, so a
++     * later commit would fault on its first access: direct memory backs
++     * this range like the reserved areas (until it is unmapped). */
++    __wine_ps5_dmem_region( start, size );
+     if (prot != PROT_NONE && anon_mmap_fixed( start, size, prot, flags ) == MAP_FAILED)
+     {
+         munmap( start, size );

@@ -397,3 +397,6 @@ wine/patches/0893-ntdll-clear-decommitted-pages-of-a-shared-host-page.patch
 tests/test_wine_narrow_syscall_args.py
 tests/wine_narrow_syscall_args.c
 wine/patches/0894-win32u-extend-narrow-syscall-arguments-on-clang.patch
+tests/test_wine_fixed_reserve.py
+tests/wine_fixed_reserve.c
+wine/patches/0897-ntdll-ps5-back-fixed-reservations-with-direct-memory.patch
