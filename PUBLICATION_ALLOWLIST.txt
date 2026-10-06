@@ -400,3 +400,6 @@ wine/patches/0894-win32u-extend-narrow-syscall-arguments-on-clang.patch
 tests/test_wine_fixed_reserve.py
 tests/wine_fixed_reserve.c
 wine/patches/0897-ntdll-ps5-back-fixed-reservations-with-direct-memory.patch
+tests/test_wine_process_counters.py
+tests/wine_process_counters.c
+wine/patches/0898-ntdll-ps5-process-memory-counters-from-the-views.patch
