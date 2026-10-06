@@ -1,0 +1,376 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 6 Oct 2026 19:00:00 +0200
+Subject: [PATCH] server: Poll for directory changes on the PS5.
+
+The server reports directory changes (FindFirstChangeNotification,
+ReadDirectoryChangesW, NtNotifyChangeDirectoryFile) through inotify, and
+the console has no inotify, dnotify or kqueue, so a watch never fired.
+Poll a watched directory instead: its entries (the whole subtree when the
+subtree is watched) are listed with file identity, size and times and
+compared with the previous list, and what differs is reported as inotify
+would: names that appeared or went, a rename (a name that went and one
+with the same file identity that came, with a cookie), a file whose size
+or times changed. A watch that takes long to list is polled less often,
+from 25 ms up to 2 s between two lists. From PS5_Proton (mihawk-99, its
+patch 0902), rebased onto this tree.
+
+  server/change.c | 281 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  server/fd.c     |   5 +
+  server/file.h   |   1 +
+  3 files changed, 287 insertions(+)
+
+diff --git a/server/change.c b/server/change.c
+index 37fa946..fdc2188 100644
+--- a/server/change.c
++++ b/server/change.c
+@@ -71,6 +71,10 @@ static void free_inode( struct inode *inode );
+ 
+ static struct fd *inotify_fd;
+ 
++#ifdef __PROSPERO__
++struct poll_watch;
++#endif
++
+ struct change_record {
+     struct list entry;
+     unsigned int cookie;
+@@ -94,8 +98,15 @@ struct dir
+     struct process *client_process;  /* client process that has a cache for this directory */
+     int             client_entry;    /* entry in client process cache */
+     struct list    kernel_object;    /* list of kernel object pointers */
++#ifdef __PROSPERO__
++    struct poll_watch *poll; /* notifications by polling, where there is no inotify */
++#endif
+ };
+ 
++#ifdef __PROSPERO__
++static void poll_watch_free( struct dir *dir );
++#endif
++
+ static struct fd *dir_get_fd( struct object *obj );
+ static struct security_descriptor *dir_get_sd( struct object *obj );
+ static int dir_set_sd( struct object *obj, const struct security_descriptor *sd,
+@@ -418,6 +429,10 @@ static void dir_destroy( struct object *obj )
+     if (dir->filter)
+         remove_change( dir );
+ 
++#ifdef __PROSPERO__
++    poll_watch_free( dir );
++#endif
++
+     if (dir->inode)
+     {
+         list_remove( &dir->in_entry );
+@@ -1103,10 +1118,273 @@ static int init_inotify( void )
+     return 0;
+ }
+ 
++#ifdef __PROSPERO__
++/* The console has no inotify, no dnotify and no kqueue. A directory that is watched is polled: its entries
++ * (and those below it, when the whole subtree is watched) are listed with their identity, size and times,
++ * the list is compared with the last one, and what differs is reported the way inotify would: a name that
++ * appeared or went, a name that went and another with the same file identity that came (a rename), a file
++ * whose size or times changed. Names in a changed file's directory that do not themselves change are not
++ * reported, as on Windows. A watch that takes long to list is polled less often. */
++
++#define POLL_TICKS_PER_SEC  10000000
++#define POLL_MIN_INTERVAL   (POLL_TICKS_PER_SEC / 40)
++#define POLL_MAX_INTERVAL   (2 * POLL_TICKS_PER_SEC)
++#define POLL_MAX_ITEMS      200000
++#define POLL_MAX_DEPTH      32
++
++struct poll_item
++{
++    char   *path;        /* relative to the watched directory, '/' separated */
++    dev_t   dev;
++    ino_t   ino;
++    mode_t  mode;
++    off_t   size;
++    time_t  mtime;
++    long    mtime_nsec;
++};
++
++struct poll_watch
++{
++    struct timeout_user *timeout;
++    struct poll_item    *items;
++    unsigned int         count;
++    timeout_t            interval;
++    unsigned int         cookie;
++};
++
++static void poll_free_items( struct poll_item *items, unsigned int count )
++{
++    unsigned int i;
++    for (i = 0; i < count; i++) free( items[i].path );
++    free( items );
++}
++
++static int poll_add_item( struct poll_item **items, unsigned int *count, unsigned int *size,
++                          const char *path, const struct stat *st )
++{
++    struct poll_item *item;
++
++    if (*count >= POLL_MAX_ITEMS) return 0;
++    if (*count == *size)
++    {
++        unsigned int new_size = *size ? *size * 2 : 64;
++        struct poll_item *new_items = realloc( *items, new_size * sizeof(**items) );
++        if (!new_items) return 0;
++        *items = new_items;
++        *size = new_size;
++    }
++    item = &(*items)[*count];
++    if (!(item->path = strdup( path ))) return 0;
++    item->dev = st->st_dev;
++    item->ino = st->st_ino;
++    item->mode = st->st_mode;
++    item->size = st->st_size;
++    item->mtime = st->st_mtime;
++#ifdef __APPLE__
++    item->mtime_nsec = st->st_mtimespec.tv_nsec;
++#else
++    item->mtime_nsec = st->st_mtim.tv_nsec;
++#endif
++    (*count)++;
++    return 1;
++}
++
++static void poll_scan( const char *base, const char *rel, int subtree, int depth,
++                       struct poll_item **items, unsigned int *count, unsigned int *size )
++{
++    DIR *dp;
++    struct dirent *entry;
++    char *path;
++    size_t len = strlen( base ) + strlen( rel ) + 2;
++
++    if (!(path = malloc( len + 1 ))) return;
++    snprintf( path, len + 1, "%s%s%s", base, rel[0] ? "/" : "", rel );
++    if (!(dp = opendir( path )))
++    {
++        free( path );
++        return;
++    }
++    while ((entry = readdir( dp )))
++    {
++        char *child, *full;
++        struct stat st;
++        size_t child_len;
++
++        if (!strcmp( entry->d_name, "." ) || !strcmp( entry->d_name, ".." )) continue;
++        child_len = strlen( rel ) + strlen( entry->d_name ) + 2;
++        if (!(child = malloc( child_len + 1 ))) break;
++        snprintf( child, child_len + 1, "%s%s%s", rel, rel[0] ? "/" : "", entry->d_name );
++        if (!(full = malloc( strlen( base ) + child_len + 2 ))) { free( child ); break; }
++        sprintf( full, "%s/%s", base, child );
++        if (!lstat( full, &st ) && poll_add_item( items, count, size, child, &st ) &&
++            subtree && S_ISDIR(st.st_mode) && depth < POLL_MAX_DEPTH)
++            poll_scan( base, child, subtree, depth + 1, items, count, size );
++        free( full );
++        free( child );
++    }
++    closedir( dp );
++    free( path );
++}
++
++static int poll_compare( const void *a, const void *b )
++{
++    return strcmp( ((const struct poll_item *)a)->path, ((const struct poll_item *)b)->path );
++}
++
++static void poll_report( struct dir *dir, unsigned int action, unsigned int cookie, const char *relpath )
++{
++    struct change_record *record;
++
++    if (dir->want_data)
++    {
++        size_t len = strlen( relpath );
++        if (!(record = malloc( offsetof(struct change_record, event.name[len]) ))) return;
++        record->cookie = cookie;
++        record->event.action = action;
++        memcpy( record->event.name, relpath, len );
++        record->event.len = len;
++        list_add_tail( &dir->change_records, &record->entry );
++    }
++    fd_async_wake_up( dir->fd, ASYNC_TYPE_WAIT, STATUS_ALERTED );
++}
++
++static unsigned int poll_name_filter( const struct poll_item *item )
++{
++    return S_ISDIR(item->mode) ? FILE_NOTIFY_CHANGE_DIR_NAME : FILE_NOTIFY_CHANGE_FILE_NAME;
++}
++
++/* what changed from the old list to the new one, both sorted by name */
++static void poll_compare_lists( struct dir *dir, const struct poll_item *old, unsigned int old_count,
++                                const struct poll_item *new, unsigned int new_count )
++{
++    struct poll_watch *watch = dir->poll;
++    unsigned char *old_gone = calloc( old_count + 1, 1 ), *new_added = calloc( new_count + 1, 1 );
++    unsigned int i = 0, j = 0, a, b;
++
++    if (!old_gone || !new_added) goto done;
++    while (i < old_count || j < new_count)
++    {
++        int cmp = i == old_count ? 1 : j == new_count ? -1 : strcmp( old[i].path, new[j].path );
++        if (cmp < 0) old_gone[i++] = 1;
++        else if (cmp > 0) new_added[j++] = 1;
++        else
++        {
++            const struct poll_item *was = &old[i], *is = &new[j];
++            if (was->dev != is->dev || was->ino != is->ino)
++            {
++                /* another file under the same name: it was replaced */
++                old_gone[i] = 1;
++                new_added[j] = 1;
++            }
++            else if (!S_ISDIR(is->mode) &&
++                     (was->size != is->size || was->mtime != is->mtime || was->mtime_nsec != is->mtime_nsec))
++            {
++                unsigned int wanted = FILE_NOTIFY_CHANGE_LAST_WRITE;
++                if (was->size != is->size) wanted |= FILE_NOTIFY_CHANGE_SIZE;
++                if (dir->filter & wanted) poll_report( dir, FILE_ACTION_MODIFIED, 0, is->path );
++            }
++            else if (was->mode != is->mode && (dir->filter & FILE_NOTIFY_CHANGE_ATTRIBUTES))
++                poll_report( dir, FILE_ACTION_MODIFIED, 0, is->path );
++            i++;
++            j++;
++        }
++    }
++    /* a name that went and another that came with the same file identity: a rename */
++    for (a = 0; a < old_count; a++)
++    {
++        if (!old_gone[a]) continue;
++        for (b = 0; b < new_count; b++)
++        {
++            if (!new_added[b] || old[a].dev != new[b].dev || old[a].ino != new[b].ino) continue;
++            if (dir->filter & poll_name_filter( &new[b] ))
++            {
++                unsigned int cookie = ++watch->cookie;
++                poll_report( dir, FILE_ACTION_RENAMED_OLD_NAME, cookie, old[a].path );
++                poll_report( dir, FILE_ACTION_RENAMED_NEW_NAME, cookie, new[b].path );
++            }
++            old_gone[a] = 0;
++            new_added[b] = 0;
++            break;
++        }
++    }
++    for (a = 0; a < old_count; a++)
++        if (old_gone[a] && (dir->filter & poll_name_filter( &old[a] )))
++            poll_report( dir, FILE_ACTION_REMOVED, 0, old[a].path );
++    for (b = 0; b < new_count; b++)
++        if (new_added[b] && (dir->filter & poll_name_filter( &new[b] )))
++            poll_report( dir, FILE_ACTION_ADDED, 0, new[b].path );
++done:
++    free( old_gone );
++    free( new_added );
++}
++
++static void poll_timeout( void *private );
++
++static void poll_arm( struct dir *dir )
++{
++    dir->poll->timeout = add_timeout_user( current_time + dir->poll->interval, poll_timeout, dir );
++}
++
++static void poll_timeout( void *private )
++{
++    struct dir *dir = private;
++    struct poll_watch *watch = dir->poll;
++    struct poll_item *items = NULL;
++    unsigned int count = 0, size = 0;
++    struct timespec before, after;
++    const char *base;
++    long long took;
++
++    watch->timeout = NULL;
++    if (!(base = get_fd_unix_name( dir->fd ))) return;
++    clock_gettime( CLOCK_MONOTONIC, &before );
++    poll_scan( base, "", dir->subtree, 0, &items, &count, &size );
++    clock_gettime( CLOCK_MONOTONIC, &after );
++    if (items) qsort( items, count, sizeof(*items), poll_compare );
++    poll_compare_lists( dir, watch->items, watch->count, items, count );
++    poll_free_items( watch->items, watch->count );
++    watch->items = items;
++    watch->count = count;
++    /* a listing that takes long is made less often: eight times as long between two */
++    took = ((long long)(after.tv_sec - before.tv_sec) * 1000000000 + (after.tv_nsec - before.tv_nsec)) / 100;
++    watch->interval = took * 8 < POLL_MIN_INTERVAL ? POLL_MIN_INTERVAL
++                      : took * 8 > POLL_MAX_INTERVAL ? POLL_MAX_INTERVAL : took * 8;
++    poll_arm( dir );
++}
++
++static void poll_watch_free( struct dir *dir )
++{
++    struct poll_watch *watch = dir->poll;
++
++    if (!watch) return;
++    if (watch->timeout) remove_timeout_user( watch->timeout );
++    poll_free_items( watch->items, watch->count );
++    free( watch );
++    dir->poll = NULL;
++}
++
++static int inotify_adjust_changes( struct dir *dir )
++{
++    struct poll_watch *watch;
++    const char *base;
++    unsigned int size = 0;
++
++    if (dir->poll) return 1;
++    if (!(base = get_fd_unix_name( dir->fd )) || !(watch = calloc( 1, sizeof(*watch) ))) return 0;
++    dir->poll = watch;
++    watch->interval = POLL_MIN_INTERVAL;
++    /* the list the next ones are compared with is made now, before the caller can change anything */
++    poll_scan( base, "", dir->subtree, 0, &watch->items, &watch->count, &size );
++    if (watch->items) qsort( watch->items, watch->count, sizeof(*watch->items), poll_compare );
++    poll_arm( dir );
++    return 1;
++}
++#else
+ static int inotify_adjust_changes( struct dir *dir )
+ {
+     return 0;
+ }
++#endif
+ 
+ static void free_inode( struct inode *inode )
+ {
+@@ -1138,6 +1416,9 @@ struct object *create_dir_obj( struct fd *fd, unsigned int access, mode_t mode )
+     dir->mode = mode;
+     dir->uid  = ~(uid_t)0;
+     dir->client_process = NULL;
++#ifdef __PROSPERO__
++    dir->poll = NULL;
++#endif
+     set_fd_user( fd, &dir_fd_ops, &dir->obj );
+ 
+     dir_add_to_existing_notify( dir );
+diff --git a/server/fd.c b/server/fd.c
+index a3545d5..bce9a84 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -3224,6 +3224,11 @@ DECL_HANDLER(get_handle_unix_name)
+     }
+ }
+ 
++const char *get_fd_unix_name( struct fd *fd )
++{
++    return fd->unix_name;
++}
++
+ /* get a Unix fd to access a file */
+ DECL_HANDLER(get_handle_fd)
+ {
+diff --git a/server/file.h b/server/file.h
+index 95d18b3..c46f95e 100644
+--- a/server/file.h
++++ b/server/file.h
+@@ -150,6 +150,7 @@ static inline timeout_t abstime_to_timeout( abstime_t abstime )
+ 
+ extern void set_current_time( void );
+ extern struct timeout_user *add_timeout_user( timeout_t when, timeout_callback func, void *private );
++extern const char *get_fd_unix_name( struct fd *fd );
+ extern void remove_timeout_user( struct timeout_user *user );
+ extern const char *get_timeout_str( timeout_t timeout );
+ 
