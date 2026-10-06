@@ -332,6 +332,28 @@ static void test_random(void)
     check_consistent();
 }
 
+/* A region whose whole range is unmapped stops being owned once it holds no
+ * run; one that still holds a run, or lies only partly in the range, stays
+ * (ntdll's fixed reservations, patch 0897). */
+static void test_remove_regions(void)
+{
+    const unsigned regions = dmem.regions;
+
+    assert(model_reserve(NULL, at(450), 8 * PAGE) == 0);
+    assert(pw_wine_dmem_add_region(&dmem, at(450), 8 * PAGE, 1) == 0 && dmem.regions == regions + 1);
+    assert(pw_wine_dmem_protect(&dmem, at(451), PAGE, 3) == 0 && state[451] == MAPPED);
+    assert(pw_wine_dmem_remove_regions(&dmem, at(440), 30 * PAGE) == 0 && dmem.regions == regions + 1);
+    assert(pw_wine_dmem_replace(&dmem, at(451), PAGE, 0) == 0);
+    assert(pw_wine_dmem_remove_regions(&dmem, at(450), 7 * PAGE) == 0 && dmem.regions == regions + 1);
+    assert(pw_wine_dmem_remove_regions(&dmem, at(450), 8 * PAGE) == 1 && dmem.regions == regions);
+    assert(!pw_wine_dmem_owns(&dmem, at(450), PAGE) && pw_wine_dmem_owns(&dmem, at(16), PAGE));
+    assert(pw_wine_dmem_protect(&dmem, at(451), PAGE, 3) == -1);
+    /* Owned again when it is handed over again. */
+    assert(pw_wine_dmem_add_region(&dmem, at(450), 8 * PAGE, 1) == 0 && dmem.regions == regions + 1);
+    assert(pw_wine_dmem_remove_regions(&dmem, at(450), 8 * PAGE) == 1);
+    model_unmap(NULL, at(450), 8 * PAGE);
+}
+
 int main(void)
 {
     PwWineDmemStats stats;
@@ -353,12 +375,13 @@ int main(void)
     test_basics();
     test_merge_and_failures();
     test_random();
+    test_remove_regions();
     pw_wine_dmem_stats(&dmem, &stats);
     /* memory was backed on both sides of 4 GiB */
     assert(!straddles ||
            (stats.peak_low_backed_bytes > 0 && stats.peak_low_backed_bytes < stats.peak_backed_bytes));
     printf("wine dmem passed: regions, commit, protect, replace, split and merged runs, "
-           "caller mappings, kernel failures, a full table, 20000 random operations and the "
+           "caller mappings, kernel failures, a full table, 20000 random operations, dropped regions and the "
            "below-4-GiB split%s; peak %u runs, %llu KiB, %llu KiB below 4 GiB\n",
            straddles ? "" : " (one side only)",
            stats.peak_runs, (unsigned long long)(stats.peak_backed_bytes >> 10),

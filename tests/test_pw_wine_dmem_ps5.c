@@ -210,10 +210,16 @@ int main(void)
     /* munmap gives back the memory and the address space. */
     assert(!__wine_ps5_munmap(base, 8 * PAGE) && used() == 0);
     assert(free_space(base, 8 * PAGE));
-    /* The range is still the module's: a fixed mapping there is direct
-     * memory again. */
+    /* A whole region unmapped is no longer the module's: a fixed mapping
+     * there is the host's. */
     assert(__wine_ps5_mmap(base, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-                           -1, 0) == base && used() == 1);
+                           -1, 0) == base && used() == 0);
+    assert(!__wine_ps5_munmap(base, PAGE));
+    /* ntdll reserves it again at a fixed address and hands it over (patch
+     * 0897): committing it by protection backs it, zeroed. */
+    assert(!sceKernelReserveVirtualRange((void **)&base, 8 * PAGE, 0x90, PAGE));
+    __wine_ps5_dmem_region(base, 8 * PAGE);
+    assert(!__wine_ps5_mprotect(base, PAGE, PROT_READ | PROT_WRITE) && used() == 1 && base[0] == 0);
     /* Out of direct memory: the call fails with ENOMEM and the range stays
      * reserved. */
     {
@@ -237,6 +243,7 @@ int main(void)
     }
     assert(!__wine_ps5_munmap(base, 8 * PAGE) && used() == 0);
     printf("wine dmem ps5 glue passed: pass-through before and outside the regions, commit, protect, "
-           "a mapping across the edge, private and shared file views, munmap, and a refused self-check\n");
+           "a mapping across the edge, private and shared file views, munmap, a region given back and taken again, "
+           "and a refused self-check\n");
     return 0;
 }

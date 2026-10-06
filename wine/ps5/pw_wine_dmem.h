@@ -85,6 +85,9 @@ int pw_wine_dmem_init(PwWineDmem *, const PwWineDmemOps *, PwWineDmemRun *runs,
  * already has. A region touching or overlapping one already owned joins
  * it. 0, or -1. */
 int pw_wine_dmem_add_region(PwWineDmem *, uintptr_t address, size_t bytes, int reserved);
+/* Stop owning every region that lies wholly inside [address, +bytes) and
+ * holds no run: its address space is gone. Returns how many were dropped. */
+int pw_wine_dmem_remove_regions(PwWineDmem *, uintptr_t address, size_t bytes);
 /* 1 when [address, +bytes) lies inside one region. */
 int pw_wine_dmem_owns(PwWineDmem *, uintptr_t address, size_t bytes);
 /* Where [address, +bytes) first crosses a region's edge: *piece is the

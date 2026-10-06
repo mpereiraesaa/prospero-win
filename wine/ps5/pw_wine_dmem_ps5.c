@@ -157,11 +157,18 @@ static int self_check(uintptr_t address)
 }
 
 /* ntdll's reserved area [base, +size), already reserved: backed by direct
- * memory from now on. */
+ * memory from now on. ntdll also gives each reservation it makes at a fixed
+ * address outside those areas: the console does not back a bare reservation
+ * when it is protected, so committing one would leave it without memory.
+ * Such a region is dropped again when it is unmapped. */
 void __wine_ps5_dmem_region(void *base, size_t size)
 {
     if (!state && pw_wine_dmem_init(&dmem, &ops, runs, RUNS, 1)) state = -1;
-    if (state < 0 || pw_wine_dmem_add_region(&dmem, (uintptr_t)base, size, 1)) return;
+    if (state < 0) return;
+    if (pw_wine_dmem_add_region(&dmem, (uintptr_t)base, size, 1)) {
+        fprintf(stderr, "wine-ps5: no direct memory region for %p, %zu bytes\n", base, size);
+        return;
+    }
     if (!state) {
         state = self_check((uintptr_t)base) ? 1 : -1;
         fprintf(stderr, "wine-ps5: direct memory %s for anonymous memory (region %p, %zu MiB)\n",
@@ -225,6 +232,7 @@ int __wine_ps5_munmap(void *address, size_t bytes)
             status |= pw_wine_dmem_replace(&dmem, at, piece, 0) | sceKernelMunmap((void *)at, piece);
         else
             status |= munmap((void *)at, piece);
+    pw_wine_dmem_remove_regions(&dmem, page_down(address), page_span(address, bytes));
     if (status) errno = EINVAL;
     return status ? -1 : 0;
 }

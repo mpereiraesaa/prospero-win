@@ -203,6 +203,28 @@ int pw_wine_dmem_add_region(PwWineDmem *d, uintptr_t address, size_t bytes, int 
     return status;
 }
 
+int pw_wine_dmem_remove_regions(PwWineDmem *d, uintptr_t address, size_t bytes)
+{
+    uintptr_t end = address + bytes < address ? UINTPTR_MAX : address + bytes;
+    unsigned kept = 0, dropped = 0;
+
+    lock(d);
+    for (unsigned i = 0; i < d->regions; i++) {
+        uint32_t run = first_after(d, d->region_low[i]);
+
+        if (d->region_low[i] >= address && d->region_high[i] <= end &&
+            (run == d->run_count || d->runs[run].address >= d->region_high[i])) {
+            dropped++;
+            continue;
+        }
+        d->region_low[kept] = d->region_low[i];
+        d->region_high[kept++] = d->region_high[i];
+    }
+    d->regions = kept;
+    unlock(d);
+    return (int)dropped;
+}
+
 int pw_wine_dmem_split(PwWineDmem *d, uintptr_t address, size_t bytes, size_t *piece)
 {
     uintptr_t end = address + bytes < address ? UINTPTR_MAX : address + bytes;
