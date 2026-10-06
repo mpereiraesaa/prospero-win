@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 5 Oct 2026 22:30:00 +0200
+Subject: [PATCH] ntdll: Leave through exit() when a process ends itself on PS5.
+
+NtTerminateProcess on the current process, without ExitProcess's first
+call for the other threads, ends in abort_process, which is _exit(). The
+title restarts into its launcher from its exit handlers, which _exit
+skips, so an unhandled exception (kernelbase's filter, once it cannot
+start winedbg, terminates the process this way) took the whole title
+down with the game: Battle.net's crash after sign-in left the console at
+its home screen instead of the launcher.
+
+The other threads are now ended first, as ExitProcess does, and the
+process leaves through exit_process, so the exit handlers run.
+---
+ dlls/ntdll/unix/process.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
+index a11cc77666..2ff204ba24 100644
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -989,7 +989,19 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
+     {
+         if (!handle) process_exiting = TRUE;
+         else if (process_exiting) exit_process( exit_code );
++#ifdef __PROSPERO__
++        else
++        {
++            /* _exit skips the exit handlers a title restarts into its
++             * launcher from, so an unhandled exception took the whole title
++             * down. End the other threads first, as ExitProcess does, then
++             * leave through exit(). */
++            NtTerminateProcess( 0, exit_code );
++            exit_process( exit_code );
++        }
++#else
+         else abort_process( exit_code );
++#endif
+     }
+     return ret;
+ }
+-- 
+2.43.0
+

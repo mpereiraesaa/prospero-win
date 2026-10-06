@@ -506,14 +506,16 @@ static int publish(PwX86HostExec *h, const uint8_t *stub, size_t bytes, uint32_t
  * CPUID as the host's, less what the guest cannot run: AVX, AVX2, FMA, F16C,
  * BMI1/2 and AVX-512 are VEX or EVEX encoded, which neither translator nor
  * this stepper takes, and XSAVE/OSXSAVE advertise the state they need.
- * Software then takes its SSE paths, as on an older processor (FFmpeg in LAV
- * Filters picked AVX on the PS5's Zen 2).
+ * SSE4.2 goes too: its CRC32 (F2 0F 38 F0/F1) and PCMPxSTRx forms are
+ * refused above, and Qt5Core's qHash takes CRC32 whenever the bit is set
+ * (Battle.net stopped on it). Software then takes its SSE paths, as on an
+ * older processor (FFmpeg in LAV Filters picked AVX on the PS5's Zen 2).
  */
 void pw_x86_cpuid_mask(uint32_t leaf, uint32_t subleaf, uint32_t regs[4])
 {
     (void)subleaf;
     if (leaf == 1) {
-        regs[2] &= ~((1u << 12) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29));
+        regs[2] &= ~((1u << 12) | (1u << 20) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29));
     } else if (leaf == 7) {
         regs[1] &= ~((1u << 3) | (1u << 5) | (1u << 8) | (1u << 16) | (1u << 17) | (1u << 21) |
                      (1u << 26) | (1u << 27) | (1u << 28) | (1u << 30) | (1u << 31));

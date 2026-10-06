@@ -66,8 +66,12 @@ FREETYPE_UNITS="base/ftsystem base/ftinit base/ftdebug base/ftbase base/ftbbox b
  base/ftglyph base/ftmm base/ftsynth base/fttype1 base/ftfstype base/ftgasp base/ftwinfnt
  autofit/autofit truetype/truetype type1/type1 cff/cff winfonts/winfnt psaux/psaux
  psnames/psnames pshinter/pshinter sfnt/sfnt smooth/smooth raster/raster gzip/ftgzip"
-# The functions dlls/win32u/freetype.c loads with dlsym.
-FREETYPE_EXPORTS="FT_Done_Face FT_Get_Char_Index FT_Get_First_Char FT_Get_Next_Char
+# The functions dlls/win32u/freetype.c and dlls/dwrite/freetype.c load with
+# dlsym.
+FREETYPE_EXPORTS="FT_Activate_Size FT_Done_Face FT_Done_FreeType FT_Done_Glyph FT_Done_Size
+ FT_Get_Glyph FT_Get_Kerning FT_Glyph_Copy FT_Glyph_Get_CBox FT_Glyph_Transform FT_New_Size
+ FT_Outline_Copy FT_Outline_Decompose FT_Outline_Done FT_Outline_EmboldenXY FT_Outline_New
+ FT_Get_Char_Index FT_Get_First_Char FT_Get_Next_Char
  FT_Get_Sfnt_Name FT_Get_Sfnt_Name_Count FT_Get_Sfnt_Table FT_Get_TrueType_Engine_Type
  FT_Get_WinFNT_Header FT_Init_FreeType FT_Library_SetLcdFilter FT_Library_Version
  FT_Load_Glyph FT_Load_Sfnt_Table FT_Matrix_Multiply FT_MulDiv FT_MulFix FT_New_Face
@@ -75,7 +79,7 @@ FREETYPE_EXPORTS="FT_Done_Face FT_Get_Char_Index FT_Get_First_Char FT_Get_Next_C
  FT_Outline_Transform FT_Outline_Translate FT_Property_Set FT_Render_Glyph FT_Set_Charmap
  FT_Set_Pixel_Sizes FT_Vector_Length FT_Vector_Transform FT_Vector_Unit"
 TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver dlls/winevulkan/winevulkan.so
- dlls/opengl32/opengl32.so dlls/ws2_32/ws2_32.so dlls/crypt32/crypt32.so"
+ dlls/opengl32/opengl32.so dlls/ws2_32/ws2_32.so dlls/crypt32/crypt32.so dlls/dwrite/dwrite.so"
 # The PE modules the patches change: every xinput built from xinput1_3's
 # source reads the title's controller (patch 0470); xinput9_1_0 forwards to
 # xinput1_4. quartz: its renderers wait for a state change without the filter
@@ -290,7 +294,7 @@ status=0
 (cd "$build" && rm -f $TARGETS)
 for step in "dlls/ntdll/ntdll.so|$heap $dmem" "dlls/win32u/win32u.so|" "server/wineserver|$heap" \
         "dlls/winevulkan/winevulkan.so|" "dlls/opengl32/opengl32.so|" "dlls/ws2_32/ws2_32.so|" \
-        "dlls/crypt32/crypt32.so|"; do
+        "dlls/crypt32/crypt32.so|" "dlls/dwrite/dwrite.so|"; do
     target=${step%%|*}; objects=${step#*|}
     make -C "$build" -k -j"$jobs" LDFLAGS="$objects $base" "$target" \
         >> "$work/make.log" 2>&1 || status=$?
@@ -446,12 +450,14 @@ if [ "$prx_status" = 0 ]; then
         __wine_unix_call_funcs __wine_unix_call_wow64_funcs
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/crypt32_desc.c" \
         __wine_unix_call_funcs __wine_unix_call_wow64_funcs
+    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/dwrite_desc.c" \
+        __wine_unix_call_funcs __wine_unix_call_wow64_funcs
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libvulkan_desc.c" \
         vkGetInstanceProcAddr vkGetDeviceProcAddr
     # shellcheck disable=SC2086
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libfreetype_desc.c" $FREETYPE_EXPORTS
     for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc wineps5_desc \
-            libfreetype_desc xinput_desc winevulkan_desc opengl32_desc ws2_32_desc crypt32_desc \
+            libfreetype_desc xinput_desc winevulkan_desc opengl32_desc ws2_32_desc crypt32_desc dwrite_desc \
             libvulkan_desc; do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
@@ -541,6 +547,11 @@ if [ "$prx_status" = 0 ]; then
     # Warcraft III's cinematics play through). Without GnuTLS it keeps what a
     # game needs: stores, certificates, hashes; PFX import reports failure.
     link_prx crypt32 dlls/crypt32/crypt32.so "$prx/obj/crypt32_desc.o" "$prx/ntdll.shared.elf"
+    # DirectWrite's Unix side, FreeType through libfreetype.prx: without it
+    # every glyph measurement a DirectWrite client makes calls through a
+    # NULL table, and Chromium (Battle.net's login page) aborts laying out
+    # text.
+    link_prx dwrite dlls/dwrite/dwrite.so "$prx/obj/dwrite_desc.o" "$prx/ntdll.shared.elf"
     # The Vulkan driver itself, from ps5vk's SDK: only what its two entry
     # points reach, since the archive repeats a member. Its import facades
     # join the SDK's stubs.
@@ -592,7 +603,7 @@ text = Path(log).read_text(errors="replace")
 owners = {"dlls/ntdll/": "dlls/ntdll/ntdll.so", "dlls/win32u/": "dlls/win32u/win32u.so",
           "server/": "server/wineserver", "dlls/winevulkan/": "dlls/winevulkan/winevulkan.so",
           "dlls/opengl32/": "dlls/opengl32/opengl32.so", "dlls/ws2_32/": "dlls/ws2_32/ws2_32.so",
-          "dlls/crypt32/": "dlls/crypt32/crypt32.so"}
+          "dlls/crypt32/": "dlls/crypt32/crypt32.so", "dlls/dwrite/": "dlls/dwrite/dwrite.so"}
 unresolved = {target: set() for target in owners.values()}
 # lld prints each unresolved symbol, then ">>> referenced by" lines whose
 # continuation names the object ("dir/file.o:(function)"); the object's
@@ -639,7 +650,7 @@ objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{
 SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
 for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfreetype", "xinput1_3",
-             "winevulkan", "opengl32", "ws2_32", "crypt32", "libvulkan") if not prx_status.startswith("skipped") else ():
+             "winevulkan", "opengl32", "ws2_32", "crypt32", "dwrite", "libvulkan") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
     if name == "libvulkan" and not link_log.is_file():
@@ -662,7 +673,7 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
                    if len(fields) >= 8 and fields[6] == "UND"}
         provided = title_exports | (ntdll_exports if name in ("win32u", "wowprospero", "wineps5",
                                                               "xinput1_3", "winevulkan", "opengl32", "ws2_32",
-                                                              "crypt32") else set())
+                                                              "crypt32", "dwrite") else set())
         entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
         # Nor does it get the WebKit process's libraries: ws2_32's getaddrinfo,
         # bound to libScePosixForWebKit, jumped to 0 in GTA IV (measured).

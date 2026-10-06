@@ -92,6 +92,11 @@ def make_game(root: Path, library: Path, console: Path) -> Path:
     os.symlink("/", prefix / "dosdevices/z:")
     os.symlink("/dev/ttyS0", prefix / "dosdevices/com1")
     os.symlink(str(root), prefix / "drive_c/users/prospero/Desktop")
+    # Proton links its fonts into the prefix from its own install.
+    (prefix / "drive_c/windows/Fonts").mkdir(parents=True)
+    (library / "runner-fonts").mkdir(parents=True, exist_ok=True)
+    (library / "runner-fonts/arial.ttf").write_bytes(b"\0\1\0\0 arial")
+    os.symlink(str(library / "runner-fonts/arial.ttf"), prefix / "drive_c/windows/Fonts/arial.ttf")
     (prefix / ".wineserver").mkdir()
     (prefix / ".wineserver/lock").write_text("")
     (library / "profiles").mkdir(parents=True)
@@ -200,7 +205,7 @@ def check_resume(root: Path) -> None:
         assert pw_prefix.main(["push", "game", *common], remote) == 0
         resent = {w.split(f"/{GAME}/")[1] for w in game_writes(remote)}
         assert len(resent) == 32 - 10 and not {f"{GAME}/{name}" for name in resent} & set(recorded)
-        assert len(manifest(library)) == 36
+        assert len(manifest(library)) == 37
 
         # Stopped with SIGTERM: everything sent so far is recorded.
         library, console, common = new_game(root, "stopped", files=30)
@@ -306,11 +311,11 @@ def check_ps5upload(root: Path) -> None:
         log = calls.read_text().splitlines()
         assert log[0] == "ps5.invalid:9114 hello"
         transfers = [line.split() for line in log if " transfer-dir " in line]
-        # Seven game files in batches of four, each its own transaction.
+        # Eight files (seven of the game, a font) in batches of four, each its own transaction.
         assert len(transfers) == 2 and transfers[0][2] != transfers[1][2]
         assert all(t[0] == "ps5.invalid:9113" and t[3] == f"/{REMOTE_PREFIX}" for t in transfers)
         # Staged as links to the library's files, not copies, and cleaned up.
-        assert [line for line in log if line.startswith("links=")] == ["links=2"] * 7
+        assert [line for line in log if line.startswith("links=")] == ["links=2"] * 8
         assert not (library / ".pw/stage").exists() or not any((library / ".pw/stage").iterdir())
         for name in ("game.exe", "data.mpq", "data03.bin"):
             assert (console / REMOTE_PREFIX / GAME / name).read_bytes() == (prefix / GAME / name).read_bytes()
@@ -322,7 +327,7 @@ def check_ps5upload(root: Path) -> None:
         assert "wowprospero.dll" in (console / REMOTE_PREFIX / "system.reg").read_text()
         recorded = manifest(library)
         assert recorded[f"{GAME}/data03.bin"] == pw_prefix.file_entry("", prefix / GAME / "data03.bin")
-        assert len(recorded) == 11
+        assert len(recorded) == 12
 
         # One file changed: only it goes, and nothing over FTP for it.
         (prefix / GAME / "game.exe").write_bytes(b"MZ game v2")
@@ -487,6 +492,8 @@ def main() -> int:
         assert (prefix / "system.reg").read_text().count("wowprospero") == 0
         assert (remote_prefix / "dosdevices/.pw-symlinks").read_text() == "c:\t../drive_c\nz:\t/\n"
         assert (remote_prefix / "drive_c/users/prospero/Desktop").is_dir()
+        # A link out of the prefix to a file is the file on the console.
+        assert (remote_prefix / "drive_c/windows/Fonts/arial.ttf").read_bytes() == b"\0\1\0\0 arial"
         assert not (remote_prefix / ".wineserver").exists()
         assert not (remote_prefix / "dosdevices/com1").exists()
         assert (console / "data/prospero-win/profiles/game.profile").is_file()

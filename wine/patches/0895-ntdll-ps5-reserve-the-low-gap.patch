@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 5 Oct 2026 20:30:00 +0200
+Subject: [PATCH] ntdll: Reserve 0x68000000-0x7f000000 on PS5.
+
+mmap_init reserves the low 4 GiB as Linux does, which leaves
+0x68000000-0x7f000000 to the host's own libraries. The console has none
+there, and it is where Wine puts the i386 builtin DLLs and where many of
+a game's DLLs land. Outside every reserved area, each image view there
+is a plain fixed anonymous mapping, drawn from the title's ~440 MiB of
+flexible memory instead of direct memory (patch 0600).
+
+Battle.net's login page showed it: the title's own address space held
+279 MiB of flexible memory in 295 read-only fixed anonymous mappings
+created by anon_mmap_fixed, the DLL images, until flexible memory ran
+out and the browser's views, then a new thread's translator state, were
+refused.
+
+The range is now reserved too, so it becomes a direct memory region like
+the rest. The reservation refuses to overwrite (patch 0570), so anything
+already mapped there keeps its place and reserve_area's halving reserves
+around it.
+---
+ dlls/ntdll/unix/virtual.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 8cf36c581d..403849bd3a 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -1013,6 +1013,14 @@ static void mmap_init( const struct preload_info *preload_info )
+     reserve_area( (void *)0x000000010000, (void *)0x000068000000 );
+     reserve_area( (void *)0x00007f000000, (void *)0x00007fff0000 );
+ #ifdef __PROSPERO__
++    /* Linux leaves 0x68000000-0x7f000000 to its own libraries; the console
++     * has none there, and it is where the i386 builtin DLLs and many of a
++     * game's DLLs go. Unreserved, every image view there is a plain fixed
++     * mapping of flexible memory: Battle.net's DLLs held 279 MiB of it.
++     * Reserved, the range is a direct memory region like the rest. The
++     * reservation refuses to overwrite, so anything already mapped there
++     * keeps its place and the halving reserves around it. */
++    reserve_area( (void *)0x000068000000, (void *)0x00007f000000 );
+     /* User space ends far below 0x7ffffe000000; reserve room for the view
+      * heap wherever the kernel has space above 4 GiB. */
+     {
+-- 
+2.43.0
+

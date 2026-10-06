@@ -153,6 +153,8 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	$(BUILD)/dbt_differential reencode < tests/fixtures/dbt_differential_forms.txt
 	python3 tests/test_pw_sse_matrix.py
 	python3 tests/test_wine_runtime_manifest.py
+	python3 tests/test_wine_protect_writecopy.py
+	python3 tests/test_wine_dib_section.py
 	python3 tests/test_wowprospero_contract.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wowprospero_unmap.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wowprospero_service_return.py
@@ -195,6 +197,8 @@ wine-check: test
 	@test -f .deps/wine-runtime/lib/i386-windows/ntdll.dll || \
 		{ echo "wine-check: no staged runtime (tools/build_wine_runtime.sh)" >&2; exit 2; }
 	python3 tests/test_wine_runtime_manifest.py
+	python3 tests/test_wine_protect_writecopy.py
+	python3 tests/test_wine_dib_section.py
 
 audit:
 	python3 tools/audit_publication.py

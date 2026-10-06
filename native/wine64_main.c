@@ -237,6 +237,72 @@ int32_t sceKernelLoadStartModule(const char *path, size_t argc, const void *argv
 int sceKernelGetModuleInfo(int32_t handle, void *info);
 int sceKernelAvailableFlexibleMemorySize(size_t *bytes);
 
+/* libkernel's description of one mapping of the title's own address space
+ * (the layout every PS4 and PS5 SDK documents). */
+typedef struct {
+    uintptr_t start, end;
+    int64_t offset;
+    int32_t protection, memory_type;
+    uint8_t flags;     /* bit 0 flexible, 1 direct, 2 stack, 3 pooled, 4 committed */
+    char name[32];
+} PwVirtualQueryInfo;
+int sceKernelVirtualQuery(const void *address, int flags, void *info, size_t size);
+
+/* Who holds the flexible memory: the title's mappings of it, summed by name
+ * and protection, largest first. Logged once when less than 64 MiB is left
+ * and once below 4 MiB, the levels at which a browser's views and then a
+ * new thread's translator state were refused. */
+static void log_flexible_holders(size_t available)
+{
+    enum { BUCKETS = 64, TOP = 16 };
+    struct { char name[33]; int32_t protection; uint64_t bytes; uint32_t count; } bucket[BUCKETS];
+    unsigned used = 0, other = 0;
+    uint64_t total = 0, unnamed = 0;
+    uintptr_t address = 0;
+    PwVirtualQueryInfo info;
+
+    memset(bucket, 0, sizeof(bucket));
+    for (unsigned steps = 0; steps < 200000; steps++) {
+        uint64_t bytes;
+        unsigned i;
+
+        memset(&info, 0, sizeof(info));
+        if (sceKernelVirtualQuery((const void *)address, 1, &info, sizeof(info)) || info.end <= address) break;
+        address = info.end;
+        if (!(info.flags & 1)) continue;
+        bytes = info.end - info.start;
+        total += bytes;
+        info.name[sizeof(info.name) - 1] = 0;
+        if (!info.name[0]) unnamed += bytes;
+        for (i = 0; i < used; i++)
+            if (bucket[i].protection == info.protection && !strcmp(bucket[i].name, info.name)) break;
+        if (i == used) {
+            if (used == BUCKETS) { other++; continue; }
+            used++;
+            memcpy(bucket[i].name, info.name, sizeof(info.name));
+            bucket[i].protection = info.protection;
+        }
+        bucket[i].bytes += bytes;
+        bucket[i].count++;
+    }
+    PS5LOG_LOG("PW_WINE64 flexible_holders available=%zuK mapped=%lluK unnamed=%lluK buckets=%u overflow=%u",
+               available >> 10, (unsigned long long)(total >> 10), (unsigned long long)(unnamed >> 10), used,
+               other);
+    for (unsigned rank = 0; rank < TOP && rank < used; rank++) {
+        unsigned best = rank;
+        for (unsigned i = rank + 1; i < used; i++)
+            if (bucket[i].bytes > bucket[best].bytes) best = i;
+        if (best != rank) {
+            __typeof__(bucket[0]) swap = bucket[rank];
+            bucket[rank] = bucket[best];
+            bucket[best] = swap;
+        }
+        PS5LOG_LOG("PW_WINE64 flexible_holder rank=%u bytes=%lluK count=%u prot=%#x name=%s", rank + 1,
+                   (unsigned long long)(bucket[rank].bytes >> 10), bucket[rank].count,
+                   (unsigned)bucket[rank].protection, bucket[rank].name[0] ? bucket[rank].name : "-");
+    }
+}
+
 static uint64_t now_ns(void)
 {
     struct timespec value;
@@ -1272,6 +1338,17 @@ int main(int argc, char **argv)
                                    (unsigned)(top[i * 4 + 3] >> 16) & 0xffu,
                                    (unsigned)(top[i * 4 + 3] >> 8) & 0xffu, (unsigned)top[i * 4 + 3] & 0xffu);
                     faults_logged = v[5];
+                }
+            }
+            if (tick % 30 == 0) {
+                static int holders_logged;
+                size_t flexible = 0;
+
+                (void)sceKernelAvailableFlexibleMemorySize(&flexible);
+                if ((holders_logged == 0 && flexible < ((size_t)64 << 20)) ||
+                    (holders_logged == 1 && flexible < ((size_t)4 << 20))) {
+                    log_flexible_holders(flexible);
+                    holders_logged = flexible < ((size_t)4 << 20) ? 2 : 1;
                 }
             }
             if (tick % 300 == 0) {

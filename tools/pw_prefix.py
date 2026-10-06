@@ -24,8 +24,9 @@ or pull, until it is pulled (or --force).
 A title cannot make symbolic links, so prospero-win keeps them per directory
 in a .pw-symlinks table (NAME<TAB>TARGET lines, wine/ps5/pw_wine_cwd.h). A
 push writes each directory's links inside the prefix there (dosdevices' c:
-and z:), and links that leave the prefix (Wine's Desktop or Documents into
-the PC's home) become empty directories. A pull never writes through such
+and z:). A link that leaves the prefix to a file (Proton's fonts in
+windows/Fonts) is sent as that file; one to a folder (Wine's Desktop or
+Documents into the PC's home) becomes an empty directory. A pull never writes through such
 a link: it replaces the link with a real directory inside the prefix, as on
 the console, and refuses a file that would still land outside the prefix.
 
@@ -276,8 +277,12 @@ def local_tree(prefix: Path) -> tuple[dict[str, Path], set[str], dict[str, dict[
                     continue    # serial and parallel ports: nothing on a console
                 if link_inside(Path(entry.path), target, root):
                     links.setdefault(relative, {})[entry.name] = target
+                elif os.path.isfile(entry.path):
+                    # A file out of the prefix (Proton links its fonts into
+                    # windows/Fonts): the console gets the file itself.
+                    files[key] = Path(entry.path)
                 else:
-                    dirs.add(key)   # a link out of the prefix: an empty directory
+                    dirs.add(key)   # a folder out of the prefix: an empty directory
             elif entry.is_dir():
                 dirs.add(key)
                 pending.append(key)
@@ -498,7 +503,7 @@ class Sync:
                 link = stage / key
                 link.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    os.link(path, link)     # the same file, not a copy
+                    os.link(path.resolve(), link)   # the same file, not a copy, even through a link
                 except OSError:
                     os.symlink(path.resolve(), link)
             self.ps5upload.send_dir(secrets.token_hex(16), self.remote_prefix, stage)

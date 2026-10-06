@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 5 Oct 2026 12:00:00 +0200
+Subject: [PATCH] ntdll: Report a re-protected image page as copied.
+
+Windows maps a writable image section copy-on-write and reports a page
+as PAGE_WRITECOPY until it is written, then as PAGE_READWRITE. Wine maps
+such pages writable from the start, never sees the write, and reported
+PAGE_WRITECOPY as the old protection whatever had happened to the page.
+Chromium protects a page of its own data read-only after writing it and
+ends the process unless VirtualProtect reports exactly PAGE_READWRITE:
+Battle.net.exe stopped a second after its window appeared, on the
+console and under the same Wine on the PC.
+
+A program that re-protects an image page has written it, so report the
+copied form, as Proton does with WINE_SIMULATE_WRITECOPY. Nothing else
+changes: the page's mapping and later queries are as before.
+
+ dlls/ntdll/unix/virtual.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index aba21c6f4b..8cf36c581d 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -5933,7 +5933,15 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+         /* Make sure all the pages are committed */
+         if (get_committed_size( view, base, size, &vprot, VPROT_COMMITTED ) >= size && (vprot & VPROT_COMMITTED))
+         {
+-            old = get_win32_prot( vprot, view->protect );
++            /* Windows reports a writable image page as PAGE_READWRITE once
++             * it has been written, and the program that re-protects one has
++             * written it: its data lives there. Wine maps such pages writable
++             * from the start and never sees the write, so report the copied
++             * form; Chromium checks for exactly PAGE_READWRITE here. */
++            if ((view->protect & SEC_IMAGE) && (vprot & VPROT_WRITECOPY))
++                old = get_win32_prot( (vprot & ~VPROT_WRITECOPY) | VPROT_WRITE, view->protect );
++            else
++                old = get_win32_prot( vprot, view->protect );
+             status = set_protection( view, base, size, new_prot );
+         }
+         else status = STATUS_NOT_COMMITTED;

@@ -640,6 +640,7 @@ What each looked like, and what it turned out to be. Newest first.
 | The screen went black at 1440x1080 | VideoOut refuses that size | Use 1920x1080 (for Warcraft III, with RenderEdge for 16:9) |
 | GDI frames shown unscaled after the Vulkan handover | The frames' pixel format; VideoOut only scales B8G8R8A8 | Draw GDI frames as B8G8R8A8 |
 | Movies didn't play | No GStreamer on the PS5; also crypt32's Unix side was missing | LAV Filters in the prefix (winetricks `lavfilters`); build `crypt32.prx` |
+| Battle.net's login page aborted (`int3; ud2` in `libcef.dll`) after `syscall fault ... ntdll.prx+0x2e1a5, address 30` (also `18`, `38`, `48`) | The unix-call dispatcher called through a NULL table: `dwrite.so` was not built, and the faulting addresses are 8 × DirectWrite's Unix call numbers (glyph advance, bounding box, metrics) | Build `dwrite.prx`; export the FreeType functions `dlls/dwrite/freetype.c` loads |
 | A game crashed on instructions with the `bnd` prefix, or took AVX paths | The translator rejected `bnd` branches; CPUID reported AVX and friends | Accept `bnd` (it's a no-op); hide AVX, AVX2, FMA, F16C, BMI, AVX-512, XSAVE and XOP from CPUID |
 | The USB keyboard and mouse modules failed to load | Loaded by name or path (`ENOENT`, `ESDKVERSION`) | Load them as system modules (`sceSysmodule`) and look their functions up |
 | Cinematics stuttered | The driver's flush period, counted regardless of the last forced flush (a shorter period alone didn't help) | Patch 0640: 16 ms counted from the last forced flush |

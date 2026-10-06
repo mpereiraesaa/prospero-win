@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 5 Oct 2026 13:00:00 +0200
+Subject: [PATCH] win32u: Map a DIB section's section below the WoW64 limit.
+ dlls/win32u/dib.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/win32u/dib.c b/dlls/win32u/dib.c
+index 8473ae3c42..b3074b5254 100644
+--- a/dlls/win32u/dib.c
++++ b/dlls/win32u/dib.c
+@@ -1543,5 +1543,7 @@ HBITMAP WINAPI NtGdiCreateDIBSection( HDC hdc, HANDLE section, DWORD offset, con
+         map_offset.QuadPart = offset - (offset % system_info.AllocationGranularity);
+         map_size = bmp->dib.dsBmih.biSizeImage + (offset - map_offset.QuadPart);
+-        if (NtMapViewOfSection( section, GetCurrentProcess(), &mapBits, 0, 0, &map_offset,
++        /* The bits are handed to the caller: in a WoW64 process they must
++         * be below its limit, as the allocation below asks. */
++        if (NtMapViewOfSection( section, GetCurrentProcess(), &mapBits, zero_bits, 0, &map_offset,
+                                 &map_size, ViewShare, 0, PAGE_READWRITE ))
+             goto error;

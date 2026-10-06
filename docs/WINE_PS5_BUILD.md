@@ -100,6 +100,10 @@ before evaluating a candidate built from that cache.
 | 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
 | 0790 | `server`, `ntdll`: opt-in immediate mutex acquire/release using the authoritative server object without request marshalling or waiter allocation; see [Immediate mutex calls](#immediate-mutex-calls) |
 | 0890 | `ntdll`: before starting the in-process server, give it ntdll's count of name changes (its `pw_cwd_share_changes` export), since the server creates, renames and deletes the files of ntdll's handles, and keep 0160's listings only when it took it. `WINE_PS5_DIR_LISTINGS=0` turns them off; the log says which |
+| 0891 | `ntdll`: VirtualProtect on a writable image page reports the old protection as PAGE_READWRITE, the copied form Windows reports once the page is written; Chromium's embedded browser (Battle.net) ends the process on PAGE_WRITECOPY |
+| 0892 | `win32u`: a DIB section over a caller's section maps the view below the WoW64 limit, as the bits it allocates itself are; on the PS5 an unlimited view goes above 4 GiB (0600) and a 32-bit program wrote to the truncated address (Battle.net's software compositor) |
+| 0895 | `ntdll`: also reserve 0x68000000-0x7f000000, which Linux leaves to its own libraries, so the i386 builtin DLLs and a game's DLLs there are direct memory instead of fixed mappings of flexible memory (Battle.net's DLLs held 279 MiB of it) |
+| 0896 | `ntdll`: a process that terminates itself without `ExitProcess`'s first call (an unhandled exception, once winedbg cannot start) ends the other threads first and leaves through `exit()`, so the title's exit handlers restart it into its launcher instead of `_exit()` taking the title down |
 | 0899 | `include`: list the PS5 sync headers (0810, 0820, 0885, 0887) in `include/Makefile.in`, which makedep needs to resolve them; configure failed without it |
 
 ## Allocator
@@ -159,7 +163,10 @@ memory of type `0x0c`, a fixed map over a reservation), mapped CPU read-write
 unless the kernel wants the GPU bits xash3d maps with. Before the first
 region is used, a self-check maps a page, writes it, makes it read-execute
 and frees it; if the console refuses any step, every call passes through as
-before and the log says so. A 16 GiB reserved area at `0x1000000000`, where
+before and the log says so. The low reserved areas cover 0x10000-0x7fff0000
+whole (patch 0895): Linux's layout leaves 0x68000000-0x7f000000 to its own
+libraries, and there the i386 builtin DLLs and a game's DLLs were fixed
+mappings of flexible memory. A 16 GiB reserved area at `0x1000000000`, where
 the kernel grants the whole range at the hint, takes the views whose limits
 allow it before the low areas are searched, so the i386 guest keeps the low
 4 GiB. An i386 image's limit is 4 GiB (0601): the main exe is mapped where
@@ -317,7 +324,7 @@ two paths.
 
 ## Immediate mutex calls
 
-Patch 0790 adds a candidate path for ordinary server mutexes that are ready
+Patch 0892 adds a candidate path for ordinary server mutexes that are ready
 immediately. It is **off by default**. With client-thread requests enabled,
 set `WINE_PS5_MUTEX_FAST=1`, or put `1` (optionally followed by one newline)
 in `<Wine prefix>/pw_mutex_fast`, to bind `pw_wineserver_try_fast_mutex`; ntdll
@@ -1000,7 +1007,12 @@ The runtime is staged beside the title:
   Unix side, without which `crypt32.dll` refuses to load: FFmpeg's
   `avformat` imports it, so LAV Filters, the DirectShow splitter and
   decoders Warcraft III's cinematics play through, need it (the console's
-  Wine has no GStreamer, which Wine's own splitters are built on);
+  Wine has no GStreamer, which Wine's own splitters are built on); and
+  `dwrite.prx`, DirectWrite's Unix side, which measures and rasterises glyphs
+  with FreeType through `libfreetype.prx` (whose exports include what
+  `dlls/dwrite/freetype.c` loads): without it every glyph call a DirectWrite
+  client makes goes through a NULL function table, and Chromium (Battle.net's
+  login page) aborts laying out text;
 - Wine's NLS files under `win/wine/share/wine/nls`.
 
 Patch 0760 reduces repeated registry work in the Windows `ws2_32.dll`
@@ -1014,12 +1026,12 @@ Host tests verify the operation reduction; console benefit remains unmeasured.
 `PROSPERO_WINE_SOURCE=/path/to/pinned/wine python3 tests/test_ws2_fqdn.py`
 also executes the actual ANSI/wide registry functions from that source.
 
-Patch 0780 keeps that name between calls, but only while a registry change
+Patch 0891 keeps that name between calls, but only while a registry change
 notification on `HKLM\System` (where `GetComputerNameExW` reads it) has not
 fired. The watch covers the whole subtree, names and values, and is armed
 before the name is read, so any change after a read makes the next call read
 the registry again. A failed address lookup uses the name to determine
-whether the requested host is this machine. With 0780, repeated calls check
+whether the requested host is this machine. With 0891, repeated calls check
 the watch with one zero-timeout wait instead of rereading the registry.
 If the watch cannot be armed, each call reads the registry normally. Failed
 name reads are retried; the ANSI conversion still runs on each call, and
@@ -1030,7 +1042,7 @@ of registry notifications, changes during a read, allocation/API failures
 and cleanup. Like 0760, the patch requires rebuilt Windows `ws2_32.dll`
 files for both architectures.
 
-The console owner reports about 52 FPS for a configuration combining 0780
+The console owner reports about 52 FPS for a configuration combining 0891
 with high-byte translator changes, versus 48.6 FPS for the control. This
 comparison does not isolate either change's contribution; a second control
 attempt failed during loading. Matching DLL source identities are audited,

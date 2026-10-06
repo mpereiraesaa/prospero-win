@@ -465,8 +465,8 @@ static void test_segment_stack(void)
     assert(run(&s, (const uint8_t[]){0x66}, 1) != PW_OK && s.eip == 0x1000);
 }
 
-/* CPUID: the host's, without the VEX/EVEX extensions and XSAVE the guest
- * cannot run; SSE2 and the vendor stay. */
+/* CPUID: the host's, without the VEX/EVEX extensions, XSAVE and the SSE4.2
+ * the guest cannot run (CRC32 is refused); SSE2 and the vendor stay. */
 static void test_cpuid(void)
 {
     static const uint8_t cpuid[] = { 0x0f, 0xa2 };
@@ -478,8 +478,9 @@ static void test_cpuid(void)
     assert(run(&s, cpuid, sizeof(cpuid)) == PW_OK && s.eip == 0x1002);
     __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
     assert(s.gpr[0] == a && s.gpr[2] == d && (d & (1u << 26)));          /* SSE2 */
-    assert(!(s.gpr[1] & ((1u << 12) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29))));
-    assert(s.gpr[1] == (c & ~((1u << 12) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29))));
+    assert(!(s.gpr[1] & ((1u << 12) | (1u << 20) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29))));
+    assert(s.gpr[1] == (c & ~((1u << 12) | (1u << 20) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29))));
+    assert(s.gpr[1] & (1u << 19));                                          /* SSE4.1 stays */
 
     reset_state(&s);
     s.gpr[0] = 7; s.gpr[1] = 0;
