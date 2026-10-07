@@ -45,6 +45,17 @@ cc -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
 /tmp/test_pw_key_shared
 ```
 
+Integration tests extract the actual staged PE wrappers and execute them with
+a deterministic provider and thread-info lookup. The shared reader and wrapper
+control flow are unchanged. The tests cover provider fallback, input-object
+reuse, desktop-change success/failure, async-key forwarding, and eight concurrent
+threads with independent caches:
+
+```
+python3 tools/test_wine_key_bridge.py --source /path/to/staged-wine \
+    --wine /path/to/host-wine
+```
+
 A linked runtime and hardware input-delivery comparison remain required before
 release enablement. Verify keys, toggle bits, focus changes, attached thread
 input, and desktop changes alongside the measured syscall reduction. This path

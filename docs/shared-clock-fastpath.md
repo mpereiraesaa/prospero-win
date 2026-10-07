@@ -60,8 +60,16 @@ clock source, with a TSC bracket no wider than 5 microseconds. Fast and slow
 results share an atomic monotonic maximum to prevent backward steps during
 reanchoring. Ordinary unsupported systems retain the original counter path.
 
-Provider integration and hardware measurements remain required.
+The deterministic integration tests extract the actual staged Wine function,
+replace its TSC instruction with a controlled source, and execute it as both
+PE32 and PE64. They cover disabled and malformed providers without executing
+TSC, stale-anchor refresh, fallback monotonicity, and concurrent calls:
 
-Portable tests do not establish hardware TSC stability. A full linked runtime and
+```
+python3 tools/test_wine_qpc_bridge.py --source /path/to/staged-wine \
+    --wine /path/to/host-wine
+```
+
+These tests do not establish hardware TSC stability. A full linked runtime and
 platform baseline/candidate comparison remain necessary before enabling this
 path in a release.

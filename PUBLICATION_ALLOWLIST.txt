@@ -473,3 +473,7 @@ docs/shared-input-fastpath.md
 tests/test_pw_key_shared.c
 wine/patches/0901-win32u-ps5-shared-key-state-fastpath.patch
 wine/ps5/input/pw_key_shared.h
+tests/lab/pw_qpc_bridge.c
+tests/lab/pw_key_bridge.c
+tools/test_wine_qpc_bridge.py
+tools/test_wine_key_bridge.py
