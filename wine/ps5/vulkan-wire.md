@@ -72,3 +72,21 @@ a mutex or calling the driver under the loader lock. The 64-bit DLL retains
 its original DisableThreadLibraryCalls behavior and direct Unix dispatch.
 Host PE controls exercise the actual retirement helper, with automatic DLL
 notification wiring checked separately in the staged loader source.
+
+### Opcode isolation mask
+
+`PW_VK_BATCH_MASK` is an optional PE32 diagnostic setting read once with batching initialization. Unset preserves all seven existing categories (`127` or `0x7f`). Decimal and `0x` hexadecimal values from 0 through 127 are accepted; signs, whitespace, trailing text, out-of-range values, and oversized strings disable batching. `PW_VK_BATCH=1` is still required. The mask changes no wire or capability ABI and is independent of `PW_VK_BATCH_STATS=1`.
+
+| Bit | Value | Category |
+| --- | ---: | --- |
+| 0 | 1 | Indexed draw |
+| 1 | 2 | Pipeline bind |
+| 2 | 4 | Index buffer bind |
+| 3 | 8 | Descriptor set bind |
+| 4 | 16 | Vertex buffer bind |
+| 5 | 32 | Descriptor template update |
+| 6 | 64 | Push constants |
+
+`0` retains negotiated batching state and its ordering path but encodes no operations. `32` selects templates only; `95` selects command records only. Individual bit values isolate one category. A masked operation uses the same synchronous fallback as other unsupported operations, globally draining older queued records first. Payload normalization is skipped for masked categories, so this setting never borrows their guest data. Unknown operations remain ordinary fallback. All seven categories stay enabled by default.
+
+`tests/test_vk_batch_masks.c` compiles the actual PE runtime against real Wine structs and uses real Win32 initialization APIs, mocking only the Unix boundary. It checks gate-only/all/template/command/individual masks, invalid settings, owned template/draw/push data, original-call fallback order, replay/enqueue totals, and exact Wine crossing counters. Console compatibility and automatic DLL thread notifications are not asserted by this fixture. Use the same frozen settings and matching artifacts across comparisons; a masked host test is not evidence of a game performance improvement.

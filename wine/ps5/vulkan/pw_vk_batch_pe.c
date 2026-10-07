@@ -20,6 +20,8 @@ static BOOL enabled,negotiated,stats_enabled;
 static BOOL fallback_profile;
 static UINT64 fallback_counts[unix_count],fallback_reported[unix_count];
 static UINT64 fallback_report_present;
+/* Opcode bit N-1 matches stable wire opcode N. Not part of the wire ABI. */
+static uint32_t opcode_mask=0x7f;
 static LONG sticky_disabled;
 static DWORD owner;
 static unsigned depth;
@@ -30,12 +32,31 @@ static void *heap_alloc(size_t n){return HeapAlloc(GetProcessHeap(),0,n);}
 static void heap_free(void *p){HeapFree(GetProcessHeap(),0,p);}
 static const struct pw_vk_template_alloc allocator={heap_alloc,heap_free};
 static DECLSPEC_NORETURN void fatal(void){ERR("PW_VK_BATCH fatal replay/order failure\n");TerminateProcess(GetCurrentProcess(),3);ExitProcess(3);}
+static BOOL read_opcode_mask(void)
+{
+ char value[32];DWORD n=GetEnvironmentVariableA("PW_VK_BATCH_MASK",value,sizeof(value));
+ unsigned base=10,i=0,digit;uint32_t mask=0;
+ if(!n)return TRUE; /* Unset retains all seven existing categories. */
+ if(n>=sizeof(value))return FALSE;
+ if(n>=2&&value[0]=='0'&&(value[1]=='x'||value[1]=='X')){base=16;i=2;}
+ if(i==n)return FALSE;
+ for(;i<n;i++){
+  if(value[i]>='0'&&value[i]<='9')digit=value[i]-'0';
+  else if(base==16&&value[i]>='a'&&value[i]<='f')digit=value[i]-'a'+10;
+  else if(base==16&&value[i]>='A'&&value[i]<='F')digit=value[i]-'A'+10;
+  else return FALSE;
+  if(digit>=base||mask>(0x7f-digit)/base)return FALSE;
+  mask=mask*base+digit;
+ }
+ opcode_mask=mask;return TRUE;
+}
 static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
 {
  char env[8];(void)o;(void)p;(void)ctx;
  stats_enabled=GetEnvironmentVariableA("PW_VK_BATCH_STATS",env,sizeof(env))==1&&env[0]=='1';
  fallback_profile=stats_enabled&&GetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",env,sizeof(env))==1&&env[0]=='1';
  enabled=GetEnvironmentVariableA("PW_VK_BATCH",env,sizeof(env))==1&&env[0]=='1'&&!pw_vk_stream_environment_unsafe();
+ if(!read_opcode_mask())enabled=FALSE; /* Invalid explicit masks fail closed. */
  if(!enabled)return TRUE;
  InitializeCriticalSection(&gate);tls=TlsAlloc();
  pw_vk_stream_registry_init(&registry);
@@ -98,9 +119,23 @@ static void retire_template(unsigned int code,void *args)
  else if(code==unix_vkDestroyDescriptorUpdateTemplateKHR){struct vkDestroyDescriptorUpdateTemplateKHR_params *p=args;pw_vk_template_remove(&templates,&allocator,(UINT_PTR)p->device,p->descriptorUpdateTemplate);}
  else if(code==unix_vkDestroyDevice){struct vkDestroyDevice_params *p=args;pw_vk_template_remove_device(&templates,&allocator,(UINT_PTR)p->device);}
 }
+static uint32_t call_opcode(unsigned int code)
+{
+ switch(code){
+ case unix_vkUpdateDescriptorSetWithTemplate:return PW_VK_UPDATE_TEMPLATE;
+ case unix_vkCmdDrawIndexed:return PW_VK_DRAW_INDEXED;
+ case unix_vkCmdBindDescriptorSets:return PW_VK_BIND_DESCRIPTORS;
+ case unix_vkCmdBindPipeline:return PW_VK_BIND_PIPELINE;
+ case unix_vkCmdBindVertexBuffers2:return PW_VK_BIND_VERTEX2;
+ case unix_vkCmdBindIndexBuffer2KHR:case unix_vkCmdBindIndexBuffer:return PW_VK_BIND_INDEX;
+ case unix_vkCmdPushConstants:return PW_VK_PUSH_CONSTANTS;
+ default:return 0;
+ }
+}
 static int encode(unsigned int code,void *args,unsigned char *wire,size_t *written,uint32_t *opcode)
 {
- size_t n=0;int encoded=0;uint32_t op=0;
+ size_t n=0;int encoded=0;uint32_t op=0,selected=call_opcode(code);
+ if(!selected||!(opcode_mask&(1u<<(selected-1)))){*written=0;*opcode=0;return 0;}
  switch(code){
  case unix_vkCmdDrawIndexed:{const struct vkCmdDrawIndexed_params *p=args;op=PW_VK_DRAW_INDEXED;encoded=pw_vk_wire_draw(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->indexCount,p->instanceCount,p->firstIndex,p->vertexOffset,p->firstInstance,&n);break;}
  case unix_vkCmdBindPipeline:{const struct vkCmdBindPipeline_params *p=args;op=PW_VK_BIND_PIPELINE;encoded=pw_vk_wire_pipeline(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->pipelineBindPoint,p->pipeline,&n);break;}
