@@ -413,3 +413,14 @@ tests/test_wine_sched_probe.py
 tests/wine_sched_probe.c
 wine/patches/0881-ntdll-ps5-report-the-cpus-a-game-runs-on.patch
 wine/patches/0882-server-ps5-round-robin-scheduling-and-priorities.patch
+wine/wow64native/README.md
+wine/wow64native/cpu.c
+wine/wow64native/unix.c
+wine/wow64native/wow64native.h
+wine/wow64native/wow64native.spec
+tools/build_wow64native.sh
+tests/test_wow64native_scaffold.py
+docs/native-wow64-provider.md
+tests/native_libkernel_resolver_fixture.c
+tests/test_native_wow64_provider.py
+wine/patches/0883-ntdll-ps5-native-wow64-signal-entry.patch

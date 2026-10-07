@@ -14,9 +14,15 @@ exports, so every Wine PRX links one generated unit that carries:
   a C runtime or module_start runs the array first, it runs only once;
 - ``module_stop``: a no-op; Wine's Unix modules are never unloaded.
 
+Use --optional-from ELF --optional-export NAME [--nm TOOL] to publish an
+additional name only when the input ELF defines it in its dynamic exports.
+Missing, hidden and undefined names are omitted; inspection failures are errors.
+
 Usage: gen_prx_descriptor.py OUTPUT.c NAME...
 """
+import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -91,12 +97,35 @@ def main(argv):
     if len(argv) < 3:
         print(__doc__.strip().splitlines()[-1], file=sys.stderr)
         return 2
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output")
+    parser.add_argument("names", nargs="+")
+    parser.add_argument("--optional-from", type=Path,
+                        help="ELF whose defined dynamic exports select optional names")
+    parser.add_argument("--optional-export", action="append", default=[])
+    parser.add_argument("--nm", default="nm", help="nm executable for the input ELF")
+    args = parser.parse_args(argv[1:])
     try:
-        text = render(argv[2:])
+        # Validate even optional names that are absent from an older module.
+        render(args.names + args.optional_export)
+        names = args.names[:]
+        if args.optional_export:
+            if args.optional_from is None:
+                raise ValueError("optional exports require --optional-from")
+            try:
+                result = subprocess.run([args.nm, "-D", "--defined-only", "--format=posix",
+                                         str(args.optional_from)],
+                                        check=True, capture_output=True, text=True)
+            except (OSError, subprocess.CalledProcessError) as error:
+                raise ValueError(f"cannot inspect optional exports: {error}") from error
+            defined = {parts[0].split("@", 1)[0] for line in result.stdout.splitlines()
+                       if len(parts := line.split()) >= 2 and parts[1].upper() != "U"}
+            names += [name for name in args.optional_export if name in defined]
+        text = render(names)
     except ValueError as error:
         print(f"gen_prx_descriptor: {error}", file=sys.stderr)
         return 1
-    Path(argv[1]).write_text(text)
+    Path(args.output).write_text(text)
     return 0
 
 
