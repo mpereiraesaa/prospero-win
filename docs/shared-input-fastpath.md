@@ -27,6 +27,17 @@ adding compiler-emulated TLS dependencies. A successful thread-desktop change
 invalidates the cached descriptor. A failed change preserves it. Thread teardown
 naturally releases the TEB storage.
 
+The cache's existing status word exposes a quiet first-success marker:
+`0x1` means the provider is disabled and `0x2` means this thread returned at
+least one fast result. Every disabled check masks `0x1`, so the success bit
+never disables the reader. Each bit uses a one-time atomic OR, preserving a
+previous success when a later provider failure disables the path. Warm calls
+use a normal status check and perform no repeated marker atomic or logging.
+The marker is historical; a value of `0x3` explicitly means the thread once
+used the fast path but now falls back. Reading it does not prove that every
+later call was fast. The descriptor remains the authority for current
+object IDs and synchronization.
+
 `NtUserGetAsyncKeyState` retains its normal path for valid keys. That path pumps
 driver events, may flush window surfaces, and consumes the last-pressed bit via
 the server. Reading only the shared down bit would omit these effects. Invalid

@@ -1,7 +1,7 @@
 Subject: [PATCH] win32u: add an opt-in shared key-state reader
 
 diff --git a/dlls/win32u/main.c b/dlls/win32u/main.c
-index 22e5368..af23660 100644
+index 22e5368..b580028 100644
 --- a/dlls/win32u/main.c
 +++ b/dlls/win32u/main.c
 @@ -2578,7 +2578,17 @@ ALL_SYSCALL_STUBS
@@ -22,7 +22,7 @@ index 22e5368..af23660 100644
  #undef SYSCALL_ENTRY
  
  #endif /*  __arm64ec__ */
-@@ -2605,3 +2615,44 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
+@@ -2605,3 +2615,50 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
      }
      return TRUE;
  }
@@ -31,6 +31,7 @@ index 22e5368..af23660 100644
 +#ifdef __i386__
 +#include "pw_key_shared.h"
 +_Static_assert( offsetof(struct ntuser_thread_info, ps5_key_shared) == 32, "client info prefix ABI" );
++_Static_assert( offsetof(struct ntuser_thread_info, ps5_key_flags) == 80, "client status ABI" );
 +_Static_assert( sizeof(struct ntuser_thread_info) <= sizeof(((TEB *)0)->Win32ClientInfo), "client info cache fits TEB" );
 +extern SHORT WINAPI pw_slow_NtUserGetKeyState( INT key );
 +extern SHORT WINAPI pw_slow_NtUserGetAsyncKeyState( INT key );
@@ -42,13 +43,18 @@ index 22e5368..af23660 100644
 +    struct pw_key_shared *key_shared = (struct pw_key_shared *)info->ps5_key_shared;
 +    int16_t state;
 +    SHORT ret;
-+    if (!info->ps5_key_disabled && pw_key_get_state( key_shared, key, &state )) return state;
++    if (!(info->ps5_key_flags & 1) && pw_key_get_state( key_shared, key, &state ))
++    {
++        /* A single first-success marker; no logging or repeated atomics. */
++        if (!(info->ps5_key_flags & 2)) InterlockedOr( &info->ps5_key_flags, 2 );
++        return state;
++    }
 +    ret = pw_slow_NtUserGetKeyState( key );
-+    if (!info->ps5_key_disabled)
++    if (!(info->ps5_key_flags & 1))
 +    {
 +        memset( key_shared, 0, sizeof(*key_shared) );
 +        if (!NtUserCallTwoParam( (ULONG_PTR)key_shared, sizeof(*key_shared), PW_KEY_QUERY ))
-+            info->ps5_key_disabled = 1;
++            InterlockedOr( &info->ps5_key_flags, 1 );
 +    }
 +    return ret;
 +}
@@ -171,15 +177,16 @@ index 34950fa..40bed6e 100644
 +#endif
 +}
 diff --git a/include/ntuser.h b/include/ntuser.h
-index be41b33..d688ca5 100644
+index be41b33..9edcb64 100644
 --- a/include/ntuser.h
 +++ b/include/ntuser.h
-@@ -126,6 +126,8 @@ struct ntuser_thread_info
+@@ -126,6 +126,9 @@ struct ntuser_thread_info
      UINT           dpi_context;       /* DPI awareness context */
      UINT64         client_imm;        /* client IMM thread info */
      UINT64         wmchar_data;       /* client data for WM_CHAR mappings */
 +    UINT64         ps5_key_shared[6]; /* optional fixed-ABI shared input cache */
-+    UINT64         ps5_key_disabled;  /* unavailable provider: retain normal syscalls */
++    LONG           ps5_key_flags;     /* 0x1 unavailable, 0x2 returned fast */
++    UINT           ps5_key_reserved;  /* keep the original eight-byte status slot */
  };
  
  #ifndef WINE_UNIX_LIB

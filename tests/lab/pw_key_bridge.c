@@ -9,14 +9,16 @@
 struct ntuser_thread_info
 {
     uint8_t original[32];
-    UINT64 ps5_key_shared[6], ps5_key_disabled;
+    UINT64 ps5_key_shared[6];
+    LONG ps5_key_flags;
+    UINT ps5_key_reserved;
 };
 struct input { uint64_t seq, id; uint8_t state[256]; uint32_t locked, pad; uint64_t serial; };
 struct desktop { uint64_t seq, id, serial; };
 static struct input *input;
 static struct desktop *desktop;
 static DWORD slot;
-static LONG slows, queries, asyncs;
+static LONG slows, queries, asyncs, success_marks, disabled_marks;
 static int supported = 1, set_result = 1;
 
 static struct ntuser_thread_info *mock_info(void)
@@ -65,6 +67,14 @@ static ULONG_PTR mock_query(ULONG_PTR pointer, ULONG_PTR size, ULONG code)
     return 1;
 }
 
+static LONG counted_flags_or(LONG *flags, LONG mask)
+{
+    assert(mask == 1 || mask == 2);
+    InterlockedIncrement(mask == 2 ? &success_marks : &disabled_marks);
+    return InterlockedOr(flags, mask);
+}
+#undef InterlockedOr
+#define InterlockedOr counted_flags_or
 #define NtUserGetThreadInfo mock_info
 #define NtUserCallTwoParam mock_query
 #include "key_body.inc"
@@ -77,6 +87,7 @@ static DWORD WINAPI worker(void *unused)
     assert(NtUserGetKeyState(65) == 0x1234);
     for (i = 0; i < 10000; ++i) assert(NtUserGetKeyState(65) == -128);
     info = mock_info();
+    assert(info->ps5_key_flags == 2);
     TlsSetValue(slot, NULL);
     HeapFree(GetProcessHeap(), 0, info);
     return 0;
@@ -99,6 +110,8 @@ int main(int argc, char **argv)
         assert(NtUserGetKeyState(65) == 0x1234);
         assert(NtUserGetKeyState(65) == 0x1234);
         assert(slows == 2 && queries == 1);
+        assert(mock_info()->ps5_key_flags == 1);
+        assert(success_marks == 0 && disabled_marks == 1);
     }
     else if (!strcmp(argv[1], "concurrent"))
     {
@@ -108,11 +121,14 @@ int main(int argc, char **argv)
         assert(WaitForMultipleObjects(8, threads, TRUE, 20000) == WAIT_OBJECT_0);
         for (i = 0; i < 8; ++i) CloseHandle(threads[i]);
         assert(slows == 8 && queries == 8);
+        assert(success_marks == 8 && disabled_marks == 0);
     }
     else
     {
         assert(NtUserGetKeyState(65) == 0x1234);
+        assert(mock_info()->ps5_key_flags == 0);
         assert(NtUserGetKeyState(65) == -128 && slows == 1 && queries == 1);
+        assert(mock_info()->ps5_key_flags == 2);
         input->state[65] = 1;
         assert(NtUserGetKeyState(65 + 256) == 1);
         ++desktop->serial;
@@ -130,6 +146,12 @@ int main(int argc, char **argv)
         assert(NtUserGetKeyState(65) == 0x1234 && slows == 4);
         assert(NtUserGetAsyncKeyState(65) == (SHORT)0x8001 && asyncs == 1);
         assert(NtUserGetAsyncKeyState(-1) == 0 && NtUserGetAsyncKeyState(256) == 0 && asyncs == 1);
+        assert(success_marks == 1 && disabled_marks == 0);
+        supported = 0; ++input->id;
+        assert(NtUserGetKeyState(65) == 0x1234 && slows == 5);
+        assert(mock_info()->ps5_key_flags == 3);
+        assert(success_marks == 1 && disabled_marks == 1);
+        assert(NtUserGetKeyState(65) == 0x1234 && slows == 6 && queries == 5);
     }
     HeapFree(GetProcessHeap(), 0, TlsGetValue(slot));
     TlsFree(slot);
