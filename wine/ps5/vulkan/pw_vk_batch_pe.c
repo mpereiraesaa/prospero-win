@@ -5,6 +5,7 @@
 #include "pw_vk_template_cache.h"
 #ifndef _WIN64
 #include "pw_vk_disable_guard.h"
+#include "pw_vk_function_names.h"
 WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 struct producer { struct pw_vk_stream stream; LONG retired; unsigned char arena[PW_VK_BATCH_ARENA]; };
 static INIT_ONCE once=INIT_ONCE_STATIC_INIT;
@@ -14,6 +15,10 @@ static struct pw_vk_stream_registry registry;
 static struct pw_vk_template_cache templates;
 static unsigned char *scratch;
 static BOOL enabled,negotiated,stats_enabled;
+/* Only the existing gated fallback path owns these arrays. */
+static BOOL fallback_profile;
+static UINT64 fallback_counts[unix_count],fallback_reported[unix_count];
+static UINT64 fallback_report_present;
 static LONG sticky_disabled;
 static DWORD owner;
 static unsigned depth;
@@ -28,6 +33,7 @@ static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
 {
  char env[8];(void)o;(void)p;(void)ctx;
  stats_enabled=GetEnvironmentVariableA("PW_VK_BATCH_STATS",env,sizeof(env))==1&&env[0]=='1';
+ fallback_profile=stats_enabled&&GetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",env,sizeof(env))==1&&env[0]=='1';
  enabled=GetEnvironmentVariableA("PW_VK_BATCH",env,sizeof(env))==1&&env[0]=='1'&&!pw_vk_stream_environment_unsafe();
  if(!enabled)return TRUE;
  InitializeCriticalSection(&gate);tls=TlsAlloc();
@@ -108,9 +114,35 @@ static int encode(unsigned int code,void *args,unsigned char *wire,size_t *writt
  *written=n;*opcode=op;return encoded;
 }
 
+/* Counts are deltas over present ordinals, not rendered-frame or FPS claims.
+ * The gate stays held; no callbacks, allocations or additional Unix calls. */
+static void fallback_snapshot(UINT64 ordinal)
+{
+ unsigned top[8],count=0,i,j,k;UINT64 delta,total=0;
+ if(!fallback_profile||!enabled||sticky_disabled||ordinal-fallback_report_present<300)return;
+ for(i=0;i<unix_count;i++){
+  delta=fallback_counts[i]-fallback_reported[i];total+=delta;
+  if(!delta)continue;
+  for(j=0;j<count;j++)if(delta>fallback_counts[top[j]]-fallback_reported[top[j]])break;
+  if(j>=8)continue;
+  if(count<8)count++;
+  for(k=count-1;k>j;k--)top[k]=top[k-1];
+  top[j]=i;
+ }
+ WINE_MESSAGE("PW_VK_FALLBACK version=1 scope=wine32_winevulkan_intercepted_process start_present=%llu end_present=%llu calls=%llu functions=%u top=%u\n",fallback_report_present,ordinal,total,(unsigned)unix_count,count);
+ for(j=0;j<count;j++){
+  i=top[j];
+  WINE_MESSAGE("PW_VK_FALLBACK_TOP version=1 end_present=%llu rank=%u code=%u function=%s calls=%llu cumulative=%llu\n",ordinal,j+1,i,pw_vk_function_names[i],fallback_counts[i]-fallback_reported[i],fallback_counts[i]);
+ }
+ memcpy(fallback_reported,fallback_counts,sizeof(fallback_counts));fallback_report_present=ordinal;
+}
 static void snapshot(unsigned int code,void *args)
 {
- if(stats_enabled&&code==unix_vkQueuePresentKHR){struct vkQueuePresentKHR_params *q=args;WINE_MESSAGE("PW_VK_BATCH version=1 scope=process tid=%lu present=%llu result=%d enabled=%u negotiated=%u records=%llu enqueued=%llu batch_dispatches=%llu piggybacks=%llu standalone_flushes=%llu arena_full=%llu fallback=%llu wine_unix_crossings=%llu\n",GetCurrentThreadId(),InterlockedIncrement64((LONG64 *)&present),q->result,enabled&&!sticky_disabled,negotiated,records_total,enqueued_total,dispatches_total,piggyback_total,dispatches_total-piggyback_total,full_total,fallback_total,InterlockedCompareExchange64((LONG64 *)&crossings_total,0,0));}
+ if(stats_enabled&&code==unix_vkQueuePresentKHR){
+  struct vkQueuePresentKHR_params *q=args;UINT64 ordinal=InterlockedIncrement64((LONG64 *)&present);
+  WINE_MESSAGE("PW_VK_BATCH version=1 scope=process tid=%lu present=%llu result=%d enabled=%u negotiated=%u records=%llu enqueued=%llu batch_dispatches=%llu piggybacks=%llu standalone_flushes=%llu arena_full=%llu fallback=%llu wine_unix_crossings=%llu\n",GetCurrentThreadId(),ordinal,q->result,enabled&&!sticky_disabled,negotiated,records_total,enqueued_total,dispatches_total,piggyback_total,dispatches_total-piggyback_total,full_total,fallback_total,InterlockedCompareExchange64((LONG64 *)&crossings_total,0,0));
+  fallback_snapshot(ordinal);
+ }
 }
 NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
 {
@@ -133,6 +165,7 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
   if(appended==PW_VK_STREAM_OK){enqueued_total++;leave();return STATUS_SUCCESS;}
  }
  fallback_total++;
+ if(fallback_profile&&code<unix_count)fallback_counts[code]++;
  status=negotiated?flush_call(code,args):raw_call(code,args);
  retire_template(code,args);template_created(code,args);
  if(code==unix_vkCreateInstance&&!status){struct vkCreateInstance_params *q=args;if(q->result==VK_SUCCESS&&q->pInstance&&*q->pInstance){struct is_available_instance_function_params cap={*q->pInstance,PW_VK_BATCH_NAME};negotiated=raw_call(unix_is_available_instance_function,&cap)==PW_VK_BATCH_CAPABILITY;}}

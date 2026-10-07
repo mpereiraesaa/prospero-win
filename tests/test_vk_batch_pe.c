@@ -36,10 +36,31 @@ static DWORD WINAPI worker(void *unused){(void)unused;draw_index(11);draw_index(
 int main(int argc,char **argv)
 {
  VkInstance handle;VkInstanceCreateInfo info={0};struct vkCreateInstance_params create={0};HANDLE thread;struct vkDestroyDevice_params destroy={0};unsigned prior;
- assert(argc==2);support=strcmp(argv[1],"old")!=0;SetEnvironmentVariableA("PW_VK_BATCH",(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats"))?"0":"1");SetEnvironmentVariableA("PW_VK_BATCH_STATS",!strcmp(argv[1],"stats")?"1":"0");
+ assert(argc==2);support=strcmp(argv[1],"old")!=0;SetEnvironmentVariableA("PW_VK_BATCH",(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats"))?"0":"1");SetEnvironmentVariableA("PW_VK_BATCH_STATS",(!strcmp(argv[1],"stats")||!strcmp(argv[1],"profile"))?"1":"0");SetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",(!strcmp(argv[1],"profile")||!strcmp(argv[1],"profile-no-stats"))?"1":"0");
  create.pCreateInfo=&info;create.pInstance=&handle;assert(pw_vk_batch_call(unix_vkCreateInstance,&create)==0);
  if(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats")||!support){draw_index(1);assert(draw_raw==1&&batches==0);if(!strcmp(argv[1],"stats")){struct vkQueuePresentKHR_params q={0};assert(pw_vk_batch_call(unix_vkQueuePresentKHR,&q)==0);assert(crossings_total==3&&present==1);}else assert(crossings_total==0);puts("PASS original path and old-Unix capability without new table access");return 0;}
- assert(negotiated&&enabled);thread=CreateThread(NULL,0,worker,NULL,0,NULL);assert(thread);assert(WaitForSingleObject(thread,5000)==WAIT_OBJECT_0);CloseHandle(thread);assert(replayed==0);
+ assert(negotiated&&enabled);
+ if(!strcmp(argv[1],"profile")){
+  unsigned i;struct vkQueuePresentKHR_params q={0};
+  struct vkCmdSetViewport_params viewport={0};struct vkCmdPipelineBarrier2_params barrier={0};
+  for(i=0;i<300;i++){
+   unsigned j;for(j=0;j<3;j++)assert(pw_vk_batch_call(unix_vkCmdSetViewport,&viewport)==0);
+   for(j=0;j<4;j++)assert(pw_vk_batch_call(unix_vkCmdPipelineBarrier2,&barrier)==0);
+   draw_index(1);assert(pw_vk_batch_call(unix_vkQueuePresentKHR,&q)==0);
+  }
+  assert(fallback_profile&&fallback_total==2401&&fallback_report_present==300);
+  assert(fallback_counts[unix_vkCmdPipelineBarrier2]==1200&&fallback_counts[unix_vkCmdSetViewport]==900);
+  assert(enqueued_total==300&&records_total==300);
+  for(i=0;i<300;i++)assert(pw_vk_batch_call(unix_vkQueuePresentKHR,&q)==0);
+  assert(fallback_report_present==600&&fallback_total==2701);
+  /* Exercise bounded top-8 selection and deterministic ascending-code ties
+   * independently of the Unix fixture's operation-specific behavior. */
+  for(i=0;i<10;i++)fallback_counts[i]+=100;
+  fallback_snapshot(900);
+  assert(fallback_report_present==900);
+  puts("PASS fallback profile exact counts, period deltas, top-8 and ties");return 0;
+ }
+ assert(!fallback_profile);thread=CreateThread(NULL,0,worker,NULL,0,NULL);assert(thread);assert(WaitForSingleObject(thread,5000)==WAIT_OBJECT_0);CloseHandle(thread);assert(replayed==0);
  /* A producer's owned arena survives actual Win32 thread exit. Main's destroy
   * drains both records before the original lifetime operation. */
  assert(pw_vk_batch_call(unix_vkDestroyDevice,&destroy)==0);assert(batches==1&&replayed==2&&sequence[0]==11&&sequence[1]==12);assert(registry.streams==NULL);

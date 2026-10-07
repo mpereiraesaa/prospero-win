@@ -22,6 +22,13 @@ for name in names:
 replacement=''.join('\t'+name+' '+chr(92)+'\n' for name in sources)
 edit('Makefile.in',lambda s:once(s,'\tloader.c '+chr(92),replacement+'\tloader.c '+chr(92)))
 edit('loader_thunks.h',lambda s:once(s,'    unix_count,','    unix_pw_vk_batch,\n    unix_count,'))
+# Names derive from this exact final Unix table; no historical opcode guesses.
+enum_text=(d/'loader_thunks.h').read_text().split('enum unix_call',1)[1].split('};',1)[0]
+function_names=re.findall(r'^    unix_(\w+),$',enum_text,re.M)
+assert function_names[-1]=='count'
+assert len(function_names)==len(set(function_names))
+assert len(function_names)==len(re.findall(r'\bunix_\w+',enum_text)), 'unparsed enum entry'
+(d/'pw_vk_function_names.h').write_text('/* Generated from staged loader_thunks.h. */\nstatic const char *const pw_vk_function_names[unix_count] = {\n'+''.join(f' [unix_{name}] = "{name}",\n' for name in function_names[:-1])+'};\n')
 # Every custom allocator can run guest callbacks, not just instance creation.
 allocator_params=re.findall(r'struct (\w+)_params\n\{([^}]+)\};',(d/'loader_thunks.h').read_text())
 allocator_names=[name for name,body in allocator_params if 'VkAllocationCallbacks *pAllocator' in body]
