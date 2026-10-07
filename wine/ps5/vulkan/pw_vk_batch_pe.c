@@ -6,6 +6,7 @@
 #ifndef _WIN64
 #include "pw_vk_disable_guard.h"
 #include "pw_vk_function_names.h"
+#include "pw_vk_progress_guard.h"
 WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 struct producer { struct pw_vk_stream stream; LONG retired; unsigned char arena[PW_VK_BATCH_ARENA]; };
 static INIT_ONCE once=INIT_ONCE_STATIC_INIT;
@@ -166,6 +167,16 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
  }
  fallback_total++;
  if(fallback_profile&&code<unix_count)fallback_counts[code]++;
+ if(pw_vk_stream_progress_call(code)){
+  /* Complete owned replay before unlocking. Never piggyback a driver wait on
+   * shared scratch: another thread must be able to drain and signal it. */
+  if(negotiated)flush_call(unix_count,NULL);
+  leave();status=raw_call(code,args);
+  /* All other progress operations have no cache/lifetime posthooks. Present
+   * diagnostics read non-atomic cumulative totals briefly under the gate. */
+  if(stats_enabled&&code==unix_vkQueuePresentKHR){enter();snapshot(code,args);leave();}
+  return status;
+ }
  status=negotiated?flush_call(code,args):raw_call(code,args);
  retire_template(code,args);template_created(code,args);
  if(code==unix_vkCreateInstance&&!status){struct vkCreateInstance_params *q=args;if(q->result==VK_SUCCESS&&q->pInstance&&*q->pInstance){struct is_available_instance_function_params cap={*q->pInstance,PW_VK_BATCH_NAME};negotiated=raw_call(unix_is_available_instance_function,&cap)==PW_VK_BATCH_CAPABILITY;}}
