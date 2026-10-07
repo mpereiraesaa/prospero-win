@@ -6,7 +6,8 @@ and global flush/runtime lifecycle remain separate work.
 
 Stable wire opcodes cover indexed draw, pipeline bind, index-buffer bind,
 descriptor-set bind, vertex-buffer bind with optional sizes/strides, and descriptor
-template updates. Fields use explicit little-endian byte offsets; dispatchable
+template updates, plus copied push-constant values. These cover the seven hot
+categories identified in the retained release thunk table. Fields use explicit little-endian byte offsets; dispatchable
 client handles use zero-extended 32-bit values, and non-dispatchable handles keep
 all 64 bits. The surrounding command stream provides version/sequence framing.
 

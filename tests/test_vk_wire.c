@@ -69,6 +69,17 @@ static void codec_cases(void)
  assert(!pw_vk_wire_template(source,sizeof(source),1,1,1,&image,1,source,&bytes));
  assert(!pw_vk_wire_descriptors(output,sizeof(output),1,0,0,0,1,(uint64_t *)output,0,NULL,&bytes));
  assert(!pw_vk_wire_vertex2(output,sizeof(output),1,0,1,(uint64_t *)output,offsets,NULL,NULL,&bytes));
+ memset(source,0x5a,16);
+ assert(pw_vk_wire_push_constants(output,sizeof(output),0x1234,UINT64_C(0x1234567887654321),3,8,16,source,&bytes));
+ memset(source,0xa5,16);
+ assert(bytes==40 && pw_vk_wire_u64(output+8)==UINT64_C(0x1234567887654321) && output[24]==0x5a && output[39]==0x5a);
+ assert(pw_vk_wire_validate(PW_VK_PUSH_CONSTANTS,output,bytes));
+ assert(!pw_vk_wire_validate(PW_VK_PUSH_CONSTANTS,output,bytes-1));
+ assert(!pw_vk_wire_push_constants(output,39,1,1,1,0,16,source,&bytes));
+ assert(!pw_vk_wire_push_constants(output,sizeof(output),1,1,1,0,16,output,&bytes));
+ assert(!pw_vk_wire_push_constants(output,sizeof(output),1,1,1,0,UINT32_MAX,source,&bytes));
+ assert(!pw_vk_wire_push_constants(output,sizeof(output),1,1,1,0,1,NULL,&bytes));
+ assert(!pw_vk_wire_push_constants(output,sizeof(output),1,1,1,0,16,(void *)(UINTPTR_MAX-8),&bytes));
  assert(!pw_vk_wire_draw(output,23,1,1,1,1,1,1,&bytes));
  assert(!pw_vk_wire_descriptors(output,sizeof(output),1,0,0,0,UINT32_MAX,NULL,0,NULL,&bytes));
  assert(!pw_vk_wire_validate(999,output,24));
