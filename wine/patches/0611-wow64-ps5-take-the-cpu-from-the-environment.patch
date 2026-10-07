@@ -4,7 +4,7 @@ diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
 index d6fea09..fd5e543 100644
 --- a/dlls/wow64/syscall.c
 +++ b/dlls/wow64/syscall.c
-@@ -903,6 +903,48 @@ static HMODULE load_64bit_module( const WCHAR *name )
+@@ -903,6 +903,49 @@ static HMODULE load_64bit_module( const WCHAR *name )
  }
  
  
@@ -19,6 +19,7 @@ index d6fea09..fd5e543 100644
 +static HMODULE load_environment_cpu_dll(void)
 +{
 +    static const WCHAR *const allowed[] = { L"wow64native.dll", L"wowprospero.dll" };
++    static const char *const names[] = { "wow64native.dll", "wowprospero.dll" };
 +    const WCHAR *dir = get_machine_wow64_dir( IMAGE_FILE_MACHINE_TARGET_HOST );
 +    WCHAR value[32], path[MAX_PATH];
 +    UNICODE_STRING name, str;
@@ -35,17 +36,17 @@ index d6fea09..fd5e543 100644
 +    for (i = 0; i < ARRAY_SIZE(allowed); i++) if (!wcscmp( value, allowed[i] )) break;
 +    if (i == ARRAY_SIZE(allowed))
 +    {
-+        ERR( "ignoring WINE_PS5_WOW64_CPU=%s\n", debugstr_w(value) );
++        ERR( "ignoring WINE_PS5_WOW64_CPU: not wow64native.dll or wowprospero.dll\n" );
 +        return NULL;
 +    }
 +    swprintf( path, MAX_PATH, L"%s\\%s", dir, allowed[i] );
 +    RtlInitUnicodeString( &str, path );
 +    if ((status = LdrLoadDll( dir, 0, &str, &module )))
 +    {
-+        ERR( "%s not loaded (%lx); using the prefix's CPU\n", debugstr_w(allowed[i]), status );
++        ERR( "%s not loaded (%lx); using the prefix's CPU\n", names[i], status );
 +        return NULL;
 +    }
-+    MESSAGE( "wow64: CPU %s from WINE_PS5_WOW64_CPU\n", debugstr_w(allowed[i]) );
++    MESSAGE( "wow64: CPU %s from WINE_PS5_WOW64_CPU\n", names[i] );
 +    return module;
 +}
 +
@@ -53,7 +54,7 @@ index d6fea09..fd5e543 100644
  /**********************************************************************
   *           get_cpu_dll_name
   */
-@@ -1008,7 +1050,7 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
+@@ -1008,7 +1051,7 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
      LdrGetDllHandle( NULL, 0, &str, &module );
      GET_PTR( LdrSystemDllInitBlock );
  
