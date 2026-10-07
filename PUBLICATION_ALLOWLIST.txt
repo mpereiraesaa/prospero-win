@@ -453,3 +453,6 @@ wine/ps5/vulkan/pw_vk_batch_unix.c
 wine/ps5/vulkan/pw_vk_disable_guard.h
 wine/ps5/vulkan/pw_vk_progress_guard.h
 wine/ps5/vulkan-wire.md
+docs/native-system-service-profile.md
+tests/test_native_system_service_profile.py
+wine/patches/0612-wow64-opt-in-named-system-service-profile.patch
