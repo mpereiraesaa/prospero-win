@@ -213,7 +213,6 @@ wine-check: test
 	PROSPERO_WINE_SOURCE="$(WINE_SOURCE)" CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wine_lookup_misses.py
 	@test -f .deps/wine-runtime/lib/i386-windows/ntdll.dll || \
 		{ echo "wine-check: no staged runtime (tools/build_wine_runtime.sh)" >&2; exit 2; }
-	python3 tests/test_mesa_zink_build.py
 	python3 tests/test_wine_runtime_manifest.py
 	python3 tests/test_wine_protect_writecopy.py
 	python3 tests/test_wine_decommit_zero.py

@@ -77,14 +77,16 @@ CROSS
   # Strip a copy: preserve the original DLL for symbols and source association.
   "$work/toolchain/bin/llvm-strip" --strip-debug -o "$work/artifacts/$destination/${file##*/}" "$file"
  done
- # Mesa's C++ runtime is part of the artifact set if its import table needs it.
- if "$work/toolchain/bin/llvm-readobj" --coff-imports "$build/src/gallium/targets/wgl/libgallium_wgl.dll" | grep -qi 'libc++.dll'; then
-  cp "$work/toolchain/$arch-w64-mingw32/bin/libc++.dll" "$work/artifacts/$destination/"
- fi
+ # Copy only compiler runtimes actually imported, including their dependencies.
+ # Wine provides the Win32/UCRT APIs; retain that existing platform ABI.
+ python3 "$root/tools/mesa_zink_manifest.py" --copy-runtime \
+  "$work/artifacts/$destination" "$work/toolchain/$arch-w64-mingw32/bin" \
+  "$work/toolchain/bin/llvm-readobj"
 done
 mkdir -p "$work/artifacts/LICENSES/mesa" "$work/artifacts/LICENSES/llvm-mingw"
 cp "$work/source/docs/license.rst" "$work/artifacts/LICENSES/mesa/"
 cp -R "$work/source/licenses" "$work/artifacts/LICENSES/mesa/"
+python3 "$root/tools/mesa_zink_manifest.py" --notices "$work/source" "$work/artifacts/LICENSES/mesa/source-notices.txt"
 cp "$work/toolchain/LICENSE.TXT" "$work/artifacts/LICENSES/llvm-mingw/"
 cp -R "$work/toolchain/i686-w64-mingw32/share/mingw32" "$work/artifacts/LICENSES/llvm-mingw/"
 python3 "$root/tools/mesa_zink_manifest.py" "$work" "$MESA_COMMIT" "$LLVM_MINGW_VERSION" "$LLVM_MINGW_SHA256" "$0"

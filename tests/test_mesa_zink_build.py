@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
-import importlib.util,struct,subprocess,tempfile,unittest
+import importlib.util,struct,subprocess,tempfile,unittest,sys
 from pathlib import Path
+sys.dont_write_bytecode=True
 ROOT=Path(__file__).resolve().parent.parent
 spec=importlib.util.spec_from_file_location('manifest',ROOT/'tools/mesa_zink_manifest.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
@@ -49,6 +50,32 @@ class BuildContracts(unittest.TestCase):
             t=Path(t);archive=t/'compiler.tar.xz';archive.write_bytes(b'bad');work=t/'work'
             result=subprocess.run(['bash',str(ROOT/'tools/build_mesa_zink.sh'),'--work',str(work),'--mesa',str(t),'--llvm-mingw',str(archive)],capture_output=True,text=True)
             self.assertNotEqual(result.returncode,0);self.assertFalse(work.exists());self.assertIn('archive hash mismatch',result.stderr)
+    def test_runtime_closure_and_architecture(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as t:
+            t=Path(t);output=t/'artifacts';output.mkdir();compiler=t/'compiler';compiler.mkdir()
+            (output/'opengl32.dll').write_bytes(pe(0x14c,0x10b))
+            for name in ['libc++.dll','libunwind.dll','libwinpthread-1.dll']:
+                (compiler/name).write_bytes(pe(0x14c,0x10b))
+            dependencies={'opengl32.dll':['KERNEL32.dll','LIBC++.DLL'],
+                          'libc++.dll':['libunwind.dll'], 'libunwind.dll':['libc++.dll']}
+            with patch.object(m,'imports',side_effect=lambda p,_:dependencies[p.name]):
+                m.copy_runtime(output,compiler,'readobj')
+            self.assertEqual({p.name for p in output.iterdir()},set(dependencies))
+            (output/'libunwind.dll').write_bytes(pe(0x8664,0x20b))
+            with patch.object(m,'imports',side_effect=lambda p,_:dependencies[p.name]):
+                with self.assertRaisesRegex(ValueError,'mixed runtime'):m.copy_runtime(output,compiler,'readobj')
+    def test_copyright_and_permission_blocks(self):
+        with tempfile.TemporaryDirectory() as t:
+            t=Path(t);source=t/'source';source.mkdir();target=t/'notices.txt'
+            (source/'a.c').write_text('/* Copyright 2026 Holder A\nPermission is granted. */\nint x;\n/* ordinary code comment */')
+            (source/'b.py').write_text('# Copyright Holder B\n# Permission for this component.\nprint(1)\n')
+            (source/'c.h').write_text('// SPDX-License-Identifier: MIT\nint x;\n')
+            (source/'d.py').write_text('license = '+chr(34)*3+'Copyright Holder C\nFull permission string.'+chr(34)*3+'\n')
+            m.write_notices(source,target);text=target.read_text()
+            for phrase in ['Holder A','Permission is granted.','Holder B','Permission for this component.','SPDX-License-Identifier: MIT','Holder C','Full permission string.']:
+                self.assertIn(phrase,text)
+            self.assertNotIn('ordinary code comment',text);self.assertNotIn('print(1)',text)
     def test_invalid_jobs(self):
         for jobs in ['0','-1','abc']:
             result=subprocess.run(['bash',str(ROOT/'tools/build_mesa_zink.sh'),'--jobs',jobs],capture_output=True,text=True)
