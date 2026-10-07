@@ -27,6 +27,10 @@
 #                    drivers that need the PC's own libraries are left out.
 #   --cpu-dll FILE   tools/build_wowprospero.sh's
 #                    x86_64-windows/wowprospero.dll.
+#   --native-cpu DIR tools/build_wow64native.sh's --output with the PS5
+#                    inputs: x86_64-windows/wow64native.dll and
+#                    ps5/wow64native.prx, the native WoW64 CPU that 32-bit
+#                    games run on by default.
 #   --lapy-release FILE  the release.json tools/build_native.sh saved for the
 #                    lapy.elf it fetched (build/native/lapy-helper-release.json).
 #   --out DIR        where PPSA99995/ is written (replaced).
@@ -37,7 +41,7 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-title= wine_ps5= host_wine= cpu_dll= lapy_release= out= zip=0
+title= wine_ps5= host_wine= cpu_dll= native_cpu= lapy_release= out= zip=0
 fail() { echo "package_release: $*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
     case $1 in
@@ -45,6 +49,7 @@ while [ $# -gt 0 ]; do
     --wine-ps5) wine_ps5=$2; shift 2 ;;
     --host-wine) host_wine=$2; shift 2 ;;
     --cpu-dll) cpu_dll=$2; shift 2 ;;
+    --native-cpu) native_cpu=$2; shift 2 ;;
     --lapy-release) lapy_release=$2; shift 2 ;;
     --out) out=$2; shift 2 ;;
     --zip) zip=1; shift ;;
@@ -58,6 +63,8 @@ ls "$wine_ps5"/prx/sce_module/ntdll.prx >/dev/null 2>&1 || fail "--wine-ps5: no 
 [ -d "$host_wine/lib/wine/i386-windows" ] && [ -d "$host_wine/lib/wine/x86_64-windows" ] &&
     [ -d "$host_wine/share/wine/nls" ] || fail "--host-wine: '$host_wine' is not a WoW64 Wine installation (usr/)"
 [ -f "$cpu_dll" ] || fail "--cpu-dll: no file '$cpu_dll'"
+[ -f "$native_cpu/x86_64-windows/wow64native.dll" ] && [ -f "$native_cpu/ps5/wow64native.prx" ] ||
+    fail "--native-cpu: no x86_64-windows/wow64native.dll and ps5/wow64native.prx in '$native_cpu'"
 [ -f "$lapy_release" ] || fail "--lapy-release: no file '$lapy_release'"
 [ -f "$wine_ps5/report.json" ] || fail "--wine-ps5: no report.json in '$wine_ps5'"
 for file in LICENSE COPYING.LIB AUTHORS NOTICES.md; do
@@ -94,6 +101,9 @@ for arch in i386-windows x86_64-windows; do
     if [ -d "$wine_ps5/pe/$arch" ]; then cp "$wine_ps5/pe/$arch"/*.dll "$lib/$arch/"; fi
 done
 cp "$cpu_dll" "$lib/x86_64-windows/wowprospero.dll"
+# The native WoW64 CPU: the launcher copies the DLL into a game's prefix.
+cp "$native_cpu/x86_64-windows/wow64native.dll" "$lib/x86_64-windows/wow64native.dll"
+cp "$native_cpu/ps5/wow64native.prx" "$lib/x86_64-unix/wow64native.prx"
 cp "$wine_ps5"/prx/sce_module/*.prx "$lib/x86_64-unix/"
 cp "$host_wine"/share/wine/nls/* "$share/nls/"
 cp "$wine_ps5"/prx/fonts/* "$share/fonts/"

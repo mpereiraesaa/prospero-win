@@ -79,6 +79,45 @@ static void test_profile(void)
     assert(parse(APP "[debug]\nwinedebug = trace+d3d.9,err=all\n", &p) == PW_OK);
 }
 
+/* [runtime] cpu: native by default for 32-bit games, the translator for
+ * OpenGL ones, either chosen explicitly; native always brings batching. */
+#define APP_ARCH(arch, gfx) "[application]\nid = g\nname = G\nexecutable = C:\\g.exe\n" \
+    "working_directory = C:\\\nprefix = default\nruntime = wine-wow64\narchitecture = " arch \
+    "\ngraphics = " gfx "\n"
+static void test_cpu(void)
+{
+    PwGameProfile p;
+    PwGameEnv env[PW_GAME_CPU_ENV_MAX];
+
+    assert(parse(APP, &p) == PW_OK && p.runtime.cpu == PW_GAME_CPU_DEFAULT);
+    assert(pw_game_cpu_native(&p) == 1);                       /* pe32 GDI */
+    assert(pw_game_cpu_env(&p, env) == 2);
+    assert(!strcmp(env[0].name, "WINE_PS5_WOW64_CPU") && !strcmp(env[0].value, "wow64native.dll"));
+    assert(!strcmp(env[1].name, "PW_VK_BATCH") && !strcmp(env[1].value, "1"));
+
+    assert(parse(APP_ARCH("pe32", "dxvk"), &p) == PW_OK && pw_game_cpu_native(&p) == 1);
+    assert(parse(APP_ARCH("pe32", "auto"), &p) == PW_OK && pw_game_cpu_native(&p) == 1);
+    assert(parse(APP_ARCH("pe32", "opengl"), &p) == PW_OK && pw_game_cpu_native(&p) == 0);
+    assert(pw_game_cpu_env(&p, env) == 0);
+    assert(parse(APP_ARCH("pe64", "dxvk"), &p) == PW_OK && pw_game_cpu_native(&p) == 0);
+
+    /* explicit choices override the default both ways */
+    assert(parse(APP_ARCH("pe32", "opengl") "[runtime]\ncpu = native\n", &p) == PW_OK);
+    assert(p.runtime.cpu == PW_GAME_CPU_NATIVE && pw_game_cpu_native(&p) == 1 &&
+           pw_game_cpu_env(&p, env) == 2);
+    assert(parse(APP_ARCH("pe32", "dxvk") "[runtime]\nCPU = Translator\n", &p) == PW_OK);
+    assert(p.runtime.cpu == PW_GAME_CPU_TRANSLATOR && pw_game_cpu_native(&p) == 0 &&
+           pw_game_cpu_env(&p, env) == 0);
+    /* a 64-bit game never uses the WoW64 CPU, even when asked */
+    assert(parse(APP_ARCH("pe64", "dxvk") "[runtime]\ncpu = native\n", &p) == PW_OK);
+    assert(pw_game_cpu_native(&p) == 0 && pw_game_cpu_env(&p, env) == 0);
+    /* with thread scheduling, in either order */
+    assert(parse(APP "[runtime]\ncpu = native\nthread_scheduling = 1\n", &p) == PW_OK);
+    assert(p.runtime.thread_scheduling == 1 && p.runtime.cpu == PW_GAME_CPU_NATIVE);
+    assert(pw_game_cpu_native(NULL) == 0 && pw_game_cpu_env(NULL, env) == 0 &&
+           pw_game_cpu_env(&p, NULL) == 0);
+}
+
 /* [runtime]: opt-in settings that reach Wine's environment, off unless set. */
 static void test_runtime(void)
 {
@@ -133,6 +172,9 @@ static void test_refusals(void)
         APP "[runtime]\nthread_scheduling = on\n",
         APP "[runtime]\nthread_scheduling = 0\nthread_scheduling = 1\n",
         APP "[runtime]\ntrust_code_pages = 1\n",                /* unknown key */
+        APP "[runtime]\ncpu = dbt\n",                           /* native or translator only */
+        APP "[runtime]\ncpu =\n",
+        APP "[runtime]\ncpu = native\ncpu = translator\n",     /* once */
         APP "[runtime]\nwinedebug = +seh\n",                    /* another section's key */
         APP "[display]\nthread_scheduling = 1\n",
         "[runtime]\nthread_scheduling = 1\n" APP,               /* application not first */
@@ -328,10 +370,11 @@ int main(void)
     test_published_forms();
     test_profile();
     test_runtime();
+    test_cpu();
     test_refusals();
     test_presets();
     test_default_mode();
     printf("game profile passed: application plus display and input, every binding kind, "
-           "runtime settings and their environment, refusals, shared presets overridden by the profile\n");
+           "runtime settings and their environment, the CPU backend choice, refusals, shared presets overridden by the profile\n");
     return 0;
 }

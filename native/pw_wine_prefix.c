@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <stdlib.h>
 
 /* mkdir -p for everything after path[base], which exists. */
 static int make_folders(char *path, size_t base)
@@ -42,4 +43,51 @@ int pw_wine_prefix_temp_create(const char *prefix, PwPrefixTemp *temp)
         if (make_folders(path, (size_t)base)) return -1;
     }
     return (int)temp->count;
+}
+
+/* Whole small files; NULL when unreadable or larger than limit. */
+static unsigned char *read_file(const char *path, size_t limit, size_t *size)
+{
+    FILE *file = fopen(path, "rb");
+    unsigned char *data;
+    long length;
+
+    if (!file) return NULL;
+    if (fseek(file, 0, SEEK_END) || (length = ftell(file)) < 0 || (size_t)length > limit ||
+        fseek(file, 0, SEEK_SET) || !(data = malloc(length ? (size_t)length : 1))) {
+        fclose(file);
+        return NULL;
+    }
+    *size = fread(data, 1, (size_t)length, file);
+    fclose(file);
+    if (*size != (size_t)length) { free(data); return NULL; }
+    return data;
+}
+
+int pw_wine_prefix_cpu_install(const char *prefix, const char *source, const char *name)
+{
+    enum { CPU_DLL_LIMIT = 16u << 20 };
+    char path[1024], temporary[1056];
+    unsigned char *wanted, *present;
+    size_t wanted_size, present_size;
+    int result = -1;
+    FILE *file;
+
+    if (!prefix || !source || !name || strchr(name, '/') ||
+        snprintf(path, sizeof(path), "%s/drive_c/windows/system32/%s", prefix, name) >= (int)sizeof(path) ||
+        snprintf(temporary, sizeof(temporary), "%s.new", path) >= (int)sizeof(temporary) ||
+        !(wanted = read_file(source, CPU_DLL_LIMIT, &wanted_size)))
+        return -1;
+    if ((present = read_file(path, CPU_DLL_LIMIT, &present_size))) {
+        int same = present_size == wanted_size && !memcmp(present, wanted, wanted_size);
+        free(present);
+        if (same) { free(wanted); return 0; }
+    }
+    if ((file = fopen(temporary, "wb"))) {
+        int written = fwrite(wanted, 1, wanted_size, file) == wanted_size;
+        if (fclose(file) == 0 && written && rename(temporary, path) == 0) result = 1;
+        else remove(temporary);
+    }
+    free(wanted);
+    return result;
 }

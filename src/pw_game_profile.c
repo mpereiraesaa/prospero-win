@@ -257,13 +257,22 @@ static int debug_field(PwGameProfile *profile, const uint8_t *key, size_t key_le
     return PW_OK;
 }
 
-/* [runtime] thread_scheduling: true/false or 1/0, once. */
+/* [runtime] thread_scheduling: true/false or 1/0; cpu: native or
+ * translator; each once. */
 static int runtime_field(PwGameRuntime *runtime, uint32_t *seen, const uint8_t *key, size_t key_length,
                          const uint8_t *v, size_t n)
 {
     uint32_t bit;
     int *field, on;
 
+    if (is(key, key_length, "cpu")) {
+        if (*seen & 2u) return PW_ERR_MALFORMED;
+        if (is(v, n, "native")) runtime->cpu = PW_GAME_CPU_NATIVE;
+        else if (is(v, n, "translator")) runtime->cpu = PW_GAME_CPU_TRANSLATOR;
+        else return PW_ERR_UNSUPPORTED;
+        *seen |= 2u;
+        return PW_OK;
+    }
     if (is(key, key_length, "thread_scheduling")) bit = 1u, field = &runtime->thread_scheduling;
     else return PW_ERR_UNSUPPORTED;
     if (*seen & bit) return PW_ERR_MALFORMED;
@@ -335,6 +344,23 @@ size_t pw_game_runtime_env(const PwGameRuntime *runtime, PwGameEnv *env)
     if (!runtime || !env) return 0;
     if (runtime->thread_scheduling) env[count++] = (PwGameEnv){ "WINE_PS5_SCHED", "1" };
     return count;
+}
+
+int pw_game_cpu_native(const PwGameProfile *profile)
+{
+    if (!profile || profile->app.architecture != PW_APP_ARCH_PE32) return 0;
+    if (profile->runtime.cpu == PW_GAME_CPU_NATIVE) return 1;
+    if (profile->runtime.cpu == PW_GAME_CPU_TRANSLATOR) return 0;
+    return profile->app.graphics != PW_APP_GRAPHICS_OPENGL;
+}
+
+size_t pw_game_cpu_env(const PwGameProfile *profile, PwGameEnv *env)
+{
+    if (!env || !pw_game_cpu_native(profile)) return 0;
+    /* patch 0611; the native CPU never runs without the batching */
+    env[0] = (PwGameEnv){ "WINE_PS5_WOW64_CPU", "wow64native.dll" };
+    env[1] = (PwGameEnv){ "PW_VK_BATCH", "1" };
+    return 2;
 }
 
 void pw_game_input_init(PwGameInput *input)

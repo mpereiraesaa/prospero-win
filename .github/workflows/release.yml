@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 32-bit MinGW for the Vulkan batching checks
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-i686
       - name: Python dependencies
         run: python3 -m pip install --user pyyaml==6.0.1
       - name: Host contracts and publication audit

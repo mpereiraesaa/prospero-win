@@ -60,8 +60,12 @@ P1 requires per-thread host FS capture, a 32-bit TEB base, restoring host FS
 before both service calls, guest FS restoration immediately before re-entry,
 valid low stacks/thunk addresses, and fault/suspend/unwind coverage. A mode-switch
 microbenchmark excludes the TLS switching cost of these service transitions.
-Selection will use `HKLM\Software\Microsoft\Wow64\x86`; deployment must preserve
-the prior backend selection and restore it after validation.
+The launcher selects it per game through `WINE_PS5_WOW64_CPU` (Wine patch 0611)
+rather than the prefix's `HKLM\Software\Microsoft\Wow64\x86`, which keeps
+naming the translator and is used whenever `wow64native.dll` cannot be loaded.
+32-bit games run on it by default with the Vulkan batching; OpenGL games and
+profiles with `[runtime] cpu = translator` keep the translator
+(docs/WINE_PS5_BUILD.md, game profiles).
 
 The signal entry must restore host FS before any Wine C or Unix TLS access.
 An ELF probe that reaches a handler with guest FS does not establish that the

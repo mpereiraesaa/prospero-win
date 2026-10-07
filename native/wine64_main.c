@@ -62,6 +62,8 @@
  * once /data is granted the process sees the real root, where /app0 does
  * not exist (measured), and the sandbox's view of app0 is used instead. */
 #define PW_WINE64_RUNTIME "/win/wine/lib/wine/x86_64-unix"
+/* Its 64-bit PE modules, among them the WoW64 CPU backends. */
+#define PW_WINE64_PE_RUNTIME "/win/wine/lib/wine/x86_64-windows"
 #define PW_SANDBOX_APP0 "/mnt/sandbox/" PW_TITLE_ID "_000/app0"
 static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 /* The title's data: profiles/, input/, prefix/ and prefixes/<name>. */
@@ -886,7 +888,8 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
-    enum { WINE64_FIXED_ENV_COUNT = 6, WINE64_PROFILE_ENV_CAPACITY = 7 + PW_GAME_RUNTIME_ENV_MAX };
+    enum { WINE64_FIXED_ENV_COUNT = 6,
+           WINE64_PROFILE_ENV_CAPACITY = 7 + PW_GAME_RUNTIME_ENV_MAX + PW_GAME_CPU_ENV_MAX };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -1009,6 +1012,27 @@ int main(int argc, char **argv)
             for (size_t i = 0; i < runtime_count; i++)
                 extra[config.extra_env_count++] = (PwWineStartEnv){ runtime_env[i].name, runtime_env[i].value };
             PS5LOG_LOG("PW_WINE64 runtime thread_scheduling=%d", game->runtime.thread_scheduling);
+        }
+        /* [runtime] cpu: a 32-bit game runs on the native WoW64 CPU unless it
+         * draws with OpenGL or its profile asks for the translator; the native
+         * CPU always brings the Vulkan batching (src/pw_game_profile.h). */
+        {
+            PwGameEnv cpu_env[PW_GAME_CPU_ENV_MAX];
+            size_t cpu_count = pw_game_cpu_env(game, cpu_env);
+            int installed = -2;
+
+            for (size_t i = 0; i < cpu_count; i++)
+                extra[config.extra_env_count++] = (PwWineStartEnv){ cpu_env[i].name, cpu_env[i].value };
+            /* WoW64 loads its CPU from the prefix's system32; when this copy
+             * fails, patch 0611 falls back to the prefix's own CPU. */
+            for (size_t i = 0; cpu_count && installed < 0 &&
+                               i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
+                char source[256];
+                snprintf(source, sizeof(source), "%s" PW_WINE64_PE_RUNTIME "/wow64native.dll",
+                         runtime_roots[i]);
+                installed = pw_wine_prefix_cpu_install(prefix, source, "wow64native.dll");
+            }
+            PS5LOG_LOG("PW_WINE64 cpu=%s prefix_cpu=%d", cpu_count ? "native" : "translator", installed);
         }
         /* [debug] winedebug: this game's channels in place of the title's. */
         if (game->winedebug[0]) {

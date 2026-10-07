@@ -98,6 +98,7 @@ before evaluating a candidate built from that cache.
 | 0600 | `ntdll`: anonymous memory in the reserved areas is direct memory, not flexible memory; a 16 GiB area at `0x1000000000` takes the allocations free to go anywhere; see [Direct memory](#direct-memory) |
 | 0601 | `ntdll`: an i386 image is never mapped above 4 GiB, so a relocatable exe whose preferred base is taken stays in the low reserved areas instead of the high one |
 | 0610 | `ntdll`: `__wine_ps5_set_segv_hook` lets `wowprospero` resume its own faults (fault markers) from inside Wine's SIGSEGV handler, instead of a second handler chaining to the action `sigaction` reports |
+| 0611 | `wow64`: `WINE_PS5_WOW64_CPU` names the process's CPU backend (`wow64native.dll` or `wowprospero.dll`); when the named one cannot be loaded, the prefix's own choice is used instead of ending the process |
 | 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
 | 0790 | `server`, `ntdll`: opt-in immediate mutex acquire/release using the authoritative server object without request marshalling or waiter allocation; see [Immediate mutex calls](#immediate-mutex-calls) |
 | 0881 | `ntdll`: the number of processors is the CPUs the process may run on (`cpuset_getaffinity`), 13 for a game on the console, not the 16 online; threads of one priority there never share a CPU, so a program that started a worker per reported CPU had three that did not run until another blocked |
@@ -914,13 +915,26 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     `winedebug = err+all,+seh` for one run. Only a channel list is taken
     (letters, digits and `_ + - , = .`), and the log names it
     (`PW_WINE64 winedebug=`). Change it and push the profile again.
-  - `[runtime]` turns on optional runtime behavior for that game only.
-    It is off unless the profile sets it to `true` (or `1`), and the log
-    shows it (`PW_WINE64 runtime`):
+  - `[runtime]` sets runtime behavior for that game only:
     - `thread_scheduling = true` sets `WINE_PS5_SCHED=1` (Wine patch 0882):
       the game's threads take turns on the CPUs, and threads the game raises
       above normal priority get a higher priority on the console too. It
-      can help a game that keeps many threads busy at once.
+      can help a game that keeps many threads busy at once. Off unless set
+      to `true` (or `1`); the log shows it (`PW_WINE64 runtime`).
+    - `cpu = native` or `cpu = translator` chooses a 32-bit game's CPU
+      backend. Without it, a 32-bit game runs on the native WoW64 CPU
+      (`wow64native.dll`), unless its `[application]` says
+      `graphics = opengl`; those keep the translator (`wowprospero.dll`),
+      because every OpenGL call crosses from the game to the host one at a
+      time and a crossing costs about ten times more on the native CPU.
+      The native CPU always comes with the 32-bit Vulkan batching
+      (`PW_VK_BATCH=1`), which queues DXVK's Vulkan commands and sends them
+      to the host together. The launcher sets `WINE_PS5_WOW64_CPU`
+      (Wine patch 0611) and copies the runtime's `wow64native.dll` into the
+      prefix's `system32` when it is missing or differs; if that copy
+      fails, the game runs on the prefix's own CPU. The log shows the
+      choice (`PW_WINE64 cpu=native prefix_cpu=1`: copied, `0`: already
+      there, `-1`: not copied). 64-bit games never use the WoW64 CPU.
   - `mode = xinput` also makes the DualSense the game's XInput controller
     0 (see [XInput controller](#xinput-controller)).
     - Cross, Circle, Square and Triangle are A, B, X and Y. L1/R1 are the

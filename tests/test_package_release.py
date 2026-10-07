@@ -41,6 +41,9 @@ def main() -> int:
                 write(host / "lib" / "wine" / arch / name, f"{arch}/{name}")
         write(host / "share" / "wine" / "nls" / "locale.nls", "nls")
         write(root / "wowprospero.dll", "cpu")
+        native = root / "wow64native"
+        write(native / "x86_64-windows" / "wow64native.dll", "native cpu")
+        write(native / "ps5" / "wow64native.prx", "native prx")
         # What the licences and SOURCES.txt come from: the build's report,
         # the Wine and FreeType sources it built, the helper's release.
         report = {"wine_commit": "a" * 40, "patches": ["0100-x.patch", "0110-y.patch"],
@@ -59,7 +62,8 @@ def main() -> int:
         write(lapy, json.dumps({"tag_name": "v9.9.9", "release_url": "https://example.invalid/v9.9.9"}))
         out = root / "out"
         inputs = ("--title", str(title), "--wine-ps5", str(ps5), "--host-wine", str(host),
-                  "--cpu-dll", str(root / "wowprospero.dll"), "--lapy-release", str(lapy))
+                  "--cpu-dll", str(root / "wowprospero.dll"), "--native-cpu", str(native),
+                  "--lapy-release", str(lapy))
 
         result = run(*inputs, "--out", str(out))
         assert result.returncode == 0, result.stderr
@@ -77,15 +81,17 @@ def main() -> int:
             names = sorted(p.name for p in (lib / arch).iterdir())
             expected = ["kernel32.dll", "quartz.dll", "xinput1_3.dll"]
             if arch == "x86_64-windows":
-                expected = sorted(expected + ["wowprospero.dll"])
+                expected = sorted(expected + ["wow64native.dll", "wowprospero.dll"])
             assert names == expected, (arch, names)
         assert (lib / "i386-windows" / "xinput1_3.dll").read_text() == "patched"
         assert (lib / "x86_64-windows" / "xinput1_3.dll").read_text() == "x86_64-windows/xinput1_3.dll"
         assert (lib / "x86_64-windows" / "wowprospero.dll").read_text() == "cpu"
+        assert (lib / "x86_64-windows" / "wow64native.dll").read_text() == "native cpu"
+        assert (lib / "x86_64-unix" / "wow64native.prx").read_text() == "native prx"
         assert sorted(p.name for p in (lib / "x86_64-unix").iterdir()) == \
-            ["libvulkan.prx", "ntdll.prx", "win32u.prx"]
+            ["libvulkan.prx", "ntdll.prx", "win32u.prx", "wow64native.prx"]
         assert (share / "nls" / "locale.nls").exists() and (share / "fonts" / "tahoma.ttf").exists()
-        assert "PPSA99995: 31 files" in result.stdout, result.stdout
+        assert "PPSA99995: 33 files" in result.stdout, result.stdout
         # The licences: the project's own texts verbatim, Wine's and its
         # libraries' from the built source, FreeType's.
         for name in ("LICENSE", "THIRD_PARTY.md"):
@@ -122,7 +128,8 @@ def main() -> int:
         # The console refuses to exec an eboot or load a PRX without execute
         # permission, whatever mode the inputs had; data files stay as they were.
         for name in ("eboot.bin", "sce_module/libc.prx", "win/wine/lib/wine/x86_64-unix/ntdll.prx",
-                     "win/wine/lib/wine/x86_64-unix/libvulkan.prx"):
+                     "win/wine/lib/wine/x86_64-unix/libvulkan.prx",
+                     "win/wine/lib/wine/x86_64-unix/wow64native.prx"):
             assert (app / name).stat().st_mode & 0o777 == 0o755, name
         assert not (app / "sce_sys" / "param.json").stat().st_mode & 0o111
         assert not (lib / "x86_64-windows" / "wowprospero.dll").stat().st_mode & 0o111
@@ -155,6 +162,10 @@ def main() -> int:
         assert bad.returncode == 2 and "--cpu-dll" in bad.stderr
         bad = run(*inputs[:-2], "--out", str(out))
         assert bad.returncode == 2 and "--lapy-release" in bad.stderr, bad.stderr
+        (native / "ps5" / "wow64native.prx").unlink()
+        bad = run(*inputs, "--out", str(out))
+        assert bad.returncode == 2 and "--native-cpu" in bad.stderr, bad.stderr
+        write(native / "ps5" / "wow64native.prx", "native prx")
         (ps5 / "source" / "NOTICES.md").unlink()
         bad = run(*inputs, "--out", str(out))
         assert bad.returncode == 2 and "NOTICES.md" in bad.stderr, bad.stderr

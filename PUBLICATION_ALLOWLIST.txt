@@ -214,6 +214,7 @@ wine/patches/0590-ntdll-ps5-repair-null-fs-on-unix-entry.patch
 wine/patches/0600-ntdll-ps5-direct-memory-for-anonymous-memory.patch
 wine/patches/0601-ntdll-ps5-keep-i386-images-below-4gib.patch
 wine/patches/0610-ntdll-ps5-segv-hook-for-the-wow64-cpu.patch
+wine/patches/0611-wow64-ps5-take-the-cpu-from-the-environment.patch
 wine/patches/0620-ntdll-generic-processor-topology.patch
 wine/patches/0630-win32u-ps5-driver-display-modes.patch
 wine/patches/0640-win32u-ps5-flush-period.patch
@@ -286,6 +287,7 @@ src/pw_prefix_temp.h
 native/pw_wine_prefix.c
 native/pw_wine_prefix.h
 tests/test_pw_prefix_temp.c
+tests/test_pw_wine_prefix_cpu.c
 tests/test_pw_wine_start.c
 tests/test_pw_wine_launch.c
 tests/test_pw_game_profile.c
@@ -424,3 +426,30 @@ docs/native-wow64-provider.md
 tests/native_libkernel_resolver_fixture.c
 tests/test_native_wow64_provider.py
 wine/patches/0883-ntdll-ps5-native-wow64-signal-entry.patch
+# 32-bit Vulkan command batching (always on with the native WoW64 CPU)
+docs/vulkan-fallback-profile.md
+docs/vulkan-progress-gate.md
+tests/lab/vk_batch_masks.c
+tests/lab/vk_batch_pe.c
+tests/lab/vk_batch_progress.c
+tests/lab/vk_batch_runtime.py
+tests/test_summarize_vk_batch.py
+tests/test_vk_command_stream.c
+tests/test_vk_command_stream.py
+tests/test_vk_wire.c
+tests/test_vk_wire.py
+tools/stage_vk_batch.py
+tools/summarize_vk_batch.py
+wine/ps5/pw_vk_command_stream.c
+wine/ps5/pw_vk_command_stream.h
+wine/ps5/pw_vk_template_cache.c
+wine/ps5/pw_vk_template_cache.h
+wine/ps5/pw_vk_wire.c
+wine/ps5/pw_vk_wire.h
+wine/ps5/vulkan-command-stream.md
+wine/ps5/vulkan/pw_vk_batch.h
+wine/ps5/vulkan/pw_vk_batch_pe.c
+wine/ps5/vulkan/pw_vk_batch_unix.c
+wine/ps5/vulkan/pw_vk_disable_guard.h
+wine/ps5/vulkan/pw_vk_progress_guard.h
+wine/ps5/vulkan-wire.md

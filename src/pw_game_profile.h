@@ -34,6 +34,10 @@
  *   thread_scheduling = true    ; Windows threads take turns and get their
  *                               ; priorities (WINE_PS5_SCHED=1); true/false
  *                               ; or 1/0, default false
+ *   cpu = native                ; a 32-bit game's CPU backend: native (runs
+ *                               ; its code directly, with Vulkan batching) or
+ *                               ; translator (wowprospero); default native,
+ *                               ; translator for OpenGL games
  *
  * Buttons: cross circle square triangle l1 r1 l2 r2 l3 r3 up down left
  * right options create touchpad. An input preset file holds only an [input]
@@ -84,13 +88,21 @@ typedef struct PwGameDisplay {
     int opengl_thread;          /* OpenGL calls run on Mesa's glthread worker */
 } PwGameDisplay;
 
+/* [runtime] cpu: the CPU backend a 32-bit game runs under. */
+typedef enum PwGameCpu {
+    PW_GAME_CPU_DEFAULT = 0,    /* native, except OpenGL games: the translator */
+    PW_GAME_CPU_NATIVE = 1,
+    PW_GAME_CPU_TRANSLATOR = 2,
+} PwGameCpu;
+
 typedef struct PwGameRuntime {
     int thread_scheduling;      /* WINE_PS5_SCHED=1 */
+    PwGameCpu cpu;
 } PwGameRuntime;
 
 /* A variable of Wine's environment; both strings are static. */
 typedef struct PwGameEnv { const char *name, *value; } PwGameEnv;
-enum { PW_GAME_RUNTIME_ENV_MAX = 1 };
+enum { PW_GAME_RUNTIME_ENV_MAX = 1, PW_GAME_CPU_ENV_MAX = 2 };
 
 typedef struct PwGameProfile {
     PwAppProfile app;
@@ -108,6 +120,14 @@ int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *pr
 /* The variables runtime sets in Wine's environment, into env, which has
  * room for PW_GAME_RUNTIME_ENV_MAX; how many. */
 size_t pw_game_runtime_env(const PwGameRuntime *runtime, PwGameEnv *env);
+/* Whether a game runs on the native WoW64 CPU: only 32-bit games; [runtime]
+ * cpu when set, else native unless the game draws with OpenGL, whose calls
+ * the Vulkan batching does not cover. */
+int pw_game_cpu_native(const PwGameProfile *profile);
+/* The variables that select the native CPU, which always comes with Vulkan
+ * batching (WINE_PS5_WOW64_CPU, PW_VK_BATCH), into env, which has room for
+ * PW_GAME_CPU_ENV_MAX; how many (0 for the translator). */
+size_t pw_game_cpu_env(const PwGameProfile *profile, PwGameEnv *env);
 /* An input with nothing bound, keyboard mode, no pointer. */
 void pw_game_input_init(PwGameInput *input);
 /* Parse an input preset file (one [input] section, no preset= line) into
