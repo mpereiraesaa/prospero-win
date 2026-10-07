@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """The PS5 Wine patch series is well-formed and applied in numeric order."""
 from __future__ import annotations
+import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -19,7 +21,56 @@ def check(names: list[str], contents: str = PATCH) -> subprocess.CompletedProces
                               capture_output=True, text=True)
 
 
+def check_patched_pe_staging() -> None:
+    # Execute the real staging stanza with a fake compiler backend. This checks
+    # both architecture targets, emitted bytes, stale staging cleanup and errors
+    # without requiring the SDK/full Wine rebuild for this focused contract.
+    text = SCRIPT.read_text()
+    modules = re.search(r'^PE_MODULES="([^"\n]+)"', text, re.M).group(1)
+    block = text.split('# The patched PE modules,', 1)[1].split('# The PRX link.', 1)[0]
+    block = block[block.index('rm -rf'):]
+    with tempfile.TemporaryDirectory() as directory:
+        base = Path(directory)
+        build, work = base / 'build', base / 'work'
+        build.mkdir(); work.mkdir()
+        stale = work / 'pe/i386-windows/stale.dll'
+        stale.parent.mkdir(parents=True); stale.write_bytes(b'old')
+        env = dict(os.environ, PW_PE_BUILD=str(build), PW_PE_WORK=str(work))
+        setup = """
+set -eu
+build=$PW_PE_BUILD
+work=$PW_PE_WORK
+jobs=1
+status=0
+make() {
+    for target in "$@"; do :; done
+    printf '%s\n' "$target" >> "$work/requests"
+    if [ "$target" = "${PW_PE_FAIL_TARGET:-}" ]; then return 17; fi
+    mkdir -p "$build/$(dirname "$target")"
+    printf 'MZfresh:%s' "$target" > "$build/$target"
+}
+"""
+        script = setup + 'PE_MODULES="' + modules + '"\n' + block + '\nprintf "%s" "$status" > "$work/status"\n'
+        result = subprocess.run(['sh'], input=script, env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert not stale.exists()
+        requests = (work / 'requests').read_text().splitlines()
+        for arch in ('i386', 'x86_64'):
+            target = f'dlls/winevulkan/{arch}-windows/winevulkan.dll'
+            assert requests.count(target) == 1
+            assert (work / f'pe/{arch}-windows/winevulkan.dll').read_bytes() == ('MZfresh:' + target).encode()
+        assert (work / 'status').read_text() == '0'
+        failed = 'dlls/winevulkan/i386-windows/winevulkan.dll'
+        (build / failed).unlink()
+        env['PW_PE_FAIL_TARGET'] = failed
+        result = subprocess.run(['sh'], input=script, env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert (work / 'status').read_text() == '17'
+        assert not (work / 'pe/i386-windows/winevulkan.dll').exists()
+
+
 def main() -> int:
+    check_patched_pe_staging()
     # The committed series itself.
     result = subprocess.run(["sh", str(SCRIPT), "--check-patches"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
