@@ -136,3 +136,17 @@ package includes it.
 Every part above is open source, and `SOURCES.txt` gives the repository and
 revision of each. prospero-win's own source, including the Wine patches, is
 at <https://github.com/mpereiraesaa/prospero-win>.
+
+## Optional Mesa WGL/Zink: `opengl32.dll`, `libgallium_wgl.dll`
+
+When supplied with `--mesa-zink`, the package includes Mesa's Windows WGL
+frontend and Zink under `win/mesa-zink/i386-windows/` and
+`win/mesa-zink/x86_64-windows/`. They use the installed
+Vulkan driver. Packaging these DLLs does not select them for a game or
+remove the existing OpenGL backend. Wine's builtin modules remain unchanged.
+
+Mesa is primarily MIT-licensed; component-specific licence texts and
+Mesa's licence overview are copied from the pinned source into
+`LICENSES/mesa/`. The llvm-mingw C++ runtime and MinGW runtime notices
+are in `LICENSES/llvm-mingw/`. `SOURCES.txt` and
+`mesa-zink-manifest.json` record the source, compiler archive and DLL hashes.

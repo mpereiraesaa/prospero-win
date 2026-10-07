@@ -461,3 +461,5 @@ tools/mesa_zink_requirements.txt
 docs/native-system-service-profile.md
 tests/test_native_system_service_profile.py
 wine/patches/0612-wow64-opt-in-named-system-service-profile.patch
+tests/test_package_mesa_zink.py
+tools/package_mesa_zink.py

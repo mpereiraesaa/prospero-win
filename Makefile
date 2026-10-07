@@ -156,6 +156,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	$(BUILD)/dbt_differential reencode < tests/fixtures/dbt_differential_forms.txt
 	python3 tests/test_pw_sse_matrix.py
 	python3 tests/test_mesa_zink_build.py
+	python3 tests/test_package_mesa_zink.py
 	python3 tests/test_wine_runtime_manifest.py
 	python3 tests/test_wine_protect_writecopy.py
 	python3 tests/test_wine_decommit_zero.py
