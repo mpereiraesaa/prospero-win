@@ -135,9 +135,10 @@ def summarize(lines, source="<memory>"):
             key: distribution([item["counts"][key] for item in intervals])
             for key in COUNTERS} if intervals else {}
     return {"source": source, "schema": "pw-vk-batch-summary/1", "scope": "process",
-            "metric": "Wine Vulkan Unix calls between consecutive successful/suboptimal present attempts",
+            "metric": "32-bit winevulkan intercepted UNIX_CALL crossings between consecutive successful/suboptimal present attempts",
             "snapshots": snapshots, "segments": segments, "issues": issues,
-            "limits": ["wine_unix_crossings excludes non-winevulkan Unix calls and native FS transitions",
+            "limits": ["wine_unix_crossings counts 32-bit PE winevulkan intercepted UNIX_CALL only, process cumulative, including capability queries",
+                       "It excludes raw module initialization, 64-bit PE winevulkan calls, other libraries and native FS transitions",
                        "records counts replayed commands; enqueued counts accepted deferred commands",
                        "Present attempts are process-scoped, not per swapchain or thread; no displayed-frame or FPS claim",
                        "No aggregation across boots, modes, gaps, failures, malformed rows or counter resets",

@@ -34,6 +34,8 @@ class SummaryTests(unittest.TestCase):
                          dict(samples=2, mean=10.5, median=10.5, min=9, max=12))
         self.assertNotIn("comparison", result)
         self.assertEqual(result["scope"], "process")
+        self.assertIn("32-bit winevulkan intercepted UNIX_CALL", result["metric"])
+        self.assertTrue(any("64-bit PE winevulkan" in limit for limit in result["limits"]))
 
     def test_timestamp_prefixes_actual_and_ps5log_escaped(self):
         for separator, ending in [("\t", "\n"), (r"\t", r"\n")]:

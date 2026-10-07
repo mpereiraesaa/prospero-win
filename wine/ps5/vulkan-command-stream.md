@@ -93,9 +93,11 @@ Missing or failed presents, malformed rows, boot headers, mode changes, and
 counter/ordinal regression break segments; the first snapshot has no interval.
 Both ordinary timestamps and escaped ps5log nanosecond prefixes are supported.
 
-These are Wine Vulkan crossings across all process threads between present
-attempts, not native FS switches, per-thread counts, displayed-frame counts, or
-FPS. Multiple swapchains also share the process present ordinal. The parser does
+These are 32-bit PE winevulkan intercepted `UNIX_CALL` crossings across all
+process threads between present attempts, including capability queries. They
+exclude raw module initialization, 64-bit PE winevulkan calls, all other library
+transitions and native FS switches. They are not per-thread counts,
+displayed-frame counts, or FPS. Multiple swapchains also share the process present ordinal. The parser does
 not automatically pair logs or aggregate across boots. Optional count comparisons
 require one candidate plus `--baseline OFF.log --segment N --baseline-segment N
 --equivalent-workload-evidence 'matching save/camera/config receipt'`. The caller
