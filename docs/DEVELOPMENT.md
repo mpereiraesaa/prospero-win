@@ -110,7 +110,14 @@ unattended launcher run that opens and closes the first game.
 `PW_FOUNDATION_READY=1` verifies an already prepared payload SDK instead of
 rebuilding it. `tools/build_wine_ps5.sh` needs the host WoW64 Wine build from
 `tools/build_wine_runtime.sh`; its environment is described in
-[WINE_PS5_BUILD.md](WINE_PS5_BUILD.md#build).
+[WINE_PS5_BUILD.md](WINE_PS5_BUILD.md#build). The PS5 Wine build emits both
+32-bit and 64-bit `winevulkan.dll` files under `pe/` alongside `winevulkan.prx`.
+Package these together when changing Vulkan thunks or the Unix dispatch table;
+reusing a PE module from an older host build can bypass new thunk behavior.
+The build stages `wine/ps5/vulkan` and the owned stream codecs after applying
+the patch series. Changes to these sources or their staging tool invalidate
+the configure cache. Batching is opt-in through `PW_VK_BATCH=1`; use
+`PW_VK_BATCH_STATS=1` to record process-wide Wine Vulkan crossings at presents.
 
 The runtime title uses the pinned foundation's high-address native layout:
 its executable segments begin at 4 GiB, leaving `0x00400000` available for
