@@ -32,7 +32,10 @@ static void ownership_order_and_lifecycle(void)
     assert(pw_vk_stream_register(&second, &a, aa, sizeof(aa)) == PW_VK_STREAM_INVALID);
     { struct pw_vk_stream alias = {0};
       assert(pw_vk_stream_register(&registry, &alias, aa + 1, sizeof(aa) - 1) == PW_VK_STREAM_INVALID); }
-    value = 11; assert(!pw_vk_stream_append(&registry, &a, 1, &value, sizeof(value)));
+    value = 11;
+    assert(pw_vk_stream_append(&second, &a, 1, &value, sizeof(value)) == PW_VK_STREAM_INVALID);
+    assert(second.next_sequence == 1 && a.used == 0);
+    assert(!pw_vk_stream_append(&registry, &a, 1, &value, sizeof(value)));
     value = 22; assert(!pw_vk_stream_append(&registry, &b, 2, &value, sizeof(value)));
     value = 33; assert(!pw_vk_stream_append(&registry, &a, 3, &value, sizeof(value)));
     value = 99; /* Caller storage reuse cannot affect queued data. */

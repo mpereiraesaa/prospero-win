@@ -86,7 +86,7 @@ int pw_vk_stream_append(struct pw_vk_stream_registry *registry, struct pw_vk_str
 {
     size_t total;
     unsigned char *dest;
-    if (!registry || !stream || !registered(registry, stream) || !opcode ||
+    if (!registry || !stream || stream->owner != registry || !opcode ||
         !valid_range(payload, payload_bytes) || payload_bytes > UINT32_MAX - PW_VK_STREAM_HEADER - 7)
         return PW_VK_STREAM_INVALID;
     total = (PW_VK_STREAM_HEADER + (size_t)payload_bytes + 7) & ~(size_t)7;

@@ -10,6 +10,10 @@ arrays, descriptor template data and supported extension chains before append;
 the generic transport cannot determine whether an opaque payload embeds a pointer.
 Unsupported arguments must drain pending work and use the ordinary thunk.
 
+A stream stores its owning registry; append checks that ownership in constant
+time instead of walking the producer list on every hot call. Only register and
+unregister mutate that ownership under caller serialization.
+
 Each append receives a process-wide sequence under caller serialization. A drain
 merges every registered arena by that sequence, preserving cross-thread handoffs.
 Draining registry-list order would reorder an update on thread A and a bind on
