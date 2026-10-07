@@ -76,3 +76,22 @@ directly before and after service calls, and verify the selected native backend.
 A host Wine pass only validates the fixture. Follow with finite worker threads
 and actual access-violation/illegal-instruction recovery through Win32 handlers
 before Minesweeper and the game sequence.
+
+
+Opt-in transition diagnostics use ABI version 3 (32-byte thread state).
+Set `PW_NATIVE_PROFILE=1` in the title environment to enable per-thread
+host/guest FS-switch counts and serialized TSC ticks around the `sysarch`
+call, plus aggregate Unix-call and syscall entry counts. Other values leave
+the profile pointer NULL. Rebuild the PE and Unix backend together; version 2
+modules cannot participate in the new contract.
+
+`PW_NATIVE_PROFILE version=1` reports cumulative counters and the raw TSC
+at the first host-FS switch, every 262144 host switches thereafter, and on
+thread cleanup. The report runs only with host FS restored, inside the
+existing full register/flags/x87/SSE/YMM save. Guest-FS restoration never
+calls the reporter. The tick measurement excludes FP saving/restoring and
+logging; it includes timestamp/branch overhead and interruptions. Counter
+intervals must be aligned to actual gameplay and a console TSC calibration.
+Compare profile-off/on runs before attributing FPS changes. Counters are not
+per-opcode attribution or proof that FS alone explains a regression. No
+WRFSBASE fast path is enabled by these diagnostics.

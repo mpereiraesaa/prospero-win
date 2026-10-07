@@ -2,7 +2,7 @@
 #ifndef WOW64NATIVE_H
 #define WOW64NATIVE_H
 
-#define PW_NATIVE_ABI_VERSION 2
+#define PW_NATIVE_ABI_VERSION 3
 #define PW_NATIVE_CS32 0x33
 #define PW_NATIVE_SS32 0x3b
 #define PW_NATIVE_CS64 0x43
@@ -32,6 +32,16 @@ struct pw_native_init_params
     unsigned int reserved;
     unsigned long long fs_set_proc;
 };
+/* Version 3 adds an optional per-thread diagnostic. Counters are written
+ * only by transition assembly on this OS thread. Snapshot callback runs
+ * only after host FS is restored, inside the existing full FP save. */
+struct pw_native_profile
+{
+    unsigned long long host_calls, guest_calls;
+    unsigned long long host_sysarch_ticks, guest_sysarch_ticks;
+    unsigned long long unix_calls, syscall_calls, last_tsc;
+    unsigned long long reserved, report_proc;
+};
 /* Unix-owned thread state; accessing Unix TLS requires host FS. */
 struct pw_native_thread_state
 {
@@ -39,6 +49,7 @@ struct pw_native_thread_state
     unsigned long long guest_fs;
     unsigned int status;
     unsigned int reserved;
+    unsigned long long profile;
 };
 struct pw_native_thread_params
 {

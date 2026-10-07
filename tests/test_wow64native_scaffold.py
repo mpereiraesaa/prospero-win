@@ -19,11 +19,11 @@ entries=(ctypes.c_void_p*4).in_dll(module,'__wine_unix_call_funcs')
 entry=entries[0]
 init=ctypes.CFUNCTYPE(ctypes.c_uint32,ctypes.c_void_p)(entry)
 assert init(None)==0xc000000d
-for version in [0,1,0xffffffff]:
+for version in [0,1,2,0xffffffff]:
     params=Init(version,0,0,0)
     assert init(ctypes.byref(params))==0xc000000d
 for ready in [0,1,0xffffffff]:
-    params=Init(2,ready,0xffff,0)
+    params=Init(3,ready,0xffff,0)
     assert init(ctypes.byref(params))==0xc00000bb
     assert params.ready==0 and params.fs==0
 
@@ -32,14 +32,14 @@ class ThreadParams(ctypes.Structure):
               ('guest_teb',ctypes.c_uint64),('state',ctypes.c_uint64)]
 class ThreadState(ctypes.Structure):
     _fields_=[('host_fs',ctypes.c_uint64),('guest_fs',ctypes.c_uint64),
-              ('status',ctypes.c_uint32),('reserved',ctypes.c_uint32)]
-assert ctypes.sizeof(ThreadParams)==ctypes.sizeof(ThreadState)==24
+              ('status',ctypes.c_uint32),('reserved',ctypes.c_uint32),('profile',ctypes.c_uint64)]
+assert ctypes.sizeof(ThreadParams)==24 and ctypes.sizeof(ThreadState)==32
 thread_init,thread_get,thread_term=[ctypes.CFUNCTYPE(ctypes.c_uint32,ctypes.c_void_p)(p) for p in entries[1:]]
 for fn in [thread_init,thread_get]:
     assert fn(None)==0xc000000d
-    assert fn(ctypes.byref(ThreadParams(3,0,0x20000,0)))==0xc000000d
+    assert fn(ctypes.byref(ThreadParams(2,0,0x20000,0)))==0xc000000d
 for address in [0,0xffff,0xfffff001,0x100000000]:
-    params=ThreadParams(2,0,address,0xffff)
+    params=ThreadParams(3,0,address,0xffff)
     assert thread_init(ctypes.byref(params))==0xc0000141
     assert params.state==0
 
@@ -47,17 +47,17 @@ for address in [0,0xffff,0xfffff001,0x100000000]:
 # isolates host/guest state, and cleanup does not retain a previous TEB.
 barrier=threading.Barrier(2)
 def exercise_thread(address):
-    params=ThreadParams(2,0,address,0)
+    params=ThreadParams(3,0,address,0)
     assert thread_get(ctypes.byref(params))==0xc000000d
     assert thread_init(ctypes.byref(params))==0xc00000bb
     first=params.state
     state=ThreadState.from_address(first)
-    assert state.host_fs and state.guest_fs==address and state.status==0xc00000bb
+    assert state.host_fs and state.guest_fs==address and state.status==0xc00000bb and not state.profile
     host_fs=state.host_fs
     barrier.wait(timeout=10)
     assert state.guest_fs==address
     assert thread_init(ctypes.byref(params))==0xc00000bb and params.state==first
-    wrong=ThreadParams(2,0,address+0x1000,0xffff)
+    wrong=ThreadParams(3,0,address+0x1000,0xffff)
     assert thread_init(ctypes.byref(wrong))==0xc000000d and wrong.state==0
     assert thread_get(ctypes.byref(wrong))==0xc000000d and wrong.state==0
     params.state=0
@@ -89,7 +89,7 @@ assert re.search(r'push\s+%r15',simulate),'state register must have an unwind sa
 assert simulate.index('fxsave64')<simulate.index('pw_native_prepare_simulate')<simulate.index('fxrstor64')
 assert len(re.findall(r'call[^\n]*<pw_native_restore_host_fs>',asm))==2
 assert len(re.findall(r'call[^\n]*<pw_native_restore_guest_fs>',asm))==3
-print(json.dumps({'init_cases':7,'thread_isolation_and_cleanup':True,'entry_guard_call_present':True,'low_PE_base':True,'native_transition_assembly_present':True,'no_DBT_run_import':True,'native_execution_tested':False}))
+print(json.dumps({'init_cases':8,'thread_isolation_and_cleanup':True,'entry_guard_call_present':True,'low_PE_base':True,'native_transition_assembly_present':True,'no_DBT_run_import':True,'native_execution_tested':False}))
 
 if a.wine_build:
     root=Path(__file__).resolve().parents[1]
@@ -110,6 +110,7 @@ void mock_configure(unsigned p, unsigned c, unsigned e)
 { present=p; caps=c; fs_error=e; last_version=0; }
 static unsigned query(unsigned version)
 { last_version=version; return version==PW_NW64_CAPS_VERSION ? caps : 0; }
+int __wine_dbg_output(const char *str) { (void)str; return 0; }
 void *dlsym(void *handle, const char *name)
 { return handle==RTLD_DEFAULT && present && !strcmp(name,PW_NATIVE_SIGNAL_QUERY) ? (void *)query : 0; }
 int sysarch(int operation, void *value)
@@ -132,15 +133,15 @@ int sysarch(int operation, void *value)
     g_init,g_thread,g_get,g_term=[ctypes.CFUNCTYPE(ctypes.c_uint32,ctypes.c_void_p)(v) for v in funcs]
     for present,caps in [(0,7),*[(1,c) for c in range(7)]]:
         gate.mock_configure(present,caps,0)
-        params=Init(2,0xffffffff,0xffff,0,0xffff)
+        params=Init(3,0xffffffff,0xffff,0,0xffff)
         assert g_init(ctypes.byref(params))==0xc00000bb
         assert params.ready==params.fs==params.fs_set_proc==0
     gate.mock_configure(1,7,0)
-    params=Init(2,0,0,0)
+    params=Init(3,0,0,0)
     assert g_init(ctypes.byref(params))==0 and params.ready==1 and params.fs==0
     assert params.fs_set_proc==ctypes.cast(gate.sysarch,ctypes.c_void_p).value
     assert ctypes.c_uint.in_dll(gate,'last_version').value==1
-    tp=ThreadParams(2,0,0x50000,0)
+    tp=ThreadParams(3,0,0x50000,0)
     gate.mock_configure(1,7,1)
     assert g_thread(ctypes.byref(tp))==0xc0000001 and not tp.state
     gate.mock_configure(1,7,2)
@@ -158,7 +159,7 @@ int sysarch(int operation, void *value)
     assert g_term(None)==0 and state.host_fs==state.guest_fs==0
     barrier=threading.Barrier(2)
     def ready_thread(address):
-        params=ThreadParams(2,0,address,0)
+        params=ThreadParams(3,0,address,0)
         assert g_thread(ctypes.byref(params))==0
         state=ThreadState.from_address(params.state)
         captured=state.host_fs
@@ -172,6 +173,20 @@ int sysarch(int operation, void *value)
     assert ctypes.c_uint.in_dll(gate,'set_calls').value==0
     assert g_init(None)==0xc000000d
     assert g_init(ctypes.byref(Init(1,0,0,0)))==0xc000000d
+    old_profile_env=os.environ.pop('PW_NATIVE_PROFILE',None)
+    for value,enabled in [('0',False),('1',True),('yes',False)]:
+        os.environ['PW_NATIVE_PROFILE']=value
+        assert g_init(ctypes.byref(params))==0
+        tp=ThreadParams(3,0,0x80000,0)
+        assert g_thread(ctypes.byref(tp))==0
+        state=ThreadState.from_address(tp.state)
+        assert bool(state.profile)==enabled
+        if enabled:
+            data=(ctypes.c_uint64*9).from_address(state.profile)
+            assert data[8] and list(data[:8])==[0]*8
+        assert g_term(None)==0 and state.profile==0
+    if old_profile_env is None:os.environ.pop('PW_NATIVE_PROFILE',None)
+    else:os.environ['PW_NATIVE_PROFILE']=old_profile_env
     assert g_init(ctypes.byref(params))==0
     receipt=dict(missing_and_partial_caps_refused=8,ready_thread_isolation=True,
         FS_capture_failure_refused=True,readiness_revocation_verified=True,
@@ -265,9 +280,20 @@ static int __attribute__((sysv_abi)) fail_first(int op, uint64_t *base)
     return calls==1 ? -1 : 0;
 }
 
+static uint64_t profile[9];
+static int reported;
+static void __attribute__((sysv_abi)) fake_profile_report(void *state)
+{
+    uint64_t flags;
+    __asm__ volatile("pushfq; popq %0":"=r"(flags));
+    if ((flags & 0x400) || ((uint64_t *)state)[3] != (uintptr_t)profile) reported=-100;
+    else reported++;
+    __asm__ volatile("fldz; pxor %%xmm0,%%xmm0; pxor %%xmm15,%%xmm15":::"xmm0","xmm15","memory");
+    if(check_avx) __asm__ volatile("vzeroall":::"memory");
+}
 int main(int argc, char **argv)
 {
-    uint64_t state[]={0x12345678,0x87654321};
+    uint64_t state[]={0x12345678,0x87654321,0,0};
     HMODULE dll=LoadLibraryW(L"wow64native.dll");
     void **setter;
     unsigned int *avx_flag, a, b, c, d, lo, hi, avx_available=0;
@@ -275,13 +301,14 @@ int main(int argc, char **argv)
     if (!dll) {printf("load_failed=%lu\n",GetLastError()); return 10;}
     setter=(void *)GetProcAddress(dll,"pw_native_sysarch");
     if(!setter) return 11;
-    if(argc>1)
+    if(argc>1 && !strcmp(argv[1],"fail"))
     {
         *setter=fail_first;
         invoke(GetProcAddress(dll,names[1]),state);
         puts("ERROR_guest_resumed_after_failed_FS_switch");
         return 60;
     }
+    if(argc>1) {profile[8]=(uintptr_t)fake_profile_report;state[3]=(uintptr_t)profile;}
     avx_flag=(void *)GetProcAddress(dll,"pw_native_avx");
     if(!avx_flag) return 13;
     if(__get_cpuid(1,&a,&b,&c,&d) && (c & bit_AVX) && (c & bit_OSXSAVE))
@@ -307,6 +334,11 @@ int main(int argc, char **argv)
         if(check_avx && memcmp(before_ymm,after_ymm,512)) return 70+i;
         printf("%s avx=%d: ABI, register, flags, x87/SSE/YMM preservation passed\n",names[i],check_avx);
     }
+    }
+    if(state[3]) {
+        unsigned expected=avx_available?2:1;
+        if(profile[0]!=expected || profile[1]!=expected || !profile[2] || !profile[3] || !profile[6] || reported!=1) return 90;
+        printf("profile_on_preservation host=%llu guest=%llu reporter=%d\n",profile[0],profile[1],reported);
     }
     printf("AVX_cases=%u\n",avx_available?2:0);
     return 0;
@@ -336,19 +368,20 @@ if a.wine_build:
     env.update(WINEPREFIX=str(out / 'prefix'), WINEARCH='win64', WINEDEBUG='-all',
         WINEDLLPATH=str(out), WINEDLLOVERRIDES='winemenubuilder.exe,winebus=d')
     cases = []
-    for args, expected in [([], 0), (['fail'], 1)]:
+    for args, expected in [([], 0), (['profile'], 0), (['fail'], 1)]:
         run = subprocess.run([str(build / 'loader/wine'), str(out / 'check.exe'), *args],
             env=env, capture_output=True, text=True, timeout=45)
         record = dict(args=args, exit=run.returncode, stdout=run.stdout, stderr=run.stderr)
         cases.append(record)
         assert run.returncode == expected, record
-        if args:
+        if args==['fail']:
             assert 'call=1 op=129 base=87654321' in run.stdout, record
             assert 'call=2 op=129 base=12345678' in run.stdout, record
             assert 'ERROR_guest_resumed' not in run.stdout, record
         else:
             assert run.stdout.count('preservation passed') in (2,4), record
             assert 'AVX_cases=' in run.stdout, record
+            if args==['profile']: assert 'profile_on_preservation' in run.stdout, record
     (out / 'receipt.json').write_text(json.dumps(dict(cases=cases, actual_FS_changed=False,
         native_execution_tested=False), indent=2) + '\n')
     print(json.dumps(dict(PE_ABI_fixture_passed=True, failure_recovery_verified=True,

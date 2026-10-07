@@ -119,6 +119,28 @@ static NTSTATUS init_xstate(void)
 
 C_ASSERT(offsetof(struct pw_native_thread_state, host_fs) == 0);
 C_ASSERT(offsetof(struct pw_native_thread_state, guest_fs) == 8);
+C_ASSERT(offsetof(struct pw_native_thread_state, profile) == 24);
+C_ASSERT(offsetof(struct pw_native_profile, host_calls) == 0);
+C_ASSERT(offsetof(struct pw_native_profile, guest_calls) == 8);
+C_ASSERT(offsetof(struct pw_native_profile, host_sysarch_ticks) == 16);
+C_ASSERT(offsetof(struct pw_native_profile, guest_sysarch_ticks) == 24);
+C_ASSERT(offsetof(struct pw_native_profile, unix_calls) == 32);
+C_ASSERT(offsetof(struct pw_native_profile, syscall_calls) == 40);
+C_ASSERT(offsetof(struct pw_native_profile, last_tsc) == 48);
+C_ASSERT(offsetof(struct pw_native_profile, report_proc) == 64);
+C_ASSERT(sizeof(struct pw_native_profile) == 72);
+
+/* No C or TLS lookup before host FS. Preserve guest flags/registers; the
+ * profile pointer is checked on every entry and is NULL by default. */
+#define PW_PROFILE_ENTRY(offset) \
+    "pushfq\n\t" \
+    "pushq %rax\n\t" \
+    "movq 24(%r15),%rax\n\t" \
+    "testq %rax,%rax\n\t" \
+    "jz 9f\n\t" \
+    "incq " offset "(%rax)\n\t9:\n\t" \
+    "popq %rax\n\t" \
+    "popfq\n\t"
 
 /* These wrappers use r15, which compatibility-mode code cannot address.
  * Everything touched below is an explicit address or register: no C, CRT,
@@ -164,9 +186,40 @@ __ASM_GLOBAL_FUNC(pw_native_switch_fs,
                   PW_SAVE_YMM_HIGH("0x200")
                   "movq %r11,%rsi\n\t"
                   "movl $129,%edi\n\t" /* AMD64_SET_FSBASE */
+                  "movq 24(%r15),%rax\n\t"
+                  "testq %rax,%rax\n\t"
+                  "jz 9f\n\t"
+                  "lfence\n\t"
+                  "rdtsc\n\t"
+                  "shlq $32,%rdx\n\t"
+                  "orq %rdx,%rax\n\t"
+                  "movq %rax,0x300(%rsp)\n\t9:\n\t"
                   "call *pw_native_sysarch(%rip)\n\t"
                   "testl %eax,%eax\n\t"
                   "jnz .Lnative_fs_failed\n\t"
+                  "movq 24(%r15),%r10\n\t"
+                  "testq %r10,%r10\n\t"
+                  "jz 9f\n\t"
+                  "lfence\n\t"
+                  "rdtsc\n\t"
+                  "shlq $32,%rdx\n\t"
+                  "orq %rdx,%rax\n\t"
+                  "movq %rax,48(%r10)\n\t"
+                  "subq 0x300(%rsp),%rax\n\t"
+                  "cmpq %r15,0x308(%rsp)\n\t"
+                  "je .Lnative_profile_host\n\t"
+                  "incq 8(%r10)\n\t"
+                  "addq %rax,24(%r10)\n\t"
+                  "jmp 9f\n\t"
+                  ".Lnative_profile_host:\n\t"
+                  "incq 0(%r10)\n\t"
+                  "addq %rax,16(%r10)\n\t"
+                  "movl 0(%r10),%eax\n\t"
+                  "andl $0x3ffff,%eax\n\t"
+                  "cmpl $1,%eax\n\t"
+                  "jne 9f\n\t"
+                  "movq %r15,%rdi\n\t"
+                  "call *64(%r10)\n\t9:\n\t"
                   "fxrstor64 (%rsp)\n\t"
                   PW_RESTORE_YMM_HIGH("0x200")
                   "addq $0x308,%rsp\n\t"
@@ -336,6 +389,7 @@ __ASM_GLOBAL_FUNC( syscall_32to64,
                    "movl %edx,0xc0(%r13)\n\t"   /* context->EFlags */
                    "leaq 4(%r14),%rdx\n\t"
                    "movl %edx,0xc4(%r13)\n\t"   /* context->Esp */
+                   PW_PROFILE_ENTRY("40")
                    "call pw_native_restore_host_fs\n\t"
                    "movq %rax,%rcx\n\t"         /* syscall number */
                    "leaq 8(%r14),%rdx\n\t"      /* parameters */
@@ -405,6 +459,7 @@ __ASM_GLOBAL_FUNC( unix_call_32to64,
                    "movl %edx,0xbc(%r13)\n\t"   /* context->SegCs */
                    "leaq 20(%r14),%rdx\n\t"
                    "movl %edx,0xc4(%r13)\n\t"   /* context->Esp */
+                   PW_PROFILE_ENTRY("32")
                    "call pw_native_restore_host_fs\n\t"
                    "movq 4(%r14),%rcx\n\t"      /* handle */
                    "movl 12(%r14),%edx\n\t"     /* code */
