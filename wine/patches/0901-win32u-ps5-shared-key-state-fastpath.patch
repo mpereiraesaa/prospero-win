@@ -1,0 +1,185 @@
+Subject: [PATCH] win32u: add an opt-in shared key-state reader
+
+diff --git a/dlls/win32u/main.c b/dlls/win32u/main.c
+index 22e5368..af23660 100644
+--- a/dlls/win32u/main.c
++++ b/dlls/win32u/main.c
+@@ -2578,7 +2578,17 @@ ALL_SYSCALL_STUBS
+ #define SYSCALL_ENTRY(id,name,args) __ASM_SYSCALL_FUNC( id, name, args )
+ DEFINE_SYSCALL_HELPER32()
+ #endif
++#ifdef __i386__
++#define NtUserGetKeyState pw_slow_NtUserGetKeyState
++#define NtUserGetAsyncKeyState pw_slow_NtUserGetAsyncKeyState
++#define NtUserSetThreadDesktop pw_slow_NtUserSetThreadDesktop
++#endif
+ ALL_SYSCALLS
++#ifdef __i386__
++#undef NtUserGetKeyState
++#undef NtUserGetAsyncKeyState
++#undef NtUserSetThreadDesktop
++#endif
+ #undef SYSCALL_ENTRY
+ 
+ #endif /*  __arm64ec__ */
+@@ -2605,3 +2615,44 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
+     }
+     return TRUE;
+ }
++
++
++#ifdef __i386__
++#include "pw_key_shared.h"
++_Static_assert( offsetof(struct ntuser_thread_info, ps5_key_shared) == 32, "client info prefix ABI" );
++_Static_assert( sizeof(struct ntuser_thread_info) <= sizeof(((TEB *)0)->Win32ClientInfo), "client info cache fits TEB" );
++extern SHORT WINAPI pw_slow_NtUserGetKeyState( INT key );
++extern SHORT WINAPI pw_slow_NtUserGetAsyncKeyState( INT key );
++extern BOOL WINAPI pw_slow_NtUserSetThreadDesktop( HDESK desktop );
++
++SHORT WINAPI NtUserGetKeyState( INT key )
++{
++    struct ntuser_thread_info *info = NtUserGetThreadInfo();
++    struct pw_key_shared *key_shared = (struct pw_key_shared *)info->ps5_key_shared;
++    int16_t state;
++    SHORT ret;
++    if (!info->ps5_key_disabled && pw_key_get_state( key_shared, key, &state )) return state;
++    ret = pw_slow_NtUserGetKeyState( key );
++    if (!info->ps5_key_disabled)
++    {
++        memset( key_shared, 0, sizeof(*key_shared) );
++        if (!NtUserCallTwoParam( (ULONG_PTR)key_shared, sizeof(*key_shared), PW_KEY_QUERY ))
++            info->ps5_key_disabled = 1;
++    }
++    return ret;
++}
++
++SHORT WINAPI NtUserGetAsyncKeyState( INT key )
++{
++    /* Valid-key calls retain driver-event pumping and pressed-bit consumption. */
++    if (key < 0 || key >= 256) return 0;
++    return pw_slow_NtUserGetAsyncKeyState( key );
++}
++
++BOOL WINAPI NtUserSetThreadDesktop( HDESK desktop )
++{
++    BOOL ret = pw_slow_NtUserSetThreadDesktop( desktop );
++    if (ret) memset( NtUserGetThreadInfo()->ps5_key_shared, 0, sizeof(struct pw_key_shared) );
++    return ret;
++}
++#endif
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index d18d866..3db7885 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -7699,10 +7699,16 @@ ULONG_PTR WINAPI NtUserCallOneParam( ULONG_PTR arg, ULONG code )
+ /***********************************************************************
+  *	     NtUserCallTwoParam    (win32u.@)
+  */
++#include "pw_key_shared.h"
++extern ULONG_PTR ps5_get_key_shared( void *args, ULONG_PTR size );
++
+ ULONG_PTR WINAPI NtUserCallTwoParam( ULONG_PTR arg1, ULONG_PTR arg2, ULONG code )
+ {
+     switch(code)
+     {
++    case PW_KEY_QUERY:
++        return ps5_get_key_shared( (void *)arg1, arg2 );
++
+     case NtUserCallTwoParam_GetDialogProc:
+         return (ULONG_PTR)get_dialog_proc( (DLGPROC)arg1, arg2 );
+ 
+diff --git a/dlls/win32u/winstation.c b/dlls/win32u/winstation.c
+index 34950fa..40bed6e 100644
+--- a/dlls/win32u/winstation.c
++++ b/dlls/win32u/winstation.c
+@@ -115,7 +115,12 @@ static NTSTATUS map_shared_session_block( SIZE_T offset, SIZE_T size, struct ses
+     OBJECT_ATTRIBUTES attr;
+     unsigned int status;
+     HANDLE handle;
++    ULONG_PTR zero_bits = 0;
+ 
++#ifdef __PROSPERO__
++    const char *fast = getenv( "PW_INPUT_SHARED_FAST" );
++    if (fast && !strcmp( fast, "1" )) zero_bits = ~(UINT)0;
++#endif
+     assert( offset + size > offset );
+ 
+     if (!(block = calloc( 1, sizeof(*block) ))) return STATUS_NO_MEMORY;
+@@ -125,8 +130,17 @@ static NTSTATUS map_shared_session_block( SIZE_T offset, SIZE_T size, struct ses
+         WARN( "Failed to open shared session section, status %#x\n", status );
+     else
+     {
+-        if ((status = NtMapViewOfSection( handle, GetCurrentProcess(), (void **)&block->data, 0, 0,
+-                                          &off, &block->size, ViewUnmap, 0, PAGE_READONLY )))
++        status = NtMapViewOfSection( handle, GetCurrentProcess(), (void **)&block->data, zero_bits, 0,
++                                     &off, &block->size, ViewUnmap, 0, PAGE_READONLY );
++        if (status && zero_bits)
++        {
++            /* Low-address pressure must not break the ordinary syscall path. */
++            block->data = NULL;
++            block->size = 0;
++            status = NtMapViewOfSection( handle, GetCurrentProcess(), (void **)&block->data, 0, 0,
++                                         &off, &block->size, ViewUnmap, 0, PAGE_READONLY );
++        }
++        if (status)
+             WARN( "Failed to map shared session block, status %#x\n", status );
+         else
+         {
+@@ -1051,3 +1065,44 @@ void winstation_init(void)
+     NtClose( dir );
+     free( buffer );
+ }
++
++
++#include "pw_key_shared.h"
++_Static_assert( offsetof(shared_object_t, seq) == 0, "shared input sequence ABI" );
++_Static_assert( offsetof(shared_object_t, id) == 8, "shared input object ID ABI" );
++ULONG_PTR ps5_get_key_shared( void *args, ULONG_PTR size )
++{
++#ifdef __PROSPERO__
++    struct pw_key_shared result = {0};
++    struct object_lock input_lock = OBJECT_LOCK_INIT, desktop_lock = OBJECT_LOCK_INIT;
++    const input_shm_t *input = NULL;
++    const desktop_shm_t *desktop = NULL;
++    const shared_object_t *input_object, *desktop_object;
++    const char *fast = getenv( "PW_INPUT_SHARED_FAST" );
++    NTSTATUS status;
++    if (!args || size != sizeof(result) || !fast || strcmp( fast, "1" )) return 0;
++    while ((status = get_shared_input( GetCurrentThreadId(), &input_lock, &input )) == STATUS_PENDING) ;
++    if (status || !input || !input_lock.id) return 0;
++    while ((status = get_shared_desktop( &desktop_lock, &desktop )) == STATUS_PENDING) ;
++    if (status || !desktop || !desktop_lock.id) return 0;
++    input_object = (const shared_object_t *)((const char *)input - offsetof(shared_object_t, shm));
++    desktop_object = (const shared_object_t *)((const char *)desktop - offsetof(shared_object_t, shm));
++    if ((uintptr_t)input_object > UINT32_MAX - sizeof(*input_object) ||
++        (uintptr_t)desktop_object > UINT32_MAX - sizeof(*desktop_object)) return 0;
++    result.version = PW_KEY_VERSION;
++    result.input_object = (uintptr_t)input_object;
++    result.desktop_object = (uintptr_t)desktop_object;
++    result.input_id = input_lock.id;
++    result.desktop_id = desktop_lock.id;
++    result.state = (uintptr_t)input->keystate;
++    result.lock = (uintptr_t)&input->keystate_lock;
++    result.input_serial = (uintptr_t)&input->keystate_serial;
++    result.desktop_serial = (uintptr_t)&desktop->keystate_serial;
++    memcpy( args, &result, sizeof(result) );
++    return 1;
++#else
++    (void)args;
++    (void)size;
++    return 0;
++#endif
++}
+diff --git a/include/ntuser.h b/include/ntuser.h
+index be41b33..d688ca5 100644
+--- a/include/ntuser.h
++++ b/include/ntuser.h
+@@ -126,6 +126,8 @@ struct ntuser_thread_info
+     UINT           dpi_context;       /* DPI awareness context */
+     UINT64         client_imm;        /* client IMM thread info */
+     UINT64         wmchar_data;       /* client data for WM_CHAR mappings */
++    UINT64         ps5_key_shared[6]; /* optional fixed-ABI shared input cache */
++    UINT64         ps5_key_disabled;  /* unavailable provider: retain normal syscalls */
+ };
+ 
+ #ifndef WINE_UNIX_LIB
