@@ -64,3 +64,20 @@ creation metadata), PE enqueue/flush lifecycle and a versioned Unix replay entry
 then translator-first measurements and native crossings at actual present
 boundaries. Console validation must use verified-medium GTA SA, GTA IV and HL2,
 with fixed-point visual comparison against the unbatched build.
+
+Descriptor-template lookup uses a fixed 1024-bucket hash of the client device
+and both halves of the full 64-bit template handle. Lookup visits only its
+collision chain; it neither scans all templates nor allocates or rehashes.
+The index costs 4 KiB in PE32 (8 KiB on a 64-bit host), plus a count field and
+owned metadata per template. Chains have no template-count limit; collisions
+are checked against the exact device and full handle. Expected lookup cost is
+constant at ordinary load; worst-case adversarial collisions remain linear in
+one bucket. Device teardown deliberately scans all buckets, outside the hot
+update path. All existing caller locking and drain requirements remain.
+
+`tests/test_vk_wire.py` verifies three forced collisions with head/middle/tail
+removal, 4096 live templates across devices, full-width handle identity and
+successful same-handle reuse on allocator failure. Successful unsupported or
+failed-allocation metadata replaces stale eligibility; failed Vulkan creation
+preserves the existing entry. These are host correctness checks, not a claimed
+FPS gain or target benchmark.

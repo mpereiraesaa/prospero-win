@@ -5,7 +5,13 @@
 #include <stdint.h>
 #include "pw_vk_wire.h"
 struct pw_vk_template_meta;
-struct pw_vk_template_cache { struct pw_vk_template_meta *head; };
+/* Fixed bucket storage avoids allocation or rehash on the hot lookup path.
+ * Collisions own separate chains; template capacity is not the bucket count. */
+#define PW_VK_TEMPLATE_BUCKETS 1024u
+struct pw_vk_template_cache {
+ struct pw_vk_template_meta *buckets[PW_VK_TEMPLATE_BUCKETS];
+ size_t count;
+};
 /* All operations require the same process-wide caller lock. Keep that lock
  * across lookup and snapshot encoding; never retain borrowed metadata after
  * unlocking. Allocation is injected so Wine can use HeapAlloc/HeapFree. */

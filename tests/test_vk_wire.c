@@ -18,7 +18,7 @@ static int template_cache_cases(void){
  fail=1;assert(!pw_vk_template_register(&c,&a,1,h,1,0,0,0,&e,1));fail=0;
  assert(pw_vk_template_register(&c,&a,1,h,1,0,0,0,&e,1));assert(pw_vk_template_register(&c,&a,2,h,1,0,0,0,&e,1));
  pw_vk_template_remove_device(&c,&a,1);assert(!pw_vk_template_lookup(&c,1,h,&n));assert(pw_vk_template_lookup(&c,2,h,&n));
- pw_vk_template_remove(&c,&a,2,h);assert(!c.head);
+ pw_vk_template_remove(&c,&a,2,h);assert(!c.count);
  {
   struct pw_vk_template_entry sparse[]={ {6,2,8,40},{4,1,88,8} };
   unsigned char data[100],out[140];size_t bytes,extent;unsigned i;
@@ -36,13 +36,68 @@ static int template_cache_cases(void){
   sparse[0].offset=0;sparse[0].stride=UINT64_MAX;assert(!pw_vk_template_extent(sparse,2,&extent));
   sparse[0].stride=24;sparse[0].count=UINT32_MAX;assert(!pw_vk_template_extent(sparse,2,&extent));
   sparse[0].count=1;sparse[0].type=1000138000;assert(!pw_vk_template_extent(sparse,2,&extent));
-  pw_vk_template_remove_device(&c,&a,3);assert(!c.head);
+  pw_vk_template_remove_device(&c,&a,3);assert(!c.count);
  }
  return 0;
 }
 
 #include <stdio.h>
 #include <string.h>
+
+/* Find real colliding keys without duplicating the hash implementation. */
+static size_t occupied_bucket(const struct pw_vk_template_cache *c)
+{
+ size_t i;for(i=0;i<PW_VK_TEMPLATE_BUCKETS;i++)if(c->buckets[i])return i;
+ assert(0);return 0;
+}
+static void hash_cache_cases(void)
+{
+ struct pw_vk_template_cache c={0};struct pw_vk_template_alloc a={allocate,free};
+ struct pw_vk_template_entry e={6,1,0,24};size_t n,bucket=0,found=0;uint64_t keys[3],h;
+ /* Three entries deliberately share a bucket; remove tail, middle and head
+  * across rebuilds, preserving the other two and their exact identities. */
+ for(h=1;found<3;h++) {
+  assert(pw_vk_template_register(&c,&a,8,h,1,0,0,0,&e,1));
+  size_t b=occupied_bucket(&c);
+  if(!found){bucket=b;keys[found++]=h;}
+  else if(b==bucket)keys[found++]=h;
+  pw_vk_template_remove(&c,&a,8,h);
+ }
+ for(size_t victim=0;victim<3;victim++) {
+  for(size_t i=0;i<3;i++)assert(pw_vk_template_register(&c,&a,8,keys[i],1,0,0,0,&e,1));
+  assert(c.count==3);
+  if(victim==1) {
+   fail=1;assert(!pw_vk_template_register(&c,&a,8,keys[victim],1,0,0,0,&e,1));fail=0;
+  } else pw_vk_template_remove(&c,&a,8,keys[victim]);
+  for(size_t i=0;i<3;i++)assert(!!pw_vk_template_lookup(&c,8,keys[i],&n)==(i!=victim));
+  pw_vk_template_remove_device(&c,&a,8);assert(!c.count);
+ }
+ /* More templates than buckets prove collision chains do not impose a hard
+  * capacity. Distinct full-width handles and devices survive full lookup. */
+ for(size_t i=0;i<PW_VK_TEMPLATE_BUCKETS*4u;i++) {
+  e.count=(uint32_t)(i%16+1);h=UINT64_C(0x100000000)+(uint64_t)i;
+  assert(pw_vk_template_register(&c,&a,(uint32_t)(3+i%2),h,1,0,0,0,&e,1));
+ }
+ assert(c.count==PW_VK_TEMPLATE_BUCKETS*4u);
+ for(size_t i=0;i<PW_VK_TEMPLATE_BUCKETS*4u;i++) {
+  h=UINT64_C(0x100000000)+(uint64_t)i;
+  const struct pw_vk_template_entry *p=pw_vk_template_lookup(&c,(uint32_t)(3+i%2),h,&n);
+  assert(p&&n==1&&p->count==i%16+1);
+  assert(!pw_vk_template_lookup(&c,(uint32_t)(4-i%2),h,&n));
+  assert(!pw_vk_template_lookup(&c,(uint32_t)(3+i%2),(uint32_t)h,&n));
+ }
+ /* Failed creation keeps prior metadata; successful reuse on OOM retires it.
+  * Unrelated colliding templates must remain available. */
+ h=UINT64_C(0x100000000)+2;
+ fail=1;assert(!pw_vk_template_register(&c,&a,3,h,0,0,0,0,&e,1));assert(pw_vk_template_lookup(&c,3,h,&n));
+ assert(!pw_vk_template_register(&c,&a,3,h,1,0,0,0,&e,1));assert(!pw_vk_template_lookup(&c,3,h,&n));fail=0;
+ assert(c.count==PW_VK_TEMPLATE_BUCKETS*4u-1);
+ pw_vk_template_remove_device(&c,&a,3);assert(c.count==PW_VK_TEMPLATE_BUCKETS*2u);
+ for(size_t i=1;i<PW_VK_TEMPLATE_BUCKETS*4u;i+=2)assert(pw_vk_template_lookup(&c,4,UINT64_C(0x100000000)+i,&n));
+ pw_vk_template_remove_device(&c,&a,4);assert(!c.count);
+ for(size_t i=0;i<PW_VK_TEMPLATE_BUCKETS;i++)assert(!c.buckets[i]);
+}
+
 static void codec_cases(void)
 {
  unsigned char output[4096], saved[4096], source[128]; size_t bytes, extent;
@@ -88,7 +143,7 @@ static void codec_cases(void)
 }
 int main(void)
 {
- assert(template_cache_cases()==0);codec_cases();
+ assert(template_cache_cases()==0);hash_cache_cases();codec_cases();
  puts("PASS Vulkan wire ownership, normalization, alias/bounds checks and descriptor-template lifecycle");
  return 0;
 }
