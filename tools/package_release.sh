@@ -33,6 +33,9 @@
 #                    games run on by default.
 #   --lapy-release FILE  the release.json tools/build_native.sh saved for the
 #                    lapy.elf it fetched (build/native/lapy-helper-release.json).
+#   --mesa-zink DIR  optional tools/build_mesa_zink.sh artifacts/ directory:
+#                    PE32/PE64 WGL/Zink, hashes and component licence texts.
+#                    Packaging does not change a game's graphics selection.
 #   --out DIR        where PPSA99995/ is written (replaced).
 #   --zip            also write DIR/PPSA99995.zip.
 #
@@ -41,10 +44,11 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-title= wine_ps5= host_wine= cpu_dll= native_cpu= lapy_release= out= zip=0
+mesa_zink= title= wine_ps5= host_wine= cpu_dll= native_cpu= lapy_release= out= zip=0
 fail() { echo "package_release: $*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
     case $1 in
+    --mesa-zink) mesa_zink=$2; shift 2 ;;
     --title) title=$2; shift 2 ;;
     --wine-ps5) wine_ps5=$2; shift 2 ;;
     --host-wine) host_wine=$2; shift 2 ;;
@@ -73,6 +77,10 @@ done
 [ -f "$wine_ps5/freetype/src/docs/FTL.TXT" ] ||
     fail "--wine-ps5: no FreeType source (freetype/src/docs/FTL.TXT) in '$wine_ps5'"
 [ -n "$out" ] || fail "--out DIR is required"
+
+if [ -n "$mesa_zink" ]; then
+    python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" || fail 'invalid --mesa-zink artifact directory'
+fi
 
 app=$out/PPSA99995
 rm -rf "$app"
@@ -177,6 +185,10 @@ else:
     lines += ["OpenGL  not included"]
 (app / "SOURCES.txt").write_text("\n".join(lines) + "\n")
 PY
+
+if [ -n "$mesa_zink" ]; then
+    python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" --app "$app" || fail 'Mesa packaging failed'
+fi
 
 files=$(find "$app" -type f | wc -l)
 size=$(du -sh "$app" | cut -f1)

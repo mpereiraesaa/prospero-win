@@ -458,3 +458,5 @@ tools/mesa_zink_manifest.py
 tests/test_mesa_zink_build.py
 tools/build_mesa_zink.md
 tools/mesa_zink_requirements.txt
+tests/test_package_mesa_zink.py
+tools/package_mesa_zink.py
