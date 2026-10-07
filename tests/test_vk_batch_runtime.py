@@ -11,7 +11,7 @@ def run(command,env=None):
  x=subprocess.run(command,capture_output=True,text=True,env=env,timeout=90);results.append(dict(command=list(map(str,command)),exit_code=x.returncode,stdout=x.stdout,stderr=x.stderr));assert x.returncode==0,x.stdout+x.stderr;return x
 run(['python3',str(r/'tools/stage_vk_batch.py'),'--source',str(source)])
 assert 'pw_vk_batch_thread_detach();' in (d/'loader.c').read_text()
-assert 'DisableThreadLibraryCalls(hinst);' not in (d/'loader.c').read_text()
+assert '#ifdef _WIN64\n            DisableThreadLibraryCalls(hinst);\n#else' in (d/'loader.c').read_text()
 assert (d/'vulkan_thunks.c').read_text().count('    pw_vk_batch_unix,')==2
 if a.vk_xml and a.video_xml:
  old=os.getcwd();os.chdir(d)

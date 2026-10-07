@@ -44,3 +44,31 @@ ASan/UBSan tests plus i686 Windows compilation. Checks cover sparse data copying
 caller storage reuse, 64-bit handles, signed vertex offsets, optional arrays,
 aliasing, capacity/address bounds, unsupported types and template lifecycle.
 This verifies local codecs, not driver semantics, Wine integration or game FPS.
+
+## Runtime integration
+
+`tools/stage_vk_batch.py` stages the portable dependencies and 32-bit PE /
+Unix runtime into the patched Wine source before configure. Generated Unix
+tables append one private batch entry without changing existing indices.
+Capability is negotiated through an existing function-availability entry
+with a live instance; older Unix modules return zero for the private name,
+so a new PE module never indexes their missing batch entry.
+
+`PW_VK_BATCH=1` enables the seven implemented command categories. Every
+unbatched operation drains all producers, then executes the ordinary call
+in the same Unix crossing. The process ordering gate spans recording and
+replay, while input payloads and template metadata are deep-owned.
+Debug callbacks, custom allocators, configured layers, and opaque instance
+creation chains disable batching permanently after draining pending work;
+subsequent calls bypass the gate so ordinary callback reentry remains valid.
+
+`PW_VK_BATCH_STATS=1` independently enables process-scoped Wine crossing
+and replay counters at present boundaries. Keep this unset for an
+uninstrumented FPS run. It does not count every native WoW64 transition.
+
+The 32-bit DLL's thread-detach hook only marks its producer retired; a
+subsequent global drain replays and frees its owned arena without taking
+a mutex or calling the driver under the loader lock. The 64-bit DLL retains
+its original DisableThreadLibraryCalls behavior and direct Unix dispatch.
+Host PE controls exercise the actual retirement helper, with automatic DLL
+notification wiring checked separately in the staged loader source.
