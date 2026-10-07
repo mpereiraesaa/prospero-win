@@ -238,17 +238,24 @@ for patch in $ordered; do
     echo "applied $patch"
 done
 
+# Stage Vulkan batching after the complete patch series. Failure must stop the
+# build before either half can be emitted with a different dispatch table.
+python3 "$root/tools/stage_vk_batch.py" --source "$tree" --repo "$root" ||
+    fail "cannot stage Vulkan command-stream runtime"
+
 # The PS5 OpenGL SDK is optional. When supplied, Wine's generic EGL/WGL
 # frontend binds directly to its static EGL symbols and the win32u PRX links
 # the SDK into the runtime.
 opengl_cflags=${CFLAGS:--g -O2}
 if [ -n "$ps5opengl_sdk" ]; then opengl_cflags="$opengl_cflags -DWINE_PS5_OPENGL"; fi
 
-# Reconfigure whenever the patches or the arguments change.
+# Reconfigure whenever the patches, staged Vulkan sources or arguments change.
 stamp=$(
     { printf '%s\n' "$WINE_COMMIT" "$CONFIGURE_ARGS" "$sdk" "$FREETYPE_SHA256" \
         "$ps5opengl_sdk" "$opengl_cflags"
-      for patch in $ordered; do cat "$patches/$patch"; done; } | sha256sum | cut -c1-64)
+      for patch in $ordered; do cat "$patches/$patch"; done
+      cat "$root/tools/stage_vk_batch.py" "$root"/wine/ps5/pw_vk_*.[ch] \
+          "$root"/wine/ps5/vulkan/*.[ch]; } | sha256sum | cut -c1-64)
 build=$work/build
 if [ ! -f "$build/Makefile" ] || [ "$(cat "$build/.prospero-stamp" 2>/dev/null)" != "$stamp" ]; then
     rm -rf "$build"

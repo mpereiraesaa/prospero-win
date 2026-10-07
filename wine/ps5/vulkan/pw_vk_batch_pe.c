@@ -1,0 +1,142 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#include "vulkan_loader.h"
+#include "pw_vk_batch.h"
+#include "pw_vk_command_stream.h"
+#include "pw_vk_template_cache.h"
+#ifndef _WIN64
+#include "pw_vk_disable_guard.h"
+WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
+struct producer { struct pw_vk_stream stream; LONG retired; unsigned char arena[PW_VK_BATCH_ARENA]; };
+static INIT_ONCE once=INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION gate;
+static DWORD tls=TLS_OUT_OF_INDEXES;
+static struct pw_vk_stream_registry registry;
+static struct pw_vk_template_cache templates;
+static unsigned char *scratch;
+static BOOL enabled,negotiated,stats_enabled;
+static LONG sticky_disabled;
+static DWORD owner;
+static unsigned depth;
+static UINT64 records_total,dispatches_total,piggyback_total,full_total,fallback_total,enqueued_total;
+static DECLSPEC_ALIGN(8) UINT64 present;
+static DECLSPEC_ALIGN(8) UINT64 crossings_total;
+static void *heap_alloc(size_t n){return HeapAlloc(GetProcessHeap(),0,n);}
+static void heap_free(void *p){HeapFree(GetProcessHeap(),0,p);}
+static const struct pw_vk_template_alloc allocator={heap_alloc,heap_free};
+static DECLSPEC_NORETURN void fatal(void){ERR("PW_VK_BATCH fatal replay/order failure\n");TerminateProcess(GetCurrentProcess(),3);ExitProcess(3);}
+static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
+{
+ char env[8];(void)o;(void)p;(void)ctx;
+ stats_enabled=GetEnvironmentVariableA("PW_VK_BATCH_STATS",env,sizeof(env))==1&&env[0]=='1';
+ enabled=GetEnvironmentVariableA("PW_VK_BATCH",env,sizeof(env))==1&&env[0]=='1'&&!pw_vk_stream_environment_unsafe();
+ if(!enabled)return TRUE;
+ InitializeCriticalSection(&gate);tls=TlsAlloc();
+ pw_vk_stream_registry_init(&registry);
+ scratch=heap_alloc(PW_VK_BATCH_SCRATCH);
+ enabled=tls!=TLS_OUT_OF_INDEXES&&scratch;
+ /* Diagnostics are independently opt-in; FPS confirmation leaves them off. */
+ return TRUE;
+}
+static void enter(void){EnterCriticalSection(&gate);if(depth&&owner==GetCurrentThreadId())fatal();owner=GetCurrentThreadId();depth=1;}
+static void leave(void){depth=0;owner=0;LeaveCriticalSection(&gate);}
+static struct producer *producer(void)
+{
+ struct producer *p=TlsGetValue(tls);
+ struct pw_vk_stream *s;unsigned count=0;
+ if(p)return p;
+ for(s=registry.streams;s;s=s->next)if(++count>=PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA)return NULL;
+ if(!(p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p))))return NULL;
+ if(pw_vk_stream_register(&registry,&p->stream,p->arena,sizeof(p->arena))!=PW_VK_STREAM_OK){heap_free(p);return NULL;}
+ if(!TlsSetValue(tls,p)){pw_vk_stream_unregister(&registry,&p->stream);heap_free(p);return NULL;}
+ return p;
+}
+static void reclaim(void)
+{
+ struct pw_vk_stream *s=registry.streams,*next;
+ while(s){struct producer *p=(struct producer *)s;next=s->next;if(InterlockedCompareExchange(&p->retired,0,0)&&!s->used){if(pw_vk_stream_unregister(&registry,s)!=PW_VK_STREAM_OK)fatal();heap_free(p);}s=next;}
+}
+void pw_vk_batch_thread_detach(void)
+{
+ struct producer *p;if(tls==TLS_OUT_OF_INDEXES)return;p=TlsGetValue(tls);
+ if(p){/* No mutex or driver call under the loader lock. */TlsSetValue(tls,NULL);InterlockedExchange(&p->retired,1);}
+}
+static NTSTATUS raw_call(unsigned int code,void *args){if(stats_enabled)InterlockedIncrement64((LONG64 *)&crossings_total);return WINE_UNIX_CALL(code,args);}
+static NTSTATUS flush_call(unsigned int code,void *args)
+{
+ size_t bytes=0,records=0;struct pw_vk_batch_params p;NTSTATUS status;
+ if(pw_vk_stream_collect(&registry,scratch,PW_VK_BATCH_SCRATCH,&bytes,&records)!=PW_VK_STREAM_OK)fatal();
+ if(!bytes){status=code==unix_count?STATUS_SUCCESS:raw_call(code,args);reclaim();return status;}
+ p.version=PW_VK_BATCH_VERSION;p.batch=(UINT_PTR)scratch;p.bytes=bytes;p.code=code;p.args=(UINT_PTR)args;p.status=STATUS_SUCCESS;
+ status=raw_call(unix_pw_vk_batch,&p);if(status)fatal();
+ dispatches_total++;records_total+=records;if(code!=unix_count)piggyback_total++;
+ reclaim();return p.status;
+}
+static void template_created(unsigned int code,void *args)
+{
+ const VkDescriptorUpdateTemplateCreateInfo *info;VkDescriptorUpdateTemplate handle;VkDevice device;VkResult result;
+ struct pw_vk_template_entry *entries;size_t i;
+ if(code==unix_vkCreateDescriptorUpdateTemplate){struct vkCreateDescriptorUpdateTemplate_params *p=args;info=p->pCreateInfo;result=p->result;handle=result==VK_SUCCESS&&p->pDescriptorUpdateTemplate?*p->pDescriptorUpdateTemplate:0;device=p->device;}
+ else if(code==unix_vkCreateDescriptorUpdateTemplateKHR){struct vkCreateDescriptorUpdateTemplateKHR_params *p=args;info=p->pCreateInfo;result=p->result;handle=result==VK_SUCCESS&&p->pDescriptorUpdateTemplate?*p->pDescriptorUpdateTemplate:0;device=p->device;}
+ else return;
+ if(result!=VK_SUCCESS||!info)return;
+ pw_vk_template_remove(&templates,&allocator,(UINT_PTR)device,handle);
+ if(info->descriptorUpdateEntryCount>4096||(info->descriptorUpdateEntryCount&&!info->pDescriptorUpdateEntries))return;
+ entries=heap_alloc((size_t)info->descriptorUpdateEntryCount*sizeof(*entries));if(!entries&&info->descriptorUpdateEntryCount)return;
+ for(i=0;i<info->descriptorUpdateEntryCount;i++){entries[i].type=info->pDescriptorUpdateEntries[i].descriptorType;entries[i].count=info->pDescriptorUpdateEntries[i].descriptorCount;entries[i].offset=info->pDescriptorUpdateEntries[i].offset;entries[i].stride=info->pDescriptorUpdateEntries[i].stride;}
+ pw_vk_template_register(&templates,&allocator,(UINT_PTR)device,handle,1,info->pNext!=NULL,info->flags,info->templateType,entries,info->descriptorUpdateEntryCount);heap_free(entries);
+}
+static void retire_template(unsigned int code,void *args)
+{
+ if(code==unix_vkDestroyDescriptorUpdateTemplate){struct vkDestroyDescriptorUpdateTemplate_params *p=args;pw_vk_template_remove(&templates,&allocator,(UINT_PTR)p->device,p->descriptorUpdateTemplate);}
+ else if(code==unix_vkDestroyDescriptorUpdateTemplateKHR){struct vkDestroyDescriptorUpdateTemplateKHR_params *p=args;pw_vk_template_remove(&templates,&allocator,(UINT_PTR)p->device,p->descriptorUpdateTemplate);}
+ else if(code==unix_vkDestroyDevice){struct vkDestroyDevice_params *p=args;pw_vk_template_remove_device(&templates,&allocator,(UINT_PTR)p->device);}
+}
+static int encode(unsigned int code,void *args,unsigned char *wire,size_t *written,uint32_t *opcode)
+{
+ size_t n=0;int encoded=0;uint32_t op=0;
+ switch(code){
+ case unix_vkCmdDrawIndexed:{const struct vkCmdDrawIndexed_params *p=args;op=PW_VK_DRAW_INDEXED;encoded=pw_vk_wire_draw(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->indexCount,p->instanceCount,p->firstIndex,p->vertexOffset,p->firstInstance,&n);break;}
+ case unix_vkCmdBindPipeline:{const struct vkCmdBindPipeline_params *p=args;op=PW_VK_BIND_PIPELINE;encoded=pw_vk_wire_pipeline(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->pipelineBindPoint,p->pipeline,&n);break;}
+ case unix_vkCmdBindIndexBuffer2KHR:{const struct vkCmdBindIndexBuffer2KHR_params *p=args;op=PW_VK_BIND_INDEX;encoded=pw_vk_wire_index(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->buffer,p->offset,p->size,p->indexType,1,&n);break;}
+ case unix_vkCmdBindIndexBuffer:{const struct vkCmdBindIndexBuffer_params *p=args;op=PW_VK_BIND_INDEX;encoded=pw_vk_wire_index(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->buffer,p->offset,0,p->indexType,0,&n);break;}
+ case unix_vkCmdBindDescriptorSets:{const struct vkCmdBindDescriptorSets_params *p=args;op=PW_VK_BIND_DESCRIPTORS;encoded=pw_vk_wire_descriptors(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->pipelineBindPoint,p->layout,p->firstSet,p->descriptorSetCount,(const uint64_t *)p->pDescriptorSets,p->dynamicOffsetCount,p->pDynamicOffsets,&n);break;}
+ case unix_vkCmdBindVertexBuffers2:{const struct vkCmdBindVertexBuffers2_params *p=args;op=PW_VK_BIND_VERTEX2;encoded=pw_vk_wire_vertex2(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->firstBinding,p->bindingCount,(const uint64_t *)p->pBuffers,p->pOffsets,p->pSizes,p->pStrides,&n);break;}
+ case unix_vkUpdateDescriptorSetWithTemplate:{const struct vkUpdateDescriptorSetWithTemplate_params *p=args;op=PW_VK_UPDATE_TEMPLATE;encoded=pw_vk_template_snapshot(&templates,(uint32_t)(uintptr_t)p->device,p->descriptorSet,p->descriptorUpdateTemplate,p->pData,1,wire,4096,&n);break;}
+ case unix_vkCmdPushConstants:{const struct vkCmdPushConstants_params *p=args;op=PW_VK_PUSH_CONSTANTS;encoded=pw_vk_wire_push_constants(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->layout,p->stageFlags,p->offset,p->size,p->pValues,&n);break;}
+ default:break;
+ }
+ *written=n;*opcode=op;return encoded;
+}
+
+static void snapshot(unsigned int code,void *args)
+{
+ if(stats_enabled&&code==unix_vkQueuePresentKHR){struct vkQueuePresentKHR_params *q=args;WINE_MESSAGE("PW_VK_BATCH version=1 scope=process tid=%lu present=%llu result=%d enabled=%u negotiated=%u records=%llu enqueued=%llu batch_dispatches=%llu piggybacks=%llu standalone_flushes=%llu arena_full=%llu fallback=%llu wine_unix_crossings=%llu\n",GetCurrentThreadId(),InterlockedIncrement64((LONG64 *)&present),q->result,enabled&&!sticky_disabled,negotiated,records_total,enqueued_total,dispatches_total,piggyback_total,dispatches_total-piggyback_total,full_total,fallback_total,InterlockedCompareExchange64((LONG64 *)&crossings_total,0,0));}
+}
+NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
+{
+ unsigned char wire[4096];size_t bytes;uint32_t opcode;struct producer *p;NTSTATUS status;int appended;
+ InitOnceExecuteOnce(&once,initialize,NULL,NULL);
+ /* Init and availability calls precede capability negotiation; old Unix never
+  * receives the new table index. Disabled64 builds retain original macro. */
+ if(!enabled||InterlockedCompareExchange(&sticky_disabled,0,0)){status=raw_call(code,args);snapshot(code,args);return status;}
+ enter();
+ if(InterlockedCompareExchange(&sticky_disabled,0,0)){leave();status=raw_call(code,args);snapshot(code,args);return status;}
+ if(pw_vk_stream_call_unsafe(code,args)||pw_vk_batch_allocator(code,args)){
+  if(negotiated)flush_call(unix_count,NULL);
+  /* Publish only after all deferred work completes. Driver callbacks now
+   * recurse through raw dispatch with no gate or pending suffix. */
+  InterlockedExchange(&sticky_disabled,1);leave();status=raw_call(code,args);snapshot(code,args);return status;
+ }
+ if(enabled&&!sticky_disabled&&negotiated&&encode(code,args,wire,&bytes,&opcode)&&(p=producer())){
+  appended=pw_vk_stream_append(&registry,&p->stream,opcode,wire,bytes);
+  if(appended==PW_VK_STREAM_FULL){full_total++;flush_call(unix_count,NULL);appended=pw_vk_stream_append(&registry,&p->stream,opcode,wire,bytes);}
+  if(appended==PW_VK_STREAM_OK){enqueued_total++;leave();return STATUS_SUCCESS;}
+ }
+ fallback_total++;
+ status=negotiated?flush_call(code,args):raw_call(code,args);
+ retire_template(code,args);template_created(code,args);
+ if(code==unix_vkCreateInstance&&!status){struct vkCreateInstance_params *q=args;if(q->result==VK_SUCCESS&&q->pInstance&&*q->pInstance){struct is_available_instance_function_params cap={*q->pInstance,PW_VK_BATCH_NAME};negotiated=raw_call(unix_is_available_instance_function,&cap)==PW_VK_BATCH_CAPABILITY;}}
+ snapshot(code,args);
+ leave();return status;
+}
+#endif
