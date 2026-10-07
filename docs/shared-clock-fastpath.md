@@ -42,3 +42,26 @@ surfaces before reading state. It also consumes the last-pressed bit through
 its normal server request. Those observable effects require a slow path until
 an independently verified event-pump eligibility rule is available. Reading
 the down bit directly must not bypass them.
+
+## Wine integration
+
+Patch 0900 connects the anchor to `RtlQueryPerformanceCounter`, including
+callers such as `timeGetTime`. This experimental path defaults off. A provider
+requires both `PW_QPC_TSC_VALIDATED=1` and `PW_QPC_TSC_HZ` set to the independently
+measured frequency before it publishes an anchor. These are validation controls,
+not a replacement for platform measurement.
+
+The client fetches its initial anchor before executing any TSC instruction.
+An unsupported or malformed provider response disables the bypass. Refreshes
+use a private, pointer-free process query rather than adding a Unix dispatch
+entry: an older provider safely rejects the query. The WOW64 bridge forwards
+the identical fixed layout. Clock refreshes use the provider's ordinary QPC
+clock source, with a TSC bracket no wider than 5 microseconds. Fast and slow
+results share an atomic monotonic maximum to prevent backward steps during
+reanchoring. Ordinary unsupported systems retain the original counter path.
+
+Provider integration and hardware measurements remain required.
+
+Portable tests do not establish hardware TSC stability. A full linked runtime and
+platform baseline/candidate comparison remain necessary before enabling this
+path in a release.

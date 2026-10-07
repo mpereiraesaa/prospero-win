@@ -59,6 +59,11 @@ make() {
             target = f'dlls/winevulkan/{arch}-windows/winevulkan.dll'
             assert requests.count(target) == 1
             assert (work / f'pe/{arch}-windows/winevulkan.dll').read_bytes() == ('MZfresh:' + target).encode()
+        for arch in ('i386', 'x86_64'):
+            for module in ('ntdll', 'win32u'):
+                assert requests.count(f'dlls/{module}/{arch}-windows/{module}.dll') == 1
+        assert requests.count('dlls/wow64/x86_64-windows/wow64.dll') == 1
+        assert 'dlls/wow64/i386-windows/wow64.dll' not in requests
         assert (work / 'status').read_text() == '0'
         failed = 'dlls/winevulkan/i386-windows/winevulkan.dll'
         (build / failed).unlink()
@@ -77,12 +82,13 @@ def main() -> int:
     assert result.returncode == 0, result.stderr
     listed = result.stdout.split()
     assert listed == sorted(p.name for p in (ROOT / "wine/patches").glob("*.patch"))
-    assert listed and all(100 <= int(name[:4]) <= 899 for name in listed)
-    # Numeric order across both owners' ranges.
+    assert listed and all(100 <= int(name[:4]) <= 999 for name in listed)
+    assert check(["0900-clock.patch", "0901-input.patch", "0999-boundary.patch"]).returncode == 0
+    # Numeric order across owners' ranges.
     result = check(["0500-core-b.patch", "0100-services-a.patch", "0101-services-c.patch"])
     assert result.returncode == 0 and result.stdout.split() == [
         "0100-services-a.patch", "0101-services-c.patch", "0500-core-b.patch"]
-    for bad in (["0099-too-low.patch"], ["0900-too-high.patch"], ["0100-Upper.patch"],
+    for bad in (["0099-too-low.patch"], ["1000-too-high.patch"], ["0100-Upper.patch"],
                 ["0100-a.patch", "0100-b.patch"], ["100-short.patch"], ["0100-a.diff"],
                 ["notes.txt"]):
         assert check(bad).returncode != 0, bad
@@ -115,6 +121,17 @@ def check_vk_runtime_staging() -> None:
         (base / 'tools').mkdir()
         source = base / 'source'
         source.mkdir()
+        headers = []
+        for family, module, name in [('time', 'ntdll', 'pw_qpc_clock.h'),
+                                     ('input', 'win32u', 'pw_key_shared.h')]:
+            if f'wine/ps5/{family}/' not in block:
+                continue
+            original = base / f'wine/ps5/{family}/{name}'
+            original.parent.mkdir(parents=True)
+            original.write_text(f'{family} shared ABI fixture\n')
+            target = source / f'dlls/{module}/{name}'
+            target.parent.mkdir(parents=True)
+            headers.append((original, target))
         helper = base / 'tools/stage_vk_batch.py'
         helper.write_text('import sys, pathlib\nassert sys.argv[1:] == ["--source", '
                           + repr(str(source)) + ', "--repo", ' + repr(str(base))
@@ -124,6 +141,8 @@ def check_vk_runtime_staging() -> None:
         result = subprocess.run(['sh'], input=setup + block, env=env, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
         assert (source / 'staged').read_text() == 'paired'
+        for original, target in headers:
+            assert target.read_bytes() == original.read_bytes()
         helper.write_text('raise SystemExit(9)\n')
         result = subprocess.run(['sh'], input=setup + block, env=env, capture_output=True, text=True)
         assert result.returncode == 29, result.stderr

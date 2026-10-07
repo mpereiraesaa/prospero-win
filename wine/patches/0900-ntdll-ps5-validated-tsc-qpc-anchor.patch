@@ -1,0 +1,183 @@
+Subject: [PATCH] ntdll: add an opt-in validated TSC QPC anchor
+
+diff --git a/dlls/ntdll/time.c b/dlls/ntdll/time.c
+index 5a96a1e..ce0ad6d 100644
+--- a/dlls/ntdll/time.c
++++ b/dlls/ntdll/time.c
+@@ -37,6 +37,7 @@
+ #include "wine/exception.h"
+ #include "wine/debug.h"
+ #include "ntdll_misc.h"
++#include "pw_qpc_clock.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(ntdll);
+ 
+@@ -381,7 +382,62 @@ LONGLONG WINAPI RtlGetSystemTimePrecise( void )
+  */
+ BOOL WINAPI DECLSPEC_HOTPATCH RtlQueryPerformanceCounter( LARGE_INTEGER *counter )
+ {
++#if defined(__i386__) || defined(__x86_64__)
++    static struct pw_qpc_anchor anchor;
++    static LONG gate, disabled, activated;
++    static DECLSPEC_ALIGN(8) LONGLONG last;
++    uint64_t value;
++    unsigned lo, hi;
++    LONGLONG previous, result;
++    if (ReadAcquire( &disabled ) && !ReadAcquire( &activated ))
++    {
++        NtQueryPerformanceCounter( counter, NULL );
++        return TRUE;
++    }
++    if (!ReadAcquire( &disabled ) && !InterlockedCompareExchange( &gate, 1, 0 ))
++    {
++        int have = 0;
++        if (anchor.validated)
++        {
++            __asm__ volatile( "lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory" );
++            have = pw_qpc_read_anchor( &anchor, ((uint64_t)hi << 32) | lo, &value );
++        }
++        if (!have)
++        {
++            struct pw_qpc_anchor fresh;
++            if (NtQueryInformationProcess( NtCurrentProcess(), (PROCESSINFOCLASS)PW_QPC_PROCESS_INFO, &fresh, sizeof(fresh), NULL ) ||
++                !pw_qpc_read_anchor( &fresh, fresh.tsc, &value ))
++                InterlockedExchange( &disabled, 1 );
++            else
++            {
++                anchor = fresh;
++                __asm__ volatile( "lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory" );
++                have = pw_qpc_read_anchor( &anchor, ((uint64_t)hi << 32) | lo, &value );
++            }
++        }
++        if (have)
++        {
++            counter->QuadPart = value;
++            InterlockedExchange( &activated, 1 );
++        }
++        else NtQueryPerformanceCounter( counter, NULL );
++        InterlockedExchange( &gate, 0 );
++    }
++    else NtQueryPerformanceCounter( counter, NULL );
++    /* Reanchoring uncertainty must not cause a caller's clock to go backward.
++     * The slow and fast paths participate in the same monotonic maximum. */
++    previous = InterlockedCompareExchange64( &last, 0, 0 );
++    do
++    {
++        result = counter->QuadPart > previous ? counter->QuadPart : previous;
++        value = InterlockedCompareExchange64( &last, result, previous );
++        if ((LONGLONG)value == previous) break;
++        previous = value;
++    } while (1);
++    counter->QuadPart = result;
++#else
+     NtQueryPerformanceCounter( counter, NULL );
++#endif
+     return TRUE;
+ }
+ 
+diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
+index a7c9ffb..7a7b3be 100644
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -1129,6 +1129,9 @@ static BOOL ps5_is_own_process( HANDLE handle )
+ /**********************************************************************
+  *           NtQueryInformationProcess  (NTDLL.@)
+  */
++extern NTSTATUS ps5_qpc_anchor( void *args );
++#include "../pw_qpc_clock.h"
++
+ NTSTATUS WINAPI NtQueryInformationProcess( HANDLE handle, PROCESSINFOCLASS class, void *info,
+                                            ULONG size, ULONG *ret_len )
+ {
+@@ -1139,6 +1142,13 @@ NTSTATUS WINAPI NtQueryInformationProcess( HANDLE handle, PROCESSINFOCLASS class
+ 
+     switch (class)
+     {
++    case PW_QPC_PROCESS_INFO:
++        len = sizeof(struct pw_qpc_anchor);
++        if (handle != NtCurrentProcess()) ret = STATUS_INVALID_HANDLE;
++        else if (size != len) ret = STATUS_INFO_LENGTH_MISMATCH;
++        else if (!info) ret = STATUS_ACCESS_VIOLATION;
++        else ret = ps5_qpc_anchor( info );
++        break;
+     UNIMPLEMENTED_INFO_CLASS(ProcessBasePriority);
+     UNIMPLEMENTED_INFO_CLASS(ProcessRaisePriority);
+     UNIMPLEMENTED_INFO_CLASS(ProcessExceptionPort);
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index fd1f229..e74fe93 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -3802,3 +3802,38 @@ NTSTATUS WINAPI NtConvertBetweenAuxiliaryCounterAndPerformanceCounter( ULONG fla
+ 
+     return STATUS_NOT_SUPPORTED;
+ }
++
++
++/* The bypass stays disabled until the platform's TSC has been independently
++ * validated on every allowed CPU. A frequency override alone is insufficient. */
++#include "../pw_qpc_clock.h"
++NTSTATUS ps5_qpc_anchor( void *args )
++{
++#if defined(__PROSPERO__) && defined(__x86_64__)
++    struct pw_qpc_anchor *anchor = args;
++    const char *verified = getenv( "PW_QPC_TSC_VALIDATED" );
++    const char *text = getenv( "PW_QPC_TSC_HZ" );
++    uint64_t hz = 0, t0, t1, counter;
++    unsigned lo, hi;
++    if (!verified || strcmp( verified, "1" ) || !text || !*text) return STATUS_NOT_SUPPORTED;
++    for (; *text; ++text)
++    {
++        if (*text < '0' || *text > '9' || hz > (PW_QPC_MAX_TSC_HZ - (*text - '0')) / 10)
++            return STATUS_NOT_SUPPORTED;
++        hz = hz * 10 + (*text - '0');
++    }
++    if (hz < PW_QPC_MIN_TSC_HZ) return STATUS_NOT_SUPPORTED;
++    __asm__ volatile( "lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory" );
++    t0 = ((uint64_t)hi << 32) | lo;
++    counter = monotonic_counter();
++    __asm__ volatile( "lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory" );
++    t1 = ((uint64_t)hi << 32) | lo;
++    if (t1 < t0 || t1 - t0 > hz / 200000) return STATUS_RETRY;
++    if (!pw_qpc_make_anchor( anchor, t0 + (t1 - t0) / 2, counter, hz, 1 ))
++        return STATUS_NOT_SUPPORTED;
++    return STATUS_SUCCESS;
++#else
++    (void)args;
++    return STATUS_NOT_SUPPORTED;
++#endif
++}
+diff --git a/dlls/wow64/process.c b/dlls/wow64/process.c
+index b8ac135..1aefd87 100644
+--- a/dlls/wow64/process.c
++++ b/dlls/wow64/process.c
+@@ -27,6 +27,7 @@
+ #include "winternl.h"
+ #include "ddk/ntddk.h"
+ #include "wow64_private.h"
++#include "../ntdll/pw_qpc_clock.h"
+ #include "wine/asm.h"
+ #include "wine/exception.h"
+ #include "wine/debug.h"
+@@ -582,6 +583,10 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
+ 
+     switch (class)
+     {
++    case PW_QPC_PROCESS_INFO:
++        /* Pointer-free and identical layout on both sides. Older providers
++         * reject this class and the client retains the ordinary QPC path. */
++        return NtQueryInformationProcess( handle, class, ptr, len, retlen );
+     case ProcessBasicInformation:  /* PROCESS_BASIC_INFORMATION */
+         if (len == sizeof(PROCESS_BASIC_INFORMATION32))
+         {
+diff --git a/include/winternl.h b/include/winternl.h
+index 3a80f27..d45e9ea 100644
+--- a/include/winternl.h
++++ b/include/winternl.h
+@@ -2013,6 +2013,7 @@ typedef enum _PROCESSINFOCLASS {
+ #ifdef __WINESRC__
+     ProcessWineMakeProcessSystem = 1000,
+     ProcessWineGrantAdminToken = 1002,
++    ProcessWineQpcAnchor = 0x50575101,
+ #endif
+ } PROCESSINFOCLASS;
+ 

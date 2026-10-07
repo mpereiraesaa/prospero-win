@@ -15,6 +15,7 @@ struct pw_qpc_anchor
     uint64_t multiplier;
     uint64_t max_delta;
 };
+#define PW_QPC_PROCESS_INFO 0x50575101u
 #define PW_QPC_VERSION 1u
 #define PW_QPC_FREQUENCY UINT64_C(10000000)
 #define PW_QPC_MIN_TSC_HZ UINT64_C(20000000)

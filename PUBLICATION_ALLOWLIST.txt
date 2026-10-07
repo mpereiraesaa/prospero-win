@@ -468,3 +468,4 @@ tools/package_mesa_zink.py
 docs/shared-clock-fastpath.md
 tests/test_pw_qpc_clock.c
 wine/ps5/time/pw_qpc_clock.h
+wine/patches/0900-ntdll-ps5-validated-tsc-qpc-anchor.patch

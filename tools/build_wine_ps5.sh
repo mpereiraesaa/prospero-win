@@ -14,7 +14,8 @@
 # architectures into <work>/pe.
 #
 # Patch numbers are owned by range: 0100-0499 services, loader and
-# presentation; 0500-0899 execution core (signals, TEB, virtual memory).
+# presentation; 0500-0899 execution core (signals, TEB, virtual memory);
+# 0900-0999 shared clock and input fast paths.
 #
 # Two links follow. The ELF link builds Wine's own targets against the
 # payload SDK and reports, rather than fails on, unresolved symbols. The PRX
@@ -87,7 +88,7 @@ TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver dlls/winevu
 # side (patch 0720), so its PE and Unix halves must come from the same build.
 # winevulkan: emit its PE thunks alongside the Unix side so command-stream
 # hooks and dispatch table capability checks come from the same source.
-PE_MODULES="xinput1_1 xinput1_2 xinput1_3 xinput1_4 xinputuap quartz opengl32 winevulkan"
+PE_MODULES="ntdll win32u xinput1_1 xinput1_2 xinput1_3 xinput1_4 xinputuap quartz opengl32 winevulkan"
 # Everything optional but FreeType (built below) is off: the console has none
 # of these libraries, and a configure-time probe against the payload SDK must
 # not pick up host headers.
@@ -152,7 +153,7 @@ fi
     (cd "$ps5opengl_sdk" && sha256sum --status --check manifest.sha256) ||
     fail "PS5 OpenGL SDK does not match its SHA-256 manifest"
 
-# The series: NNNN-lower-case-name.patch, unique numbers below 0900, each a
+# The series: NNNN-lower-case-name.patch, unique numbers below 1000, each a
 # mail-formatted patch with a subject. Printed in the order it is applied.
 series() {
     [ -d "$patches" ] || fail "no patch directory $patches"
@@ -166,8 +167,8 @@ series() {
             fail "patch name must be NNNN-lower-case-words.patch: $patch"
         number=$(printf '%s' "$patch" | cut -c1-4 | sed 's/^0*//')
         number=${number:-0}
-        [ "$number" -ge 100 ] && [ "$number" -le 899 ] ||
-            fail "patch number outside 0100-0899: $patch"
+        [ "$number" -ge 100 ] && [ "$number" -le 999 ] ||
+            fail "patch number outside 0100-0999: $patch"
         [ "$number" -ne "$last" ] || fail "duplicate patch number: $patch"
         last=$number
         grep -q '^Subject: ' "$patches/$patch" || fail "patch has no Subject: $patch"
@@ -243,6 +244,10 @@ done
 python3 "$root/tools/stage_vk_batch.py" --source "$tree" --repo "$root" ||
     fail "cannot stage Vulkan command-stream runtime"
 
+# Stage the pointer-free shared-clock ABI used by PE32 and the provider.
+cp "$root/wine/ps5/time/pw_qpc_clock.h" "$tree/dlls/ntdll/pw_qpc_clock.h" ||
+    fail "cannot stage shared-clock ABI"
+
 # The PS5 OpenGL SDK is optional. When supplied, Wine's generic EGL/WGL
 # frontend binds directly to its static EGL symbols and the win32u PRX links
 # the SDK into the runtime.
@@ -255,7 +260,7 @@ stamp=$(
         "$ps5opengl_sdk" "$opengl_cflags"
       for patch in $ordered; do cat "$patches/$patch"; done
       cat "$root/tools/stage_vk_batch.py" "$root"/wine/ps5/pw_vk_*.[ch] \
-          "$root"/wine/ps5/vulkan/*.[ch]; } | sha256sum | cut -c1-64)
+          "$root"/wine/ps5/vulkan/*.[ch] "$root/wine/ps5/time/pw_qpc_clock.h"; } | sha256sum | cut -c1-64)
 build=$work/build
 if [ ! -f "$build/Makefile" ] || [ "$(cat "$build/.prospero-stamp" 2>/dev/null)" != "$stamp" ]; then
     rm -rf "$build"
@@ -312,7 +317,9 @@ done
 rm -rf "$work/pe"
 for arch in i386 x86_64; do
     mkdir -p "$work/pe/$arch-windows"
-    for module in $PE_MODULES; do
+    modules="$PE_MODULES"
+    [ "$arch" != x86_64 ] || modules="$modules wow64"
+    for module in $modules; do
         target=dlls/$module/$arch-windows/$module.dll
         make -C "$build" -k -j"$jobs" "$target" >> "$work/make.log" 2>&1 || status=$?
         [ ! -f "$build/$target" ] || cp "$build/$target" "$work/pe/$arch-windows/"
