@@ -81,3 +81,23 @@ successful same-handle reuse on allocator failure. Successful unsupported or
 failed-allocation metadata replaces stale eligibility; failed Vulkan creation
 preserves the existing entry. These are host correctness checks, not a claimed
 FPS gain or target benchmark.
+
+Present-counter analysis: run
+`python3 tools/summarize_vk_batch.py RUN.log --output summary.json` and
+`python3 tests/test_summarize_vk_batch.py` for the parser controls. Version 1
+process snapshots include `enqueued`, replayed `records`, `wine_unix_crossings`,
+`batch_dispatches`, `piggybacks`, `standalone_flushes`, `fallback`, and `arena_full`.
+The tool subtracts consecutive successful/suboptimal present snapshots and
+reports individual counts plus mean/median/range for each uninterrupted segment.
+Missing or failed presents, malformed rows, boot headers, mode changes, and
+counter/ordinal regression break segments; the first snapshot has no interval.
+Both ordinary timestamps and escaped ps5log nanosecond prefixes are supported.
+
+These are Wine Vulkan crossings across all process threads between present
+attempts, not native FS switches, per-thread counts, displayed-frame counts, or
+FPS. Multiple swapchains also share the process present ordinal. The parser does
+not automatically pair logs or aggregate across boots. Optional count comparisons
+require one candidate plus `--baseline OFF.log --segment N --baseline-segment N
+--equivalent-workload-evidence 'matching save/camera/config receipt'`. The caller
+must establish that workload equivalence; the tool records the supplied evidence
+and compares only mean crossing counts, without inferring a performance gain.
