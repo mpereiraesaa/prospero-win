@@ -463,3 +463,8 @@ tests/test_native_system_service_profile.py
 wine/patches/0612-wow64-opt-in-named-system-service-profile.patch
 tests/test_package_mesa_zink.py
 tools/package_mesa_zink.py
+
+# Shared clock and input fast-path contracts
+docs/shared-clock-fastpath.md
+tests/test_pw_qpc_clock.c
+wine/ps5/time/pw_qpc_clock.h
