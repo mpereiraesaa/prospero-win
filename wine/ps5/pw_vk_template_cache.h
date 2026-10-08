@@ -27,9 +27,10 @@ const struct pw_vk_template_entry *pw_vk_template_lookup(const struct pw_vk_temp
  * low address ABI bounds when used from real 32-bit Wine thunks. */
 int pw_vk_template_snapshot(const struct pw_vk_template_cache *,uint32_t,uint64_t,uint64_t,
  const void *,int guest32,void *,size_t,size_t *);
-/* Caller drains every stream BEFORE these operations, without cache lock held,
- * then obtains the lock and retires metadata; then forwards original destroy.
- * Global stream ordering/lifetime synchronization is caller responsibility. */
+/* Caller serializes retirement with snapshot/enqueue under the ordering gate.
+ * Destroy may already be queued: pending records own their descriptor spans
+ * and never retain these metadata arrays. Otherwise drain before immediate
+ * destruction. Native resource/client lifetime is managed by the adapter. */
 void pw_vk_template_remove(struct pw_vk_template_cache *,const struct pw_vk_template_alloc *,uint32_t,uint64_t);
 void pw_vk_template_remove_device(struct pw_vk_template_cache *,const struct pw_vk_template_alloc *,uint32_t);
 #endif

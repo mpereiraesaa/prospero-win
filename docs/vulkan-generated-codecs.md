@@ -76,3 +76,10 @@ adapter sources, so a generator change reconfigures the staged module instead
 of silently retaining an older generated Makefile or codec. XML inputs use the
 exact registry revision declared by the pinned Wine generator; explicit XML
 paths remain available for offline fixture reproduction.
+
+The PE runtime lab fixture now exercises both core and KHR template creation
+through the real producer metadata hook, then queues all six update/push forms.
+It overwrites descriptor and nested barrier inputs, retires template metadata
+before replay, and checks that a deferred device client prefix remains live
+until replay completes. The Unix boundary is controlled; these checks establish
+producer ownership and lifetime without claiming graphics-driver execution.

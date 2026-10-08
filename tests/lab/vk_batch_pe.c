@@ -28,19 +28,21 @@ static NTSTATUS original(unsigned int code,void *args)
 }
 static NTSTATUS mock_call(unsigned int code,void *args)
 {
- if(code==unix_pw_vk_batch){struct pw_vk_batch_params *p=args;size_t done;batches++;assert(support);assert(p->version==1);assert(pw_vk_stream_replay((void *)(uintptr_t)p->batch,p->bytes,effect,NULL,&done)==PW_VK_STREAM_OK);p->status=p->code==unix_count?STATUS_SUCCESS:original(p->code,(void *)(uintptr_t)p->args);return STATUS_SUCCESS;}
+ if(code==unix_pw_vk_batch){struct pw_vk_batch_params *p=args;size_t done;batches++;assert(support);assert(p->version==PW_VK_BATCH_VERSION);assert(pw_vk_stream_replay((void *)(uintptr_t)p->batch,p->bytes,effect,NULL,&done)==PW_VK_STREAM_OK);p->status=p->code==unix_count?STATUS_SUCCESS:original(p->code,(void *)(uintptr_t)p->args);return STATUS_SUCCESS;}
  return original(code,args);
 }
 static void draw_index(unsigned n){struct vkCmdDrawIndexed_params p={(VkCommandBuffer)(uintptr_t)9,n,1,0,-7,0};assert(pw_vk_batch_call(unix_vkCmdDrawIndexed,&p)==STATUS_SUCCESS);memset(&p,0xee,sizeof(p));}
 static DWORD WINAPI worker(void *unused){(void)unused;draw_index(11);draw_index(12);pw_vk_batch_thread_detach();return 0;}
 int main(int argc,char **argv)
 {
- VkInstance handle;VkInstanceCreateInfo info={0};struct vkCreateInstance_params create={0};HANDLE thread;struct vkDestroyDevice_params destroy={0};unsigned prior;
+ VkInstance handle;VkInstanceCreateInfo info={0};struct vkCreateInstance_params create={0};HANDLE thread;struct vkResetCommandBuffer_params destroy={0};unsigned prior;
  assert(argc==2);support=strcmp(argv[1],"old")!=0;SetEnvironmentVariableA("PW_VK_BATCH",(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats"))?"0":"1");SetEnvironmentVariableA("PW_VK_BATCH_STATS",(!strcmp(argv[1],"stats")||!strcmp(argv[1],"profile"))?"1":"0");SetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",(!strcmp(argv[1],"profile")||!strcmp(argv[1],"profile-no-stats"))?"1":"0");
  create.pCreateInfo=&info;create.pInstance=&handle;assert(pw_vk_batch_call(unix_vkCreateInstance,&create)==0);
  if(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats")||!support){draw_index(1);assert(draw_raw==1&&batches==0);if(!strcmp(argv[1],"stats")){struct vkQueuePresentKHR_params q={0};assert(pw_vk_batch_call(unix_vkQueuePresentKHR,&q)==0);assert(crossings_total==3&&present==1);}else assert(crossings_total==0);puts("PASS original path and old-Unix capability without new table access");return 0;}
  assert(negotiated&&enabled);
  if(!strcmp(argv[1],"profile")){
+  /* Narrow diagnostic scope intentionally measures unbatched fallback. */
+  opcode_mask=95;
   unsigned i;struct vkQueuePresentKHR_params q={0};
   struct vkCmdSetViewport_params viewport={0};struct vkCmdPipelineBarrier2_params barrier={0};
   for(i=0;i<300;i++){
@@ -61,9 +63,9 @@ int main(int argc,char **argv)
   puts("PASS fallback profile exact counts, period deltas, top-8 and ties");return 0;
  }
  assert(!fallback_profile);thread=CreateThread(NULL,0,worker,NULL,0,NULL);assert(thread);assert(WaitForSingleObject(thread,5000)==WAIT_OBJECT_0);CloseHandle(thread);assert(replayed==0);
- /* A producer's owned arena survives actual Win32 thread exit. Main's destroy
+ /* A producer's owned arena survives actual Win32 thread exit. Main's synchronous reset
   * drains both records before the original lifetime operation. */
- assert(pw_vk_batch_call(unix_vkDestroyDevice,&destroy)==0);assert(batches==1&&replayed==2&&sequence[0]==11&&sequence[1]==12);assert(registry.streams==NULL);
+ assert(pw_vk_batch_call(unix_vkResetCommandBuffer,&destroy)==0);assert(batches==1&&replayed==2&&sequence[0]==11&&sequence[1]==12);assert(registry.streams==NULL);
  draw_index(13);prior=ordinary;
  {struct vkCreateDebugUtilsMessengerEXT_params callback={0};assert(pw_vk_batch_call(unix_vkCreateDebugUtilsMessengerEXT,&callback)==0);}
  assert(sticky_disabled&&replayed==3&&sequence[2]==13&&ordinary==prior+2);

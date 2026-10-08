@@ -494,3 +494,5 @@ tests/test_vk_retire.py
 tests/test_vk_generated_stage.py
 
 tests/lab/vk_generated_replay.c
+
+tests/lab/vk_batch_owned.c
