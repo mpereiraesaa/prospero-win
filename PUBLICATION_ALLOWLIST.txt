@@ -480,3 +480,8 @@ tools/test_wine_key_bridge.py
 tools/generate_vk_codecs.py
 wine/ps5/vulkan/pw_vk_codec.c
 wine/ps5/vulkan/pw_vk_codec.h
+
+docs/vulkan-generated-codecs.md
+tests/lab/vk_codecs_runtime.py
+tests/test_vk_codec.c
+tests/test_vk_codecs.py
