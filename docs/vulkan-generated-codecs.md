@@ -83,3 +83,14 @@ It overwrites descriptor and nested barrier inputs, retires template metadata
 before replay, and checks that a deferred device client prefix remains live
 until replay completes. The Unix boundary is controlled; these checks establish
 producer ownership and lifetime without claiming graphics-driver execution.
+
+Replay now starts with a private aligned 4 KiB decode arena per Unix entry.
+Legacy-only and ordinary small generated batches allocate no decode heap.
+A decode that cannot fit retries once at the existing 4 MiB bound, then reuses
+that allocation for the remainder of semantic preflight and replay. Each entry
+owns its context, including recursive and concurrent entries. This removes
+unconditional 4 MiB allocation/free per batch without weakening full-batch
+validation or reducing supported input sizes. The Unix-entry fixture counts
+allocations, tests exact bounds, growth failure, recursion and parallel calls,
+and offers a host microbenchmark of nested barriers, viewports and descriptor
+updates. Host timings do not establish a console frame-rate improvement.
