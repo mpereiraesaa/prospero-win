@@ -132,6 +132,18 @@ across classes, zeroed `calloc`, overflow refusal, foreign and double frees,
 and eight threads of mixed traffic under AddressSanitizer and
 ThreadSanitizer.
 
+Where new spans and large blocks come from is pluggable
+(`pw_wine_heap_set_backing`). On the console, once direct memory passes its
+self-check (see [Direct memory](#direct-memory)), `ntdll`'s heap takes them
+from main direct memory, mapped where the kernel chooses, and freeing a
+large block releases it; the log says `wine-ps5: heap in direct memory`.
+They stay anonymous mappings of flexible memory until then, whenever the
+backing refuses (its table of blocks is half full or direct memory is
+short), and always with `WINE_PS5_HEAP_FLEXIBLE` set. With every block in
+flexible memory, OpenGL games used up the title's ~440 MiB through this
+heap: Slay the Spire 2 held 276 MiB of heap when flexible memory reached 0. `wineserver`'s own copy of
+the heap is unchanged.
+
 `wine/ps5/pw_wine_heap_libc.c` binds `malloc`, `calloc`, `realloc`, `free`,
 `strdup`, `strndup`, `asprintf` and `vasprintf` to that heap. The build links
 it into `ntdll.so`, which exports it, so `win32u.so` imports the same heap

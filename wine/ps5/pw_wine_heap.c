@@ -36,10 +36,24 @@ static void *larges[MAX_LARGE];
 static uint32_t large_count;
 static PwWineHeapStats stats;
 
+static PwWineHeapBacking backing;
 static void *map(size_t bytes)
 {
-    void *p=mmap(NULL,bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    void *p=backing.map?backing.map(backing.context,bytes):NULL;
+    if(p)return p;
+    p=mmap(NULL,bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
     return p==MAP_FAILED?NULL:p;
+}
+static void unmap(void *address,size_t bytes)
+{
+    if(backing.unmap&&!backing.unmap(backing.context,address,bytes))return;
+    (void)munmap(address,bytes);
+}
+void pw_wine_heap_set_backing(const PwWineHeapBacking *value)
+{
+    pthread_mutex_lock(&lock);
+    if(value)backing=*value;else memset(&backing,0,sizeof(backing));
+    pthread_mutex_unlock(&lock);
 }
 static void note_mapped(int64_t delta)
 {
@@ -142,7 +156,7 @@ static void release(Header *header)
         LargeHeader *large=(LargeHeader *)header-1;uint64_t mapped=large->mapped;
         uint32_t slot=large_slot(header+1);
         memmove(&larges[slot],&larges[slot+1],(large_count-slot-1)*sizeof(larges[0]));
-        large_count--;header->magic=0;(void)munmap(large,mapped);note_mapped(-(int64_t)mapped);stats.large_live--;
+        large_count--;header->magic=0;unmap(large,mapped);note_mapped(-(int64_t)mapped);stats.large_live--;
     }
 }
 static Header *owned(const void *pointer)
