@@ -935,6 +935,19 @@ The title runs one game per process (`src/pw_wine_launch.h`):
       fails, the game runs on the prefix's own CPU. The log shows the
       choice (`PW_WINE64 cpu=native prefix_cpu=1`: copied, `0`: already
       there, `-1`: not copied). 64-bit games never use the WoW64 CPU.
+    - `shared_input = true` sets `PW_INPUT_SHARED_FAST=1` (Wine patch
+      0901): `GetKeyState` reads Wine's shared input memory in the game
+      instead of crossing to the host each time
+      ([shared-input-fastpath.md](shared-input-fastpath.md)). Off unless set.
+    - `fast_clock = true` lets `QueryPerformanceCounter` (and
+      `timeGetTime`) read the TSC in the game (Wine patch 0900,
+      [shared-clock-fastpath.md](shared-clock-fastpath.md)). The launcher
+      measures the TSC frequency twice against `CLOCK_MONOTONIC`, about
+      25 ms each, and sets `PW_QPC_TSC_VALIDATED=1` and `PW_QPC_TSC_HZ` only
+      when both measurements agree within 0.05% (`src/pw_tsc_calibrate.c`);
+      otherwise the game keeps Wine's normal counter. The log shows the
+      result (`PW_WINE64 fast_clock=on tsc_hz=... calibration=ok`). Off
+      unless set.
   - `mode = xinput` also makes the DualSense the game's XInput controller
     0 (see [XInput controller](#xinput-controller)).
     - Cross, Circle, Square and Triangle are A, B, X and Y. L1/R1 are the

@@ -39,6 +39,14 @@
  *                               ; translator (wowprospero); default native,
  *                               ; translator for builtin OpenGL games; native
  *                               ; for explicit graphics=zink
+ *   shared_input = true         ; GetKeyState answered from Wine's shared
+ *                               ; input memory, without a crossing
+ *                               ; (PW_INPUT_SHARED_FAST=1); default false
+ *   fast_clock = true           ; QueryPerformanceCounter from the TSC
+ *                               ; (patch 0900): the title measures the TSC
+ *                               ; frequency at launch and sets
+ *                               ; PW_QPC_TSC_VALIDATED/PW_QPC_TSC_HZ only
+ *                               ; when it is consistent; default false
  *
  * Buttons: cross circle square triangle l1 r1 l2 r2 l3 r3 up down left
  * right options create touchpad. An input preset file holds only an [input]
@@ -99,11 +107,15 @@ typedef enum PwGameCpu {
 typedef struct PwGameRuntime {
     int thread_scheduling;      /* WINE_PS5_SCHED=1 */
     PwGameCpu cpu;
+    int shared_input;           /* PW_INPUT_SHARED_FAST=1 */
+    int fast_clock;             /* the title calibrates the TSC, then sets
+                                   PW_QPC_TSC_VALIDATED and PW_QPC_TSC_HZ */
 } PwGameRuntime;
 
 /* A variable of Wine's environment; both strings are static. */
 typedef struct PwGameEnv { const char *name, *value; } PwGameEnv;
-enum { PW_GAME_RUNTIME_ENV_MAX = 1, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 4 };
+enum { PW_GAME_RUNTIME_ENV_MAX = 2, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 4,
+       PW_GAME_CLOCK_ENV_MAX = 2 };
 
 typedef struct PwGameProfile {
     PwAppProfile app;
@@ -119,7 +131,9 @@ typedef struct PwGameProfile {
  * PW_ERR_* status. */
 int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *profile);
 /* The variables runtime sets in Wine's environment, into env, which has
- * room for PW_GAME_RUNTIME_ENV_MAX; how many. */
+ * room for PW_GAME_RUNTIME_ENV_MAX; how many. fast_clock is not among them:
+ * its frequency is measured at launch (src/pw_tsc_calibrate.h), and the
+ * title adds up to PW_GAME_CLOCK_ENV_MAX variables itself. */
 size_t pw_game_runtime_env(const PwGameRuntime *runtime, PwGameEnv *env);
 /* Whether a game runs on the native WoW64 CPU: only 32-bit games; [runtime]
  * cpu when set, else native unless the game draws with OpenGL, whose calls

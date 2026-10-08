@@ -353,6 +353,9 @@ tests/test_pw_diagnostics.c
 src/pw_script_input.c
 src/pw_script_input.h
 tests/test_pw_script_input.c
+src/pw_tsc_calibrate.c
+src/pw_tsc_calibrate.h
+tests/test_pw_tsc_calibrate.c
 
 # Experimental shared mutex primitives and bounded native checks
 wine/patches/0810-server-ps5-shared-mutex-word.patch

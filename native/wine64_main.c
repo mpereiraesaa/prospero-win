@@ -40,6 +40,7 @@
 #include "pw_wine_prefix.h"
 #include "../src/pw_present.h"
 #include "../src/pw_spinner.h"
+#include "../src/pw_tsc_calibrate.h"
 #include "pw_wine_display.h"
 #include "../include/prospero_win.h"
 
@@ -312,6 +313,10 @@ static uint64_t now_ns(void)
     if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) return 0u;
     return (uint64_t)value.tv_sec * 1000000000u + (uint64_t)value.tv_nsec;
 }
+
+/* [runtime] fast_clock: the readers pw_tsc_measure takes. */
+static uint64_t calibration_clock(void *context) { (void)context; return now_ns(); }
+static uint64_t calibration_tsc(void *context) { (void)context; return __builtin_ia32_rdtsc(); }
 
 /* ---- Wine stderr -> ps5log, one line per text line -------------------- */
 
@@ -891,7 +896,8 @@ int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
     enum { WINE64_FIXED_ENV_COUNT = 6,
-           WINE64_PROFILE_ENV_CAPACITY = 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX + PW_GAME_CPU_ENV_MAX };
+           WINE64_PROFILE_ENV_CAPACITY = 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX + PW_GAME_CPU_ENV_MAX +
+                                         PW_GAME_CLOCK_ENV_MAX };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -1020,7 +1026,26 @@ int main(int argc, char **argv)
 
             for (size_t i = 0; i < runtime_count; i++)
                 extra[config.extra_env_count++] = (PwWineStartEnv){ runtime_env[i].name, runtime_env[i].value };
-            PS5LOG_LOG("PW_WINE64 runtime thread_scheduling=%d", game->runtime.thread_scheduling);
+            PS5LOG_LOG("PW_WINE64 runtime thread_scheduling=%d shared_input=%d", game->runtime.thread_scheduling,
+                       game->runtime.shared_input);
+        }
+        /* [runtime] fast_clock: patch 0900 answers QueryPerformanceCounter
+         * from the TSC only when told its frequency; measure it now, and
+         * leave the game on Wine's normal counter if the two measurements
+         * disagree or look wrong (src/pw_tsc_calibrate.h). */
+        if (game->runtime.fast_clock) {
+            static char tsc_hz_text[24];
+            uint64_t hz = 0;
+            PwTscStatus clock_status = pw_tsc_measure(calibration_clock, calibration_tsc, NULL, &hz);
+
+            if (clock_status == PW_TSC_OK) {
+                snprintf(tsc_hz_text, sizeof(tsc_hz_text), "%llu", (unsigned long long)hz);
+                extra[config.extra_env_count++] = (PwWineStartEnv){ "PW_QPC_TSC_VALIDATED", "1" };
+                extra[config.extra_env_count++] = (PwWineStartEnv){ "PW_QPC_TSC_HZ", tsc_hz_text };
+            }
+            PS5LOG_LOG("PW_WINE64 fast_clock=%s tsc_hz=%llu calibration=%s",
+                       clock_status == PW_TSC_OK ? "on" : "off", (unsigned long long)hz,
+                       pw_tsc_status_name(clock_status));
         }
         /* [runtime] cpu: a 32-bit game runs on the native WoW64 CPU unless it
          * draws with builtin OpenGL or asks for the translator; explicit Zink

@@ -257,8 +257,8 @@ static int debug_field(PwGameProfile *profile, const uint8_t *key, size_t key_le
     return PW_OK;
 }
 
-/* [runtime] thread_scheduling: true/false or 1/0; cpu: native or
- * translator; each once. */
+/* [runtime] thread_scheduling, shared_input, fast_clock: true/false or
+ * 1/0; cpu: native or translator; each once. */
 static int runtime_field(PwGameRuntime *runtime, uint32_t *seen, const uint8_t *key, size_t key_length,
                          const uint8_t *v, size_t n)
 {
@@ -274,6 +274,8 @@ static int runtime_field(PwGameRuntime *runtime, uint32_t *seen, const uint8_t *
         return PW_OK;
     }
     if (is(key, key_length, "thread_scheduling")) bit = 1u, field = &runtime->thread_scheduling;
+    else if (is(key, key_length, "shared_input")) bit = 4u, field = &runtime->shared_input;
+    else if (is(key, key_length, "fast_clock")) bit = 8u, field = &runtime->fast_clock;
     else return PW_ERR_UNSUPPORTED;
     if (*seen & bit) return PW_ERR_MALFORMED;
     if (is(v, n, "true") || is(v, n, "1")) on = 1;
@@ -343,6 +345,7 @@ size_t pw_game_runtime_env(const PwGameRuntime *runtime, PwGameEnv *env)
 
     if (!runtime || !env) return 0;
     if (runtime->thread_scheduling) env[count++] = (PwGameEnv){ "WINE_PS5_SCHED", "1" };
+    if (runtime->shared_input) env[count++] = (PwGameEnv){ "PW_INPUT_SHARED_FAST", "1" };
     return count;
 }
 

@@ -32,13 +32,13 @@ static void test_graphics_env(void)
         for (int fps = 0; fps < 2; fps++) {
             p.app.graphics = (PwAppGraphics)graphics; p.display.show_fps = fps;
             p.display.refresh = 120; p.display.opengl_thread = 1;
-            p.runtime.thread_scheduling = 1;
+            p.runtime.thread_scheduling = 1; p.runtime.shared_input = 1; p.runtime.fast_clock = 1;
             p.runtime.cpu = PW_GAME_CPU_NATIVE; /* worst-case explicit override */
             size_t count = pw_game_graphics_env(&p, env);
             assert(count <= PW_GAME_GRAPHICS_ENV_MAX);
-            /* Fixed6, desktop/override/XInput3, graphics, runtime and CPU. */
-            assert(6 + 3 + count + pw_game_cpu_env(&p, cpu) + pw_game_runtime_env(&p.runtime, runtime) <=
-                   PW_WINE_START_MAX_ENV);
+            /* Fixed6, desktop/override/XInput3, graphics, runtime, clock and CPU. */
+            assert(6 + 3 + count + pw_game_cpu_env(&p, cpu) + pw_game_runtime_env(&p.runtime, runtime) +
+                   PW_GAME_CLOCK_ENV_MAX <= PW_WINE_START_MAX_ENV);
             if (graphics == PW_APP_GRAPHICS_ZINK) {
                 assert(count == (size_t)(1 + fps));
                 assert(!strcmp(env[0].name, "GALLIUM_DRIVER") && !strcmp(env[0].value, "zink"));
@@ -180,6 +180,23 @@ static void test_runtime(void)
     assert(parse(APP "[runtime]\nthread_scheduling = FALSE\n", &p) == PW_OK);
     assert(!p.runtime.thread_scheduling && pw_game_runtime_env(&p.runtime, env) == 0);
     assert(pw_game_runtime_env(NULL, env) == 0 && pw_game_runtime_env(&p.runtime, NULL) == 0);
+
+    /* shared_input reaches Wine; fast_clock is only a flag, the title
+     * measures the TSC and sets the clock variables itself. */
+    assert(parse(APP, &p) == PW_OK && !p.runtime.shared_input && !p.runtime.fast_clock);
+    assert(parse(APP "[runtime]\nshared_input = true\n", &p) == PW_OK);
+    assert(p.runtime.shared_input == 1 && !p.runtime.fast_clock);
+    assert(pw_game_runtime_env(&p.runtime, env) == 1);
+    assert(!strcmp(env[0].name, "PW_INPUT_SHARED_FAST") && !strcmp(env[0].value, "1"));
+    assert(parse(APP "[runtime]\nfast_clock = 1\n", &p) == PW_OK);
+    assert(p.runtime.fast_clock == 1 && !p.runtime.shared_input && pw_game_runtime_env(&p.runtime, env) == 0);
+    assert(parse(APP "[runtime]\nfast_clock = false\nshared_input = 0\n", &p) == PW_OK);
+    assert(!p.runtime.fast_clock && !p.runtime.shared_input);
+    assert(parse(APP "[runtime]\nthread_scheduling = 1\nshared_input = 1\nfast_clock = true\ncpu = native\n",
+                 &p) == PW_OK);
+    assert(p.runtime.fast_clock && p.runtime.cpu == PW_GAME_CPU_NATIVE);
+    assert(pw_game_runtime_env(&p.runtime, env) == PW_GAME_RUNTIME_ENV_MAX);
+    assert(!strcmp(env[0].name, "WINE_PS5_SCHED") && !strcmp(env[1].name, "PW_INPUT_SHARED_FAST"));
 }
 
 static void test_refusals(void)
@@ -212,6 +229,13 @@ static void test_refusals(void)
         APP "[runtime]\nthread_scheduling =\n",
         APP "[runtime]\nthread_scheduling = on\n",
         APP "[runtime]\nthread_scheduling = 0\nthread_scheduling = 1\n",
+        APP "[runtime]\nshared_input = yes\n",                  /* true/false or 1/0 only */
+        APP "[runtime]\nshared_input =\n",
+        APP "[runtime]\nshared_input = 1\nshared_input = 0\n",   /* once */
+        APP "[runtime]\nfast_clock = on\n",
+        APP "[runtime]\nfast_clock = 2\n",
+        APP "[runtime]\nfast_clock = true\nfast_clock = true\n",
+        APP "[display]\nfast_clock = 1\n",                      /* another section's key */
         APP "[runtime]\ntrust_code_pages = 1\n",                /* unknown key */
         APP "[runtime]\ncpu = dbt\n",                           /* native or translator only */
         APP "[runtime]\ncpu =\n",

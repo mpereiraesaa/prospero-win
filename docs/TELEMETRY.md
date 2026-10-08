@@ -22,6 +22,7 @@ Every record the title writes starts with `PW_WINE64`:
 | `restart` / `restart failed` | the `LoadExec` target, cycle, reason and eboot; the failure code |
 | `profile` | the game's id, prefix, desktop, scaling, view, whether it shows the frame rate (`show_fps`) and input mode |
 | `winedebug` | the game's own `WINEDEBUG`, when its profile's `[debug]` section sets one |
+| `runtime` / `fast_clock` | the profile's `[runtime]` switches (`thread_scheduling`, `shared_input`); with `fast_clock = true`, whether the TSC clock is on, the measured `tsc_hz` and the calibration result (`ok`, or why it was refused: `bracket`, `short`, `backward`, `range`, `disagree`) |
 | `cpu` | a 32-bit game's CPU backend, `native` (with the Vulkan batching) or `translator`, and `prefix_cpu`: `1` copied `wow64native.dll` into the prefix, `0` it was already there, `-1` not copied (the prefix's own CPU runs), `-2` not needed |
 | `ntdll` / `load` / `environment` / `run` | the runtime found, `ntdll.prx` loaded (stage, module, segments), Wine's environment, `__wine_main` started |
 | `display` / `audio` | the present sink, input and XInput hooks, VideoOut; the audio sink and port |
