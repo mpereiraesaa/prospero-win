@@ -38,3 +38,18 @@ until global replay completes; PE list unlinking stays immediate. Retirement
 node allocation failure drains first, then releases the client object. Other
 loader frees, including failed creation cleanup, remain immediate. This hook is
 a dependency for generated destruction codecs; it does not itself enable them.
+
+The v2 opt-in runtime uses 256 KiB producer arenas. A generated record carries
+the original Unix function index followed by owned fieldwise input bytes; replay
+decodes into aligned native parameter storage and calls the native thunk, never
+the guest-pointer thunk. Entire batches pass semantic preflight before effects.
+The Unix entry accepts legacy v1 batches, while a new PE requires the exact v2
+capability; mismatched old Unix libraries disable batching safely. Existing
+seven fast codecs stay first. Additional generated operations are enabled only
+with the default all-category mask (127); narrower diagnostic masks retain their
+previous scope. Unknown shapes drain and dispatch synchronously. The six opaque
+descriptor-template forms still require their metadata-aware adapter.
+
+The process scratch limit is 16 MiB to preserve the existing 63-producer bound
+with larger arenas. Unix decoding uses a bounded 4 MiB allocation per entry.
+These allocation and memory costs require measurement before default enablement.
