@@ -582,7 +582,8 @@ class Installer:
         mode = prospero.get("graphics", "dxvk" if self.dxvk else "gdi")
         if mode not in ("auto", "gdi", "dxvk", "opengl", "zink"):
             raise InstallError(f"prospero.graphics: unsupported backend {mode!r}")
-        return mode
+        # OpenGL draws through Mesa's Zink; zink is the older name for it.
+        return "opengl" if mode == "zink" else mode
 
     def install_dxvk(self) -> list[str]:
         mode = self.graphics_mode()
@@ -603,7 +604,7 @@ class Installer:
         return list(DXVK_DLLS)
 
     def install_mesa_zink(self) -> None:
-        if self.graphics_mode() != "zink":
+        if self.graphics_mode() != "opengl":
             return
         game = self.script.get("game") or {}
         exe = Path(self.expand(game.get("exe", "")))
@@ -662,8 +663,8 @@ class Installer:
         name = prospero.get("name") or self.document.get("name") or self.slug
         overrides = {dll: "n" for dll in dxvk_dlls}
         overrides.update(self.overrides)
-        if self.graphics_mode() in ("opengl", "zink"):
-            overrides["opengl32"] = "b" if self.graphics_mode() == "opengl" else "n"
+        if self.graphics_mode() == "opengl":
+            overrides["opengl32"] = "n"
         by_mode: dict[str, list[str]] = {}
         for dll, mode in overrides.items():
             by_mode.setdefault(mode, []).append(dll)
@@ -691,17 +692,17 @@ class Installer:
     # --- the whole install -----------------------------------------------------
     def install(self) -> Path:
         mode = self.graphics_mode()  # Reject invalid providers before prefix creation.
-        if mode == "zink":
+        if mode == "opengl":
             if not self.mesa_zink:
-                raise InstallError("graphics=zink requires --mesa-zink local artifact directory")
+                raise InstallError("graphics=opengl requires --mesa-zink local artifact directory")
             for names, order in self.overrides.items():
                 if any(character.isspace() for character in names + order):
-                    raise InstallError("graphics=zink DLL overrides cannot contain whitespace")
+                    raise InstallError("graphics=opengl DLL overrides cannot contain whitespace")
                 if any(name.lower().lstrip("*").removesuffix(".dll") == "opengl32" for name in names.split(",")) and order.lower() != "n":
-                    raise InstallError("graphics=zink conflicts with explicit opengl32 load order")
+                    raise InstallError("graphics=opengl conflicts with explicit opengl32 load order")
             self.mesa_files = mesa_provider(self.mesa_zink)
         elif self.mesa_zink:
-            raise InstallError("--mesa-zink requires prospero.graphics=zink")
+            raise InstallError("--mesa-zink requires prospero.graphics=opengl")
         if self.gamedir.exists():
             raise InstallError(f"{self.gamedir} exists: remove it to reinstall {self.slug}")
         self.resolve_files()
@@ -744,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--slug", help="the profile id, when the script has no game_slug")
     parser.add_argument("--file", action="append", default=[], metavar="ID=PATH")
     parser.add_argument("--input", action="append", default=[], metavar="ID=VALUE")
-    parser.add_argument("--mesa-zink", type=Path, help="validated local Mesa WGL/Zink artifact directory; requires graphics=zink")
+    parser.add_argument("--mesa-zink", type=Path, help="validated local Mesa WGL/Zink artifact directory; requires graphics=opengl")
     parser.add_argument("--disc", help="a directory holding the disc's files")
     parser.add_argument("--resolution", default="1920x1080")
     parser.add_argument("--keep-cache", action="store_true")

@@ -7,10 +7,14 @@ the PS5 build overrides, and the licences and source revisions it carries."""
 from pathlib import Path
 import json
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "package_release.sh"
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / "tests"))
+from test_package_mesa_zink import fixture as mesa_fixture  # noqa: E402
 
 
 def write(path: Path, data: str = "x") -> None:
@@ -48,8 +52,7 @@ def main() -> int:
         # the Wine and FreeType sources it built, the helper's release.
         report = {"wine_commit": "a" * 40, "patches": ["0100-x.patch", "0110-y.patch"],
                   "sources": {"prx_foundation": "b" * 40, "ps5_mesa": "c" * 40, "ps5_vulkan": "d" * 40,
-                              "radv_payload_sdk": "9" * 40, "ps5vk": None, "ps5_opengl_sdk": None,
-                              "ps5_opengl": None}}
+                              "radv_payload_sdk": "9" * 40, "ps5vk": None}}
         write(ps5 / "report.json", json.dumps(report))
         for name in ("LICENSE", "COPYING.LIB", "AUTHORS", "NOTICES.md"):
             write(ps5 / "source" / name, f"wine {name}")
@@ -60,10 +63,13 @@ def main() -> int:
         write(ps5 / "freetype" / "src" / "docs" / "FTL.TXT", "FTL")
         lapy = root / "lapy-helper-release.json"
         write(lapy, json.dumps({"tag_name": "v9.9.9", "release_url": "https://example.invalid/v9.9.9"}))
+        mesa = root / "mesa-zink"
+        mesa.mkdir()
+        mesa_fixture(mesa)
         out = root / "out"
         inputs = ("--title", str(title), "--wine-ps5", str(ps5), "--host-wine", str(host),
                   "--cpu-dll", str(root / "wowprospero.dll"), "--native-cpu", str(native),
-                  "--lapy-release", str(lapy))
+                  "--mesa-zink", str(mesa), "--lapy-release", str(lapy))
 
         result = run(*inputs, "--out", str(out))
         assert result.returncode == 0, result.stderr
@@ -91,7 +97,14 @@ def main() -> int:
         assert sorted(p.name for p in (lib / "x86_64-unix").iterdir()) == \
             ["libvulkan.prx", "ntdll.prx", "win32u.prx", "wow64native.prx"]
         assert (share / "nls" / "locale.nls").exists() and (share / "fonts" / "tahoma.ttf").exists()
-        assert "PPSA99995: 33 files" in result.stdout, result.stdout
+        assert "PPSA99995: 39 files" in result.stdout, result.stdout
+        # OpenGL: Mesa WGL/Zink for both architectures, with its manifest.
+        zink = app / "win" / "mesa-zink"
+        for arch in ("i386-windows", "x86_64-windows"):
+            assert sorted(p.name for p in (zink / arch).iterdir()) == ["libgallium_wgl.dll", "opengl32.dll"]
+            assert (zink / arch / "opengl32.dll").read_bytes() == (mesa / arch / "opengl32.dll").read_bytes()
+        assert (app / "mesa-zink-manifest.json").exists()
+        assert (app / "LICENSES" / "mesa" / "MIT").read_text() == "fixture license"
         # The licences: the project's own texts verbatim, Wine's and its
         # libraries' from the built source, FreeType's.
         for name in ("LICENSE", "THIRD_PARTY.md"):
@@ -109,7 +122,7 @@ def main() -> int:
         assert (licences / "wine" / "libs" / "faudio" / "LICENSE").read_text() == "faudio licence"
         assert (licences / "wine" / "libs" / "ldap" / "COPYRIGHT").read_text() == "ldap copyright"
         assert sorted(p.name for p in (licences / "freetype").iterdir()) == ["FTL.TXT", "LICENSE.TXT"]
-        # SOURCES.txt: every revision the build recorded, and no OpenGL.
+        # SOURCES.txt: every revision the build recorded, Mesa's Zink included.
         sources = (app / "SOURCES.txt").read_text()
         head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
                               capture_output=True, text=True).stdout.strip()
@@ -123,7 +136,8 @@ def main() -> int:
                          "https://example.invalid/v9.9.9  release v9.9.9",
                          f"PS5_Mesa  commit {'c' * 40}", f"PS5_Vulkan  commit {'d' * 40}",
                          f"PS5_PayloadSDK  commit {'9' * 40}",
-                         "OpenGL  not included"):
+                         "Mesa WGL/Zink (PE32 and PE64)  https://github.com/mpereiraesaa/PS5_Mesa",
+                         f"  commit {'1' * 40}"):
             assert expected in sources, (expected, sources)
         # The console refuses to exec an eboot or load a PRX without execute
         # permission, whatever mode the inputs had; data files stay as they were.
@@ -139,14 +153,6 @@ def main() -> int:
         assert run(*inputs, "--out", str(out)).returncode == 0
         assert not (app / "stale.txt").exists()
 
-        # An OpenGL build says so, with the SDK it linked.
-        report["sources"].update(ps5_opengl_sdk="e" * 64, ps5_opengl="8" * 40)
-        write(ps5 / "report.json", json.dumps(report))
-        assert run(*inputs, "--out", str(out)).returncode == 0
-        sources = (app / "SOURCES.txt").read_text()
-        assert f"OpenGL (in win32u.prx)  https://github.com/mpereiraesaa/ps5-opengl  commit {'8' * 40}" \
-            in sources, sources
-        assert f"SDK manifest SHA-256 {'e' * 64}" in sources and "not included" not in sources
         # A libvulkan.prx that is not RADV has no notice here: refused.
         report["sources"].update(ps5_mesa=None, ps5_vulkan=None, ps5vk="f" * 64)
         write(ps5 / "report.json", json.dumps(report))
@@ -162,6 +168,12 @@ def main() -> int:
         assert bad.returncode == 2 and "--cpu-dll" in bad.stderr
         bad = run(*inputs[:-2], "--out", str(out))
         assert bad.returncode == 2 and "--lapy-release" in bad.stderr, bad.stderr
+        # OpenGL games need Zink: a package without it is refused, and so is a
+        # bad artifact directory.
+        bad = run(*inputs[:-4], *inputs[-2:], "--out", str(out))
+        assert bad.returncode == 2 and "--mesa-zink" in bad.stderr, bad.stderr
+        bad = run(*inputs[:-3], str(root / "nowhere"), *inputs[-2:], "--out", str(out))
+        assert bad.returncode == 2 and "--mesa-zink" in bad.stderr, bad.stderr
         (native / "ps5" / "wow64native.prx").unlink()
         bad = run(*inputs, "--out", str(out))
         assert bad.returncode == 2 and "--native-cpu" in bad.stderr, bad.stderr
@@ -170,8 +182,8 @@ def main() -> int:
         bad = run(*inputs, "--out", str(out))
         assert bad.returncode == 2 and "NOTICES.md" in bad.stderr, bad.stderr
     print("package release passed: layout, dev.conf and PC-only modules left out, patched xinput, "
-          "eboot and PRX modules executable, licences and source revisions, OpenGL noted, "
-          "non-RADV Vulkan refused, a clean folder each time, missing inputs named")
+          "eboot and PRX modules executable, licences and source revisions, Mesa Zink packaged, "
+          "non-RADV Vulkan refused, a clean folder each time, missing inputs and Zink named")
     return 0
 
 

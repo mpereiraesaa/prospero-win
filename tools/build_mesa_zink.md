@@ -1,9 +1,9 @@
 # Pinned Mesa WGL/Zink builds
 
 `build_mesa_zink.sh` builds PE32 and PE64 WGL frontends and the Zink Gallium
-backend on Linux. It does not install DLLs or select a game graphics backend.
-The existing OpenGL backend remains available. Console compatibility and
-performance require separate validation.
+backend on Linux. OpenGL games on the console draw through them: the package
+carries both architectures (`tools/package_release.sh --mesa-zink`), and the
+launcher installs the game's copy into its prefix (`graphics = opengl`).
 
 Install Git, tar, xz, Ninja, Python 3 with venv support, and the pinned Python
 tools in an isolated environment:

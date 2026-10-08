@@ -10,6 +10,7 @@
 #     win/wine/lib/wine/x86_64-windows/
 #     win/wine/lib/wine/x86_64-unix/*.prx       Wine's PS5 side
 #     win/wine/share/wine/nls/, fonts/
+#     win/mesa-zink/{i386,x86_64}-windows/      Mesa WGL/Zink: OpenGL
 #     LICENSE, THIRD_PARTY.md, LICENSES/       the licences of everything above
 #     SOURCES.txt                               the source revision of each part
 #
@@ -33,9 +34,9 @@
 #                    games run on by default.
 #   --lapy-release FILE  the release.json tools/build_native.sh saved for the
 #                    lapy.elf it fetched (build/native/lapy-helper-release.json).
-#   --mesa-zink DIR  optional tools/build_mesa_zink.sh artifacts/ directory:
+#   --mesa-zink DIR  tools/build_mesa_zink.sh's artifacts/ directory:
 #                    PE32/PE64 WGL/Zink, hashes and component licence texts.
-#                    Packaging does not change a game's graphics selection.
+#                    OpenGL games draw through it (graphics = opengl).
 #   --out DIR        where PPSA99995/ is written (replaced).
 #   --zip            also write DIR/PPSA99995.zip.
 #
@@ -77,10 +78,8 @@ done
 [ -f "$wine_ps5/freetype/src/docs/FTL.TXT" ] ||
     fail "--wine-ps5: no FreeType source (freetype/src/docs/FTL.TXT) in '$wine_ps5'"
 [ -n "$out" ] || fail "--out DIR is required"
-
-if [ -n "$mesa_zink" ]; then
-    python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" || fail 'invalid --mesa-zink artifact directory'
-fi
+[ -n "$mesa_zink" ] || fail "--mesa-zink DIR is required: OpenGL games draw through Zink"
+python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" || fail "--mesa-zink: invalid artifact directory '$mesa_zink'"
 
 app=$out/PPSA99995
 rm -rf "$app"
@@ -177,18 +176,11 @@ if vulkan:
               f"  linked by https://github.com/mpereiraesaa/PS5_Vulkan  commit {sources.get('ps5_vulkan') or 'not recorded'}",
               "  with the payload SDK and platform layer  https://github.com/mihawk-99/PS5_PayloadSDK"
               f"  commit {sources.get('radv_payload_sdk') or 'not recorded'}"]
-if sources.get("ps5_opengl_sdk"):
-    lines += ["OpenGL (in win32u.prx)  https://github.com/mpereiraesaa/ps5-opengl"
-              f"  commit {sources.get('ps5_opengl') or 'not recorded'}",
-              f"  SDK manifest SHA-256 {sources['ps5_opengl_sdk']}"]
-else:
-    lines += ["OpenGL  not included"]
 (app / "SOURCES.txt").write_text("\n".join(lines) + "\n")
 PY
 
-if [ -n "$mesa_zink" ]; then
-    python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" --app "$app" || fail 'Mesa packaging failed'
-fi
+python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" --app "$app" || fail 'Mesa packaging failed'
+
 
 files=$(find "$app" -type f | wc -l)
 size=$(du -sh "$app" | cut -f1)

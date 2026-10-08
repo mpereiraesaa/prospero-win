@@ -294,18 +294,25 @@ def main() -> int:
             assert line in profile.splitlines(), (line, profile)
 
         # A PS5 backend choice overrides Lutris's DXVK setting for this game.
+        # OpenGL draws through Zink, so it needs the Mesa package.
+        mesa = fake_mesa(root / "mesa")
         opengl_script = root / "opengl.yml"
         opengl_script.write_text(SCRIPT.replace("  display:", "  graphics: opengl\n  display:", 1)
                                  .replace("overrides: {ddraw.dll: n}",
                                           "overrides: {ddraw.dll: n, opengl32.dll: n}"))
-        assert pw_install.main([str(opengl_script), "--library", str(library), "--wine", str(wine),
-                                "--slug", "opengl-game", "--file", f"setup={setup}"]) == 0
+        opengl_args = [str(opengl_script), "--library", str(library), "--wine", str(wine),
+                       "--file", f"setup={setup}"]
+        assert pw_install.main(opengl_args + ["--slug", "opengl-no-mesa"]) == 1
+        assert not (library / "prefixes" / "opengl-no-mesa").exists()
+        assert pw_install.main(opengl_args + ["--slug", "opengl-game", "--mesa-zink", str(mesa)]) == 0
         opengl_prefix = library / "prefixes" / "opengl-game"
         opengl_profile = (library / "profiles" / "opengl-game.profile").read_text()
         assert "graphics = opengl" in opengl_profile.splitlines()
         assert "d3d8=n" not in opengl_profile
-        assert "opengl32=b" in opengl_profile
-        assert "opengl32=n" not in opengl_profile
+        assert "opengl32=n" in opengl_profile
+        assert "opengl32=b" not in opengl_profile
+        assert (opengl_prefix / "drive_c/windows/syswow64/opengl32.dll").read_bytes() == \
+            (mesa / "i386-windows/opengl32.dll").read_bytes()
         assert not (opengl_prefix / "drive_c/windows/syswow64/d3d8.dll").exists()
         assert '"d3d8"="native"' not in (opengl_prefix / "user.reg").read_text()
 
@@ -327,7 +334,6 @@ def main() -> int:
         # Explicit local Zink packages install only the game's architecture.
         zink_script = root / "zink.yml"
         zink_script.write_text(SCRIPT.replace("  display:", "  graphics: zink\n  display:", 1))
-        mesa = fake_mesa(root / "mesa")
         zink_args = [str(zink_script), "--library", str(library), "--wine", str(wine), "--file", f"setup={setup}"]
         assert pw_install.main(zink_args + ["--slug", "zink-missing"]) == 1
         assert not (library / "prefixes/zink-missing").exists()
@@ -343,7 +349,8 @@ def main() -> int:
                 assert not (win/other/name).exists()
             assert not (win/folder/"d3d9.dll").exists()
             profile = (library/"profiles"/(slug+".profile")).read_text()
-            assert "graphics = zink" in profile and "opengl32=n" in profile
+            # zink is the older name for opengl
+            assert "graphics = opengl" in profile and "opengl32=n" in profile
             assert '\"opengl32\"=\"native\"' in (library/"prefixes"/slug/"user.reg").read_text()
         setup.write_bytes(pe(32))
         # Conflicting case/grouped overrides are rejected before creating a prefix.
