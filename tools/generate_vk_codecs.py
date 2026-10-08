@@ -121,7 +121,6 @@ default:goto fail;}\n'''
   skip={};active=[]
   for f in funcs:
    if f.name in ['vkDebugReportMessageEXT','vkSubmitDebugUtilsMessageEXT']:skip[f.name]='callback delivery'
-   elif f.name in ['vkDestroyInstance','vkDestroyDevice','vkDestroyCommandPool','vkFreeCommandBuffers']:skip[f.name]='manual PE object lifetime requires immediate drain before client storage free'
    elif any(p.is_pointer() and not p.is_const() for p in f.params):skip[f.name]='immediate output storage'
    elif f.name in ['vkUpdateDescriptorSetWithTemplate','vkUpdateDescriptorSetWithTemplateKHR','vkCmdPushDescriptorSetWithTemplateKHR','vkCmdPushDescriptorSetWithTemplate','vkCmdPushDescriptorSetWithTemplate2KHR','vkCmdPushDescriptorSetWithTemplate2']:skip[f.name]='template metadata snapshot requires registered template semantic codec'
    else:
@@ -279,10 +278,14 @@ static void *allocate(size_t size){size_t pos=(used+7)&~(size_t)7;if(pos>sizeof(
   return src+'printf("PASS generated roundtrips=%u unsupported_shapes=%u\\n",passed,unsupported);return 0;}\n'
 
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--source',required=True);ap.add_argument('--xml',required=True);ap.add_argument('--video-xml',required=True);ap.add_argument('--output',required=True);a=ap.parse_args();source=pathlib.Path(a.source).resolve();xml=pathlib.Path(a.xml).resolve();video=pathlib.Path(a.video_xml).resolve();out=pathlib.Path(a.output).resolve();out.mkdir(parents=True,exist_ok=True)
+ ap=argparse.ArgumentParser();ap.add_argument('--source',required=True);ap.add_argument('--xml');ap.add_argument('--video-xml');ap.add_argument('--output',required=True);a=ap.parse_args();source=pathlib.Path(a.source).resolve();out=pathlib.Path(a.output).resolve();out.mkdir(parents=True,exist_ok=True)
  logging.disable(logging.CRITICAL)
  with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
-  model=runpy.run_path(str(source/'dlls/winevulkan/make_vulkan'));previous=os.getcwd();os.chdir(source/'dlls/winevulkan')
+  model=runpy.run_path(str(source/'dlls/winevulkan/make_vulkan'));cache=pathlib.Path(os.environ.get('XDG_CACHE_HOME',str(pathlib.Path.home()/'.cache')))/'wine';cache.mkdir(parents=True,exist_ok=True);version=model['VK_XML_VERSION']
+  xml=pathlib.Path(a.xml).resolve() if a.xml else cache/('vk-'+version+'.xml');video=pathlib.Path(a.video_xml).resolve() if a.video_xml else cache/('video-'+version+'.xml')
+  if not a.xml:model['download_vk_xml'](str(xml),'vk.xml')
+  if not a.video_xml:model['download_vk_xml'](str(video),'video.xml')
+  previous=os.getcwd();os.chdir(source/'dlls/winevulkan')
   try:model['Generator'](str(xml),str(video))
   finally:os.chdir(previous)
  names=set(re.findall(r'\bunix_(vk\w+),',(source/'dlls/winevulkan/loader_thunks.h').read_text()));codecs=Codecs(model,names);src,audit=codecs.generate();(out/'pw_vk_generated_roundtrip.c').write_text(codecs.fixture(codecs.active));(out/'pw_vk_generated.c').write_text(src);(out/'pw_vk_generated_manifest.json').write_text(json.dumps(audit,indent=2)+'\n');print(json.dumps({k:v for k,v in audit.items() if k not in ['functions','unsupported_structures']}))

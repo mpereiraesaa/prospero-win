@@ -3,6 +3,7 @@
 #include "pw_vk_batch.h"
 #include <stdlib.h>
 #include "pw_vk_retire.h"
+#include "pw_vk_codec.h"
 #include "pw_vk_command_stream.h"
 #include "pw_vk_template_cache.h"
 #ifndef _WIN64
@@ -17,7 +18,7 @@ static DWORD tls=TLS_OUT_OF_INDEXES;
 static struct pw_vk_stream_registry registry;
 static struct pw_vk_template_cache templates;
 static struct pw_vk_retirement retirement;
-static unsigned char *scratch;
+static unsigned char *scratch,*encoded_wire;
 static BOOL enabled,negotiated,stats_enabled;
 /* Only the existing gated fallback path owns these arrays. */
 static BOOL fallback_profile;
@@ -64,7 +65,8 @@ static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
  InitializeCriticalSection(&gate);tls=TlsAlloc();
  pw_vk_stream_registry_init(&registry);
  scratch=heap_alloc(PW_VK_BATCH_SCRATCH);
- enabled=tls!=TLS_OUT_OF_INDEXES&&scratch;
+ encoded_wire=heap_alloc(PW_VK_BATCH_ARENA);
+ enabled=tls!=TLS_OUT_OF_INDEXES&&scratch&&encoded_wire;
  /* Diagnostics are independently opt-in; FPS confirmation leaves them off. */
  return TRUE;
 }
@@ -202,12 +204,12 @@ static void snapshot(unsigned int code,void *args)
 }
 NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
 {
- unsigned char wire[4096];size_t bytes;uint32_t opcode;struct producer *p;NTSTATUS status;int appended;
+ unsigned char *wire;size_t bytes;uint32_t opcode;struct producer *p;NTSTATUS status;int appended;
  InitOnceExecuteOnce(&once,initialize,NULL,NULL);
  /* Init and availability calls precede capability negotiation; old Unix never
   * receives the new table index. Disabled64 builds retain original macro. */
  if(!enabled||InterlockedCompareExchange(&sticky_disabled,0,0)){status=raw_call(code,args);snapshot(code,args);return status;}
- enter();
+ enter();wire=encoded_wire;
  if(InterlockedCompareExchange(&sticky_disabled,0,0)){leave();status=raw_call(code,args);snapshot(code,args);return status;}
  if(pw_vk_stream_call_unsafe(code,args)||pw_vk_batch_allocator(code,args)){
   if(negotiated)flush_call(unix_count,NULL);
@@ -215,10 +217,15 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
    * recurse through raw dispatch with no gate or pending suffix. */
   InterlockedExchange(&sticky_disabled,1);leave();status=raw_call(code,args);snapshot(code,args);return status;
  }
- if(enabled&&!sticky_disabled&&negotiated&&encode(code,args,wire,&bytes,&opcode)&&(p=producer())){
+ bytes=0;opcode=0;
+ if(negotiated&&!encode(code,args,wire,&bytes,&opcode)&&opcode_mask==0x7f&&
+    pw_vk_generated_encode(code,args,wire+4,PW_VK_BATCH_ARENA-PW_VK_STREAM_HEADER-4,&bytes)){
+  memcpy(wire,&code,4);bytes+=4;opcode=PW_VK_BATCH_GENERATED_OPCODE;
+ }
+ if(negotiated&&bytes&&(p=producer())){
   appended=pw_vk_stream_append(&registry,&p->stream,opcode,wire,bytes);
   if(appended==PW_VK_STREAM_FULL){full_total++;flush_call(unix_count,NULL);appended=pw_vk_stream_append(&registry,&p->stream,opcode,wire,bytes);}
-  if(appended==PW_VK_STREAM_OK){enqueued_total++;leave();return STATUS_SUCCESS;}
+  if(appended==PW_VK_STREAM_OK){enqueued_total++;retire_template(code,args);leave();return STATUS_SUCCESS;}
  }
  fallback_total++;
  if(fallback_profile&&code<unix_count)fallback_counts[code]++;

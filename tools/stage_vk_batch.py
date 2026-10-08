@@ -2,7 +2,7 @@
 """Stage reviewed batch runtime and update pinned Wine/generator consistently.
 Use an isolated source tree. Generated changes mirror generator changes.
 """
-import argparse,pathlib,re,shutil,ast
+import argparse,pathlib,re,shutil,ast,subprocess,sys
 ap=argparse.ArgumentParser();ap.add_argument('--source',required=True);ap.add_argument('--repo',default=str(pathlib.Path(__file__).resolve().parents[1]));a=ap.parse_args();repo=pathlib.Path(a.repo);d=pathlib.Path(a.source)/'dlls/winevulkan'
 def edit(name,fn):
  p=d/name;s=p.read_text();p.write_text(fn(s))
@@ -22,9 +22,11 @@ def retire_loader(s):
   assert count==1,(name,count);s=s[:begin]+body+s[end:]
  return s
 edit('loader.c',retire_loader)
-edit('vulkan.c',lambda s:once(s,'    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);', '    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    if (!strcmp(name, PW_VK_BATCH_NAME)) return PW_VK_BATCH_CAPABILITY;\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);'))
+edit('vulkan.c',lambda s:once(s,'    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);', '    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    if (!strcmp(name, PW_VK_BATCH_NAME)) return PW_VK_BATCH_CAPABILITY;\n    if (!strcmp(name, PW_VK_BATCH_LEGACY_NAME)) return PW_VK_BATCH_LEGACY_CAPABILITY;\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);'))
 names=['pw_vk_wire','pw_vk_template_cache','pw_vk_command_stream']
 sources=['pw_vk_batch_pe.c','pw_vk_batch_unix.c','pw_vk_retire.c']
+names+=['pw_vk_codec','pw_vk_generated']
+subprocess.run([sys.executable,str(repo/'tools/generate_vk_codecs.py'),'--source',a.source,'--output',str(d)],check=True)
 for name in names:
  sources.extend([name+'.c',name+'_unix.c'])
  (d/(name+'_unix.c')).write_text('#if 0\n#pragma makedep unix\n#endif\n#include "'+name+'.c"\n')
@@ -50,6 +52,8 @@ with (d/'pw_vk_batch_pe.c').open('a') as f:
 orig=(d/'vulkan_thunks.c').read_text()
 void_names=re.findall(r'    \(void \*\)thunk32_(\w+),',orig)
 helper='\nNTSTATUS pw_vk_batch_dispatch(unsigned int code,void *args)\n{\n    switch(code)\n    {\n'+''.join('        case unix_'+n+': thunk32_'+n+'(args); return STATUS_SUCCESS;\n' for n in void_names)+'        default:\n#ifdef _WIN64\n            return __wine_unix_call_wow64_funcs[code](args);\n#else\n            return __wine_unix_call_funcs[code](args);\n#endif\n    }\n}\n'
+native_helper='\nNTSTATUS pw_vk_batch_dispatch_native(unsigned int code,void *args)\n{\n    switch(code)\n    {\n'+''.join('        case unix_'+n+':\n#ifdef _WIN64\n            thunk64_'+n+'(args);\n#else\n            thunk32_'+n+'(args);\n#endif\n            return STATUS_SUCCESS;\n' for n in void_names)+'        default: return __wine_unix_call_funcs[code](args);\n    }\n}\n'
+helper+=native_helper
 edit('vulkan_thunks.c',lambda s:s.replace('};\nC_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_count);','    pw_vk_batch_unix,\n};\nC_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_count);')+helper)
 # Generator emits exactly the same additive enum/table and void-call classifier.
 def generator(s):
@@ -62,6 +66,10 @@ def generator(s):
  addition+='        for func in Type.all(Function, Function.needs_thunk):\n'
  addition+='            if func.is_perf_critical(): f.write(f'+repr('        case unix_{func.name}: thunk32_{func.name}(args); return STATUS_SUCCESS;\n')+')\n'
  addition+='        f.write('+repr('        default:\n#ifdef _WIN64\n            return __wine_unix_call_wow64_funcs[code](args);\n#else\n            return __wine_unix_call_funcs[code](args);\n#endif\n    }\n}\n')+')\n'
+ addition+='        f.write('+repr('\nNTSTATUS pw_vk_batch_dispatch_native(unsigned int code,void *args)\n{\n    switch(code)\n    {\n')+')\n'
+ addition+='        for func in Type.all(Function, Function.needs_thunk):\n'
+ addition+='            if func.is_perf_critical(): f.write(f'+repr('        case unix_{func.name}:\n#ifdef _WIN64\n            thunk64_{func.name}(args);\n#else\n            thunk32_{func.name}(args);\n#endif\n            return STATUS_SUCCESS;\n')+')\n'
+ addition+='        f.write('+repr('        default: return __wine_unix_call_funcs[code](args);\n    }\n}\n')+')\n'
  s=once(s,needle,needle+addition);ast.parse(s);return s
 edit('make_vulkan',generator)
 print(d)

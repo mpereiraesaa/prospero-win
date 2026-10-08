@@ -9,6 +9,7 @@
 #include "vulkan_private.h"
 #include "pw_vk_wire.h"
 #include "pw_vk_batch.h"
+#include "pw_vk_codec.h"
 #include "pw_vk_command_stream.h"
 int pw_wine_vk_replay(uint32_t op,const void *wire,size_t bytes)
 {
@@ -38,14 +39,36 @@ int pw_wine_vk_replay(uint32_t op,const void *wire,size_t bytes)
 }
 
 extern NTSTATUS pw_vk_batch_dispatch(unsigned int,void *);
-static int preflight(void *unused,const struct pw_vk_stream_record *r){(void)unused;return !(r->payload_bytes<=4096&&pw_vk_wire_validate(r->opcode,r->payload,r->payload_bytes));}
-static int replay(void *unused,const struct pw_vk_stream_record *r){(void)unused;return !pw_wine_vk_replay(r->opcode,r->payload,r->payload_bytes);}
+extern NTSTATUS pw_vk_batch_dispatch_native(unsigned int,void *);
+struct replay_context { void *arena; unsigned version; };
+static int generated_record(struct replay_context *ctx,const struct pw_vk_stream_record *r,void **params)
+{
+ unsigned code;
+ if(ctx->version!=PW_VK_BATCH_VERSION||r->payload_bytes<4||r->payload_bytes>PW_VK_CODEC_MAX_BYTES)return 0;
+ memcpy(&code,r->payload,4);
+ return code<unix_pw_vk_batch&&pw_vk_generated_decode(code,r->payload+4,r->payload_bytes-4,ctx->arena,PW_VK_CODEC_DECODE_BYTES,params);
+}
+static int preflight(void *context,const struct pw_vk_stream_record *r)
+{
+ struct replay_context *ctx=context;void *params;
+ if(r->opcode==PW_VK_BATCH_GENERATED_OPCODE)return !generated_record(ctx,r,&params);
+ return !(r->payload_bytes<=4096&&pw_vk_wire_validate(r->opcode,r->payload,r->payload_bytes));
+}
+static int replay(void *context,const struct pw_vk_stream_record *r)
+{
+ struct replay_context *ctx=context;void *params;unsigned code;
+ if(r->opcode!=PW_VK_BATCH_GENERATED_OPCODE)return !pw_wine_vk_replay(r->opcode,r->payload,r->payload_bytes);
+ if(!generated_record(ctx,r,&params))return 1;
+ memcpy(&code,r->payload,4);return pw_vk_batch_dispatch_native(code,params)!=STATUS_SUCCESS;
+}
 NTSTATUS pw_vk_batch_unix(void *args)
 {
- struct pw_vk_batch_params *p=args;size_t completed;
- if(p->version!=PW_VK_BATCH_VERSION||p->bytes>PW_VK_BATCH_SCRATCH||p->code>unix_count||p->code==unix_pw_vk_batch)return STATUS_INVALID_PARAMETER;
- if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,preflight,NULL,&completed)!=PW_VK_STREAM_OK)return STATUS_INVALID_PARAMETER;
- if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,replay,NULL,&completed)!=PW_VK_STREAM_OK)return STATUS_UNSUCCESSFUL;
+ struct pw_vk_batch_params *p=args;size_t completed;struct replay_context ctx;NTSTATUS status=STATUS_SUCCESS;
+ if((p->version!=PW_VK_BATCH_VERSION&&p->version!=PW_VK_BATCH_LEGACY_VERSION)||p->bytes>PW_VK_BATCH_SCRATCH||p->code>unix_count||p->code==unix_pw_vk_batch)return STATUS_INVALID_PARAMETER;
+ ctx.version=p->version;ctx.arena=malloc(PW_VK_CODEC_DECODE_BYTES);if(!ctx.arena)return STATUS_NO_MEMORY;
+ if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,preflight,&ctx,&completed)!=PW_VK_STREAM_OK)status=STATUS_INVALID_PARAMETER;
+ else if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,replay,&ctx,&completed)!=PW_VK_STREAM_OK)status=STATUS_UNSUCCESSFUL;
+ free(ctx.arena);if(status)return status;
  p->status=STATUS_SUCCESS;
  /* unix_count is the private flush-only sentinel. This check occurs before
   * any dispatch; ordinary perf-critical thunks really return void. */
