@@ -70,3 +70,9 @@ extents and ignore the API stride. Mutable descriptor types, unknown metadata,
 creation extension chains and allocator callbacks take the synchronous fallback
 path. Command-buffer allocation writes only a PE tail association; the shared
 client-object prefix used by Unix unwrapping stays unchanged.
+
+The public Wine build fingerprint includes the codec generator as well as all
+adapter sources, so a generator change reconfigures the staged module instead
+of silently retaining an older generated Makefile or codec. XML inputs use the
+exact registry revision declared by the pinned Wine generator; explicit XML
+paths remain available for offline fixture reproduction.

@@ -150,6 +150,7 @@ def check_vk_runtime_staging() -> None:
     # recipe; otherwise an old generated Makefile can omit a newly added unit.
     stamp = text.split('stamp=$(\n', 1)[1].split('build=$work/build', 1)[0]
     assert '"$root/tools/stage_vk_batch.py"' in stamp
+    assert '"$root/tools/generate_vk_codecs.py"' in stamp
     assert '"$root"/wine/ps5/pw_vk_*.[ch]' in stamp
     assert '"$root"/wine/ps5/vulkan/*.[ch]' in stamp
 
