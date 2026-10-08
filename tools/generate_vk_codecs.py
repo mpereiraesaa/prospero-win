@@ -45,6 +45,7 @@ class Codecs:
   if getattr(v,'bit_width',None):
    width=v.bit_width
    return '{ uint64_t bits=c->decode?0:(uint64_t)p->'+v.name+'; CHECK(pw_vk_codec_value(c,&bits,8,0)); if(bits>UINT64_C('+str((1<<width)-1)+'))goto fail; if(c->decode)p->'+v.name+'=bits; }'
+  if v.name=='pData' and ('DescriptorSetWithTemplate' in parent.name):return f'CHECK(pw_vk_codec_template(c,(void *)({address}),p->descriptorUpdateTemplate));'
   if v.name=='pCheckpointMarker':return f'CHECK(pw_vk_codec_value(c,(void *)({address}),sizeof(p->{v.name}),1)); /* opaque marker identity: never dereferenced */'
   if v.name=='pAllocator':return f'if(p->{v.name})goto fail; CHECK(pw_vk_codec_array(c,(void *)({address}),0,1,1)==0);'
   if v.name=='pNext':return f'CHECK(codec_next(c,(void *)({address})));'
@@ -122,7 +123,6 @@ default:goto fail;}\n'''
   for f in funcs:
    if f.name in ['vkDebugReportMessageEXT','vkSubmitDebugUtilsMessageEXT']:skip[f.name]='callback delivery'
    elif any(p.is_pointer() and not p.is_const() for p in f.params):skip[f.name]='immediate output storage'
-   elif f.name in ['vkUpdateDescriptorSetWithTemplate','vkUpdateDescriptorSetWithTemplateKHR','vkCmdPushDescriptorSetWithTemplateKHR','vkCmdPushDescriptorSetWithTemplate','vkCmdPushDescriptorSetWithTemplate2KHR','vkCmdPushDescriptorSetWithTemplate2']:skip[f.name]='template metadata snapshot requires registered template semantic codec'
    else:
     active.append(f)
     for p in f.params:
@@ -167,11 +167,13 @@ static int codec_next(struct pw_vk_codec *,void *);
   src+='default:return 0;}}\nstatic int generated(struct pw_vk_codec *c,unsigned code,void *args){switch(code){\n'
   for f in active:src+=f'case unix_{f.name}:c->gpu_addresses={int(f.name.startswith("vkCmd"))};return codec_{f.name}(c,args,0);\n'
   src+='default:return 0;}}\n'
-  src+='''int pw_vk_generated_encode(unsigned code,void *args,void *wire,size_t capacity,size_t *written)
-{ struct pw_vk_codec c={0};c.wire=wire;c.capacity=capacity;*written=0;
+  src+='''int pw_vk_generated_encode_templates(unsigned code,void *args,void *wire,size_t capacity,size_t *written,pw_vk_codec_snapshot_fn snapshot,void *context)
+{ struct pw_vk_codec c={0};c.wire=wire;c.capacity=capacity;c.template_snapshot=snapshot;c.snapshot_context=context;*written=0;
  if(!args||!wire||capacity>PW_VK_CODEC_MAX_BYTES||!pw_vk_codec_source(&c,args,pw_vk_generated_param_size(code)))return 0;
  if(!generated(&c,code,args))return 0;
  *written=c.used;return 1;}
+int pw_vk_generated_encode(unsigned code,void *args,void *wire,size_t capacity,size_t *written)
+{ return pw_vk_generated_encode_templates(code,args,wire,capacity,written,NULL,NULL); }
 int pw_vk_generated_decode(unsigned code,const void *wire,size_t bytes,void *arena,size_t capacity,void **args)
 { struct pw_vk_codec c={0};size_t size=pw_vk_generated_param_size(code);
  if(!size||size>capacity||bytes>PW_VK_CODEC_MAX_BYTES||capacity>PW_VK_CODEC_DECODE_BYTES||(uintptr_t)arena%8||!wire||!arena)return 0;
@@ -205,6 +207,7 @@ int pw_vk_generated_decode(unsigned code,const void *wire,size_t bytes,void *are
   selector_init=''
   if v.selector and self.record(v.type) and v.type.union and v.type.members[0].selection:
    selector_init='p->'+v.selector+'='+v.type.members[0].selection[0]+';'
+  if v.name=='pData' and ('DescriptorSetWithTemplate' in parent.name):return '{ VkDescriptorBufferInfo *info=allocate(sizeof(*info));info->buffer=UINT64_C(0xfedcba9876543210);info->offset=4;info->range=4;p->pData=info; }'
   if v.name=='pCheckpointMarker':return 'p->pCheckpointMarker=(const void *)(uintptr_t)0x12345678;'
   if self.pointer(v):
    if v.dyn_array_len=='null-terminated':return 'p->'+v.name+'="owned test string";'
@@ -234,6 +237,9 @@ int pw_vk_generated_decode(unsigned code,const void *wire,size_t bytes,void *are
 #include <string.h>
 static union{uint64_t align;unsigned char bytes[16*1024*1024];} storage;
 static size_t used;static unsigned depth;
+static int snapshot(void *context,uint64_t handle,const void *data,void *output,size_t capacity,size_t *written)
+{ unsigned char *p=output;uint32_t span=24;(void)context;if(!data||capacity<56)return 0;memset(p,0,56);memcpy(p+16,&handle,8);memcpy(p+24,&span,4);memcpy(p+32,data,24);*written=56;return 1; }
+
 static void *allocate(size_t size){size_t pos=(used+7)&~(size_t)7;if(pos>sizeof(storage.bytes)||size>sizeof(storage.bytes)-pos)abort();void *p=storage.bytes+pos;used=pos+size;memset(p,0,size);return p;}
 '''
   for name in self.records:src+=f'static void __attribute__((unused)) fill_{name}(void *);\n'
@@ -264,14 +270,14 @@ static void *allocate(size_t size){size_t pos=(used+7)&~(size_t)7;if(pos>sizeof(
     'vkCmdCopyImage2':'struct vkCmdCopyImage2_params *q=decoded;if(q->pCopyImageInfo->regionCount!=4||q->pCopyImageInfo->srcImage!=UINT64_C(0xfedcba9876543210))return 13;',
     'vkCmdPushDataEXT':'struct vkCmdPushDataEXT_params *q=decoded;if(q->pPushDataInfo->data.size!=4||((const uint8_t *)q->pPushDataInfo->data.address)[0]!=3)return 14;',
    }.get(f.name,'')
-   src+=f'''if(!pw_vk_generated_encode(unix_{f.name},params,wire,sizeof(wire),&n)){{unsupported++;printf("UNSUPPORTED {f.name}\\n");}}
+   src+=f'''if(!pw_vk_generated_encode_templates(unix_{f.name},params,wire,sizeof(wire),&n,snapshot,NULL)){{unsupported++;printf("UNSUPPORTED {f.name}\\n");}}
  else{{
  if(produce){{file=fopen(path,"wb");if(!file||fwrite(wire,1,n,file)!=n)return 3;fclose(file);}}
  else{{file=fopen(path,"rb");if(!file)return 4;size_t got=fread(again,1,sizeof(again),file);fclose(file);if(got!=n||memcmp(wire,again,n)){{fprintf(stderr,"cross ABI mismatch {f.name}\\n");return 5;}}}}
  memset(storage.bytes,0xcc,used);
  if(!pw_vk_generated_decode(unix_{f.name},wire,n,arena.bytes,sizeof(arena.bytes),&decoded)){{fprintf(stderr,"decode failed {f.name}\\n");return 6;}}
  {typed}
- if(!pw_vk_generated_encode(unix_{f.name},decoded,again,sizeof(again),&m)||m!=n||memcmp(wire,again,n)){{fprintf(stderr,"roundtrip failed {f.name}\\n");return 7;}}
+ if(!pw_vk_generated_encode_templates(unix_{f.name},decoded,again,sizeof(again),&m,snapshot,NULL)||m!=n||memcmp(wire,again,n)){{fprintf(stderr,"roundtrip failed {f.name}\\n");return 7;}}
  if(n&&pw_vk_generated_decode(unix_{f.name},wire,n-1,arena.bytes,sizeof(arena.bytes),&decoded))return 8;
  if(n<sizeof(wire)){{wire[n]=0;if(pw_vk_generated_decode(unix_{f.name},wire,n+1,arena.bytes,sizeof(arena.bytes),&decoded))return 9;}}
  passed++;}}}}\n'''

@@ -492,3 +492,5 @@ wine/ps5/vulkan/pw_vk_retire.h
 tests/test_vk_retire.py
 
 tests/test_vk_generated_stage.py
+
+tests/lab/vk_generated_replay.c

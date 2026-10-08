@@ -68,3 +68,29 @@ int pw_vk_codec_string(struct pw_vk_codec *c,void *slot)
  for(i=0;i<length;i++)if(!pw_vk_codec_value(c,(void *)(string+i),1,0))return 0;
  return length&&string[length-1]==0;
 }
+
+/* Template snapshots have the existing normalized 32-byte header, followed by
+ * sparse referenced spans. Only metadata-aware PE code can produce one. */
+int pw_vk_codec_template(struct pw_vk_codec *c,void *slot,uint64_t handle)
+{
+ uint32_t bytes=0,span,reserved;uint64_t encoded_handle;size_t written,offset;void *pointer=NULL;
+ if(!c->decode){
+  if(!c->template_snapshot||!room(c,4)||!pw_vk_codec_source(c,slot,sizeof(pointer)))return 0;
+  memcpy(&pointer,slot,sizeof(pointer));
+  if(!c->template_snapshot(c->snapshot_context,handle,pointer,c->wire+c->used+4,c->capacity-c->used-4,&written)||written>UINT32_MAX)return 0;
+  bytes=(uint32_t)written;
+ }
+ if(!pw_vk_codec_value(c,&bytes,4,0)||bytes<32||!room(c,bytes))return 0;
+ memcpy(&reserved,c->wire+c->used+4,4);if(reserved)return 0;
+ memcpy(&reserved,c->wire+c->used+28,4);if(reserved)return 0;
+ memcpy(&encoded_handle,c->wire+c->used+16,8);if(encoded_handle!=handle)return 0;
+ memcpy(&span,c->wire+c->used+24,4);if((uint64_t)span+32!=bytes)return 0;
+ if(c->decode){
+  if(c->arena_used>SIZE_MAX-7)return 0;
+  offset=(c->arena_used+7)&~(size_t)7;
+  if(offset>c->arena_capacity||span>c->arena_capacity-offset)return 0;
+  pointer=c->arena+offset;c->arena_used=offset+span;
+  memcpy(pointer,c->wire+c->used+32,span);memcpy(slot,&pointer,sizeof(pointer));
+ }
+ c->used+=bytes;return 1;
+}
