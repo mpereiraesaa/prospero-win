@@ -659,13 +659,15 @@ static int open_library(void)
             snprintf(catalog_detail[catalog_count], sizeof(catalog_detail[0]), "%s  %s  %ux%u",
                      game->app.architecture == PW_APP_ARCH_PE64 ? "pe64" : "pe32",
                      game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" :
-                     game->app.graphics == PW_APP_GRAPHICS_OPENGL ? "opengl" : "gdi",
+                     game->app.graphics == PW_APP_GRAPHICS_OPENGL ? "opengl" :
+                     game->app.graphics == PW_APP_GRAPHICS_ZINK ? "zink" : "gdi",
                      (unsigned)game->display.width, (unsigned)game->display.height);
         else
             snprintf(catalog_detail[catalog_count], sizeof(catalog_detail[0]), "%s  %s",
                      game->app.architecture == PW_APP_ARCH_PE64 ? "pe64" : "pe32",
                      game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" :
-                     game->app.graphics == PW_APP_GRAPHICS_OPENGL ? "opengl" : "gdi");
+                     game->app.graphics == PW_APP_GRAPHICS_OPENGL ? "opengl" :
+                     game->app.graphics == PW_APP_GRAPHICS_ZINK ? "zink" : "gdi");
         catalog[catalog_count] = (PwWineApp){ game->app.id, game->app.name,
                                               catalog_detail[catalog_count], game->app.executable };
         catalog_count++;
@@ -889,7 +891,7 @@ int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
     enum { WINE64_FIXED_ENV_COUNT = 6,
-           WINE64_PROFILE_ENV_CAPACITY = 7 + PW_GAME_RUNTIME_ENV_MAX + PW_GAME_CPU_ENV_MAX };
+           WINE64_PROFILE_ENV_CAPACITY = 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX + PW_GAME_CPU_ENV_MAX };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -975,30 +977,37 @@ int main(int argc, char **argv)
                      (unsigned)game->display.height);
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_DESKTOP", desktop };
         }
-        /* Profile graphics mode selects Wine's builtin WGL implementation;
+        /* The graphics mode selects builtin WGL or the native Zink provider;
          * preserve other per-game overrides such as DXVK when composing it. */
         int overrides_status = pw_app_profile_effective_dll_overrides(
             &game->app, effective_dll_overrides, sizeof(effective_dll_overrides));
         if (overrides_status == PW_OK && effective_dll_overrides[0])
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINEDLLOVERRIDES", effective_dll_overrides };
-        else if (overrides_status != PW_OK)
+        else if (overrides_status != PW_OK) {
             PS5LOG_LOG("PW_WINE64 DLL overrides refused: %s", game->app.id);
-        if (game->app.graphics == PW_APP_GRAPHICS_OPENGL)
-            extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_OPENGL", "1" };
-        /* [display] show_fps: the backend's own counter, top left. Mesa draws
-         * text only where the PS5 OpenGL SDK's EGL calls its HUD. */
-        if (game->display.show_fps)
-            extra[config.extra_env_count++] = game->app.graphics == PW_APP_GRAPHICS_OPENGL
-                ? (PwWineStartEnv){ "GALLIUM_HUD", "simple,fps" } : (PwWineStartEnv){ "DXVK_HUD", "fps" };
-        /* [display] refresh = 120: the PS5 OpenGL SDK asks the display for
-         * 120 Hz (Wine patch 0722). The title declares the capability in its
-         * param.json; a display without 120 Hz keeps presenting at 60. */
-        if (game->app.graphics == PW_APP_GRAPHICS_OPENGL && game->display.refresh == 120)
-            extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_GL_REFRESH", "120" };
-        /* [display] opengl_thread: Mesa's glthread runs the game's OpenGL
-         * calls on a worker thread, so the driver's work overlaps the game's. */
-        if (game->app.graphics == PW_APP_GRAPHICS_OPENGL && game->display.opengl_thread)
-            extra[config.extra_env_count++] = (PwWineStartEnv){ "PS5_GLTHREAD", "1" };
+            return 1;
+        }
+        {
+            PwGameEnv graphics_env[PW_GAME_GRAPHICS_ENV_MAX];
+            size_t graphics_count = pw_game_graphics_env(game, graphics_env);
+            for (size_t i = 0; i < graphics_count; i++)
+                extra[config.extra_env_count++] = (PwWineStartEnv){ graphics_env[i].name, graphics_env[i].value };
+        }
+        if (game->app.graphics == PW_APP_GRAPHICS_ZINK) {
+            int provider_status = PW_ERR_NOT_FOUND;
+            unsigned copied = 0;
+            for (size_t i = 0; i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
+                char provider[512];
+                int length = snprintf(provider, sizeof(provider), "%s/win/mesa-zink/%s", runtime_roots[i],
+                    game->app.architecture == PW_APP_ARCH_PE32 ? "i386-windows" : "x86_64-windows");
+                if (length < 0 || (size_t)length >= sizeof(provider)) { provider_status = PW_ERR_LIMIT; break; }
+                provider_status = pw_wine_prefix_zink_install(prefix, provider, game->app.architecture, &copied);
+                if (provider_status != PW_ERR_NOT_FOUND) break;
+            }
+            PS5LOG_LOG("PW_WINE64 zink provider=%s copied=%u architecture=%s", pw_result_name(provider_status),
+                       copied, game->app.architecture == PW_APP_ARCH_PE32 ? "pe32" : "pe64");
+            if (provider_status != PW_OK) return 1;
+        }
         /* xinput mode: SDL2 games (Half-Life) look for controllers through
          * raw input first, which Wine on the PS5 has none of, and then skip
          * XInput; this hint makes them read controller 0 through XInput. */
@@ -1014,7 +1023,8 @@ int main(int argc, char **argv)
             PS5LOG_LOG("PW_WINE64 runtime thread_scheduling=%d", game->runtime.thread_scheduling);
         }
         /* [runtime] cpu: a 32-bit game runs on the native WoW64 CPU unless it
-         * draws with OpenGL or its profile asks for the translator; the native
+         * draws with builtin OpenGL or asks for the translator; explicit Zink
+         * keeps the native default. The native
          * CPU always brings the Vulkan batching (src/pw_game_profile.h). */
         {
             PwGameEnv cpu_env[PW_GAME_CPU_ENV_MAX];

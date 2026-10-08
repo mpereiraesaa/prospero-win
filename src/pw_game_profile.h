@@ -10,7 +10,7 @@
  *   scaling = fit          ; fit (keep aspect, fill the screen), integer, stretch
  *   view = window          ; window: show the game's windows; desktop: all of it
  *   show_fps = true        ; a frame-rate counter in the top left (default: true):
- *                          ; DXVK's HUD, or Mesa's for graphics = opengl
+ *                          ; DXVK's HUD, or Mesa's for graphics = opengl/zink
  *   refresh = 120          ; output refresh rate for graphics = opengl: 60 or 120
  *                          ; (default 60); a display without 120 Hz stays at 60
  *   opengl_thread = true   ; graphics = opengl: run OpenGL on its own CPU thread
@@ -37,7 +37,8 @@
  *   cpu = native                ; a 32-bit game's CPU backend: native (runs
  *                               ; its code directly, with Vulkan batching) or
  *                               ; translator (wowprospero); default native,
- *                               ; translator for OpenGL games
+ *                               ; translator for builtin OpenGL games; native
+ *                               ; for explicit graphics=zink
  *
  * Buttons: cross circle square triangle l1 r1 l2 r2 l3 r3 up down left
  * right options create touchpad. An input preset file holds only an [input]
@@ -102,7 +103,7 @@ typedef struct PwGameRuntime {
 
 /* A variable of Wine's environment; both strings are static. */
 typedef struct PwGameEnv { const char *name, *value; } PwGameEnv;
-enum { PW_GAME_RUNTIME_ENV_MAX = 1, PW_GAME_CPU_ENV_MAX = 2 };
+enum { PW_GAME_RUNTIME_ENV_MAX = 1, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 4 };
 
 typedef struct PwGameProfile {
     PwAppProfile app;
@@ -128,6 +129,13 @@ int pw_game_cpu_native(const PwGameProfile *profile);
  * batching (WINE_PS5_WOW64_CPU, PW_VK_BATCH), into env, which has room for
  * PW_GAME_CPU_ENV_MAX; how many (0 for the translator). */
 size_t pw_game_cpu_env(const PwGameProfile *profile, PwGameEnv *env);
+
+/* Graphics-specific environment, at most PW_GAME_GRAPHICS_ENV_MAX entries.
+ * graphics=zink selects GALLIUM_DRIVER=zink, with Mesa's optional FPS HUD;
+ * builtin OpenGL keeps its PS5 EGL/thread/refresh options. Zink providers are
+ * optional at win/mesa-zink/{i386-windows,x86_64-windows}; unsupported/missing
+ * providers must fail before launch. No graphics default is changed. */
+size_t pw_game_graphics_env(const PwGameProfile *profile, PwGameEnv *env);
 /* An input with nothing bound, keyboard mode, no pointer. */
 void pw_game_input_init(PwGameInput *input);
 /* Parse an input preset file (one [input] section, no preset= line) into

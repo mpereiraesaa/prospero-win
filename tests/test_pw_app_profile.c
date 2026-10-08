@@ -23,8 +23,37 @@ static int parse_text(const char *text, PwAppProfile *profile)
     return pw_app_profile_parse((const uint8_t *)text, strlen(text), profile);
 }
 
+static void test_zink(void)
+{
+    static const char base[] = "[application]\nid=zink\nname=Zink game\n"
+        "executable=C:\\game.exe\nworking_directory=C:\\\nprefix=zink\nruntime=wine-wow64\n";
+    const char *good[] = { "", "d3d9=n", "opengl32=n", "OPENGL32.DLL=N", "opengl32,d3d9=n",
+                           "d3d9=n;", "*opengl32=n" };
+    const char *bad[] = { "opengl32=b", "opengl32=n,b", "opengl32=", "opengl32=n;opengl32=b",
+                          "opengl32.dll,d3d9=b", "*opengl32=b" };
+    char text[1024], out[300]; PwAppProfile p, before;
+    for (unsigned i = 0; i < sizeof(good) / sizeof(good[0]); i++) {
+        snprintf(text, sizeof(text), "%sarchitecture=pe32\ngraphics=ZiNk\n%s%s\n", base,
+                 good[i][0] ? "dll_overrides=" : "", good[i]);
+        assert(parse_text(text, &p) == PW_OK && p.graphics == PW_APP_GRAPHICS_ZINK);
+        assert(pw_app_profile_effective_dll_overrides(&p, out, sizeof(out)) == PW_OK);
+        assert(strstr(out, "opengl32=n") || strstr(out, "OPENGL32.DLL=N") || strstr(out, "opengl32,d3d9=n"));
+    }
+    before = p;
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        snprintf(text, sizeof(text), "%sarchitecture=pe64\ngraphics=zink\ndll_overrides=%s\n", base, bad[i]);
+        assert(parse_text(text, &p) == PW_ERR_MALFORMED && !memcmp(&p, &before, sizeof(p)));
+    }
+    snprintf(text, sizeof(text), "%sarchitecture=pe64\ngraphics=zink\n", base);
+    assert(parse_text(text, &p) == PW_OK && p.architecture == PW_APP_ARCH_PE64);
+    assert(pw_app_profile_effective_dll_overrides(&p, out, 11) == PW_OK && !strcmp(out, "opengl32=n"));
+    strcpy(out, "unchanged");
+    assert(pw_app_profile_effective_dll_overrides(&p, out, 10) == PW_ERR_LIMIT && !strcmp(out, "unchanged"));
+}
+
 int main(void)
 {
+    test_zink();
     PwAppProfile profile;
     PwAppProfile before;
     char effective_overrides[PW_APP_DLL_OVERRIDES_CAPACITY + sizeof(";opengl32=b")];

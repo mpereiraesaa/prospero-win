@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "../src/pw_game_profile.h"
+#include "../src/pw_wine_start.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,40 @@ static int preset(const char *text, PwGameInput *input)
 
 enum { CROSS, CIRCLE, SQUARE, TRIANGLE, L1, R1, L2, R2, L3, R3, UP, DOWN, LEFT, RIGHT, OPTIONS,
        CREATE, TOUCHPAD };
+
+static void test_graphics_env(void)
+{
+    PwGameProfile p;
+    PwGameEnv env[PW_GAME_GRAPHICS_ENV_MAX], cpu[PW_GAME_CPU_ENV_MAX], runtime[PW_GAME_RUNTIME_ENV_MAX];
+    assert(parse(APP, &p) == PW_OK);
+    assert(pw_game_graphics_env(NULL, env) == 0 && pw_game_graphics_env(&p, NULL) == 0);
+    for (int graphics = PW_APP_GRAPHICS_AUTO; graphics <= PW_APP_GRAPHICS_ZINK; graphics++) {
+        for (int fps = 0; fps < 2; fps++) {
+            p.app.graphics = (PwAppGraphics)graphics; p.display.show_fps = fps;
+            p.display.refresh = 120; p.display.opengl_thread = 1;
+            p.runtime.thread_scheduling = 1;
+            p.runtime.cpu = PW_GAME_CPU_NATIVE; /* worst-case explicit override */
+            size_t count = pw_game_graphics_env(&p, env);
+            assert(count <= PW_GAME_GRAPHICS_ENV_MAX);
+            /* Fixed6, desktop/override/XInput3, graphics, runtime and CPU. */
+            assert(6 + 3 + count + pw_game_cpu_env(&p, cpu) + pw_game_runtime_env(&p.runtime, runtime) <=
+                   PW_WINE_START_MAX_ENV);
+            if (graphics == PW_APP_GRAPHICS_ZINK) {
+                assert(count == (size_t)(1 + fps));
+                assert(!strcmp(env[0].name, "GALLIUM_DRIVER") && !strcmp(env[0].value, "zink"));
+                if (fps) assert(!strcmp(env[1].name, "GALLIUM_HUD"));
+            } else if (graphics == PW_APP_GRAPHICS_OPENGL) {
+                assert(count == (size_t)(3 + fps));
+                assert(!strcmp(env[0].name, "WINE_PS5_OPENGL"));
+                assert(!strcmp(env[count - 2].name, "WINE_PS5_GL_REFRESH"));
+                assert(!strcmp(env[count - 1].name, "PS5_GLTHREAD"));
+            } else {
+                assert(count == (size_t)fps);
+                if (fps) assert(!strcmp(env[0].name, "DXVK_HUD"));
+            }
+        }
+    }
+}
 
 static void test_profile(void)
 {
@@ -100,6 +135,12 @@ static void test_cpu(void)
     assert(parse(APP_ARCH("pe32", "opengl"), &p) == PW_OK && pw_game_cpu_native(&p) == 0);
     assert(pw_game_cpu_env(&p, env) == 0);
     assert(parse(APP_ARCH("pe64", "dxvk"), &p) == PW_OK && pw_game_cpu_native(&p) == 0);
+
+    assert(parse(APP_ARCH("pe32", "zink"), &p) == PW_OK && pw_game_cpu_native(&p) == 1);
+    assert(pw_game_cpu_env(&p, env) == 2 && !strcmp(env[1].name, "PW_VK_BATCH"));
+    assert(parse(APP_ARCH("pe64", "zink"), &p) == PW_OK && pw_game_cpu_env(&p, env) == 0);
+    assert(parse(APP_ARCH("pe32", "zink") "[runtime]\ncpu=translator\n", &p) == PW_OK &&
+           pw_game_cpu_env(&p, env) == 0);
 
     /* explicit choices override the default both ways */
     assert(parse(APP_ARCH("pe32", "opengl") "[runtime]\ncpu = native\n", &p) == PW_OK);
@@ -367,6 +408,7 @@ static void test_published_forms(void)
 
 int main(void)
 {
+    test_graphics_env();
     test_published_forms();
     test_profile();
     test_runtime();
