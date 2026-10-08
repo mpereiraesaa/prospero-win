@@ -212,7 +212,7 @@ settings in a `prospero` block. They become the profile's `[display]` and
 ```yaml
 prospero:
   name: Warcraft III          # the name in the launcher
-  graphics: dxvk              # gdi, dxvk, opengl, or auto for this game
+  graphics: dxvk              # gdi, dxvk, opengl, zink, or auto for this game
   display: {desktop: 1920x1080, scaling: fit}
   input: {preset: warcraft3}
 ```
@@ -226,6 +226,25 @@ corner by default. `refresh: 120` lets an OpenGL game present at 120 Hz on a
 display that supports it (the default is 60). `opengl_thread: true` runs an
 OpenGL game's graphics work on its own CPU core, beside the game, which helps
 busy scenes in games such as Half-Life and Counter-Strike (off by default).
+
+`graphics: zink` is a separate opt-in OpenGL path. Pass `--mesa-zink DIR`
+to `pw_install.py`, naming a local output directory from the pinned Mesa
+WGL/Zink builder that contains `manifest.json`, `i386-windows/` and
+`x86_64-windows/`. The tool validates both architectures, hashes and bounded
+PE imports before creating a prefix. After Wine initializes the prefix, it
+installs the game's architecture-matched `opengl32.dll`, `libgallium_wgl.dll`
+and all manifest DLL companions, and selects native `opengl32`. Hashes bind
+files to the manifest; obtain that manifest from a trusted build. Files must
+remain unchanged during installation. A failed copy emits no profile;
+individual file replacement is atomic, the provider group is not.
+
+The console also needs a launcher and optional Mesa package supporting Zink;
+it validates and installs the provider into an existing initialized prefix
+before launch, selects `GALLIUM_DRIVER=zink`, and defaults PE32 games to native
+WoW64 with Vulkan batching. `refresh` and `opengl_thread` remain options for
+builtin `graphics: opengl`. Existing D3D overrides remain intact: Zink selects
+WGL for OpenGL applications, not a D3D conversion. No renderer or performance
+claim follows from successfully installing a provider.
 
 The profile's `[application]` section comes from the script's `game` section:
 the executable, its arguments and its working folder.
