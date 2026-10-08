@@ -221,18 +221,11 @@ wine/patches/0620-ntdll-generic-processor-topology.patch
 wine/patches/0630-win32u-ps5-driver-display-modes.patch
 wine/patches/0640-win32u-ps5-flush-period.patch
 wine/patches/0650-win32u-ps5-black-surfaces.patch
-wine/patches/0660-win32u-ps5-opengl-egl.patch
-wine/patches/0661-win32u-ps5-opengl-fbo-compat.patch
-wine/patches/0662-win32u-ps5-opengl-present-gl21.patch
 wine/patches/0670-win32u-ps5-relative-mouse.patch
 wine/patches/0680-server-ps5-wait-watchdog.patch
 wine/patches/0690-ntdll-ps5-slow-operation-log.patch
 wine/patches/0700-strmbase-renderer-state-wait-without-filter-lock.patch
 wine/patches/0710-ntdll-ps5-guest-access-violations-from-the-wow64-cpu.patch
-wine/patches/0720-opengl32-batch-immediate-mode-calls.patch
-wine/patches/0721-win32u-ps5-log-opengl-frame-rate.patch
-wine/patches/0722-win32u-ps5-opengl-refresh-rate.patch
-wine/patches/0723-win32u-ps5-opengl-cursor.patch
 wine/patches/0730-server-ps5-anonymous-mappings-in-shared-memory.patch
 wine/patches/0740-win32u-ps5-vulkan-hardware-cursor.patch
 wine/patches/0750-winspool-fail-unix-calls-without-a-backend.patch
@@ -319,7 +312,6 @@ tests/test_wine_lookup_misses.py
 wine/ps5/pw_wine_cwd.c
 wine/ps5/pw_wine_cwd.h
 wine/ps5/pw_wine_cwd_libc.c
-wine/ps5/pw_opengl_libc.c
 wine/ps5/pw_vulkan_libc.c
 wine/ps5/pw_vulkan_radv.c
 docs/INSTALLING_GAMES.md

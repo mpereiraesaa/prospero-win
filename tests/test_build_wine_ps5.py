@@ -114,7 +114,7 @@ def main() -> int:
 
 def check_vk_runtime_staging() -> None:
     text = SCRIPT.read_text()
-    block = text.split('# Stage Vulkan batching', 1)[1].split('# The PS5 OpenGL SDK', 1)[0]
+    block = text.split('# Stage Vulkan batching', 1)[1].split('\ncflags=', 1)[0]
     block = block[block.index('python3'):]
     with tempfile.TemporaryDirectory() as directory:
         base = Path(directory)
