@@ -190,6 +190,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_pw_prefix.py
 	python3 tests/test_pw_gameplay_run.py
 	python3 tests/test_gen_prx_descriptor.py
+	CC="$(CC)" python3 tests/test_native_system_service_profile.py
 	python3 tests/test_test_reachability.py
 	python3 tests/test_status_vocabulary.py
 	python3 tests/test_classify_x86.py
