@@ -240,9 +240,10 @@ ran at 12 fps with the line above: the same 25,000 OpenGL calls per frame
 cost 20 times more there. A small test program that times single OpenGL
 calls then showed that the cost of crossing from Wine to the library was
 the same on both; small `glBegin`/`glEnd` draws were the slow part, inside
-the PS5's OpenGL driver. OpenGL games also log their frame rate, as
-`PW_GL frames=<n> fps=<rate>` every five seconds, so a run needs no one at
-the TV to read the counter.
+the PS5's OpenGL driver. That driver, the PS5 OpenGL SDK, has since been
+replaced by Mesa's Zink on Vulkan. Its builds logged the frame rate as
+`PW_GL frames=<n> fps=<rate>` every five seconds; with Zink, read Wine's
+`fps` channel instead (`pw_gameplay_run.py --fps`), as for DXVK.
 
 Avoid sampling profilers based on `SIGPROF` on the PS5. Its threading
 library delays a signal that arrives while a thread holds one of its locks,
@@ -309,8 +310,8 @@ reports it and puts the console back as it was.
   afterwards, and `--fetch` copies a file such as the game's own benchmark
   log into `--save` (both in [profiling on the PS5](#10-profiling-on-the-ps5));
 - `--fps` turns on Wine's `fps` channel in the game's profile, for a game
-  that draws with Vulkan through DXVK. OpenGL games log their frame rate
-  without it (`PW_GL`).
+  that presents with Vulkan: DXVK, or Zink for OpenGL. Logs from builds with
+  the old PS5 OpenGL SDK carry `PW_GL` lines instead, which it still reads.
 - `--input FILE` replays a recorded macro: keys held and released, mouse
   buttons and relative mouse motion, through the same path a USB keyboard
   and mouse take, and controller buttons and sticks. One event per line, its
@@ -630,7 +631,7 @@ What each looked like, and what it turned out to be. Newest first.
 | A Direct3D game through DXVK (Half-Life 2) showed no mouse pointer in its menus | Vulkan frames reach the screen through the GPU driver's own video output (patch 0460), which the PS5 user driver doesn't compose, so nothing drew the Windows cursor over them. A first fix scaled the position to the 3840x2160 output, which put the pointer at twice its place: VideoOut's cursor position is in the shown frame's pixels | Patch 0740 and `pw_videoout_cursor` in `libvulkan.prx`: after each present, the application's cursor goes to VideoOut's hardware cursor (two 64x64 images in display memory), at the desktop's coordinates. It's hidden while the game hides the cursor and while GDI frames show |
 | Half-Life 2 took about 95 s to load a map. `srvbench`, a small test program, measured 5.2 ms for a `MapViewOfFile` + `UnmapViewOfFile` pair on the console against 0.1 ms on the PC, while the kernel's own `mmap`/`munmap` took about 3 µs | Wine tells the CPU backend only the address of a view being unmapped, and wowprospero flushed with no size, which discards every thread's translations. A 32-bit DXVK maps and unmaps windows of its texture memory about 12,000 times while Half-Life 2 loads a map, so every thread kept retranslating its code | The backend takes the view's extent just before the unmap and flushes only that range: 0.1–0.15 ms a pair on the console, and `d1_canals_01` loads in 25 s |
 | Half-Life 2 froze while loading its first map, and closing it left the console stuck on "Closing…" until a reboot. The wait snapshot showed the main thread inside `CloseHandle`, called from DXVK's `d3d9.dll` | With no `memfd` on the PS5, Wine's server backed every anonymous section with a temp file on `/data`. A 32-bit DXVK keeps managed textures in 64 MiB anonymous sections that it creates and closes constantly (1,401 while Half-Life 2 loads its first map), so texture data went to storage, and closing one of those files blocked for good | Patch 0730: anonymous sections are anonymous shared memory (`shm_open(SHM_ANON)`). A test program repeating DXVK's pattern now closes each one in about 0.2 ms, and Half-Life 2 loads the map |
-| An OpenGL game's menu showed no mouse pointer; its items still lit up under it | The user driver draws the cursor only over the GDI frames it composes; OpenGL frames reach the screen through the SDK's EGL surface. A first fix uploaded the cursor as `GL_BGRA`, which the SDK accepted without an error and drew nothing from | Patch 0723: the presenter blends the application's cursor over each OpenGL frame, uploaded as RGBA |
+| An OpenGL game's menu showed no mouse pointer; its items still lit up under it | The user driver draws the cursor only over the GDI frames it composes; OpenGL frames reach the screen through the SDK's EGL surface. A first fix uploaded the cursor as `GL_BGRA`, which the SDK accepted without an error and drew nothing from | Patch 0723 (removed with the PS5 OpenGL SDK; Zink frames get VideoOut's hardware cursor, patch 0740): the presenter blends the application's cursor over each OpenGL frame, uploaded as RGBA |
 | Half-Life (OpenGL) ran at 12 fps on the PS5 and about 75 fps on the PC; OpenArena reached 60 | `PW_WOW_TIMING`: 82% of the game's main thread in OpenGL calls, 2.64 µs each against 0.13 µs on the PC. Each small `glBegin`/`glEnd` draw costs about 58 µs in the PS5's OpenGL driver against 6 µs on the PC, and Half-Life issues thousands per frame | The driver fetched `sceAgcGetRegisterDefaults()`, about 9 µs a call, on every draw: now once. `opengl32` replays per-vertex calls in one crossing (patch 0720). Mesa draws a run of `glBegin`/`glEnd` blocks as one triangle list, and no longer flushes on `glActiveTexture`. Half-Life holds 60 fps with about a third of each frame to spare |
 | Warcraft III's intro started 0.2–32 s late, or never; the app idle; logging or a key press made it go away | Lock starvation in Wine's DirectShow ([#250](https://github.com/mpereiraesaa/prospero-win/issues/250)): `GetState()` held the renderer's lock while polled every 10 ms, and the PS5's ~1 ms thread wake-up always lost the race for it. Code that re-takes a lock right after releasing it can starve waiters here, not on Linux | Patch 0700: renderers wait without the lock (intro 0.19 s late, 6/6) |
 | The stick and USB mouse didn't move the pointer; keys worked. `inputs` grew, nothing refused | win32u (Wine 11) holds a driver's mouse motion until a button or `MOUSEEVENTF_MOVE_NOCOALESCE` sends it; the PS5 driver never sent it. Before, the pointer only seemed to move because the driver answered `GetCursorPos` itself | Wine patch 0670: relative motion, sent with `MOUSEEVENTF_MOVE_NOCOALESCE` |

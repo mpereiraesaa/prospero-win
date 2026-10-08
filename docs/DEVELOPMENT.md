@@ -134,7 +134,7 @@ hardware claim needs the exact artifacts and the title's `ps5log/1` records
 ## Packaging the app
 
 The folder a player uploads to `/data/homebrew` is the title with its Wine
-runtime beside it. `tools/package_release.sh` puts it together from four
+runtime beside it. `tools/package_release.sh` puts it together from these
 builds:
 
 ```sh
@@ -142,9 +142,12 @@ tools/build_native.sh                  # the title: dist/PPSA99995
 tools/build_wine_ps5.sh --radv <PS5_Vulkan checkout>   # Wine's PS5 modules, RADV
 tools/build_host_wine.sh               # the same Wine for the PC: its PE modules
 tools/build_wowprospero.sh             # the 32-bit CPU: wowprospero.dll
+tools/build_wow64native.sh ...         # the native WoW64 CPU (with its PS5 inputs)
+tools/build_mesa_zink.sh               # OpenGL: Mesa WGL/Zink, PE32 and PE64
 tools/package_release.sh --title dist/PPSA99995 --wine-ps5 .deps/wine-ps5 \
     --host-wine <host Wine install>/usr \
     --cpu-dll <Wine build>/dlls/wowprospero/x86_64-windows/wowprospero.dll \
+    --native-cpu <wow64native output> --mesa-zink <build_mesa_zink artifacts> \
     --lapy-release build/native/lapy-helper-release.json \
     --out release --zip
 ```
@@ -165,10 +168,9 @@ ship to the ones in this repository. `SOURCES.txt` records the source
 revision of each part, read from the builds themselves (the Wine build's
 `report.json` and the helper's `release.json`). Packaging stops if one of
 those is missing, or if `libvulkan.prx` is not the RADV build the notices
-describe. For an OpenGL package, pass `--ps5-opengl-sdk` the SDK that
-ps5-opengl's `make sdk` installed inside its own checkout
-(`build/sdk/ps5-opengl-gl46`), so the report can name the commit it was
-built from.
+describe. `--mesa-zink` is required: OpenGL games draw through it, and its
+manifest names the Mesa commit and compiler for `SOURCES.txt`
+([tools/build_mesa_zink.md](../tools/build_mesa_zink.md)).
 
 ## Making a release
 
