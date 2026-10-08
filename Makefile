@@ -186,6 +186,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wowprospero_unmap.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wowprospero_service_return.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wine_image_view_fds.py
+	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_native_wait_callers.py
 	python3 tests/test_build_wine_ps5.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_ws2_fqdn.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wine_mutex_fast.py

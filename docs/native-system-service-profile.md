@@ -23,3 +23,26 @@ Counts include entries satisfied in the 64-bit PE layer without a host call.
 They must not be labelled as FS transitions or total native crossings. The
 existing native transition profiler measures those separately. Diagnostic
 logging and allocation add overhead; no FPS gain is inferred from this run.
+
+Set `PW_NATIVE_WAIT_TID=00ac` (hexadecimal, without `0x`) together with
+`PW_NATIVE_SYSCALL_PROFILE=1` to record `NtWaitForAlertByThreadId` return
+addresses for that guest thread. `0` selects all threads; unset or malformed
+values disable wait caller recording. Each thread retains up to 64 distinct
+addresses, with excess occurrences counted in `other`. `PW_NATIVE_WAIT_CALLER`
+rows report cumulative totals at the normal 16,384-entry reporting boundary.
+
+A wait caller can be the generic `RtlWaitOnAddress` wrapper. Resolve addresses
+against the exact PE modules; an address in that wrapper alone does not prove
+which application lock blocked the thread. Correlate with batching-gate
+acquisition timing and thread identities before attributing wait time.
+
+For the Vulkan batching lock, set `PW_VK_BATCH_GATE_PROFILE=1` with batching
+enabled. `PW_VK_GATE` reports cumulative acquisition elapsed TSC ticks and
+hold ticks per thread every 4,096 acquisitions, for up to 64 threads. Gate
+hold time excludes reporting, which occurs after release. Acquisition time
+includes the uncontended entry overhead; it is not an exact blocked-time
+counter. Convert using the same run's TSC frequency and subtract cumulative
+snapshots covering the same gameplay window. Partial final intervals are
+not reported. The counters and TSC reads are disabled by default. Compare
+these diagnostics with native syscall samples on the same thread; use a
+separate run with diagnostics disabled for performance acceptance.

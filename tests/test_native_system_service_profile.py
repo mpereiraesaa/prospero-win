@@ -26,6 +26,7 @@ typedef struct {int done;} RTL_RUN_ONCE;
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof((x)[0]))
 #define WINAPI
 #define TRUE 1
+#define FALSE 0
 #define HEAP_ZERO_MEMORY 1
 #define ALL_SYSCALLS32 SYSCALL_ENTRY(0,NtYieldExecution,0) SYSCALL_ENTRY(1,NtProtectVirtualMemory,0)
 struct peb {void *ProcessHeap;};

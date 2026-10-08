@@ -3,7 +3,7 @@ Subject: [PATCH] wow64: add opt-in named guest system-service diagnostics
 
 --- a/dlls/wow64/syscall.c
 +++ b/dlls/wow64/syscall.c
-@@ -1239,6 +1239,82 @@
+@@ -1239,6 +1239,111 @@
  #endif
  
  
@@ -14,12 +14,14 @@ Subject: [PATCH] wow64: add opt-in named guest system-service diagnostics
 +struct pw_syscall_histogram
 +{
 +    ULONGLONG counts[0x4000], reported[0x4000], total;
-+    ULONG callers[64];
++    ULONG callers[64], wait_callers[64];
 +    ULONGLONG caller_counts[64], caller_other;
++    ULONGLONG wait_counts[64], wait_other;
 +};
 +static RTL_RUN_ONCE pw_syscall_once = RTL_RUN_ONCE_INIT;
 +static struct { void *teb; struct pw_syscall_histogram *data; } pw_syscall_slots[64];
-+static BOOL pw_syscall_enabled;
++static BOOL pw_syscall_enabled, pw_wait_enabled;
++static ULONG pw_wait_tid;
 +static const char *const pw_syscall_names[] = {
 +#define SYSCALL_ENTRY(id,name,args) #name,
 +    ALL_SYSCALLS32
@@ -27,11 +29,27 @@ Subject: [PATCH] wow64: add opt-in named guest system-service diagnostics
 +};
 +static ULONG WINAPI pw_syscall_initialize(RTL_RUN_ONCE *once, void *arg, void **ctx)
 +{
-+    WCHAR buffer[8];
++    WCHAR buffer[16];
++    unsigned i, digit;
 +    UNICODE_STRING name, value = {0, sizeof(buffer), buffer};
 +    (void)once; (void)arg; (void)ctx;
 +    RtlInitUnicodeString(&name, L"PW_NATIVE_SYSCALL_PROFILE");
 +    pw_syscall_enabled = !RtlQueryEnvironmentVariable_U(NULL, &name, &value) && value.Length == sizeof(WCHAR) && buffer[0] == '1';
++    RtlInitUnicodeString(&name, L"PW_NATIVE_WAIT_TID");
++    value.Length = 0;
++    if (!RtlQueryEnvironmentVariable_U(NULL, &name, &value) && value.Length && value.Length <= 8 * sizeof(WCHAR))
++    {
++        pw_wait_enabled = TRUE;
++        for (i = 0; i < value.Length / sizeof(WCHAR); ++i)
++        {
++            WCHAR c = buffer[i];
++            if (c >= '0' && c <= '9') digit = c - '0';
++            else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
++            else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
++            else { pw_wait_enabled = FALSE; break; }
++            pw_wait_tid = (pw_wait_tid << 4) | digit;
++        }
++    }
 +    return TRUE;
 +}
 +static void pw_syscall_profile(UINT num, UINT *args)
@@ -67,6 +85,15 @@ Subject: [PATCH] wow64: add opt-in named guest system-service diagnostics
 +            { p->callers[i] = caller; p->caller_counts[i]++; break; }
 +        if (i == ARRAY_SIZE(p->callers)) p->caller_other++;
 +    }
++    if (pw_wait_enabled && (!pw_wait_tid || pw_wait_tid == (ULONG)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread) &&
++        num < ARRAY_SIZE(pw_syscall_names) && !strcmp(pw_syscall_names[num], "NtWaitForAlertByThreadId"))
++    {
++        ULONG caller = args[-1];
++        for (i = 0; i < ARRAY_SIZE(p->wait_callers); ++i)
++            if (!p->wait_counts[i] || p->wait_callers[i] == caller)
++            { p->wait_callers[i] = caller; p->wait_counts[i]++; break; }
++        if (i == ARRAY_SIZE(p->wait_callers)) p->wait_other++;
++    }
 +    if (++p->total & 0x3fff) return;
 +    __asm__ volatile("lfence; rdtsc" : "=a"(i), "=d"(num) :: "memory");
 +    tsc = ((ULONGLONG)num << 32) | i;
@@ -81,12 +108,14 @@ Subject: [PATCH] wow64: add opt-in named guest system-service diagnostics
 +        }
 +    for (i = 0; i < ARRAY_SIZE(p->callers); ++i)
 +        if (p->caller_counts[i]) MESSAGE("PW_NATIVE_PROTECT_CALLER tid=%04lx caller=%08lx total=%llu other=%llu\n", (ULONG)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, p->callers[i], p->caller_counts[i], p->caller_other);
++    for (i = 0; i < ARRAY_SIZE(p->wait_callers); ++i)
++        if (p->wait_counts[i]) MESSAGE("PW_NATIVE_WAIT_CALLER tid=%04lx caller=%08lx total=%llu other=%llu\n", (ULONG)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, p->wait_callers[i], p->wait_counts[i], p->wait_other);
 +}
 +
  /**********************************************************************
   *           Wow64SystemServiceEx  (wow64.@)
   */
-@@ -1253,6 +1329,7 @@
+@@ -1253,6 +1358,7 @@
          ERR( "unsupported syscall %04x\n", num );
          return STATUS_INVALID_SYSTEM_SERVICE;
      }

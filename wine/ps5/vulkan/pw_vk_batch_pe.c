@@ -20,6 +20,16 @@ static struct pw_vk_template_cache templates;
 static struct pw_vk_retirement retirement;
 static unsigned char *scratch,*encoded_wire;
 static BOOL enabled,negotiated,stats_enabled;
+static BOOL gate_profile;
+struct gate_sample { DWORD tid; UINT64 entries, acquire_ticks, hold_ticks; };
+static struct gate_sample gate_samples[64], *gate_active;
+static UINT64 gate_since;
+static UINT64 gate_clock(void)
+{
+ unsigned low,high;
+ __asm__ volatile("lfence; rdtsc" : "=a"(low), "=d"(high) :: "memory");
+ return ((UINT64)high<<32)|low;
+}
 /* Only the existing gated fallback path owns these arrays. */
 static BOOL fallback_profile;
 static UINT64 fallback_counts[unix_count],fallback_reported[unix_count];
@@ -57,6 +67,7 @@ static BOOL read_opcode_mask(void)
 static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
 {
  char env[8];(void)o;(void)p;(void)ctx;
+ gate_profile=GetEnvironmentVariableA("PW_VK_BATCH_GATE_PROFILE",env,sizeof(env))==1&&env[0]=='1';
  stats_enabled=GetEnvironmentVariableA("PW_VK_BATCH_STATS",env,sizeof(env))==1&&env[0]=='1';
  fallback_profile=stats_enabled&&GetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",env,sizeof(env))==1&&env[0]=='1';
  enabled=GetEnvironmentVariableA("PW_VK_BATCH",env,sizeof(env))==1&&env[0]=='1'&&!pw_vk_stream_environment_unsafe();
@@ -70,8 +81,36 @@ static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
  /* Diagnostics are independently opt-in; FPS confirmation leaves them off. */
  return TRUE;
 }
-static void enter(void){EnterCriticalSection(&gate);if(depth&&owner==GetCurrentThreadId())fatal();owner=GetCurrentThreadId();depth=1;}
-static void leave(void){depth=0;owner=0;LeaveCriticalSection(&gate);}
+static void enter(void)
+{
+ UINT64 start=gate_profile?gate_clock():0;
+ EnterCriticalSection(&gate);
+ if(depth&&owner==GetCurrentThreadId())fatal();
+ owner=GetCurrentThreadId();depth=1;
+ if(gate_profile){
+  unsigned i;UINT64 acquired=gate_clock();
+  gate_active=NULL;
+  for(i=0;i<ARRAY_SIZE(gate_samples);i++)if(!gate_samples[i].tid||gate_samples[i].tid==owner){
+   gate_active=&gate_samples[i];gate_active->tid=owner;
+   gate_active->entries++;gate_active->acquire_ticks+=acquired-start;break;
+  }
+  gate_since=acquired;
+ }
+}
+static void leave(void)
+{
+ struct gate_sample sample={0};BOOL report=FALSE;
+ if(gate_profile&&gate_active){
+  gate_active->hold_ticks+=gate_clock()-gate_since;
+  if(!(gate_active->entries&4095)){sample=*gate_active;report=TRUE;}
+  gate_active=NULL;
+ }
+ depth=0;owner=0;LeaveCriticalSection(&gate);
+ /* Copy under the gate, log after release: logging must not extend hold time. */
+ if(report)WINE_MESSAGE("PW_VK_GATE tid=%04lx gate=%p entries=%llu acquire_ticks=%llu hold_ticks=%llu\n",
+   sample.tid,&gate,(unsigned long long)sample.entries,
+   (unsigned long long)sample.acquire_ticks,(unsigned long long)sample.hold_ticks);
+}
 static struct producer *producer(void)
 {
  struct producer *p=TlsGetValue(tls);
