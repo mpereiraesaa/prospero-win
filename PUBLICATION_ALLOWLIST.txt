@@ -488,3 +488,5 @@ tests/test_vk_codecs.py
 
 wine/ps5/vulkan/pw_vk_retire.c
 wine/ps5/vulkan/pw_vk_retire.h
+
+tests/test_vk_retire.py

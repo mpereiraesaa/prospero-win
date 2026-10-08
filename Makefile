@@ -175,6 +175,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_wow64native_scaffold.py
 	python3 tests/test_vk_command_stream.py
 	python3 tests/test_vk_wire.py
+	python3 tests/test_vk_retire.py
 	python3 tests/test_vk_codecs.py
 	python3 tests/test_summarize_vk_batch.py
 	CC="$(CC)" python3 tests/test_native_wow64_provider.py

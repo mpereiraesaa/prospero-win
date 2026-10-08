@@ -31,3 +31,10 @@ paths and compiles real PE32 and Unix64 layouts under an 8 GiB memory cap. Its
 fixtures overwrite source storage after encoding, decode/re-encode every viable
 opcode, reject truncated/trailing packets, and compare PE32 bytes against the
 native parameter fixtures. No driver or console is involved.
+
+Client-object destruction requires a separate retirement step. The staged manual
+instance, device, pool and command-buffer wrappers retain their CRT allocations
+until global replay completes; PE list unlinking stays immediate. Retirement
+node allocation failure drains first, then releases the client object. Other
+loader frees, including failed creation cleanup, remain immediate. This hook is
+a dependency for generated destruction codecs; it does not itself enable them.
