@@ -664,15 +664,13 @@ static int open_library(void)
             snprintf(catalog_detail[catalog_count], sizeof(catalog_detail[0]), "%s  %s  %ux%u",
                      game->app.architecture == PW_APP_ARCH_PE64 ? "pe64" : "pe32",
                      game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" :
-                     game->app.graphics == PW_APP_GRAPHICS_OPENGL ? "opengl" :
-                     game->app.graphics == PW_APP_GRAPHICS_ZINK ? "zink" : "gdi",
+                     game->app.graphics == PW_APP_GRAPHICS_ZINK ? "opengl" : "gdi",
                      (unsigned)game->display.width, (unsigned)game->display.height);
         else
             snprintf(catalog_detail[catalog_count], sizeof(catalog_detail[0]), "%s  %s",
                      game->app.architecture == PW_APP_ARCH_PE64 ? "pe64" : "pe32",
                      game->app.graphics == PW_APP_GRAPHICS_DXVK ? "dxvk" :
-                     game->app.graphics == PW_APP_GRAPHICS_OPENGL ? "opengl" :
-                     game->app.graphics == PW_APP_GRAPHICS_ZINK ? "zink" : "gdi");
+                     game->app.graphics == PW_APP_GRAPHICS_ZINK ? "opengl" : "gdi");
         catalog[catalog_count] = (PwWineApp){ game->app.id, game->app.name,
                                               catalog_detail[catalog_count], game->app.executable };
         catalog_count++;
@@ -925,7 +923,7 @@ int main(int argc, char **argv)
     /* wine, the executable, the profile's argument words, NULL */
     static const char *wine_argv[2 + PW_WINE_LAUNCH_WORDS + 1] = { "wine" };
     static char argument_words[PW_APP_ARGUMENTS_CAPACITY];
-    static char effective_dll_overrides[PW_APP_DLL_OVERRIDES_CAPACITY + sizeof(";opengl32=b")];
+    static char effective_dll_overrides[PW_APP_DLL_OVERRIDES_CAPACITY + sizeof(";opengl32=n")];
     static char ntdll_dir[256], ntdll_path[288];
     static const PwWineStartOps ops = {
         sceKernelLoadStartModule, sceKernelGetModuleInfo, set_env, start_thread };
@@ -992,8 +990,8 @@ int main(int argc, char **argv)
                      (unsigned)game->display.height);
             extra[config.extra_env_count++] = (PwWineStartEnv){ "WINE_PS5_DESKTOP", desktop };
         }
-        /* The graphics mode selects builtin WGL or the native Zink provider;
-         * preserve other per-game overrides such as DXVK when composing it. */
+        /* OpenGL selects the native Zink provider; preserve other per-game
+         * overrides such as DXVK when composing it. */
         int overrides_status = pw_app_profile_effective_dll_overrides(
             &game->app, effective_dll_overrides, sizeof(effective_dll_overrides));
         if (overrides_status == PW_OK && effective_dll_overrides[0])
@@ -1057,9 +1055,8 @@ int main(int argc, char **argv)
                        pw_tsc_status_name(clock_status));
         }
         /* [runtime] cpu: a 32-bit game runs on the native WoW64 CPU unless it
-         * draws with builtin OpenGL or asks for the translator; explicit Zink
-         * keeps the native default. The native
-         * CPU always brings the Vulkan batching (src/pw_game_profile.h). */
+         * asks for the translator. The native CPU always brings the Vulkan
+         * batching (src/pw_game_profile.h). */
         {
             PwGameEnv cpu_env[PW_GAME_CPU_ENV_MAX];
             size_t cpu_count = pw_game_cpu_env(game, cpu_env);
@@ -1097,11 +1094,15 @@ int main(int argc, char **argv)
             }
             if (debug_count) PS5LOG_LOG("PW_WINE64 debug_env=%s", names);
         }
-        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s show_fps=%d refresh=%u gl_thread=%d input=%s "
+        /* refresh and opengl_thread set the PS5 OpenGL SDK's output rate and
+         * glthread; Zink, which replaced it, has neither, so they are ignored. */
+        if (game->display.refresh != 60 || game->display.opengl_thread)
+            PS5LOG_LOG("PW_WINE64 ignored display refresh=%u opengl_thread=%d (no longer supported)",
+                       (unsigned)game->display.refresh, game->display.opengl_thread);
+        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s show_fps=%d input=%s "
                    "preset=%s mode=%s mouse=%d dll_overrides=%s", game->app.id, prefix,
                    desktop[0] ? desktop : "default",
-                   scaling, view, game->display.show_fps, (unsigned)game->display.refresh,
-                   game->display.opengl_thread, pw_result_name(input_status),
+                   scaling, view, game->display.show_fps, pw_result_name(input_status),
                    game->input.preset[0] ? game->input.preset : "-",
                    game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse,
                    effective_dll_overrides[0] ? effective_dll_overrides : "-");

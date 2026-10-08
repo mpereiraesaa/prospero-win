@@ -10,11 +10,9 @@
  *   scaling = fit          ; fit (keep aspect, fill the screen), integer, stretch
  *   view = window          ; window: show the game's windows; desktop: all of it
  *   show_fps = true        ; a frame-rate counter in the top left (default: true):
- *                          ; DXVK's HUD, or Mesa's for graphics = opengl/zink
- *   refresh = 120          ; output refresh rate for graphics = opengl: 60 or 120
- *                          ; (default 60); a display without 120 Hz stays at 60
- *   opengl_thread = true   ; graphics = opengl: run OpenGL on its own CPU thread
- *                          ; (Mesa's glthread), beside the game (default: false)
+ *                          ; DXVK's HUD, or Mesa's for graphics = opengl
+ *   refresh = 120          ; accepted and ignored: it set the PS5 OpenGL SDK's
+ *   opengl_thread = true   ; output rate and glthread, which Zink replaced
  *
  *   [input]
  *   preset = pinball       ; an input file shared between profiles
@@ -102,13 +100,13 @@ typedef struct PwGameDisplay {
     PwGameScaling scaling;
     PwGameView view;            /* window by default: a small game fills the TV */
     int show_fps;               /* the graphics backend's frame-rate counter */
-    uint32_t refresh;           /* Hz an OpenGL game asks the display for: 60 or 120 */
-    int opengl_thread;          /* OpenGL calls run on Mesa's glthread worker */
+    uint32_t refresh;           /* parsed (60 or 120) but unused since Zink */
+    int opengl_thread;          /* parsed but unused since Zink */
 } PwGameDisplay;
 
 /* [runtime] cpu: the CPU backend a 32-bit game runs under. */
 typedef enum PwGameCpu {
-    PW_GAME_CPU_DEFAULT = 0,    /* native, except OpenGL games: the translator */
+    PW_GAME_CPU_DEFAULT = 0,    /* native */
     PW_GAME_CPU_NATIVE = 1,
     PW_GAME_CPU_TRANSLATOR = 2,
 } PwGameCpu;
@@ -129,7 +127,7 @@ typedef struct PwGameDebugEnv {
     char name[PW_GAME_DEBUG_ENV_NAME];
     char value[PW_GAME_DEBUG_ENV_VALUE];
 } PwGameDebugEnv;
-enum { PW_GAME_RUNTIME_ENV_MAX = 2, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 4,
+enum { PW_GAME_RUNTIME_ENV_MAX = 2, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 2,
        PW_GAME_CLOCK_ENV_MAX = 2 };
 
 typedef struct PwGameProfile {
@@ -153,8 +151,8 @@ int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *pr
  * title adds up to PW_GAME_CLOCK_ENV_MAX variables itself. */
 size_t pw_game_runtime_env(const PwGameRuntime *runtime, PwGameEnv *env);
 /* Whether a game runs on the native WoW64 CPU: only 32-bit games; [runtime]
- * cpu when set, else native unless the game draws with OpenGL, whose calls
- * the Vulkan batching does not cover. */
+ * cpu when set, else native. OpenGL games draw through Zink, whose Vulkan
+ * calls the batching covers like DXVK's. */
 int pw_game_cpu_native(const PwGameProfile *profile);
 /* The variables that select the native CPU, which always comes with Vulkan
  * batching (WINE_PS5_WOW64_CPU, PW_VK_BATCH), into env, which has room for
@@ -162,10 +160,10 @@ int pw_game_cpu_native(const PwGameProfile *profile);
 size_t pw_game_cpu_env(const PwGameProfile *profile, PwGameEnv *env);
 
 /* Graphics-specific environment, at most PW_GAME_GRAPHICS_ENV_MAX entries.
- * graphics=zink selects GALLIUM_DRIVER=zink, with Mesa's optional FPS HUD;
- * builtin OpenGL keeps its PS5 EGL/thread/refresh options. Zink providers are
- * optional at win/mesa-zink/{i386-windows,x86_64-windows}; unsupported/missing
- * providers must fail before launch. No graphics default is changed. */
+ * graphics = opengl (or zink) selects GALLIUM_DRIVER=zink, with Mesa's FPS
+ * HUD when show_fps is on; the launcher installs the architecture's Zink
+ * provider from win/mesa-zink/{i386-windows,x86_64-windows} and refuses the
+ * launch when it is missing. */
 size_t pw_game_graphics_env(const PwGameProfile *profile, PwGameEnv *env);
 /* The [debug] env variables, into env, which has room for
  * PW_GAME_DEBUG_ENV_MAX; how many. The strings live in profile. */

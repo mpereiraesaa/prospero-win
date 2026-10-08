@@ -39,15 +39,11 @@ static void test_graphics_env(void)
             /* Fixed6, desktop/override/XInput3, graphics, runtime, clock and CPU. */
             assert(6 + 3 + count + pw_game_cpu_env(&p, cpu) + pw_game_runtime_env(&p.runtime, runtime) +
                    PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX <= PW_WINE_START_MAX_ENV);
+            /* refresh and opengl_thread no longer set anything */
             if (graphics == PW_APP_GRAPHICS_ZINK) {
                 assert(count == (size_t)(1 + fps));
                 assert(!strcmp(env[0].name, "GALLIUM_DRIVER") && !strcmp(env[0].value, "zink"));
                 if (fps) assert(!strcmp(env[1].name, "GALLIUM_HUD"));
-            } else if (graphics == PW_APP_GRAPHICS_OPENGL) {
-                assert(count == (size_t)(3 + fps));
-                assert(!strcmp(env[0].name, "WINE_PS5_OPENGL"));
-                assert(!strcmp(env[count - 2].name, "WINE_PS5_GL_REFRESH"));
-                assert(!strcmp(env[count - 1].name, "PS5_GLTHREAD"));
             } else {
                 assert(count == (size_t)fps);
                 if (fps) assert(!strcmp(env[0].name, "DXVK_HUD"));
@@ -132,8 +128,10 @@ static void test_cpu(void)
 
     assert(parse(APP_ARCH("pe32", "dxvk"), &p) == PW_OK && pw_game_cpu_native(&p) == 1);
     assert(parse(APP_ARCH("pe32", "auto"), &p) == PW_OK && pw_game_cpu_native(&p) == 1);
-    assert(parse(APP_ARCH("pe32", "opengl"), &p) == PW_OK && pw_game_cpu_native(&p) == 0);
-    assert(pw_game_cpu_env(&p, env) == 0);
+    /* OpenGL draws through Zink: native with the batching, like zink */
+    assert(parse(APP_ARCH("pe32", "opengl"), &p) == PW_OK && pw_game_cpu_native(&p) == 1);
+    assert(p.app.graphics == PW_APP_GRAPHICS_ZINK);
+    assert(pw_game_cpu_env(&p, env) == 2 && !strcmp(env[1].name, "PW_VK_BATCH"));
     assert(parse(APP_ARCH("pe64", "dxvk"), &p) == PW_OK && pw_game_cpu_native(&p) == 0);
 
     assert(parse(APP_ARCH("pe32", "zink"), &p) == PW_OK && pw_game_cpu_native(&p) == 1);
@@ -143,7 +141,10 @@ static void test_cpu(void)
            pw_game_cpu_env(&p, env) == 0);
 
     /* explicit choices override the default both ways */
-    assert(parse(APP_ARCH("pe32", "opengl") "[runtime]\ncpu = native\n", &p) == PW_OK);
+    assert(parse(APP_ARCH("pe32", "opengl") "[runtime]\ncpu = translator\n", &p) == PW_OK);
+    assert(p.runtime.cpu == PW_GAME_CPU_TRANSLATOR && pw_game_cpu_native(&p) == 0 &&
+           pw_game_cpu_env(&p, env) == 0);
+    assert(parse(APP_ARCH("pe32", "gdi") "[runtime]\ncpu = native\n", &p) == PW_OK);
     assert(p.runtime.cpu == PW_GAME_CPU_NATIVE && pw_game_cpu_native(&p) == 1 &&
            pw_game_cpu_env(&p, env) == 2);
     assert(parse(APP_ARCH("pe32", "dxvk") "[runtime]\nCPU = Translator\n", &p) == PW_OK);
@@ -487,7 +488,7 @@ static void test_debug_env(void)
     /* The title's environment has room for every profile variable at once. */
     assert(PW_GAME_DEBUG_ENV_MAX == 5);
     assert(7 + 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX +
-           PW_GAME_CPU_ENV_MAX + PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX == PW_WINE_START_MAX_ENV);
+           PW_GAME_CPU_ENV_MAX + PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX <= PW_WINE_START_MAX_ENV);
 }
 
 int main(void)

@@ -421,7 +421,7 @@ int pw_game_cpu_native(const PwGameProfile *profile)
     if (!profile || profile->app.architecture != PW_APP_ARCH_PE32) return 0;
     if (profile->runtime.cpu == PW_GAME_CPU_NATIVE) return 1;
     if (profile->runtime.cpu == PW_GAME_CPU_TRANSLATOR) return 0;
-    return profile->app.graphics != PW_APP_GRAPHICS_OPENGL;
+    return 1;
 }
 
 size_t pw_game_cpu_env(const PwGameProfile *profile, PwGameEnv *env)
@@ -436,19 +436,12 @@ size_t pw_game_cpu_env(const PwGameProfile *profile, PwGameEnv *env)
 size_t pw_game_graphics_env(const PwGameProfile *profile, PwGameEnv *env)
 {
     size_t count = 0;
-    int builtin, zink;
+    int zink;
     if (!profile || !env) return 0;
-    builtin = profile->app.graphics == PW_APP_GRAPHICS_OPENGL;
     zink = profile->app.graphics == PW_APP_GRAPHICS_ZINK;
-    if (builtin) env[count++] = (PwGameEnv){ "WINE_PS5_OPENGL", "1" };
     if (zink) env[count++] = (PwGameEnv){ "GALLIUM_DRIVER", "zink" };
     if (profile->display.show_fps)
-        env[count++] = builtin || zink ? (PwGameEnv){ "GALLIUM_HUD", "simple,fps" }
-                                     : (PwGameEnv){ "DXVK_HUD", "fps" };
-    if (builtin && profile->display.refresh == 120)
-        env[count++] = (PwGameEnv){ "WINE_PS5_GL_REFRESH", "120" };
-    if (builtin && profile->display.opengl_thread)
-        env[count++] = (PwGameEnv){ "PS5_GLTHREAD", "1" };
+        env[count++] = zink ? (PwGameEnv){ "GALLIUM_HUD", "simple,fps" } : (PwGameEnv){ "DXVK_HUD", "fps" };
     return count;
 }
 

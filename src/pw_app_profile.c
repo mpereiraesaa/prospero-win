@@ -168,22 +168,20 @@ static int opengl32_override(const char *text, unsigned char required)
 int pw_app_profile_effective_dll_overrides(const PwAppProfile *profile,
                                            char *text, size_t capacity)
 {
-    const char *suffix = profile && profile->graphics == PW_APP_GRAPHICS_ZINK
-        ? "opengl32=n" : "opengl32=b";
+    const char *suffix = "opengl32=n";
     size_t base_length, append_length, suffix_length;
     int has_opengl32;
 
     if (!profile || !text || capacity == 0u)
         return PW_ERR_PRECONDITION;
     base_length = strlen(profile->dll_overrides);
-    if (profile->graphics != PW_APP_GRAPHICS_OPENGL && profile->graphics != PW_APP_GRAPHICS_ZINK) {
+    if (profile->graphics != PW_APP_GRAPHICS_ZINK) {
         if (base_length >= capacity)
             return PW_ERR_LIMIT;
         memcpy(text, profile->dll_overrides, base_length + 1u);
         return PW_OK;
     }
-    has_opengl32 = opengl32_override(profile->dll_overrides,
-        profile->graphics == PW_APP_GRAPHICS_ZINK ? 'n' : 'b');
+    has_opengl32 = opengl32_override(profile->dll_overrides, 'n');
     if (has_opengl32 < 0)
         return PW_ERR_MALFORMED;
     if (has_opengl32) {
@@ -321,10 +319,10 @@ static int parse_field(PwAppProfile *profile, uint32_t *fields,
         } else if (equal_ascii(value, (size_t)(value_end - value), "dxvk")) {
             profile->graphics = PW_APP_GRAPHICS_DXVK;
             status = PW_OK;
-        } else if (equal_ascii(value, (size_t)(value_end - value), "opengl")) {
-            profile->graphics = PW_APP_GRAPHICS_OPENGL;
-            status = PW_OK;
-        } else if (equal_ascii(value, (size_t)(value_end - value), "zink")) {
+        } else if (equal_ascii(value, (size_t)(value_end - value), "opengl") ||
+                   equal_ascii(value, (size_t)(value_end - value), "zink")) {
+            /* OpenGL draws through Mesa's Zink on Vulkan; zink is the
+             * older name for the same thing */
             profile->graphics = PW_APP_GRAPHICS_ZINK;
             status = PW_OK;
         } else {
@@ -408,8 +406,7 @@ int pw_app_profile_parse(const uint8_t *bytes, size_t length,
         !valid_windows_path(parsed.working_directory) ||
         !has_exe_extension(parsed.executable))
         return PW_ERR_MALFORMED;
-    if ((parsed.graphics == PW_APP_GRAPHICS_OPENGL || parsed.graphics == PW_APP_GRAPHICS_ZINK) &&
-        opengl32_override(parsed.dll_overrides, parsed.graphics == PW_APP_GRAPHICS_ZINK ? 'n' : 'b') < 0)
+    if (parsed.graphics == PW_APP_GRAPHICS_ZINK && opengl32_override(parsed.dll_overrides, 'n') < 0)
         return PW_ERR_MALFORMED;
     *profile = parsed;
     return PW_OK;
