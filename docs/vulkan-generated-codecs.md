@@ -47,7 +47,15 @@ The Unix entry accepts legacy v1 batches, while a new PE requires the exact v2
 capability; mismatched old Unix libraries disable batching safely. Existing
 seven fast codecs stay first. Additional generated operations are enabled only
 with the default all-category mask (127); narrower diagnostic masks retain their
-previous scope. Unknown shapes drain and dispatch synchronously. All six descriptor-template forms use device-scoped registered metadata, with
+previous scope. `PW_VK_BATCH_GENERATED=0` additionally disables generated codecs
+while retaining all selected manual categories; unset or `1` retains existing
+behavior. This switch never overrides a narrower `PW_VK_BATCH_MASK`. Only the
+single characters `0` and `1` are accepted; malformed nonempty values disable batching.
+With stats enabled, `PW_VK_BATCH_CONFIG` reports the mask and effective generated
+selection once at initialization. Use mask 127 with generated 0 versus 1 to
+isolate generated replay after a same-CPU mask 0 versus 127 comparison implicates
+batching. This is diagnostic isolation, not a graphics correctness fix.
+Unknown shapes drain and dispatch synchronously. All six descriptor-template forms use device-scoped registered metadata, with
 command-buffer client tails retaining the originating device association.
 
 The process scratch limit is 16 MiB to preserve the existing 63-producer bound

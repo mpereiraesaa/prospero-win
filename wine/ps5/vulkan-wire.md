@@ -90,3 +90,8 @@ notification wiring checked separately in the staged loader source.
 `0` retains negotiated batching state and its ordering path but encodes no operations. `32` selects templates only; `95` selects command records only. Individual bit values isolate one category. A masked operation uses the same synchronous fallback as other unsupported operations, globally draining older queued records first. Payload normalization is skipped for masked categories, so this setting never borrows their guest data. Unknown operations remain ordinary fallback. All seven categories stay enabled by default.
 
 `tests/lab/vk_batch_masks.c` compiles the actual PE runtime against real Wine structs and uses real Win32 initialization APIs, mocking only the Unix boundary. It checks gate-only/all/template/command/individual masks, invalid settings, owned template/draw/push data, original-call fallback order, replay/enqueue totals, and exact Wine crossing counters. Console compatibility and automatic DLL thread notifications are not asserted by this fixture. Use the same frozen settings and matching artifacts across comparisons; a masked host test is not evidence of a game performance improvement.
+
+`PW_VK_BATCH_GENERATED=0` disables generated codecs independently of the seven
+manual categories. Unset or `1` preserves current behavior; other nonempty values
+disable batching. Generated encoding still requires mask 127. With statistics
+enabled, `PW_VK_BATCH_CONFIG mask=N generated=N` records the effective selection.

@@ -26,6 +26,7 @@ static UINT64 fallback_counts[unix_count],fallback_reported[unix_count];
 static UINT64 fallback_report_present;
 /* Opcode bit N-1 matches stable wire opcode N. Not part of the wire ABI. */
 static uint32_t opcode_mask=0x7f;
+static BOOL generated_enabled=TRUE;
 static LONG sticky_disabled;
 static DWORD owner;
 static unsigned depth;
@@ -54,13 +55,20 @@ static BOOL read_opcode_mask(void)
  }
  opcode_mask=mask;return TRUE;
 }
+static BOOL read_generated_mode(void)
+{
+ char value[8];DWORD n=GetEnvironmentVariableA("PW_VK_BATCH_GENERATED",value,sizeof(value));
+ if(!n)return TRUE;
+ if(n!=1||(value[0]!='0'&&value[0]!='1'))return FALSE;
+ generated_enabled=value[0]=='1';return TRUE;
+}
 static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
 {
  char env[8];(void)o;(void)p;(void)ctx;
  stats_enabled=GetEnvironmentVariableA("PW_VK_BATCH_STATS",env,sizeof(env))==1&&env[0]=='1';
  fallback_profile=stats_enabled&&GetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",env,sizeof(env))==1&&env[0]=='1';
  enabled=GetEnvironmentVariableA("PW_VK_BATCH",env,sizeof(env))==1&&env[0]=='1'&&!pw_vk_stream_environment_unsafe();
- if(!read_opcode_mask())enabled=FALSE; /* Invalid explicit masks fail closed. */
+ if(!read_opcode_mask()||!read_generated_mode())enabled=FALSE; /* Invalid explicit masks fail closed. */
  if(!enabled)return TRUE;
  InitializeCriticalSection(&gate);tls=TlsAlloc();
  pw_vk_stream_registry_init(&registry);
@@ -68,6 +76,7 @@ static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
  encoded_wire=heap_alloc(PW_VK_BATCH_ARENA);
  enabled=tls!=TLS_OUT_OF_INDEXES&&scratch&&encoded_wire;
  /* Diagnostics are independently opt-in; FPS confirmation leaves them off. */
+ if(stats_enabled)WINE_MESSAGE("PW_VK_BATCH_CONFIG mask=%u generated=%u\n",opcode_mask,(unsigned)(generated_enabled&&opcode_mask==0x7f));
  return TRUE;
 }
 static void enter(void){EnterCriticalSection(&gate);if(depth&&owner==GetCurrentThreadId())fatal();owner=GetCurrentThreadId();depth=1;}
@@ -236,7 +245,7 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
   InterlockedExchange(&sticky_disabled,1);leave();status=raw_call(code,args);snapshot(code,args);return status;
  }
  bytes=0;opcode=0;
- if(negotiated&&!encode(code,args,wire,&bytes,&opcode)&&opcode_mask==0x7f&&
+ if(negotiated&&!encode(code,args,wire,&bytes,&opcode)&&opcode_mask==0x7f&&generated_enabled&&
     pw_vk_generated_encode_templates(code,args,wire+4,PW_VK_BATCH_ARENA-PW_VK_STREAM_HEADER-4,&bytes,template_snapshot,template_device(code,args))){
   memcpy(wire,&code,4);bytes+=4;opcode=PW_VK_BATCH_GENERATED_OPCODE;
  }

@@ -15,10 +15,18 @@ static NTSTATUS mock_call(unsigned int,void *);
 #undef WINE_MESSAGE
 #define WINE_MESSAGE(...) fprintf(stderr,__VA_ARGS__)
 #include "pw_vk_batch_pe.c"
-static unsigned raw[8],played[8],trace[32],used;
+static unsigned raw[8],played[8],trace[32],used,generated_raw,generated_played;
 static int effect(void *unused,const struct pw_vk_stream_record *r)
 {
- (void)unused;assert(pw_vk_wire_validate(r->opcode,r->payload,r->payload_bytes));assert(r->opcode>=1&&r->opcode<=7);played[r->opcode]++;trace[used++]=r->opcode;
+ (void)unused;
+ if(r->opcode==PW_VK_BATCH_GENERATED_OPCODE){
+  uint64_t arena[512];void *params;unsigned code;struct vkCmdSetViewport_params *viewport;
+  memcpy(&code,r->payload,4);assert(code==unix_vkCmdSetViewport);
+  assert(pw_vk_generated_decode(code,r->payload+4,r->payload_bytes-4,arena,sizeof(arena),&params));
+  viewport=params;assert(viewport->viewportCount==1&&viewport->pViewports[0].width==123.0f);
+  generated_played++;return 0;
+ }
+ assert(pw_vk_wire_validate(r->opcode,r->payload,r->payload_bytes));assert(r->opcode>=1&&r->opcode<=7);played[r->opcode]++;trace[used++]=r->opcode;
  if(r->opcode==PW_VK_UPDATE_TEMPLATE){assert(pw_vk_wire_u64(r->payload+32)==0x123456789abcdef0ULL);assert(pw_vk_wire_u64(r->payload+40)==11);assert(pw_vk_wire_u64(r->payload+48)==99);}
  if(r->opcode==PW_VK_DRAW_INDEXED)assert(pw_vk_wire_u32(r->payload+4)==7);
  if(r->opcode==PW_VK_PUSH_CONSTANTS)assert(pw_vk_wire_u32(r->payload+24)==0x10203040);
@@ -27,6 +35,7 @@ static int effect(void *unused,const struct pw_vk_stream_record *r)
 static NTSTATUS original(unsigned int code,void *args)
 {
  unsigned op=call_opcode(code);
+ if(code==unix_vkCmdSetViewport){struct vkCmdSetViewport_params *p=args;assert(p->viewportCount==1&&p->pViewports[0].width==123.0f);generated_raw++;}
  if(op){raw[op]++;trace[used++]=0x100|op;}
  if(code==unix_vkCreateInstance){struct vkCreateInstance_params *p=args;*p->pInstance=(VkInstance)(uintptr_t)7;p->result=VK_SUCCESS;}
  if(code==unix_is_available_instance_function){struct is_available_instance_function_params *p=args;return !strcmp(p->name,PW_VK_BATCH_NAME)?PW_VK_BATCH_CAPABILITY:0;}
@@ -41,10 +50,11 @@ static NTSTATUS mock_call(unsigned int code,void *args)
 int main(int argc,char **argv)
 {
  VkInstance instance;VkInstanceCreateInfo info={0};struct vkCreateInstance_params create={0};VkDescriptorUpdateTemplate handle;VkDescriptorUpdateTemplateEntry entry={0};VkDescriptorUpdateTemplateCreateInfo ti={0};struct vkCreateDescriptorUpdateTemplate_params tc={0};VkDescriptorBufferInfo data={0x123456789abcdef0ULL,11,99};struct vkUpdateDescriptorSetWithTemplate_params update={0};struct vkCmdDrawIndexed_params draw={0};struct vkCmdBindDescriptorSets_params ds={0};struct vkCmdBindPipeline_params pipeline={0};struct vkCmdBindVertexBuffers2_params vb={0};struct vkCmdBindIndexBuffer_params ib={0};struct vkCmdPushConstants_params pc={0};struct vkEndCommandBuffer_params end={0};VkDescriptorSet set=17;VkBuffer buffer=18;VkDeviceSize offset=19,size=20,stride=21;uint32_t dynamic=22,value=0x10203040;unsigned i,count=0;uint32_t expected;UINT64 before;
- assert(argc==3);expected=(uint32_t)strtoul(argv[2],NULL,0);
+ assert(argc==3||argc==5);expected=(uint32_t)strtoul(argv[2],NULL,0);
  SetEnvironmentVariableA("PW_VK_BATCH","1");SetEnvironmentVariableA("PW_VK_BATCH_STATS","1");SetEnvironmentVariableA("PW_VK_BATCH_MASK",strcmp(argv[1],"unset")?argv[1]:NULL);
+ if(argc==5)SetEnvironmentVariableA("PW_VK_BATCH_GENERATED",strcmp(argv[3],"unset")?argv[3]:NULL);
  create.pCreateInfo=&info;create.pInstance=&instance;assert(pw_vk_batch_call(unix_vkCreateInstance,&create)==0);
- if(expected==0xff){assert(!enabled&&!negotiated&&tls==TLS_OUT_OF_INDEXES);puts("PASS invalid mask fails closed");return 0;}
+ if(expected==0xff||(argc==5&&!strcmp(argv[4],"invalid"))){assert(!enabled&&!negotiated&&tls==TLS_OUT_OF_INDEXES);puts("PASS invalid mask fails closed");return 0;}
  assert(enabled&&negotiated&&opcode_mask==expected);
  entry.descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;entry.descriptorCount=1;entry.stride=sizeof(data);ti.descriptorUpdateEntryCount=1;ti.pDescriptorUpdateEntries=&entry;ti.templateType=VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;tc.device=(VkDevice)(uintptr_t)11;tc.pCreateInfo=&ti;tc.pDescriptorUpdateTemplate=&handle;assert(pw_vk_batch_call(unix_vkCreateDescriptorUpdateTemplate,&tc)==0);before=crossings_total;
  update.device=tc.device;update.descriptorSet=set;update.descriptorUpdateTemplate=handle;update.pData=(expected&(1u<<(PW_VK_UPDATE_TEMPLATE-1)))?&data:(const void *)(uintptr_t)1;assert(pw_vk_batch_call(unix_vkUpdateDescriptorSetWithTemplate,&update)==0);memset(&data,0xee,sizeof(data));
@@ -61,5 +71,14 @@ int main(int argc,char **argv)
   for(i=0;i<7;i++)assert(trace[i]==((expected&(1u<<(order[i]-1)))?order[i]:(0x100|order[i])));
  }
  assert(enqueued_total==count&&records_total==count);assert(crossings_total-before==8-count);
+ {
+  VkViewport viewport={0};struct vkCmdSetViewport_params vp={0};unsigned selected=expected==127&&(argc==3||!strcmp(argv[4],"1"));
+  vp.commandBuffer=end.commandBuffer;vp.viewportCount=1;vp.pViewports=&viewport;viewport.width=123.0f;
+  assert(pw_vk_batch_call(unix_vkCmdSetViewport,&vp)==0);
+  assert(generated_raw==!selected&&generated_played==0);viewport.width=456.0f;
+  assert(pw_vk_batch_call(unix_vkEndCommandBuffer,&end)==0);
+  assert(generated_raw==!selected&&generated_played==selected);
+  assert(enqueued_total==count+selected&&records_total==count+selected);
+ }
  puts("PASS mask selection, all seven categories, owned payloads, fallback ordering and exact crossing stats");return 0;
 }
