@@ -56,6 +56,16 @@ for patch in $ordered; do
     git -C "$tree" apply --index "$patches/$patch" || fail "patch does not apply: $patch"
 done
 
+# The series includes sources that live in wine/ps5 (the Vulkan batching
+# runtime, the shared clock and key-state ABIs); stage them as the console
+# build does, or the tree does not configure.
+python3 "$root/tools/stage_vk_batch.py" --source "$tree" --repo "$root" ||
+    fail "cannot stage Vulkan command-stream runtime"
+cp "$root/wine/ps5/time/pw_qpc_clock.h" "$tree/dlls/ntdll/pw_qpc_clock.h" ||
+    fail "cannot stage shared-clock ABI"
+cp "$root/wine/ps5/input/pw_key_shared.h" "$tree/dlls/win32u/pw_key_shared.h" ||
+    fail "cannot stage shared-input ABI"
+
 configure_args="--prefix=/usr --enable-archs=i386,x86_64 --disable-tests"
 stamp=$({ printf '%s\n' "$commit" "$configure_args"
           for patch in $ordered; do cat "$patches/$patch"; done; } | sha256sum | cut -c1-64)
