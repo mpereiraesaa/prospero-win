@@ -897,7 +897,7 @@ int main(int argc, char **argv)
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
     enum { WINE64_FIXED_ENV_COUNT = 6,
            WINE64_PROFILE_ENV_CAPACITY = 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX + PW_GAME_CPU_ENV_MAX +
-                                         PW_GAME_CLOCK_ENV_MAX };
+                                         PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
         /* the i386 exe runs in this process through WoW64; otherwise Wine
@@ -1073,6 +1073,20 @@ int main(int argc, char **argv)
         if (game->winedebug[0]) {
             extra[0].value = game->winedebug;
             PS5LOG_LOG("PW_WINE64 winedebug=%s", game->winedebug);
+        }
+        /* [debug] env: diagnostics variables; the parser refuses any the
+         * title sets itself, so these only add (src/pw_game_profile.h). */
+        {
+            PwGameEnv debug_env[PW_GAME_DEBUG_ENV_MAX];
+            size_t debug_count = pw_game_debug_env(game, debug_env);
+            char names[PW_GAME_DEBUG_ENV_MAX * PW_GAME_DEBUG_ENV_NAME] = "";
+
+            for (size_t i = 0; i < debug_count; i++) {
+                extra[config.extra_env_count++] = (PwWineStartEnv){ debug_env[i].name, debug_env[i].value };
+                if (i) strcat(names, ",");
+                strcat(names, debug_env[i].name);
+            }
+            if (debug_count) PS5LOG_LOG("PW_WINE64 debug_env=%s", names);
         }
         PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s show_fps=%d refresh=%u gl_thread=%d input=%s "
                    "preset=%s mode=%s mouse=%d dll_overrides=%s", game->app.id, prefix,

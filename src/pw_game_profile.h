@@ -29,6 +29,14 @@
  *   [debug]
  *   winedebug = +seh,+virtual   ; Wine's debug channels for this game (default:
  *                               ; the title's, err+all,+loaddll,+process)
+ *   env = PW_NATIVE_PROFILE=1   ; one more variable for Wine's environment,
+ *                               ; up to 4 env lines: names start with PW_,
+ *                               ; DXVK_, MESA_, GALLIUM_, RADV_ or VK_, and
+ *                               ; may not be one the title sets itself
+ *                               ; (PW_VK_BATCH, PW_INPUT_SHARED_FAST,
+ *                               ; PW_QPC_TSC_*, GALLIUM_DRIVER, and DXVK_HUD
+ *                               ; or GALLIUM_HUD while show_fps is on);
+ *                               ; values: letters, digits and _ + - , . = : /
  *
  *   [runtime]
  *   thread_scheduling = true    ; Windows threads take turns and get their
@@ -63,6 +71,7 @@ enum {
     PW_GAME_DESKTOP_MAX_W = 3840, PW_GAME_DESKTOP_MAX_H = 2160,
     PW_GAME_MOUSE_SPEED_DEFAULT = 1200, PW_GAME_MOUSE_SPEED_MAX = 20000,
     PW_GAME_WINEDEBUG_CAPACITY = 128,
+    PW_GAME_DEBUG_ENV_MAX = 4, PW_GAME_DEBUG_ENV_NAME = 48, PW_GAME_DEBUG_ENV_VALUE = 96,
 };
 
 typedef enum PwGameScaling { PW_GAME_SCALING_FIT = 0, PW_GAME_SCALING_INTEGER,
@@ -114,6 +123,12 @@ typedef struct PwGameRuntime {
 
 /* A variable of Wine's environment; both strings are static. */
 typedef struct PwGameEnv { const char *name, *value; } PwGameEnv;
+
+/* [debug] env = NAME=VALUE: one extra variable for Wine's environment. */
+typedef struct PwGameDebugEnv {
+    char name[PW_GAME_DEBUG_ENV_NAME];
+    char value[PW_GAME_DEBUG_ENV_VALUE];
+} PwGameDebugEnv;
 enum { PW_GAME_RUNTIME_ENV_MAX = 2, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 4,
        PW_GAME_CLOCK_ENV_MAX = 2 };
 
@@ -123,6 +138,8 @@ typedef struct PwGameProfile {
     PwGameInput input;          /* this profile's own [input] lines */
     /* [debug] winedebug: WINEDEBUG for this game, empty for the title's. */
     char winedebug[PW_GAME_WINEDEBUG_CAPACITY];
+    PwGameDebugEnv debug_env[PW_GAME_DEBUG_ENV_MAX];    /* [debug] env lines */
+    size_t debug_env_count;
     PwGameRuntime runtime;      /* [runtime], everything off by default */
 } PwGameProfile;
 
@@ -150,6 +167,9 @@ size_t pw_game_cpu_env(const PwGameProfile *profile, PwGameEnv *env);
  * optional at win/mesa-zink/{i386-windows,x86_64-windows}; unsupported/missing
  * providers must fail before launch. No graphics default is changed. */
 size_t pw_game_graphics_env(const PwGameProfile *profile, PwGameEnv *env);
+/* The [debug] env variables, into env, which has room for
+ * PW_GAME_DEBUG_ENV_MAX; how many. The strings live in profile. */
+size_t pw_game_debug_env(const PwGameProfile *profile, PwGameEnv *env);
 /* An input with nothing bound, keyboard mode, no pointer. */
 void pw_game_input_init(PwGameInput *input);
 /* Parse an input preset file (one [input] section, no preset= line) into

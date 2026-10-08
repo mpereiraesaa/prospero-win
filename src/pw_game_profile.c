@@ -240,9 +240,68 @@ static int section_of(const uint8_t *begin, const uint8_t *end)
 /* [debug] winedebug = Wine's channel list (e.g. +seh,warn+module,-all):
  * letters, digits and _ + - , = . only, so nothing but a WINEDEBUG value
  * reaches Wine's environment. */
+static int env_value_char(uint8_t c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+           c == '_' || c == '+' || c == '-' || c == ',' || c == '.' || c == '=' || c == ':' || c == '/';
+}
+
+static int starts(const uint8_t *text, size_t length, const char *prefix)
+{
+    size_t n = strlen(prefix);
+    return length >= n && !memcmp(text, prefix, n);
+}
+
+static int same(const uint8_t *text, size_t length, const char *name)
+{
+    return strlen(name) == length && !memcmp(text, name, length);
+}
+
+/* [debug] env = NAME=VALUE (src/pw_game_profile.h): only the families of
+ * variables a game's graphics and the native CPU read, never one the title
+ * sets itself, so a profile adds diagnostics but cannot change what the
+ * title decides. DXVK_HUD/GALLIUM_HUD are checked against show_fps after
+ * the whole profile is read. */
+static int debug_env_field(PwGameProfile *profile, const uint8_t *value, size_t value_length)
+{
+    static const char *const families[] = { "PW_", "DXVK_", "MESA_", "GALLIUM_", "RADV_", "VK_" };
+    static const char *const title_set[] = { "PW_VK_BATCH", "PW_INPUT_SHARED_FAST", "GALLIUM_DRIVER" };
+    const uint8_t *equals = memchr(value, '=', value_length);
+    size_t name_length, data_length;
+    PwGameDebugEnv *entry;
+    int family = 0;
+
+    if (!equals || profile->debug_env_count >= PW_GAME_DEBUG_ENV_MAX) return PW_ERR_MALFORMED;
+    name_length = (size_t)(equals - value);
+    data_length = value_length - name_length - 1;
+    if (!name_length || name_length >= PW_GAME_DEBUG_ENV_NAME ||
+        !data_length || data_length >= PW_GAME_DEBUG_ENV_VALUE)
+        return PW_ERR_MALFORMED;
+    for (size_t i = 0; i < name_length; i++) {
+        uint8_t c = value[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) return PW_ERR_MALFORMED;
+    }
+    for (size_t i = 0; i < sizeof(families) / sizeof(families[0]); i++)
+        family |= starts(value, name_length, families[i]);
+    if (!family || starts(value, name_length, "PW_QPC_TSC_")) return PW_ERR_UNSUPPORTED;
+    for (size_t i = 0; i < sizeof(title_set) / sizeof(title_set[0]); i++)
+        if (same(value, name_length, title_set[i])) return PW_ERR_UNSUPPORTED;
+    for (size_t i = 0; i < data_length; i++)
+        if (!env_value_char(equals[1 + i])) return PW_ERR_MALFORMED;
+    for (size_t i = 0; i < profile->debug_env_count; i++)
+        if (same(value, name_length, profile->debug_env[i].name)) return PW_ERR_MALFORMED;
+    entry = &profile->debug_env[profile->debug_env_count++];
+    memcpy(entry->name, value, name_length);
+    entry->name[name_length] = 0;
+    memcpy(entry->value, equals + 1, data_length);
+    entry->value[data_length] = 0;
+    return PW_OK;
+}
+
 static int debug_field(PwGameProfile *profile, const uint8_t *key, size_t key_length,
                        const uint8_t *value, size_t value_length)
 {
+    if (is(key, key_length, "env")) return debug_env_field(profile, value, value_length);
     if (!is(key, key_length, "winedebug")) return PW_ERR_MALFORMED;
     if (!value_length || value_length >= sizeof(profile->winedebug) || profile->winedebug[0])
         return PW_ERR_MALFORMED;
@@ -349,6 +408,14 @@ size_t pw_game_runtime_env(const PwGameRuntime *runtime, PwGameEnv *env)
     return count;
 }
 
+size_t pw_game_debug_env(const PwGameProfile *profile, PwGameEnv *env)
+{
+    if (!profile || !env) return 0;
+    for (size_t i = 0; i < profile->debug_env_count; i++)
+        env[i] = (PwGameEnv){ profile->debug_env[i].name, profile->debug_env[i].value };
+    return profile->debug_env_count;
+}
+
 int pw_game_cpu_native(const PwGameProfile *profile)
 {
     if (!profile || profile->app.architecture != PW_APP_ARCH_PE32) return 0;
@@ -410,6 +477,10 @@ int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *pr
         return status;
     if ((status = pw_app_profile_parse(bytes, application_end, &parsed.app)) != PW_OK)
         return status;
+    /* show_fps sets the HUD variable itself (pw_game_graphics_env). */
+    for (size_t i = 0; parsed.display.show_fps && i < parsed.debug_env_count; i++)
+        if (!strcmp(parsed.debug_env[i].name, "DXVK_HUD") || !strcmp(parsed.debug_env[i].name, "GALLIUM_HUD"))
+            return PW_ERR_UNSUPPORTED;
     *profile = parsed;
     return PW_OK;
 }

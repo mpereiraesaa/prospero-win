@@ -430,6 +430,54 @@ static void test_published_forms(void)
     for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++) assert(input.bindings[i].kind == PW_GAME_BIND_UNSET);
 }
 
+/* [debug] env: extra diagnostics variables, only of the families graphics
+ * and the native CPU read, never one the title sets itself. */
+static void test_debug_env(void)
+{
+    PwGameProfile p;
+    PwGameEnv env[PW_GAME_DEBUG_ENV_MAX];
+
+    assert(parse(APP, &p) == PW_OK && p.debug_env_count == 0 && pw_game_debug_env(&p, env) == 0);
+    assert(parse(APP "[debug]\nwinedebug = +fps\nenv = PW_NATIVE_PROFILE=1\n"
+                 "env = PW_VK_BATCH_STATS=1\nenv = DXVK_LOG_PATH=C:/logs\nenv = MESA_LOADER_DRIVER_OVERRIDE=zink\n",
+                 &p) == PW_OK);
+    assert(!strcmp(p.winedebug, "+fps") && pw_game_debug_env(&p, env) == 4);
+    assert(!strcmp(env[0].name, "PW_NATIVE_PROFILE") && !strcmp(env[0].value, "1"));
+    assert(!strcmp(env[1].name, "PW_VK_BATCH_STATS") && !strcmp(env[1].value, "1"));
+    assert(!strcmp(env[2].name, "DXVK_LOG_PATH") && !strcmp(env[2].value, "C:/logs"));
+    assert(!strcmp(env[3].name, "MESA_LOADER_DRIVER_OVERRIDE") && !strcmp(env[3].value, "zink"));
+    assert(parse(APP "[debug]\nenv = RADV_DEBUG=nocache,hang\nenv = VK_LOADER_DEBUG=all\n"
+                 "env = GALLIUM_PRINT_OPTIONS=1\nenv = PW_VK_BATCH_MASK=0x7f\n", &p) == PW_OK);
+    assert(p.debug_env_count == 4 && !strcmp(p.debug_env[0].value, "nocache,hang"));
+    /* A value may itself hold '=': only the first one splits. */
+    assert(parse(APP "[debug]\nenv = DXVK_CONFIG=d3d9.maxFrameRate=60\n", &p) == PW_OK);
+    assert(!strcmp(p.debug_env[0].name, "DXVK_CONFIG") && !strcmp(p.debug_env[0].value, "d3d9.maxFrameRate=60"));
+    /* The HUD variables only when show_fps does not set them already. */
+    assert(parse(APP "[debug]\nenv = DXVK_HUD=fps,gpuload\n", &p) == PW_ERR_UNSUPPORTED);
+    assert(parse(APP "[display]\nshow_fps = false\n[debug]\nenv = DXVK_HUD=fps,gpuload\n", &p) == PW_OK);
+    assert(!strcmp(p.debug_env[0].value, "fps,gpuload"));
+    assert(parse(APP "[debug]\nenv = GALLIUM_HUD=fps\n[display]\nshow_fps = true\n", &p) == PW_ERR_UNSUPPORTED);
+    /* Refused: names the title sets, other families, bad names and values,
+     * duplicates, a fifth line, empty or oversized parts. */
+    const char *refused[] = {
+        "env = PW_VK_BATCH=0\n", "env = PW_INPUT_SHARED_FAST=1\n", "env = PW_QPC_TSC_HZ=1\n",
+        "env = PW_QPC_TSC_VALIDATED=1\n", "env = GALLIUM_DRIVER=llvmpipe\n", "env = WINEDEBUG=+all\n",
+        "env = WINE_PS5_WOW64_CPU=wowprospero.dll\n", "env = LD_PRELOAD=/x\n", "env = SDL_X=1\n",
+        "env = pw_native_profile=1\n", "env = PW_X Y=1\n", "env = PW_X=a b\n", "env = PW_X=$HOME\n",
+        "env = PW_X=\n", "env = =1\n", "env = PW_X\n", "env = PW_X=1\nenv = PW_X=2\n",
+        "env = PW_A=1\nenv = PW_B=1\nenv = PW_C=1\nenv = PW_D=1\nenv = PW_E=1\n",
+        "env = PW_" "0123456789012345678901234567890123456789012345=1\n",
+        "env = PW_X=" "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456\n",
+    };
+    for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        char text[2048];
+        snprintf(text, sizeof(text), APP "[debug]\n%s", refused[i]);
+        assert(parse(text, &p) != PW_OK);
+    }
+    /* The title's environment has room for every profile variable at once. */
+    assert(PW_GAME_DEBUG_ENV_MAX == 4);
+}
+
 int main(void)
 {
     test_graphics_env();
@@ -437,10 +485,11 @@ int main(void)
     test_profile();
     test_runtime();
     test_cpu();
+    test_debug_env();
     test_refusals();
     test_presets();
     test_default_mode();
     printf("game profile passed: application plus display and input, every binding kind, "
-           "runtime settings and their environment, the CPU backend choice, refusals, shared presets overridden by the profile\n");
+           "runtime settings and their environment, the CPU backend choice, debug env variables, refusals, shared presets overridden by the profile\n");
     return 0;
 }
