@@ -2,6 +2,7 @@
 #include "pw_vk_template_cache.h"
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 static int fail;static void *allocate(size_t n){return fail?NULL:malloc(n);}
 static int template_cache_cases(void){
  struct pw_vk_template_cache c={0};struct pw_vk_template_alloc a={allocate,free};
@@ -13,8 +14,23 @@ static int template_cache_cases(void){
  assert(!pw_vk_template_register(&c,&a,1,h,0,0,0,0,&e,1));assert(pw_vk_template_lookup(&c,1,h,&n));
  assert(!pw_vk_template_register(&c,&a,1,h,1,1,0,0,&e,1));assert(!pw_vk_template_lookup(&c,1,h,&n));
  assert(!pw_vk_template_register(&c,&a,1,h,1,0,1,0,&e,1));
- assert(!pw_vk_template_register(&c,&a,1,h,1,0,0,1,&e,1));
- e.type=1000150000;assert(!pw_vk_template_register(&c,&a,1,h,1,0,0,0,&e,1));e.type=6;
+ assert(pw_vk_template_register(&c,&a,1,h,1,0,0,1,&e,1));
+ assert(!pw_vk_template_register(&c,&a,1,h,1,0,0,2,&e,1));
+ e.type=UINT32_MAX;assert(!pw_vk_template_register(&c,&a,1,h,1,0,0,0,&e,1));e.type=6;
+ {
+  struct pw_vk_template_entry inline_bytes={1000138000,7,3,UINT64_MAX};
+  unsigned char data[10]={0,0,0,1,2,3,4,5,6,7},out[128];size_t bytes,extent;
+  assert(pw_vk_template_extent(&inline_bytes,1,&extent)&&extent==10);
+  assert(pw_vk_wire_template(out,sizeof(out),1,0,h,&inline_bytes,1,data,&bytes)&&bytes==42);
+  assert(!memcmp(out+35,data+3,7));memset(data,0xcc,sizeof(data));assert(out[35]==1);
+  struct pw_vk_template_entry accel={1000150000,2,0,8};uint64_t handles[2]={h,h+1};
+  assert(pw_vk_wire_template(out,sizeof(out),1,0,h,&accel,1,handles,&bytes)&&bytes==48);
+  assert(pw_vk_wire_u64(out+32)==h&&pw_vk_wire_u64(out+40)==h+1);
+  accel.type=1000165000;assert(pw_vk_template_extent(&accel,1,&extent)&&extent==16);
+  assert(pw_vk_template_register(&c,&a,1,h,1,0,0,1,NULL,0));
+  assert(pw_vk_template_snapshot(&c,1,0,h,NULL,0,out,sizeof(out),&bytes)&&bytes==32);
+  pw_vk_template_remove(&c,&a,1,h);
+ }
  fail=1;assert(!pw_vk_template_register(&c,&a,1,h,1,0,0,0,&e,1));fail=0;
  assert(pw_vk_template_register(&c,&a,1,h,1,0,0,0,&e,1));assert(pw_vk_template_register(&c,&a,2,h,1,0,0,0,&e,1));
  pw_vk_template_remove_device(&c,&a,1);assert(!pw_vk_template_lookup(&c,1,h,&n));assert(pw_vk_template_lookup(&c,2,h,&n));
@@ -35,7 +51,7 @@ static int template_cache_cases(void){
   sparse[0].offset=UINT64_MAX;assert(!pw_vk_template_extent(sparse,2,&extent));
   sparse[0].offset=0;sparse[0].stride=UINT64_MAX;assert(!pw_vk_template_extent(sparse,2,&extent));
   sparse[0].stride=24;sparse[0].count=UINT32_MAX;assert(!pw_vk_template_extent(sparse,2,&extent));
-  sparse[0].count=1;sparse[0].type=1000138000;assert(!pw_vk_template_extent(sparse,2,&extent));
+  sparse[0].count=1;sparse[0].type=UINT32_MAX;assert(!pw_vk_template_extent(sparse,2,&extent));
   pw_vk_template_remove_device(&c,&a,3);assert(!c.count);
  }
  return 0;

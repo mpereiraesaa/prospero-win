@@ -141,6 +141,24 @@ static void retire_template(unsigned int code,void *args)
  else if(code==unix_vkDestroyDescriptorUpdateTemplateKHR){struct vkDestroyDescriptorUpdateTemplateKHR_params *p=args;pw_vk_template_remove(&templates,&allocator,(UINT_PTR)p->device,p->descriptorUpdateTemplate);}
  else if(code==unix_vkDestroyDevice){struct vkDestroyDevice_params *p=args;pw_vk_template_remove_device(&templates,&allocator,(UINT_PTR)p->device);}
 }
+static VkDevice template_device(unsigned code,const void *args)
+{
+ VkCommandBuffer buffer;
+ switch(code){
+ case unix_vkUpdateDescriptorSetWithTemplate:return ((const struct vkUpdateDescriptorSetWithTemplate_params *)args)->device;
+ case unix_vkUpdateDescriptorSetWithTemplateKHR:return ((const struct vkUpdateDescriptorSetWithTemplateKHR_params *)args)->device;
+ case unix_vkCmdPushDescriptorSetWithTemplate:buffer=((const struct vkCmdPushDescriptorSetWithTemplate_params *)args)->commandBuffer;break;
+ case unix_vkCmdPushDescriptorSetWithTemplateKHR:buffer=((const struct vkCmdPushDescriptorSetWithTemplateKHR_params *)args)->commandBuffer;break;
+ case unix_vkCmdPushDescriptorSetWithTemplate2:buffer=((const struct vkCmdPushDescriptorSetWithTemplate2_params *)args)->commandBuffer;break;
+ case unix_vkCmdPushDescriptorSetWithTemplate2KHR:buffer=((const struct vkCmdPushDescriptorSetWithTemplate2KHR_params *)args)->commandBuffer;break;
+ default:return NULL;
+ }
+ return buffer?buffer->device:NULL;
+}
+static int template_snapshot(void *device,uint64_t handle,const void *data,void *wire,size_t capacity,size_t *written)
+{
+ return pw_vk_template_snapshot(&templates,(UINT_PTR)device,0,handle,data,1,wire,capacity,written);
+}
 static uint32_t call_opcode(unsigned int code)
 {
  switch(code){
@@ -219,7 +237,7 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
  }
  bytes=0;opcode=0;
  if(negotiated&&!encode(code,args,wire,&bytes,&opcode)&&opcode_mask==0x7f&&
-    pw_vk_generated_encode(code,args,wire+4,PW_VK_BATCH_ARENA-PW_VK_STREAM_HEADER-4,&bytes)){
+    pw_vk_generated_encode_templates(code,args,wire+4,PW_VK_BATCH_ARENA-PW_VK_STREAM_HEADER-4,&bytes,template_snapshot,template_device(code,args))){
   memcpy(wire,&code,4);bytes+=4;opcode=PW_VK_BATCH_GENERATED_OPCODE;
  }
  if(negotiated&&bytes&&(p=producer())){

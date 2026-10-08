@@ -47,9 +47,26 @@ The Unix entry accepts legacy v1 batches, while a new PE requires the exact v2
 capability; mismatched old Unix libraries disable batching safely. Existing
 seven fast codecs stay first. Additional generated operations are enabled only
 with the default all-category mask (127); narrower diagnostic masks retain their
-previous scope. Unknown shapes drain and dispatch synchronously. The six opaque
-descriptor-template forms still require their metadata-aware adapter.
+previous scope. Unknown shapes drain and dispatch synchronously. All six descriptor-template forms use device-scoped registered metadata, with
+command-buffer client tails retaining the originating device association.
 
 The process scratch limit is 16 MiB to preserve the existing 63-producer bound
 with larger arenas. Unix decoding uses a bounded 4 MiB allocation per entry.
 These allocation and memory costs require measurement before default enablement.
+
+The codec exposes an injected descriptor-template snapshot callback. Encoding
+uses registered entry extents; decoding checks the normalized header, template
+identity, byte extent and reserved fields before allocating aligned owned data.
+The callback is producer state and is never serialized. Generated fixtures cover
+all six core/KHR template forms with explicit uniform-buffer metadata. The
+actual Unix-entry fixture uses controlled native thunks to verify owned nested
+barriers, destruction ordering, piggyback status propagation and full-batch
+semantic rejection before effects; it does not exercise a GPU driver.
+
+Template metadata supports both descriptor-set and push-descriptor template
+kinds, including empty templates. Sparse image, buffer, texel-buffer and
+acceleration-structure spans are copied; inline uniform bytes use contiguous
+extents and ignore the API stride. Mutable descriptor types, unknown metadata,
+creation extension chains and allocator callbacks take the synchronous fallback
+path. Command-buffer allocation writes only a PE tail association; the shared
+client-object prefix used by Unix unwrapping stays unchanged.

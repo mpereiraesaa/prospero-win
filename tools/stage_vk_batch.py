@@ -22,6 +22,11 @@ def retire_loader(s):
   assert count==1,(name,count);s=s[:begin]+body+s[end:]
  return s
 edit('loader.c',retire_loader)
+# This PE-only tail field associates push-template command records with metadata.
+# Unix unwraps only the unchanged client-object prefix, never this PE list/tail.
+edit('vulkan_loader.h',lambda s:once(s,'    struct list pool_link;\n};','    struct list pool_link;\n    VkDevice device;\n};'))
+edit('loader.c',lambda s:once(s,'    for (i = 0; i < allocate_info->commandBufferCount; i++)\n        buffers[i] = vulkan_client_object_create(sizeof(*buffers[i]));','    for (i = 0; i < allocate_info->commandBufferCount; i++)\n    {\n        buffers[i] = vulkan_client_object_create(sizeof(*buffers[i]));\n        if (buffers[i]) buffers[i]->device = device;\n    }'))
+
 edit('vulkan.c',lambda s:once(s,'    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);', '    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    if (!strcmp(name, PW_VK_BATCH_NAME)) return PW_VK_BATCH_CAPABILITY;\n    if (!strcmp(name, PW_VK_BATCH_LEGACY_NAME)) return PW_VK_BATCH_LEGACY_CAPABILITY;\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);'))
 names=['pw_vk_wire','pw_vk_template_cache','pw_vk_command_stream']
 sources=['pw_vk_batch_pe.c','pw_vk_batch_unix.c','pw_vk_retire.c']

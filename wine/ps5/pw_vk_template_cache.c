@@ -29,10 +29,10 @@ int pw_vk_template_register(struct pw_vk_template_cache *c,const struct pw_vk_te
  /* Successful same-handle registration supersedes stale identity, including
   * when newly-created metadata is unsupported. No stale batch eligibility. */
  pw_vk_template_remove(c,a,d,h);
- if(!d || !h || pn || flags || type || !n || !e || n>(SIZE_MAX-sizeof(*m))/sizeof(*e)) return 0;
+ if(!d || !h || pn || flags || type>1 || (!e&&n) || n>(SIZE_MAX-sizeof(*m))/sizeof(*e)) return 0;
  if(!pw_vk_template_extent(e,n,&extent)) return 0;
  m=a->alloc(sizeof(*m)+n*sizeof(*e));if(!m)return 0;
- m->device=d;m->handle=h;m->count=n;memcpy(m->entries,e,n*sizeof(*e));
+ m->device=d;m->handle=h;m->count=n;if(n)memcpy(m->entries,e,n*sizeof(*e));
  {
   size_t bucket=template_bucket(d,h);
   m->next=c->buckets[bucket];c->buckets[bucket]=m;c->count++;
