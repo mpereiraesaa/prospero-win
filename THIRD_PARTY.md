@@ -150,3 +150,13 @@ Mesa's licence overview are copied from the pinned source into
 `LICENSES/mesa/`. The llvm-mingw C++ runtime and MinGW runtime notices
 are in `LICENSES/llvm-mingw/`. `SOURCES.txt` and
 `mesa-zink-manifest.json` record the source, compiler archive and DLL hashes.
+
+The optional WGL/Zink packager validates every consumed manifest field before
+changing the output package, including compiler version, hashes, imports and
+licence metadata. Input is a trusted, immutable local builder artifact set;
+this is not manifest authentication. Limits are 1 MiB for the manifest,
+32 DLLs per architecture (128 MiB each), 256 imports per DLL, and 256 licence
+files (16 MiB each). Provider basenames are ASCII and at most 127 bytes;
+symlink inputs and duplicate case aliases are refused. Copying after successful
+preflight remains nontransactional, so output must not be published if copying
+fails. Existing builtin OpenGL remains unchanged.

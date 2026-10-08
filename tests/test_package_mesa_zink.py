@@ -43,4 +43,58 @@ class Packaging(unittest.TestCase):
                 with self.assertRaises(ValueError):p.package(artifacts,app)
                 self.assertEqual(list(app.iterdir()),[])
 
+    def test_manifest_metadata_rejects_before_any_output_mutation(self):
+        cases = {
+            'missing-version': lambda m: m.pop('llvm_mingw'),
+            'null-version': lambda m: m.update(llvm_mingw=None),
+            'version-type': lambda m: m.update(llvm_mingw=3),
+            'version-newline': lambda m: m.update(llvm_mingw='ucrt\nfalse source'),
+            'version-long': lambda m: m.update(llvm_mingw='x' * 65),
+            'files-type': lambda m: m.update(files=[]),
+            'files-too-many': lambda m: m['files'].update({f'i386-windows/c{i}.dll': {} for i in range(65)}),
+            'record-type': lambda m: m['files'].update({'i386-windows/opengl32.dll': []}),
+            'hash-type': lambda m: m['files']['i386-windows/opengl32.dll'].update(sha256=3),
+            'machine-type': lambda m: m['files']['i386-windows/opengl32.dll'].update(machine=True),
+            'imports-missing': lambda m: m['files']['i386-windows/opengl32.dll'].pop('imports'),
+            'imports-type': lambda m: m['files']['i386-windows/opengl32.dll'].update(imports='vulkan-1.dll'),
+            'imports-too-many': lambda m: m['files']['i386-windows/opengl32.dll'].update(imports=['vulkan-1.dll'] * 257),
+            'imports-path': lambda m: m['files']['i386-windows/opengl32.dll'].update(imports=['../libc++.dll']),
+            'imports-value': lambda m: m['files']['i386-windows/opengl32.dll'].update(imports=[None]),
+            'licenses-type': lambda m: m.update(license_sha256=[]),
+            'license-hash-type': lambda m: m.update(license_sha256={'LICENSES/mesa/MIT': None}),
+            'license-count': lambda m: m.update(license_sha256={f'LICENSES/{i}': '0'*64 for i in range(257)}),
+            'license-long': lambda m: m.update(license_sha256={'LICENSES/' + 'x'*257: '0'*64}),
+            'duplicate-case': lambda m: m['files'].update({'i386-windows/OPENGL32.dll': m['files']['i386-windows/opengl32.dll']}),
+            'unicode-name': lambda m: m['files'].update({'i386-windows/K.dll': m['files']['i386-windows/opengl32.dll']}),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                base = Path(temp); artifacts = base / 'artifacts'; artifacts.mkdir()
+                manifest = fixture(artifacts); mutate(manifest)
+                (artifacts / 'manifest.json').write_text(json.dumps(manifest))
+                app = base / 'app'; app.mkdir(); (app / 'SOURCES.txt').write_bytes(b'original source')
+                (app / 'keep').write_bytes(b'original package')
+                before = {str(f.relative_to(app)): f.read_bytes() for f in app.rglob('*') if f.is_file()}
+                with self.assertRaises(ValueError): p.package(artifacts, app)
+                self.assertEqual({str(f.relative_to(app)): f.read_bytes() for f in app.rglob('*') if f.is_file()}, before)
+                self.assertFalse((app / 'win').exists())
+
+    def test_bounded_files_and_symlink_inputs(self):
+        for problem in ['manifest-size', 'dll-size', 'license-size', 'dll-symlink', 'arch-symlink']:
+            with self.subTest(problem=problem), tempfile.TemporaryDirectory() as temp:
+                base = Path(temp); artifacts = base / 'artifacts'; artifacts.mkdir(); manifest = fixture(artifacts)
+                if problem == 'manifest-size':
+                    (artifacts / 'manifest.json').write_bytes(b' ' * (p.MAX_MANIFEST + 1))
+                elif problem == 'dll-size':
+                    with (artifacts / 'i386-windows/opengl32.dll').open('r+b') as f: f.truncate(p.MAX_DLL + 1)
+                elif problem == 'license-size':
+                    with (artifacts / 'LICENSES/mesa/MIT').open('r+b') as f: f.truncate(p.MAX_LICENSE + 1)
+                elif problem == 'dll-symlink':
+                    target = artifacts / 'i386-windows/opengl32.dll'; target.rename(base / 'original.dll'); target.symlink_to(base / 'original.dll')
+                else:
+                    target = artifacts / 'i386-windows'; target.rename(base / 'arch'); target.symlink_to(base / 'arch', target_is_directory=True)
+                app = base / 'app'; app.mkdir()
+                with self.assertRaises(ValueError): p.package(artifacts, app)
+                self.assertEqual(list(app.iterdir()), [])
+
 if __name__=='__main__':unittest.main()
