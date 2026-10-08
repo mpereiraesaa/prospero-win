@@ -13,9 +13,18 @@ for name in ['pw_vk_wire','pw_vk_template_cache','pw_vk_command_stream']:
 for p in (repo/'wine/ps5/vulkan').glob('*.[ch]'):shutil.copyfile(p,d/p.name)
 edit('vulkan_loader.h',lambda s:once(s,'#define UNIX_CALL(code, params) WINE_UNIX_CALL(unix_ ## code, params)', '#include "pw_vk_batch.h"\n#ifdef _WIN64\n#define UNIX_CALL(code, params) WINE_UNIX_CALL(unix_ ## code, params)\n#else\n#define UNIX_CALL(code, params) pw_vk_batch_call(unix_ ## code, params)\n#endif'))
 edit('loader.c',lambda s:once(s,'            DisableThreadLibraryCalls(hinst);','#ifdef _WIN64\n            DisableThreadLibraryCalls(hinst);\n#else\n            /* Stream nodes survive teardown; notifications retire only. */\n#endif').replace('        case DLL_PROCESS_ATTACH:', '        case DLL_THREAD_DETACH:\n#ifndef _WIN64\n            pw_vk_batch_thread_detach();\n#endif\n            break;\n        case DLL_PROCESS_ATTACH:'))
+# Restrict deferred CRT frees to the four manual destruction wrappers. Creation
+# failure cleanup and callback-conversion allocations retain ordinary free().
+def retire_loader(s):
+ for name in ['vkDestroyInstance','vkDestroyDevice','vkDestroyCommandPool','vkFreeCommandBuffers']:
+  begin=s.index('void WINAPI '+name+'(');end=s.index('\n}\n',begin)+3
+  body=s[begin:end];body,count=re.subn(r'(?m)^(\s*)free\(([^;]+)\);$',r'\1#ifdef _WIN64\n\1free(\2);\n\1#else\n\1pw_vk_batch_retire_free(\2);\n\1#endif',body)
+  assert count==1,(name,count);s=s[:begin]+body+s[end:]
+ return s
+edit('loader.c',retire_loader)
 edit('vulkan.c',lambda s:once(s,'    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);', '    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    if (!strcmp(name, PW_VK_BATCH_NAME)) return PW_VK_BATCH_CAPABILITY;\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);'))
 names=['pw_vk_wire','pw_vk_template_cache','pw_vk_command_stream']
-sources=['pw_vk_batch_pe.c','pw_vk_batch_unix.c']
+sources=['pw_vk_batch_pe.c','pw_vk_batch_unix.c','pw_vk_retire.c']
 for name in names:
  sources.extend([name+'.c',name+'_unix.c'])
  (d/(name+'_unix.c')).write_text('#if 0\n#pragma makedep unix\n#endif\n#include "'+name+'.c"\n')

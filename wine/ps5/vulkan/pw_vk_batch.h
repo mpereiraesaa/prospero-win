@@ -14,5 +14,6 @@ NTSTATUS pw_vk_batch_unix(void *);
 BOOL pw_vk_batch_allocator(unsigned int,const void *);
 NTSTATUS pw_vk_batch_call(unsigned int,void *);
 void pw_vk_batch_thread_detach(void);
+void pw_vk_batch_retire_free(void *);
 #endif
 #endif

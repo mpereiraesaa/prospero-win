@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "vulkan_loader.h"
 #include "pw_vk_batch.h"
+#include <stdlib.h>
+#include "pw_vk_retire.h"
 #include "pw_vk_command_stream.h"
 #include "pw_vk_template_cache.h"
 #ifndef _WIN64
@@ -14,6 +16,7 @@ static CRITICAL_SECTION gate;
 static DWORD tls=TLS_OUT_OF_INDEXES;
 static struct pw_vk_stream_registry registry;
 static struct pw_vk_template_cache templates;
+static struct pw_vk_retirement retirement;
 static unsigned char *scratch;
 static BOOL enabled,negotiated,stats_enabled;
 /* Only the existing gated fallback path owns these arrays. */
@@ -93,11 +96,28 @@ static NTSTATUS flush_call(unsigned int code,void *args)
 {
  size_t bytes=0,records=0;struct pw_vk_batch_params p;NTSTATUS status;
  if(pw_vk_stream_collect(&registry,scratch,PW_VK_BATCH_SCRATCH,&bytes,&records)!=PW_VK_STREAM_OK)fatal();
- if(!bytes){status=code==unix_count?STATUS_SUCCESS:raw_call(code,args);reclaim();return status;}
+ if(!bytes){status=code==unix_count?STATUS_SUCCESS:raw_call(code,args);pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return status;}
  p.version=PW_VK_BATCH_VERSION;p.batch=(UINT_PTR)scratch;p.bytes=bytes;p.code=code;p.args=(UINT_PTR)args;p.status=STATUS_SUCCESS;
  status=raw_call(unix_pw_vk_batch,&p);if(status)fatal();
  dispatches_total++;records_total+=records;if(code!=unix_count)piggyback_total++;
- reclaim();return p.status;
+ pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return p.status;
+}
+/* Manual loader wrappers unlink PE lists immediately, but queued native thunks
+ * still dereference each client-object prefix. Release only after global replay
+ * completes. A concurrent flush may already have completed before this hook. */
+void pw_vk_batch_retire_free(void *object)
+{
+ struct pw_vk_stream *stream;BOOL pending=FALSE;
+ if(!object)return;
+ if(!enabled||InterlockedCompareExchange(&sticky_disabled,0,0)){free(object);return;}
+ enter();
+ for(stream=registry.streams;stream;stream=stream->next)if(stream->used){pending=TRUE;break;}
+ if(!pending)free(object);
+ else if(!pw_vk_retirement_add(&retirement,object,heap_alloc)){
+  /* Node allocation failure preserves lifetime by completing replay first. */
+  flush_call(unix_count,NULL);free(object);
+ }
+ leave();
 }
 static void template_created(unsigned int code,void *args)
 {
