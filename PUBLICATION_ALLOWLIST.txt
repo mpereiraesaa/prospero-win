@@ -477,3 +477,6 @@ tests/lab/pw_qpc_bridge.c
 tests/lab/pw_key_bridge.c
 tools/test_wine_qpc_bridge.py
 tools/test_wine_key_bridge.py
+tools/generate_vk_codecs.py
+wine/ps5/vulkan/pw_vk_codec.c
+wine/ps5/vulkan/pw_vk_codec.h
