@@ -77,8 +77,8 @@ $(eval $(call test_rule,test_pw_wine_cwd_listing,tests/test_pw_wine_cwd_listing.
 $(eval $(call test_rule,test_pw_wine_compat,tests/test_pw_wine_compat.c wine/ps5/pw_wine_compat.c,-std=gnu11))
 # The console's resolver keeps the C library's names; the test renames them
 # so glibc's own resolver stays out of the way.
-PW_WS2_32_TEST_FLAGS := -D_DEFAULT_SOURCE $(foreach name,getaddrinfo freeaddrinfo getnameinfo gethostbyname \
-	gethostbyaddr,-D$(name)=pw_test_$(name))
+PW_WS2_32_TEST_FLAGS := -D_DEFAULT_SOURCE -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 $(foreach name,getaddrinfo freeaddrinfo getnameinfo gethostbyname \
+	gethostbyaddr gethostname,-D$(name)=pw_test_$(name))
 $(eval $(call test_rule,test_pw_ws2_32_libc,tests/test_pw_ws2_32_libc.c wine/ps5/pw_ws2_32_libc.c,$(PW_WS2_32_TEST_FLAGS)))
 $(eval $(call test_rule,test_pw_launcher_render,tests/test_pw_launcher_render.c src/pw_launcher_render.c,))
 $(eval $(call test_rule,test_pw_pad,tests/test_pw_pad.c src/pw_pad.c,))

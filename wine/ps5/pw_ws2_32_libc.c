@@ -14,11 +14,14 @@
  * "Starting a new game" (measured), while the failure Wine reports for it
  * (one "Failed to resolve your host name IP" line per lookup) is what lets
  * the game carry on offline. There is no services database, so a service must be a port
- * number. gethostname, inet_pton and inet_ntop are the title's own.
+ * number. Winsock reports the stable local name PS5; inet_pton and
+ * inet_ntop are the title's own. A successful local-address probe must
+ * still be checked against game loading, not just resolver unit tests.
  *
  * The host test builds this file with these names prefixed (Makefile), so
  * glibc's stay in place. */
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -79,17 +82,24 @@ static socklen_t pw_sockaddr(struct sockaddr_storage *storage, const struct pw_a
     return sizeof(*in6);
 }
 
-/* "localhost" or the name gethostname reports. */
+/* The title's gethostname may return an empty name. Wine then substitutes
+ * the PC prefix's registry name for an empty lookup, which is not resolvable
+ * here. Keep the name returned by Winsock and our local resolver identical. */
+static const char pw_hostname[] = "PS5";
+
+int gethostname(char *name, size_t size)
+{
+    if (size < sizeof(pw_hostname)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(name, pw_hostname, sizeof(pw_hostname));
+    return 0;
+}
+
 static int pw_is_local_name(const char *name)
 {
-    char own[256];
-
-    if (!strcasecmp(name, "localhost"))
-        return 1;
-    if (gethostname(own, sizeof(own)))
-        return 0;
-    own[sizeof(own) - 1] = 0;
-    return own[0] && !strcasecmp(name, own);
+    return !strcasecmp(name, "localhost") || !strcasecmp(name, pw_hostname);
 }
 
 /* The addresses NODE stands for in FAMILY, IPv4 first: that is what a
