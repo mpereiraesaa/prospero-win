@@ -180,6 +180,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_vk_retire.py
 	python3 tests/test_vk_codecs.py
 	python3 tests/test_summarize_vk_batch.py
+	python3 tests/test_native_profile_split.py
 	CC="$(CC)" python3 tests/test_native_wow64_provider.py
 	python3 tests/test_wowprospero_contract.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wowprospero_unmap.py

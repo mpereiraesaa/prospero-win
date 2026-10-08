@@ -75,6 +75,7 @@ src/pw_pad.c
 src/pw_pad.h
 src/pw_guest_call.c
 src/pw_guest_call.h
+tests/test_native_profile_split.py
 tests/test_pw_audio_ps5.c
 tests/test_pw_audio_mix.c
 tests/test_pw_app_profile.c
@@ -116,6 +117,7 @@ tools/audit_publication.py
 tools/classify_x86.c
 tools/build_native.sh
 tools/fetch_lapy_helper.py
+tools/native_profile_split.py
 tools/survey_x86_coverage.py
 tools/make_icon.py
 tools/make_test_pe.py

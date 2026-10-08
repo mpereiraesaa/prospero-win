@@ -19,27 +19,27 @@ entries=(ctypes.c_void_p*4).in_dll(module,'__wine_unix_call_funcs')
 entry=entries[0]
 init=ctypes.CFUNCTYPE(ctypes.c_uint32,ctypes.c_void_p)(entry)
 assert init(None)==0xc000000d
-for version in [0,1,2,0xffffffff]:
+for version in [0,1,2,3,0xffffffff]:
     params=Init(version,0,0,0)
     assert init(ctypes.byref(params))==0xc000000d
 for ready in [0,1,0xffffffff]:
-    params=Init(3,ready,0xffff,0)
+    params=Init(4,ready,0xffff,0)
     assert init(ctypes.byref(params))==0xc00000bb
     assert params.ready==0 and params.fs==0
 
 class ThreadParams(ctypes.Structure):
-    _fields_=[('version',ctypes.c_uint32),('reserved',ctypes.c_uint32),
+    _fields_=[('version',ctypes.c_uint32),('tid',ctypes.c_uint32),
               ('guest_teb',ctypes.c_uint64),('state',ctypes.c_uint64)]
 class ThreadState(ctypes.Structure):
     _fields_=[('host_fs',ctypes.c_uint64),('guest_fs',ctypes.c_uint64),
-              ('status',ctypes.c_uint32),('reserved',ctypes.c_uint32),('profile',ctypes.c_uint64)]
+              ('status',ctypes.c_uint32),('tid',ctypes.c_uint32),('profile',ctypes.c_uint64)]
 assert ctypes.sizeof(ThreadParams)==24 and ctypes.sizeof(ThreadState)==32
 thread_init,thread_get,thread_term=[ctypes.CFUNCTYPE(ctypes.c_uint32,ctypes.c_void_p)(p) for p in entries[1:]]
 for fn in [thread_init,thread_get]:
     assert fn(None)==0xc000000d
-    assert fn(ctypes.byref(ThreadParams(2,0,0x20000,0)))==0xc000000d
+    assert fn(ctypes.byref(ThreadParams(3,0,0x20000,0)))==0xc000000d
 for address in [0,0xffff,0xfffff001,0x100000000]:
-    params=ThreadParams(3,0,address,0xffff)
+    params=ThreadParams(4,0,address,0xffff)
     assert thread_init(ctypes.byref(params))==0xc0000141
     assert params.state==0
 
@@ -47,7 +47,7 @@ for address in [0,0xffff,0xfffff001,0x100000000]:
 # isolates host/guest state, and cleanup does not retain a previous TEB.
 barrier=threading.Barrier(2)
 def exercise_thread(address):
-    params=ThreadParams(3,0,address,0)
+    params=ThreadParams(4,0,address,0)
     assert thread_get(ctypes.byref(params))==0xc000000d
     assert thread_init(ctypes.byref(params))==0xc00000bb
     first=params.state
@@ -57,7 +57,7 @@ def exercise_thread(address):
     barrier.wait(timeout=10)
     assert state.guest_fs==address
     assert thread_init(ctypes.byref(params))==0xc00000bb and params.state==first
-    wrong=ThreadParams(3,0,address+0x1000,0xffff)
+    wrong=ThreadParams(4,0,address+0x1000,0xffff)
     assert thread_init(ctypes.byref(wrong))==0xc000000d and wrong.state==0
     assert thread_get(ctypes.byref(wrong))==0xc000000d and wrong.state==0
     params.state=0
@@ -133,15 +133,15 @@ int sysarch(int operation, void *value)
     g_init,g_thread,g_get,g_term=[ctypes.CFUNCTYPE(ctypes.c_uint32,ctypes.c_void_p)(v) for v in funcs]
     for present,caps in [(0,7),*[(1,c) for c in range(7)]]:
         gate.mock_configure(present,caps,0)
-        params=Init(3,0xffffffff,0xffff,0,0xffff)
+        params=Init(4,0xffffffff,0xffff,0,0xffff)
         assert g_init(ctypes.byref(params))==0xc00000bb
         assert params.ready==params.fs==params.fs_set_proc==0
     gate.mock_configure(1,7,0)
-    params=Init(3,0,0,0)
+    params=Init(4,0,0,0)
     assert g_init(ctypes.byref(params))==0 and params.ready==1 and params.fs==0
     assert params.fs_set_proc==ctypes.cast(gate.sysarch,ctypes.c_void_p).value
     assert ctypes.c_uint.in_dll(gate,'last_version').value==1
-    tp=ThreadParams(3,0,0x50000,0)
+    tp=ThreadParams(4,0,0x50000,0)
     gate.mock_configure(1,7,1)
     assert g_thread(ctypes.byref(tp))==0xc0000001 and not tp.state
     gate.mock_configure(1,7,2)
@@ -159,7 +159,7 @@ int sysarch(int operation, void *value)
     assert g_term(None)==0 and state.host_fs==state.guest_fs==0
     barrier=threading.Barrier(2)
     def ready_thread(address):
-        params=ThreadParams(3,0,address,0)
+        params=ThreadParams(4,0,address,0)
         assert g_thread(ctypes.byref(params))==0
         state=ThreadState.from_address(params.state)
         captured=state.host_fs
@@ -177,13 +177,13 @@ int sysarch(int operation, void *value)
     for value,enabled in [('0',False),('1',True),('yes',False)]:
         os.environ['PW_NATIVE_PROFILE']=value
         assert g_init(ctypes.byref(params))==0
-        tp=ThreadParams(3,0,0x80000,0)
+        tp=ThreadParams(4,0,0x80000,0)
         assert g_thread(ctypes.byref(tp))==0
         state=ThreadState.from_address(tp.state)
         assert bool(state.profile)==enabled
         if enabled:
-            data=(ctypes.c_uint64*9).from_address(state.profile)
-            assert data[8] and list(data[:8])==[0]*8
+            data=(ctypes.c_uint64*13).from_address(state.profile)
+            assert data[8] and list(data[:8])==[0]*8 and list(data[9:])==[0]*4
         assert g_term(None)==0 and state.profile==0
     if old_profile_env is None:os.environ.pop('PW_NATIVE_PROFILE',None)
     else:os.environ['PW_NATIVE_PROFILE']=old_profile_env
@@ -280,7 +280,7 @@ static int __attribute__((sysv_abi)) fail_first(int op, uint64_t *base)
     return calls==1 ? -1 : 0;
 }
 
-static uint64_t profile[9];
+static uint64_t profile[13];
 static int reported;
 static void __attribute__((sysv_abi)) fake_profile_report(void *state)
 {
@@ -288,6 +288,7 @@ static void __attribute__((sysv_abi)) fake_profile_report(void *state)
     __asm__ volatile("pushfq; popq %0":"=r"(flags));
     if ((flags & 0x400) || ((uint64_t *)state)[3] != (uintptr_t)profile) reported=-100;
     else reported++;
+    profile[12]=~0ull; /* the real reporter sets its next TSC deadline */
     __asm__ volatile("fldz; pxor %%xmm0,%%xmm0; pxor %%xmm15,%%xmm15":::"xmm0","xmm15","memory");
     if(check_avx) __asm__ volatile("vzeroall":::"memory");
 }
@@ -308,7 +309,7 @@ int main(int argc, char **argv)
         puts("ERROR_guest_resumed_after_failed_FS_switch");
         return 60;
     }
-    if(argc>1) {profile[8]=(uintptr_t)fake_profile_report;state[3]=(uintptr_t)profile;}
+    if(argc>1) {profile[8]=(uintptr_t)fake_profile_report;state[3]=(uintptr_t)profile;profile[7]=1;}
     avx_flag=(void *)GetProcAddress(dll,"pw_native_avx");
     if(!avx_flag) return 13;
     if(__get_cpuid(1,&a,&b,&c,&d) && (c & bit_AVX) && (c & bit_OSXSAVE))
@@ -338,7 +339,11 @@ int main(int argc, char **argv)
     if(state[3]) {
         unsigned expected=avx_available?2:1;
         if(profile[0]!=expected || profile[1]!=expected || !profile[2] || !profile[3] || !profile[6] || reported!=1) return 90;
-        printf("profile_on_preservation host=%llu guest=%llu reporter=%d\n",profile[0],profile[1],reported);
+        /* The first host stay was marked a Unix call; the guest switch clears
+         * the mark, so a second (AVX) stay counts as other. */
+        if(!profile[9] || profile[10] || profile[7] || (expected==2) != (profile[11]!=0)) return 91;
+        printf("profile_on_preservation host=%llu guest=%llu reporter=%d unix_host=%llu other_host=%llu\n",
+               profile[0],profile[1],reported,profile[9],profile[11]);
     }
     printf("AVX_cases=%u\n",avx_available?2:0);
     return 0;
