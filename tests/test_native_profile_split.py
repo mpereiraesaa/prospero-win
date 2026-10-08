@@ -25,6 +25,8 @@ def report(tid, tsc, unix=0, sys_=0, other=0, host_fs=0, guest_fs=0, unix_calls=
 def main() -> int:
     lines = [
         "WINE 0040:trace:fps:x @ approx 60.00fps",
+        "1\t2\tINFO\tWINE PW_NATIVE_PROFILE cpu_clock_mhz=3500 cpu=3 tid=0000",
+        "1\t2\tINFO\tWINE PW_NATIVE_PROFILE cpu_clock_mhz=1600 cpu=5 tid=004c",
         "PW_NATIVE_PROFILE version=1 teb=1 tsc=5 host_calls=1",       # old format: ignored
         report(0x4c, 0),
         report(0x24, 0),
@@ -49,18 +51,20 @@ def main() -> int:
     assert [r["tid"] for r in late] == [0x4c] and abs(late[0]["unix"] - 25) < 1e-9, late
     assert nps.split(nps.parse(lines), min_wall=3) == [r for r in rows if r["tid"] == 0x4c]
     assert nps.split([]) == []
+    assert nps.clocks(lines) == [(3500, 3, 0), (1600, 5, 0x4c)]
     with tempfile.TemporaryDirectory() as directory:
         log = Path(directory) / "session.log"
         log.write_text("\n".join(lines) + "\n")
         run = subprocess.run([sys.executable, str(ROOT / "tools/native_profile_split.py"), str(log)],
                              capture_output=True, text=True)
         assert run.returncode == 0 and "4c" in run.stdout and "67.5" in run.stdout, run
+        assert "2 samples, min 1600 MHz, median 3500 MHz, max 3500 MHz" in run.stdout, run
         empty = Path(directory) / "empty.log"
         empty.write_text("nothing\n")
         run = subprocess.run([sys.executable, str(ROOT / "tools/native_profile_split.py"), str(empty)],
                              capture_output=True, text=True)
         assert run.returncode == 1 and "no PW_NATIVE_PROFILE" in run.stderr, run
-    print("native profile split passed: shares, rates, window, short threads, old format and empty logs")
+    print("native profile split passed: shares, rates, window, short threads, core-clock samples, old format and empty logs")
     return 0
 
 

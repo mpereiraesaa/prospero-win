@@ -116,6 +116,19 @@ save. Guest-FS restoration never calls the reporter. Tick measurements
 exclude FP saving/restoring and logging; they include timestamp/branch
 overhead and interruptions.
 
+The profile also measures the core clock: at process start and then about
+once a minute, from whichever thread reports first, a chain of 16M dependent
+1-cycle adds is timed with `CLOCK_MONOTONIC` (under 5 ms at 3.5 GHz, about
+10 ms at 1.6 GHz), and logged as
+
+    PW_NATIVE_PROFILE cpu_clock_mhz=3500 cpu=3 tid=004c
+
+`cpu` is RDTSCP's TSC_AUX (the CPU number where the kernel sets it); `tid` is
+0 for the startup measurement. The TSC runs at a fixed rate whatever the core
+does, so only this shows whether the game's cores run at full clock or in a
+lower power state. A thread preempted during the loop reads low; compare
+several samples.
+
 `tools/native_profile_split.py LOG [--from S] [--to S]` turns the first and
 last report of each thread in a window into shares of wall time: on the host
 in Unix calls, in syscalls (waiting included), other host time, the FS

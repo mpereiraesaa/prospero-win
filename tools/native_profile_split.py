@@ -17,7 +17,8 @@ chosen window and prints, per thread, the share of wall time spent
   guest%    the rest: the game's and its DLLs' own code (DXVK, d3d9),
             plus any time the thread was descheduled while there
 
-with Unix calls and syscalls per second. A Unix call that calls back into
+with Unix calls and syscalls per second, after the core-clock samples
+(cpu_clock_mhz) if the log has any. A Unix call that calls back into
 the guest splits: the part after the callback counts as a syscall. The
 busiest Vulkan thread (DXVK's CS thread) is the one with the highest Unix-call
 rate.
@@ -32,6 +33,7 @@ import re
 import sys
 
 LINE = re.compile(r"PW_NATIVE_PROFILE version=2 (.*)$")
+CLOCK = re.compile(r"PW_NATIVE_PROFILE cpu_clock_mhz=(\d+) cpu=(\d+) tid=([0-9a-fA-F]+)")
 FIELD = re.compile(r"(\w+)=([0-9a-fA-F]+)")
 HEX = {"tid", "teb"}
 
@@ -47,6 +49,16 @@ def parse(lines):
         if fields.get("tsc_hz") and "tsc" in fields:
             reports.append(fields)
     return reports
+
+
+def clocks(lines):
+    """[(mhz, cpu, tid)] from the core-clock lines, in log order."""
+    out = []
+    for line in lines:
+        match = CLOCK.search(line)
+        if match:
+            out.append((int(match[1]), int(match[2]), int(match[3], 16)))
+    return out
 
 
 def split(reports, start=None, end=None, min_wall=0.5):
@@ -87,7 +99,13 @@ def main(argv=None) -> int:
     parser.add_argument("--min-wall", type=float, default=0.5)
     args = parser.parse_args(argv)
     with open(args.log, errors="replace") as handle:
-        reports = parse(handle)
+        lines = handle.readlines()
+    reports = parse(lines)
+    samples = clocks(lines)
+    if samples:
+        mhz = sorted(sample[0] for sample in samples)
+        print(f"core clock: {len(mhz)} samples, min {mhz[0]} MHz, median {mhz[len(mhz) // 2]} MHz, "
+              f"max {mhz[-1]} MHz")
     rows = split(reports, args.start, args.end, args.min_wall)
     if not rows:
         print("no PW_NATIVE_PROFILE version=2 reports in the window", file=sys.stderr)

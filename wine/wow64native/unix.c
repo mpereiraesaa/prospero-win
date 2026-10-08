@@ -55,6 +55,31 @@ static unsigned long long measure_tsc_hz(void)
     return tsc1 > tsc0 ? (tsc1 - tsc0) * 1000000000ull / ns : 0;
 }
 
+/* The core clock this thread runs at: a chain of dependent 1-cycle adds
+ * (eight per iteration, so the loop counter runs alongside) timed with
+ * CLOCK_MONOTONIC. 2M iterations are 16M cycles: under 5 ms at 3.5 GHz,
+ * 10 ms at 1.6 GHz. The TSC runs at a fixed rate whatever the core does,
+ * so only this shows a lower power state. cpu is RDTSCP's TSC_AUX (the
+ * CPU number where the kernel sets it). */
+static void report_cpu_clock(unsigned int tid)
+{
+    struct timespec start, end;
+    unsigned long long iterations = 2000000ull, chain = 0, ns;
+    unsigned int low, high, aux;
+    if (clock_gettime(CLOCK_MONOTONIC, &start)) return;
+    __asm__ volatile("1:\n\t"
+                     "addq $1,%0\n\taddq $1,%0\n\taddq $1,%0\n\taddq $1,%0\n\t"
+                     "addq $1,%0\n\taddq $1,%0\n\taddq $1,%0\n\taddq $1,%0\n\t"
+                     "decq %1\n\tjnz 1b"
+                     : "+r"(chain), "+r"(iterations) : : "cc");
+    if (clock_gettime(CLOCK_MONOTONIC, &end)) return;
+    __asm__ volatile("rdtscp" : "=a"(low), "=d"(high), "=c"(aux));
+    ns = (unsigned long long)(end.tv_sec - start.tv_sec) * 1000000000ull + end.tv_nsec - start.tv_nsec;
+    if (!ns || chain != 16000000ull) return;
+    WINE_MESSAGE("PW_NATIVE_PROFILE cpu_clock_mhz=%llu cpu=%u tid=%04x\n", chain * 1000ull / ns, aux, tid);
+}
+static unsigned long long clock_next_tsc;
+
 /* Cumulative per-thread counters; tools/native_profile_split.py turns two
  * consecutive reports of a thread into an interval's split. tid is the
  * Windows thread id, as in Wine's log prefixes. */
@@ -70,6 +95,13 @@ static void profile_report(void *arg)
                  p->host_sysarch_ticks, p->guest_sysarch_ticks, p->unix_calls, p->syscall_calls,
                  p->unix_host_ticks, p->syscall_host_ticks, p->other_host_ticks);
     p->next_report_tsc = profile_tsc_hz ? p->last_tsc + 2 * profile_tsc_hz : ~0ull;
+    /* About once a minute, on whichever thread reports first after that:
+     * the busy ones report most often. */
+    if (profile_tsc_hz && p->last_tsc >= __atomic_load_n(&clock_next_tsc, __ATOMIC_RELAXED))
+    {
+        __atomic_store_n(&clock_next_tsc, p->last_tsc + 60 * profile_tsc_hz, __ATOMIC_RELAXED);
+        report_cpu_clock(state->tid);
+    }
 }
 
 static NTSTATUS capture_host_fs(unsigned long long *base)
@@ -117,7 +149,12 @@ static NTSTATUS process_init(void *args)
         {
             const char *value = getenv("PW_NATIVE_PROFILE");
             profile_enabled = value && !strcmp(value, "1");
-            if (profile_enabled) profile_tsc_hz = measure_tsc_hz();
+            if (profile_enabled)
+            {
+                profile_tsc_hz = measure_tsc_hz();
+                report_cpu_clock(0);    /* at startup, before any thread report */
+                clock_next_tsc = read_tsc() + 60 * profile_tsc_hz;
+            }
         }
         return STATUS_SUCCESS;
     }
