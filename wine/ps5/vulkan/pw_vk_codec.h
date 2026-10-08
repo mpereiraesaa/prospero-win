@@ -17,6 +17,7 @@ struct pw_vk_codec {
 };
 int pw_vk_codec_source(struct pw_vk_codec *,const void *,size_t);
 int pw_vk_codec_value(struct pw_vk_codec *,void *,size_t,unsigned);
+int pw_vk_codec_bytes(struct pw_vk_codec *,void *,uint64_t,size_t);
 int pw_vk_codec_array(struct pw_vk_codec *,void *,uint64_t,size_t,unsigned);
 int pw_vk_codec_string(struct pw_vk_codec *,void *);
 int pw_vk_codec_template(struct pw_vk_codec *,void *,uint64_t);

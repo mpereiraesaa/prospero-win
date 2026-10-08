@@ -15,6 +15,10 @@
 #include "pw_vk_codec.h"
 #include "pw_vk_wire.h"
 #include "pw_vk_command_stream.h"
+static _Thread_local uint64_t scalar_calls;
+int __real_pw_vk_codec_value(struct pw_vk_codec *,void *,size_t,unsigned);
+int __wrap_pw_vk_codec_value(struct pw_vk_codec *c,void *p,size_t n,unsigned wide)
+{ scalar_calls++;return __real_pw_vk_codec_value(c,p,n,wide); }
 static _Thread_local unsigned effects;
 static _Thread_local int fail_allocation;
 static atomic_uint allocations,releases;
@@ -48,6 +52,9 @@ NTSTATUS pw_vk_batch_dispatch_native(unsigned code,void *params)
  }else if(code==unix_vkDestroyDevice){
   struct vkDestroyDevice_params *p=params;
   assert(p->device==(VkDevice)(uintptr_t)0x5678&&!p->pAllocator);
+ }else if(code==unix_vkCmdUpdateBuffer){
+  struct vkCmdUpdateBuffer_params *p=params;
+  assert(p->dataSize==65536&&((const unsigned char *)p->pData)[0]==0x5a&&((const unsigned char *)p->pData)[65535]==0x5a);
  }else abort();
  effects++;return STATUS_SUCCESS;
 }
@@ -88,8 +95,30 @@ static int legacy_benchmark(void)
  printf("legacy_batches=%u records_per_batch=24 elapsed_seconds=%.6f allocations=%u\n",iterations,seconds()-start,atomic_load(&allocations)-before);
  assert(!pw_vk_stream_unregister(&registry,&stream));assert(!munmap(batch,65536));return 0;
 }
+/* Encode, frame, semantic preflight and native replay in each iteration. */
+static int blob_benchmark(void)
+{
+ unsigned char input[65536],encoded[131072],storage[131072];size_t bytes,n,records;
+ memset(input,0x5a,sizeof(input));
+ struct vkCmdUpdateBuffer_params command={.commandBuffer=(VkCommandBuffer)(uintptr_t)0x1234,.dstBuffer=0x4433,.dataSize=sizeof(input),.pData=input};
+ void *batch=mmap(NULL,sizeof(storage),PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_32BIT,-1,0);assert(batch!=MAP_FAILED);
+ struct pw_vk_stream_registry registry;struct pw_vk_stream stream={0};
+ pw_vk_stream_registry_init(&registry);assert(!pw_vk_stream_register(&registry,&stream,storage,sizeof(storage)));
+ struct pw_vk_batch_params call={.version=PW_VK_BATCH_VERSION,.batch=(uintptr_t)batch,.code=unix_count};
+ const unsigned iterations=1000;scalar_calls=0;unsigned before=atomic_load(&allocations);double start=seconds();
+ for(unsigned i=0;i<iterations;i++){
+  assert(pw_vk_generated_encode(unix_vkCmdUpdateBuffer,&command,encoded+4,sizeof(encoded)-4,&n));
+  unsigned code=unix_vkCmdUpdateBuffer;memcpy(encoded,&code,4);
+  assert(!pw_vk_stream_append(&registry,&stream,PW_VK_BATCH_GENERATED_OPCODE,encoded,n+4));
+  assert(!pw_vk_stream_collect(&registry,batch,sizeof(storage),&bytes,&records)&&records==1);call.bytes=bytes;
+  assert(!call_batch(&call));
+ }
+ printf("blob_bytes=65536 full_path_batches=%u elapsed_seconds=%.6f allocations=%u generated_scalar_calls=%llu\n",iterations,seconds()-start,atomic_load(&allocations)-before,(unsigned long long)scalar_calls);
+ assert(!pw_vk_stream_unregister(&registry,&stream));assert(!munmap(batch,sizeof(storage)));return 0;
+}
 int main(int argc,char **argv)
 {
+ if(argc==2&&!strcmp(argv[1],"blob-benchmark"))return blob_benchmark();
  if(argc==2&&!strcmp(argv[1],"legacy-benchmark"))return legacy_benchmark();
  struct pw_vk_stream_registry registry;struct pw_vk_stream stream={0};
  unsigned char arena[65536];size_t bytes,records;struct pw_vk_batch_params call;

@@ -27,6 +27,20 @@ int pw_vk_codec_value(struct pw_vk_codec *c,void *value,size_t n,unsigned wide)
  }
  c->used+=encoded;return 1;
 }
+/* Contiguous same-width primitive elements retain scalar wire representation.
+ * Widened pointer-size values and records still use the fieldwise path. */
+int pw_vk_codec_bytes(struct pw_vk_codec *c,void *value,uint64_t count,size_t element)
+{
+ size_t bytes;
+ if(count>UINT32_MAX||!element||element>8||count>SIZE_MAX/element)return 0;
+ bytes=(size_t)count*element;
+ if(!room(c,bytes))return 0;
+ if(!bytes)return 1;
+ if(!c->decode&&!pw_vk_codec_source(c,value,bytes))return 0;
+ if(c->decode)memcpy(value,c->wire+c->used,bytes);
+ else memcpy(c->wire+c->used,value,bytes);
+ c->used+=bytes;return 1;
+}
 int pw_vk_codec_array(struct pw_vk_codec *c,void *slot,uint64_t count,size_t element,unsigned optional)
 {
  void *pointer=NULL;uint32_t present=0;size_t bytes,offset;

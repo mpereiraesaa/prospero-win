@@ -34,6 +34,8 @@ class Codecs:
  def scalar(self,v,address):
   wide=v.is_pointer_size() or v.type_name=='size_t'
   return f'CHECK(pw_vk_codec_value(c,(void *)({address}),sizeof(*({address})),{int(wide)}));'
+ def bulk(self,v):
+  return not self.record(v.type) and not isinstance(v.type,self.m['FunctionPointer']) and not v.is_pointer_size() and v.type_name!='size_t'
  def element(self,v,address,selector='0'):
   if self.record(v.type):return f'CHECK(codec_{v.type.name}(c,(void *)({address}),{selector}));'
   if isinstance(v.type,self.m['FunctionPointer']):
@@ -65,10 +67,12 @@ class Codecs:
    typ='uint8_t' if v.type_name=='void' else v.type_name
    optional=int(bool(v.optional))
    out=f'{{ uint64_t count=(uint64_t)({count}); int present=pw_vk_codec_array(c,(void *)({address}),count,sizeof({typ}),{optional}); if(present<0)goto fail; if(present){{'
+   if self.bulk(v):return out+f'CHECK(pw_vk_codec_bytes(c,(void *)p->{v.name},count,sizeof({typ})));'+'} }'
    out+=f'for(uint64_t i=0;i<count;i++){{'+self.element(v,f'&(({typ} *)p->{v.name})[i]',selector) if v.type_name!='void' else f'for(uint64_t i=0;i<count;i++){{ CHECK(pw_vk_codec_value(c,&((uint8_t *)p->{v.name})[i],1,0));'
    return out+'}} }'
   if v.array_lens:
    typ=v.type_name
+   if self.bulk(v):return f'CHECK(pw_vk_codec_bytes(c,(void *)p->{v.name},sizeof(p->{v.name})/sizeof({typ}),sizeof({typ})));'
    return '{ for(size_t i=0;i<sizeof(p->'+v.name+')/sizeof('+typ+');i++){'+self.element(v,'&(('+typ+' *)p->'+v.name+')[i]',selector)+'} }'
   return self.element(v,address,selector)
  def pointer(self,v):return v.is_pointer() or (isinstance(v,self.m['Parameter']) and bool(v.array_lens))

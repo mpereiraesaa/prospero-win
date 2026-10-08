@@ -20,6 +20,18 @@ int main(void)
  assert(pw_vk_codec_value(&c,&guest,4,1));assert(c.used==8);
  d=decoder(c.used);assert(pw_vk_codec_value(&d,&native,8,1));assert(native==guest);
  native=UINT64_MAX;c=encoder();assert(pw_vk_codec_value(&c,&native,8,1));d=decoder(c.used);assert(!pw_vk_codec_value(&d,&guest,4,1));
+ uint32_t values[4]={0x12345678,0xffffffff,0,42},decoded[4]={0};
+ c=encoder();assert(pw_vk_codec_bytes(&c,values,4,4));assert(c.used==sizeof(values));
+ d=decoder(c.used);assert(pw_vk_codec_bytes(&d,decoded,4,4));assert(!memcmp(values,decoded,sizeof(values)));
+ c=encoder();assert(pw_vk_codec_bytes(&c,NULL,0,1)&&c.used==0);
+ assert(!pw_vk_codec_bytes(&c,values,UINT64_MAX,8));assert(!pw_vk_codec_bytes(&c,values,1,0));
+ assert(!pw_vk_codec_bytes(&c,values,1,9));
+ c.capacity=15;assert(!pw_vk_codec_bytes(&c,values,4,4)&&c.used==0);
+ d=decoder(15);assert(!pw_vk_codec_bytes(&d,decoded,4,4)&&d.used==0);
+ c=encoder();assert(!pw_vk_codec_bytes(&c,wire+20,4,4)&&c.used==0);
+ assert(!pw_vk_codec_bytes(&c,(void *)(UINTPTR_MAX-3),2,4));
+ c=encoder();assert(pw_vk_codec_bytes(&c,values,4,4));
+ d=decoder(c.used);d.used=SIZE_MAX;assert(!pw_vk_codec_bytes(&d,decoded,1,4));
  char text[]="mutable caller string";const char *p=text,*copied=NULL;
  c=encoder();assert(pw_vk_codec_string(&c,&p));size_t bytes=c.used;memset(text,'x',sizeof(text));d=decoder(bytes);assert(pw_vk_codec_string(&d,&copied));assert(!strcmp(copied,"mutable caller string"));assert((uintptr_t)copied%8==0);
  p=NULL;c=encoder();assert(pw_vk_codec_string(&c,&p));d=decoder(c.used);copied=(void *)1;assert(pw_vk_codec_string(&d,&copied));assert(!copied);

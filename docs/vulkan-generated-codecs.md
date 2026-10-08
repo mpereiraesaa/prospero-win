@@ -94,3 +94,13 @@ validation or reducing supported input sizes. The Unix-entry fixture counts
 allocations, tests exact bounds, growth failure, recursion and parallel calls,
 and offers a host microbenchmark of nested barriers, viewports and descriptor
 updates. Host timings do not establish a console frame-rate improvement.
+
+Same-width primitive arrays now copy their contiguous scalar representation in
+one bounded codec operation. Records, callbacks and pointer-size values retain
+fieldwise conversion, including PE32-to-Unix64 widening. The shared helper checks
+count multiplication, source aliasing and remaining wire capacity before copying.
+The cross-layout fixture continues to exercise every supported generated schema;
+host throughput measurements carry no native graphics performance claim.
+The optional `blob-benchmark` mode runs a 64 KiB buffer update through encoding,
+stream collection, both decode passes and controlled native dispatch, counting
+generated scalar codec calls without asserting elapsed time.
