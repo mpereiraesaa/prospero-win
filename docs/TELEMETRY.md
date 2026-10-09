@@ -53,8 +53,15 @@ number the next session takes. A file starts with
 and then has one line per record, `REC seq=<n> t=<monotonic seconds> <record>`.
 A session keeps two chunks of at most a megabyte: when the current one is
 full, it becomes `session-N.previous.log` (replacing the older chunk) and a new
-one starts with the same `PW_REPORT/1` line. The title writes buffered records
-every 100 ms and before every restart, so a crash loses at most that much.
+one starts with the same `PW_REPORT/1` line. A writer thread saves and sends
+buffered records every 100 ms and before every restart, so a crash loses at
+most that much; the thread that logs a record (any game thread, through Wine's
+stderr sink) only copies it into a 512 KiB buffer and never waits for the
+file or the network. When that buffer is full, because the disk or the
+network fell that far behind, further records are dropped rather than waited
+for: the sequence numbers still count them, the next record the writer saves
+is `PW_WINE64 diagnostics dropped records=<n> bytes=<b>`, and the launcher's
+log status shows the session's total as `LOG SAVED (<n> DROPPED)`.
 
 Records longer than a `ps5log` record (1024 bytes) are cut and end in
 `[truncated]`, in both the saved file and the live stream.
