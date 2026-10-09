@@ -6,6 +6,7 @@
 #include "pw_vk_batch.h"
 #include "pw_vk_codec.h"
 #include "pw_vk_command_stream.h"
+#include "pw_vk_spsc.h"
 #include "pw_vk_wire.h"
 static NTSTATUS mock_call(unsigned int,void *);
 #undef WINE_UNIX_CALL
@@ -14,7 +15,19 @@ static NTSTATUS mock_call(unsigned int,void *);
 #define ERR(...) fprintf(stderr,__VA_ARGS__)
 #undef WINE_MESSAGE
 #define WINE_MESSAGE(...) fprintf(stderr,__VA_ARGS__)
+static int observed_append(struct pw_vk_spsc_sequence *,struct pw_vk_spsc *,uint32_t,const void *,uint32_t);
+#define pw_vk_spsc_append observed_append
 #include "pw_vk_batch_pe.c"
+#undef pw_vk_spsc_append
+static int observed_append(struct pw_vk_spsc_sequence *seq,struct pw_vk_spsc *stream,uint32_t op,const void *wire,uint32_t bytes)
+{
+ if(op==PW_VK_BATCH_GENERATED_OPCODE&&bytes>=4){
+  unsigned code;memcpy(&code,wire,4);
+  if(code==unix_vkDestroyDescriptorUpdateTemplate||code==unix_vkDestroyDescriptorUpdateTemplateKHR)
+   assert(!templates.count); /* A consumer may destroy/reuse immediately upon publication. */
+ }
+ return pw_vk_spsc_append(seq,stream,op,wire,bytes);
+}
 static unsigned effects,forms;
 static int effect(void *unused,const struct pw_vk_stream_record *r)
 {
