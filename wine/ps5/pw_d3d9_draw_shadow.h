@@ -11,10 +11,14 @@ struct pw_d3d9_draw_shadow {
     unsigned recording;
     struct pw_d3d9_draw_block pending;
 };
+/* Initialize only a freshly created device. Adopted/unknown native devices must
+ * immediately invalidate. Release metadata with its owner generation. */
 void pw_d3d9_draw_init(struct pw_d3d9_draw_shadow *);
 void pw_d3d9_draw_invalidate(struct pw_d3d9_draw_shadow *);
 void pw_d3d9_draw_declaration(struct pw_d3d9_draw_shadow *, int nonnull, uint32_t hr);
 void pw_d3d9_draw_fvf(struct pw_d3d9_draw_shadow *, uint32_t fvf, uint32_t hr);
+/* Only an actual successful GetVertexDeclaration result is evidence; FVF0
+ * cannot distinguish an explicit declaration from NULL. */
 void pw_d3d9_draw_observe(struct pw_d3d9_draw_shadow *, int nonnull, uint32_t hr);
 void pw_d3d9_draw_begin(struct pw_d3d9_draw_shadow *, uint32_t hr);
 void pw_d3d9_draw_end(struct pw_d3d9_draw_shadow *, struct pw_d3d9_draw_block *, uint32_t hr);

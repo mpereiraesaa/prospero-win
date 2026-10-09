@@ -33,6 +33,8 @@ int main(void)
     pw_d3d9_draw_capture(&s,&b,0); assert(b.declaration==PW_D3D9_DECL_NULL);
     pw_d3d9_draw_fvf(&s,2,0); pw_d3d9_draw_apply(&s,&b,0);
     assert(s.active==PW_D3D9_DECL_PRESENT);
+    pw_d3d9_draw_create_block(&s,&b,99,0);
+    assert(b.captures_decl && b.declaration==PW_D3D9_DECL_UNKNOWN);
     pw_d3d9_draw_create_block(&s,&b,3,0); assert(b.captures_decl);
     pw_d3d9_draw_invalidate(&s); assert(!pw_d3d9_draw_can_queue(&s,&c));
     pw_d3d9_draw_capture(&s,&b,0); assert(b.declaration==PW_D3D9_DECL_UNKNOWN);
