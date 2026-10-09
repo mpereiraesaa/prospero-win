@@ -10,12 +10,6 @@ a=p.parse_args();base=a.recovery.resolve();root=a.production_root.resolve();pair
 prefix=a.prefix.resolve() if a.prefix else out/'prefix'
 source=Path(__file__).with_suffix('.c');backend=base/'backend/d3d9.dll';sha=lambda f:hashlib.sha256(f.read_bytes()).hexdigest()
 inputs=[Path(__file__),source,pair/'receipt.json',pair/'d3d9.dll',a.host_service.resolve(),backend,*sorted((root/'wine/ps5').rglob('*.c')),*sorted((root/'wine/ps5').rglob('*.h'))]
-pair_receipt=json.loads((pair/'receipt.json').read_text())
-assert pair_receipt['features']==260095,'requires the complete frozen binding/draw/Transform pair'
-for build in pair_receipt['builds']:
- assert '-DPW_D3D9_ENABLE_DRAW_BATCH' in build['command']
-for name,digest in pair_receipt['sources'].items():
- assert sha(root/name)==digest,('pair source differs from production root',name)
 r={'status':'running','scope':'Exact native Transform HRESULT/matrix comparison with production proxy, async off/on. Supplied host service must use only the documented ordinary-window test adapter. No console acceptance.','inputs':{str(f):sha(f) for f in inputs},'commands':[],'artifacts':{}}
 def save():(out/'receipt.json').write_text(json.dumps(r,indent=2)+'\n')
 def run(cmd,label,env=None):
@@ -27,6 +21,12 @@ def run(cmd,label,env=None):
  return (out/(label+'.log')).read_text(errors='replace')
 def win(f):return 'Z:'+str(f.resolve()).replace('/',chr(92))
 try:
+ pair_receipt=json.loads((pair/'receipt.json').read_text())
+ assert pair_receipt['features']==260095,'requires the complete frozen binding/draw/Transform pair'
+ for build in pair_receipt['builds']:
+  assert '-DPW_D3D9_ENABLE_DRAW_BATCH' in build['command']
+ for name,digest in pair_receipt['sources'].items():
+  assert sha(root/name)==digest,('pair source differs from production root',name)
  if not a.prefix:run(['cp','-a','--reflink=auto',base/'host/prefix',prefix],'prefix-copy')
  else:assert prefix.is_dir()
  for abi,cc in [('32','i686-w64-mingw32-gcc'),('64','x86_64-w64-mingw32-gcc')]:
