@@ -11,10 +11,31 @@
 #include <time.h>
 #include "wine/ps5/pw_vk_replay.h"
 /* Deterministic partial worker-start failure, without altering production API. */
-static unsigned create_calls,fail_create;
+static unsigned create_calls,fail_create,fail_attr_init,fail_attr_set,fail_attr_destroy,live_attrs,worker_attrs;
+int __real_pthread_attr_init(pthread_attr_t *);
+int __real_pthread_attr_setstacksize(pthread_attr_t *,size_t);
+int __real_pthread_attr_destroy(pthread_attr_t *);
+int __wrap_pthread_attr_init(pthread_attr_t *a)
+{
+ int status;if(fail_attr_init){fail_attr_init=0;return EAGAIN;}
+ status=__real_pthread_attr_init(a);if(!status)++live_attrs;return status;
+}
+int __wrap_pthread_attr_setstacksize(pthread_attr_t *a,size_t bytes)
+{
+ assert(bytes==PW_VK_REPLAY_WORKER_STACK);
+ if(fail_attr_set){fail_attr_set=0;return EINVAL;}
+ return __real_pthread_attr_setstacksize(a,bytes);
+}
+int __wrap_pthread_attr_destroy(pthread_attr_t *a)
+{
+ int status=__real_pthread_attr_destroy(a);if(!status){assert(live_attrs);--live_attrs;}
+ if(fail_attr_destroy){fail_attr_destroy=0;return EINVAL;}
+ return status;
+}
 int __real_pthread_create(pthread_t *,const pthread_attr_t *,void *(*)(void *),void *);
 int __wrap_pthread_create(pthread_t *t,const pthread_attr_t *a,void *(*fn)(void *),void *arg)
 {
+ if(a){size_t bytes=0;assert(!pthread_attr_getstacksize(a,&bytes));assert(bytes==PW_VK_REPLAY_WORKER_STACK);++worker_attrs;}
  if(++create_calls==fail_create)return EAGAIN;
  return __real_pthread_create(t,a,fn,arg);
 }
@@ -122,7 +143,12 @@ static void errors(void)
  struct fixture f;struct pw_vk_replay *s;struct pw_vk_replay_lane *a;struct pw_vk_replay_stats stats;uint64_t ticket=99;
  init(&f);struct context ca={&f,1,0,0,1};
  assert(!pw_vk_replay_create(0,1024,execute));assert(!pw_vk_replay_create(9,1024,execute));assert(!pw_vk_replay_create(2,1,execute));assert(!pw_vk_replay_create(2,1024,NULL));
- fail_create=create_calls+2;assert(!pw_vk_replay_create(2,1024,execute));fail_create=0;
+ {unsigned before=create_calls;
+  fail_attr_init=1;assert(!pw_vk_replay_create(2,1024,execute));assert(create_calls==before && !live_attrs);
+  fail_attr_set=1;assert(!pw_vk_replay_create(2,1024,execute));assert(create_calls==before && !live_attrs);
+  fail_attr_destroy=1;assert(!pw_vk_replay_create(2,1024,execute));assert(create_calls==before+2 && !live_attrs);
+ }
+ fail_create=create_calls+2;assert(!pw_vk_replay_create(2,1024,execute));fail_create=0;assert(!live_attrs);
  s=pw_vk_replay_create(1,1024,execute);assert(s);assert(!pw_vk_replay_lane_create(s,0,&ca));
  a=pw_vk_replay_lane_create(s,1,&ca);assert(a);
  assert(pw_vk_replay_enqueue(a,NULL,1,&ticket)==PW_VK_REPLAY_INVALID);
@@ -160,7 +186,9 @@ static void startup_trace(void)
   else{
    assert(occurrences(text,"event=create_begin ")==1);
    assert(occurrences(text,"event=stack_default ")==1);
-   assert(strstr(text,"query_result=0 destroy_result=0"));
+   assert(strstr(text,"query_result=0"));
+   assert(strstr(text,"phase=set bytes=1048576 result=0"));
+   assert(strstr(text,"phase=destroy result=0"));
    assert(occurrences(text,"event=create_end ")==1);
    assert(occurrences(text,"event=pthread_create_begin ")==2);
    assert(occurrences(text,"event=pthread_create_end ")==2);
@@ -173,5 +201,5 @@ static void startup_trace(void)
 }
 int main(void)
 {
- startup_trace();parallel_and_ordered();backpressure();errors();puts("Vulkan replay scheduler: independent overlap, pool exclusion, owned order, scoped waits and failure passed");return 0;
+ startup_trace();parallel_and_ordered();backpressure();errors();assert(worker_attrs && !live_attrs);puts("Vulkan replay scheduler: independent overlap, pool exclusion, owned order, scoped waits and failure passed");return 0;
 }

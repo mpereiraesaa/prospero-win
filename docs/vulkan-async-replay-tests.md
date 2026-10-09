@@ -49,9 +49,9 @@ and do not call Wine logging or guest TLS helpers. A completed create followed
 by a job/dispatch begin without its matching end narrows the next investigation;
 it does not by itself establish a driver, stack, or scheduler diagnosis.
 
-The worker stack remains the pthread default. Opt-in tracing queries a fresh
+The original diagnostic retained the pthread default stack. Opt-in tracing queries a fresh
 pthread attribute object for its default stack size; query failures are reported
-and do not alter worker creation. This reports the default attribute value, not
+and do not alter the configured stack choice. This reports the default attribute value, not
 a measured live worker stack extent. The SDK title stub exports the three
 standard attribute APIs used; no Linux-only stack query API is assumed. The host regression captures stderr and checks exact
 startup counts and the eight-job bound across twenty jobs, plus default silence.
@@ -63,3 +63,24 @@ The trace bounds fixture replays ten jobs of forty records and checks exactly
 dispatch trace. A prior diagnostic observed both workers enter and multiple
 driver calls complete, so thread construction alone does not explain the console
 startup failure. Missing final stderr records still require cautious interpretation.
+
+
+## Explicit replay-worker stack candidate
+
+Replay workers request a fixed 1 MiB native stack, bounded by the existing
+maximum of eight workers (at most 8 MiB requested stack space, excluding guards
+and pthread bookkeeping). The console default attribute was observed as 64 KiB.
+The adapter's manual replay path alone uses over 8 KiB of local stack before
+entering the driver; 1 MiB provides headroom for driver recording call chains and
+matches the scale already used for native service threads. This is an initial
+bounded engineering choice, not a measured worst-case driver requirement or a
+claim that stack exhaustion caused the startup failure.
+
+Attribute initialization or size-setting failure prevents worker creation.
+Partial pthread creation and attribute-destruction failure stop and join every
+started worker before returning failure. The host fixture checks the exact
+attribute size on every worker creation and injects init, set, destroy and
+partial-create failures. Trace records retain the observed default size and
+report the configured size and setup results. The candidate requires separate
+one-worker and then two-worker console validation; previous trace packages stay
+immutable.

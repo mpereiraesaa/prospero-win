@@ -77,30 +77,39 @@ static void *worker_main(void *arg)
 }
 struct pw_vk_replay *pw_vk_replay_create(unsigned workers,size_t limit,pw_vk_replay_fn execute)
 {
- struct pw_vk_replay *s;unsigned i;const char *value=getenv("PW_VK_REPLAY_TRACE");int trace=value && !strcmp(value,"1");
- if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=create_begin workers=%u limit=%zu stack=default\n",workers,limit);
- if(trace){
-  pthread_attr_t attr;size_t stack_bytes=0;int status=pthread_attr_init(&attr),destroy_status=0;
-  if(!status){status=pthread_attr_getstacksize(&attr,&stack_bytes);destroy_status=pthread_attr_destroy(&attr);}
-  fprintf(stderr,"PW_VK_REPLAY_TRACE event=stack_default bytes=%zu query_result=%d destroy_result=%d\n",stack_bytes,status,destroy_status);
- }
+ struct pw_vk_replay *s=NULL;unsigned i;pthread_attr_t attr;int status,destroy_status;
+ const char *value=getenv("PW_VK_REPLAY_TRACE");int trace=value && !strcmp(value,"1");
  if(!workers || workers>PW_VK_REPLAY_MAX_WORKERS || limit<sizeof(struct job) || !execute)return NULL;
- if(!(s=calloc(1,sizeof(*s))))return NULL;
+ if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=create_begin workers=%u limit=%zu stack=%u\n",workers,limit,PW_VK_REPLAY_WORKER_STACK);
+ status=pthread_attr_init(&attr);
+ if(status){if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=stack_setup phase=init result=%d\n",status);return NULL;}
+ if(trace){
+  size_t stack_bytes=0;int query_status=pthread_attr_getstacksize(&attr,&stack_bytes);
+  fprintf(stderr,"PW_VK_REPLAY_TRACE event=stack_default bytes=%zu query_result=%d\n",stack_bytes,query_status);
+ }
+ status=pthread_attr_setstacksize(&attr,PW_VK_REPLAY_WORKER_STACK);
+ if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=stack_setup phase=set bytes=%u result=%d\n",PW_VK_REPLAY_WORKER_STACK,status);
+ if(status)goto done;
+ if(!(s=calloc(1,sizeof(*s))))goto done;
  s->limit=limit;s->execute=execute;s->stats.workers=workers;s->trace=trace;
- if(pthread_mutex_init(&s->mutex,NULL)){free(s);return NULL;}
- if(pthread_cond_init(&s->changed,NULL)){pthread_mutex_destroy(&s->mutex);free(s);return NULL;}
+ if(pthread_mutex_init(&s->mutex,NULL)){free(s);s=NULL;goto done;}
+ if(pthread_cond_init(&s->changed,NULL)){pthread_mutex_destroy(&s->mutex);free(s);s=NULL;goto done;}
  for(i=0;i<workers;i++){
   s->workers[i].owner=s;s->workers[i].index=i;
-  int status;
   if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=pthread_create_begin worker=%u\n",i);
-  status=pthread_create(&s->workers[i].thread,NULL,worker_main,&s->workers[i]);
+  status=pthread_create(&s->workers[i].thread,&attr,worker_main,&s->workers[i]);
   if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=pthread_create_end worker=%u result=%d\n",i,status);
-  if(status){pw_vk_replay_destroy(s);return NULL;}
+  if(status)goto done;
   ++s->started;
  }
- if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=create_end workers=%u\n",s->started);
+ done:
+ destroy_status=pthread_attr_destroy(&attr);
+ if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=stack_setup phase=destroy result=%d\n",destroy_status);
+ if(status || destroy_status){pw_vk_replay_destroy(s);return NULL;}
+ if(trace && s)fprintf(stderr,"PW_VK_REPLAY_TRACE event=create_end workers=%u\n",s->started);
  return s;
 }
+
 struct pw_vk_replay_lane *pw_vk_replay_lane_create(struct pw_vk_replay *s,uint64_t pool,void *context)
 {
  struct pw_vk_replay_lane *lane;struct domain *d;

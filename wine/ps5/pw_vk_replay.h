@@ -3,6 +3,7 @@
 #define PW_VK_REPLAY_H
 #include <stddef.h>
 #include <stdint.h>
+#define PW_VK_REPLAY_WORKER_STACK (1024u * 1024u)
 #define PW_VK_REPLAY_MAX_WORKERS 8
 struct pw_vk_replay;
 struct pw_vk_replay_lane;

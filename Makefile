@@ -60,7 +60,7 @@ $(eval $(call test_rule,test_pw_wine_prefix_cpu,tests/test_pw_wine_prefix_cpu.c 
 $(eval $(call test_rule,test_vk_command_stream,tests/test_vk_command_stream.c wine/ps5/pw_vk_command_stream.c,-Iwine/ps5))
 $(eval $(call test_rule,test_vk_spsc,tests/test_vk_spsc.c wine/ps5/pw_vk_spsc.c wine/ps5/pw_vk_command_stream.c,-I. -pthread))
 $(BUILD)/test_vk_spsc: wine/ps5/pw_vk_spsc.h wine/ps5/pw_vk_command_stream.h
-$(eval $(call test_rule,test_vk_replay,tests/test_vk_replay.c wine/ps5/pw_vk_replay.c,-I. -pthread -Xlinker --wrap=pthread_create))
+$(eval $(call test_rule,test_vk_replay,tests/test_vk_replay.c wine/ps5/pw_vk_replay.c,-I. -pthread -Xlinker --wrap=pthread_create -Xlinker --wrap=pthread_attr_init -Xlinker --wrap=pthread_attr_setstacksize -Xlinker --wrap=pthread_attr_destroy))
 $(BUILD)/test_vk_replay: wine/ps5/pw_vk_replay.h
 $(eval $(call test_rule,test_vk_codec,tests/test_vk_codec.c wine/ps5/vulkan/pw_vk_codec.c,-Iwine/ps5/vulkan))
 $(eval $(call test_rule,test_vk_wire,tests/test_vk_wire.c wine/ps5/pw_vk_wire.c wine/ps5/pw_vk_template_cache.c,-Iwine/ps5))
