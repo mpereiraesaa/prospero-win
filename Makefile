@@ -33,6 +33,9 @@ $(BUILD)/test_d3d9_cursor_wire: wine/ps5/pw_d3d9_cursor_wire.h
 $(eval $(call test_rule,test_d3d9_up_wire,tests/test_d3d9_up_wire.c wine/ps5/pw_d3d9_up_wire.c,-Iwine/ps5))
 $(BUILD)/test_d3d9_up_wire: wine/ps5/pw_d3d9_up_wire.h
 
+$(eval $(call test_rule,test_d3d9_implicit_wire,tests/test_d3d9_implicit_wire.c wine/ps5/pw_d3d9_implicit_wire.c,-Iwine/ps5))
+$(BUILD)/test_d3d9_implicit_wire: wine/ps5/pw_d3d9_implicit_wire.h wine/ps5/pw_d3d9_objects.h
+
 $(eval $(call test_rule,test_d3d9_gamma_wire,tests/test_d3d9_gamma_wire.c wine/ps5/pw_d3d9_gamma_wire.c,-Iwine/ps5))
 $(BUILD)/test_d3d9_gamma_wire: wine/ps5/pw_d3d9_gamma_wire.h
 $(eval $(call test_rule,test_d3d9_query_wire,tests/test_d3d9_query_wire.c wine/ps5/pw_d3d9_query_wire.c,-Iwine/ps5))
@@ -185,7 +188,7 @@ TESTS := test_d3d9_failure_diag test_d3d9_object_getter test_pw_qpc_clock test_p
 	test_pw_wine_heap test_pw_wine_dmem test_pw_wine_dmem_ps5 test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_script_input test_pw_game_profile test_pw_prefix_temp test_pw_tsc_calibrate test_pw_wine_prefix_cpu test_vk_command_stream test_vk_spsc test_d3d9_bridge_wire test_vk_replay test_d3d9_objects test_d3d9_program_query test_d3d9_program_wire test_d3d9_factory_wire test_d3d9_resource_wire test_d3d9_texture_wire test_d3d9_window test_d3d9_window_driver test_vk_wire test_vk_codec \
 	test_pw_wine_library test_pw_wine_display test_pw_hid test_pw_hid_ps5 test_pw_spinner test_pw_wine_dl test_pw_wine_sink \
 	test_pw_wine_threads test_pw_wine_compat test_pw_wine_cwd test_pw_wine_cwd_listing test_pw_ws2_32_libc test_pw_launcher_render test_pw_pad \
-	test_d3d9_gamma_wire test_d3d9_query_wire test_d3d9_stateblock_wire test_pw_guest_fp test_d3d9_cursor_wire test_d3d9_up_wire test_pw_vm test_pw_x86_block test_pw_x86_flat test_pw_x86_cache test_pw_x86_code_pages test_pw_wow_smc_pages test_pw_wow_thread_budget test_pw_wow_tsc_clock test_pw_wow_call_top \
+	test_d3d9_implicit_wire test_d3d9_gamma_wire test_d3d9_query_wire test_d3d9_stateblock_wire test_pw_guest_fp test_d3d9_cursor_wire test_d3d9_up_wire test_pw_vm test_pw_x86_block test_pw_x86_flat test_pw_x86_cache test_pw_x86_code_pages test_pw_wow_smc_pages test_pw_wow_thread_budget test_pw_wow_tsc_clock test_pw_wow_call_top \
 	test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_global_residency test_pw_x86_reencode test_pw_x86_smc test_pw_x86_fault_markers test_pw_x86_lazyflags \
 	test_pw_guest_call test_pw_x87 test_pw_x87_native test_pw_audio_ps5 test_pw_audio_mix test_pw_agc_submit_lifecycle \
 	test_pw_videoout_layout test_pw_videoout_tile test_pw_pad_ps5 test_pw_data_mount \
