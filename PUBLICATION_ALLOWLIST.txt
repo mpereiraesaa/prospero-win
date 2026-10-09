@@ -749,3 +749,7 @@ docs/d3d9-texture-proxy.md
 tests/lab/d3d9_texture_client.c
 tests/lab/d3d9_texture_client.py
 docs/d3d9-texture-client.md
+wine/ps5/pw_d3d9_query_wire.c
+wine/ps5/pw_d3d9_query_wire.h
+tests/test_d3d9_query_wire.c
+docs/d3d9-query-wire.md
