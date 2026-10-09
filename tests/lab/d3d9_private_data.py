@@ -10,6 +10,7 @@ import subprocess
 parser = argparse.ArgumentParser(description=__doc__)
 for name in ('wine-build', 'prefix', 'output'):
     parser.add_argument('--' + name, type=Path, required=True)
+parser.add_argument('--backend64', type=Path)
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
 out = args.output.resolve()
@@ -32,7 +33,13 @@ try:
         target = out / (compiler + '.exe')
         run([compiler + '-w64-mingw32-gcc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', root / files[0], root / files[1], '-o', target], 'compile-' + compiler)
         receipt[compiler + '_sha256'] = hashlib.sha256(target.read_bytes()).hexdigest()
-        text = run([args.wine_build.resolve() / 'loader/wine', target], compiler, env)
+        command = [args.wine_build.resolve() / 'loader/wine', target]
+        if compiler == 'x86_64' and args.backend64:
+            command.append('Z:' + str(args.backend64.resolve()).replace('/', '\\'))
+        text = run(command, compiler, env)
+        if compiler == 'x86_64' and args.backend64:
+            assert 'PW_PRIVATE_NATIVE PASS vb=1 ib=1 texture=1 surface=1 edge_semantics=1' in text, text
+            receipt['backend64_sha256'] = hashlib.sha256(args.backend64.read_bytes()).hexdigest()
         assert 'PW_PRIVATE_DATA PASS copied=1 local_unknown=1 reentrant=1 bounded=1 cleanup=1' in text, text
     receipt['status'] = 'pass'
 except Exception:

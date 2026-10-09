@@ -22,3 +22,11 @@ short outputs, local IUnknown ownership, null interfaces, reentrant Free from an
 IUnknown::AddRef callback, bounded entry/length rejection and final cleanup. It
 uses controlled IUnknown callbacks; this is a local COM contract, not backend or
 console acceptance.
+
+With `--backend64`, the PE64 fixture compares the helper directly against actual
+DXVK vertex/index buffers, a texture and an offscreen surface: unknown flags,
+null-byte-data removal, missing-key Free/Get, size-only queries, short buffers,
+null size pointers, interface-size rejection and local IUnknown ownership. The
+comparison passed on the pinned backend. Source semantics were also checked in
+[`d3d9_resource.h`](https://github.com/doitsujin/dxvk/blob/9d6f54a1ade20d1d27dd421024717a636f3d8c68/src/d3d9/d3d9_resource.h)
+and [`com_private_data.cpp`](https://github.com/doitsujin/dxvk/blob/9d6f54a1ade20d1d27dd421024717a636f3d8c68/src/util/com/com_private_data.cpp).
