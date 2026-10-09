@@ -879,3 +879,7 @@ tests/lab/d3d9_surface_owners_control.c
 tests/lab/d3d9_surface_owners_control.py
 tests/lab/d3d9_program_copy.c
 tests/lab/d3d9_program_copy.py
+wine/ps5/pw_d3d9_command_batch.c
+wine/ps5/pw_d3d9_command_batch.h
+tests/test_d3d9_command_batch.c
+docs/d3d9-command-batch.md
