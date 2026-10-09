@@ -239,5 +239,5 @@ useful overlap with the saturated command-submission thread or improved pacing.
 The test restored the original runtime and profile state. The performance gate
 has not passed, and the runtime/performance PR stack remains draft and unmerged.
 Do not repeat this candidate merely to obtain a longer regression run. Capture:
-`/home/manuel/personal/ing_pereira/engineering/homebrew_ps5/projects/logging_server/runs/20261009T091007679Z_PPSA99995_prospero-win-wine64_0x1df71d3a315.log`.
+`logging_server/runs/20261009T091007679Z_PPSA99995_prospero-win-wine64_0x1df71d3a315.log`.
 The immutable package, source and manifest hashes above remain unchanged.
