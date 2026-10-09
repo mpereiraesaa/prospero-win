@@ -15,8 +15,8 @@ Reset failures, live public resources blocking Reset, recovery, mirror-failure
 retirement and final zero references in all three modes.
 
 The runner requires pipeline publication/acknowledgment accounting to balance,
-zero pipeline publications with async disabled, and a pending peak greater than
-one with async enabled. These are actual observations, not inferred from a build
+zero pipeline publications, acknowledgments and pending peak with async disabled,
+and a pending peak greater than one and no greater than eight with async enabled. These are actual observations, not inferred from a build
 flag. `--allow-single-outstanding` is diagnostic only and records the relaxed
 requirement explicitly; such a run cannot establish concurrent outstanding work.
 A fast backend may not produce a greater-than-one peak for this workload. The

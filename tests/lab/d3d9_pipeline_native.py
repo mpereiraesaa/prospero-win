@@ -71,7 +71,7 @@ try:
    final=[x for x in reads if 'label=end' in x or 'label=start' in x]
    assert len(final)==4 and all(' hr=00000000 center=ffff0000 ' in x for x in final),final  # UP and DP/DIP buffer draws
    results.append(dict(seed=seed,async_mode=mode,gets=int(m.group(2)),getter_rpcs=sum(int(c.get('op24',0)) for c in clients),
-    pipeline_pending_peak=max([int(c.get('pipeline_pending_peak',0)) for c in clients] or [0]),pipeline_published=sum(int(c.get('pipeline_published',0)) for c in clients),pipeline_acked=sum(int(c.get('pipeline_acked',0)) for c in clients),command_rpcs=sum(int(c.get('op21',0)) for c in clients),batch_flushes=sum(int(c.get('op33',0)) for c in clients),
+    pipeline_pending_peak=max([int(c.get('pipeline_pending_peak',0)) for c in clients] or [0]),pipeline_published=sum(int(c.get('pipeline_published',0)) for c in clients),pipeline_acked=sum(int(c.get('pipeline_acked',0)) for c in clients),pipeline_wait_wall_us=sum(int(c.get('pipeline_wait_wall_us',0)) for c in clients),command_rpcs=sum(int(c.get('op21',0)) for c in clients),batch_flushes=sum(int(c.get('op33',0)) for c in clients),
     async_queued=sum(int(c.get('async_queued',0)) for c in clients),readbacks=len([x for x in lines if x.startswith('PW_TRANSFORM_READBACK ')]),controlled_interval={k:controlled.get(k,'0') for k in ('frame','op21','op24','op33','async_queued','batch_commands','sync_published')},total_published=sum(int(c.get('sync_published',0)) for c in clients),transcript_lines=len(lines),
     transcript_sha256=hashlib.sha256('\n'.join(lines).encode()).hexdigest()))
   assert transcripts['native']==transcripts['0'],'seed %d: bridge differs from direct DXVK'%seed
@@ -84,7 +84,8 @@ try:
  # Require actual pipeline observations, not merely enabled feature bits.
  ons=[x for x in results if x['async_mode']=='1'];offs=[x for x in results if x['async_mode']=='0']
  assert all(x['pipeline_published']>0 and x['pipeline_published']==x['pipeline_acked'] for x in ons),ons
- assert all(x['pipeline_published']==0 for x in offs),offs
+ assert all(x['pipeline_published']==0 and x['pipeline_acked']==0 and x['pipeline_pending_peak']==0 for x in offs),offs
+ assert all(0<=x['pipeline_pending_peak']<=8 for x in ons),ons
  if not a.allow_single_outstanding:assert max(x['pipeline_pending_peak'] for x in ons)>1,ons
  lifetime={}
  for mode in ('native','0','1'):
@@ -98,7 +99,7 @@ try:
  assert lifetime['native']==lifetime['0']==lifetime['1'],lifetime
  r['lifetime']=lifetime
  assert all(sha(Path(p))==h for p,h in r['sources'].items()),'source changed during proof'
- r['artifacts']={str(p):sha(p) for p in [out/'pair/d3d9.dll',out/'host-service.dll',out/'client.exe',out/'native64.exe',base/'backend/d3d9.dll',out/'i686-lifetime.exe',out/'x86_64-lifetime.exe']}
+ r['artifacts']={str(p):sha(p) for p in [out/'pair/d3d9.dll',out/'pair/service.dll',out/'host-service.dll',out/'client.exe',out/'native64.exe',base/'backend/d3d9.dll',out/'i686-lifetime.exe',out/'x86_64-lifetime.exe']}
  r['logs']={str(p):sha(p) for p in sorted(out.glob('*.log'))}
  r['pair_receipt_sha256']=sha(out/'pair/receipt.json')
  r.update(status='pass',results=results)
