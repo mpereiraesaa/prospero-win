@@ -37,16 +37,18 @@ diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
      if (!intersect_rect( &box, &box, &screen_rect )) return screen_rect;
      return box;
  }
-@@ -367,7 +369,7 @@
+@@ -367,7 +369,9 @@
  
  static BOOL ps5_CreateWindow( HWND hwnd )
  {
 -    register_input_fd();
-+    if (!bridge_window_created( hwnd )) register_input_fd();
++    int native = bridge_window_created( hwnd );
++    if (native < 0) return FALSE;
++    if (!native) register_input_fd();
      return TRUE;
  }
  
-@@ -407,6 +409,7 @@
+@@ -407,6 +411,7 @@
      struct ps5_window *window;
  
      pthread_mutex_lock( &screen_lock );
@@ -54,7 +56,7 @@ diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
      if ((window = find_window( hwnd )))
      {
          if (window->shown)
-@@ -455,7 +458,7 @@
+@@ -455,7 +460,7 @@
  
      pthread_mutex_lock( &screen_lock );
      for (i = window_count; i > 0; i--)
@@ -63,7 +65,7 @@ diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
      pthread_mutex_unlock( &screen_lock );
      return hwnd;
  }
-@@ -543,8 +546,14 @@
+@@ -543,8 +548,14 @@
      struct ps5_input event;
      HWND hwnd = NtUserGetForegroundWindow();
      UINT processed = 0;
@@ -80,7 +82,7 @@ diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
      if (!hwnd && (hwnd = last_shown_window()))
      {
          /* no window manager activates windows here: the newest one gets
-@@ -563,6 +572,7 @@
+@@ -563,6 +574,7 @@
          INPUT input = {.type = INPUT_KEYBOARD};
  
          processed++;
@@ -88,7 +90,7 @@ diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
          switch (event.type)
          {
          case 1:
-@@ -793,6 +803,10 @@
+@@ -793,6 +805,10 @@
      VkPhysicalDevice physical;
      uint32_t count = 1, chosen = 0, i;
      VkResult res;
@@ -99,7 +101,7 @@ diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
  
      /* A host driver may open the video output as soon as its displays are
       * queried (RADV does; ps5vk waits for the swapchain), so the title lets
-@@ -800,6 +814,7 @@
+@@ -800,6 +816,7 @@
      if (release_display && release_display())
      {
          ERR( "the title kept the video output\n" );
@@ -107,7 +109,7 @@ diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
          return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
      }
  
-@@ -835,9 +850,11 @@
+@@ -835,9 +852,11 @@
      res = instance->p_vkCreateDisplayPlaneSurfaceKHR( instance->host.instance, &info, NULL, handle );
      TRACE( "%s: mode %u of %u, %ux%u display plane surface 0x%s, res %d\n", debugstr_client_surface( client ),
             chosen, count, info.imageExtent.width, info.imageExtent.height, wine_dbgstr_longlong( *handle ), res );

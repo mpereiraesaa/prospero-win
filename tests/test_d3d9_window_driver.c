@@ -92,5 +92,13 @@ int main(void)
  created(0,100,1,0,1);created(1,200,4,11,0);q.operation=PW_D3D9_WINDOW_ATTACH;
  assert(!ps5_bridge_window_call(&q,sizeof(q)));assert(q.id.epoch>epoch);
  q.id=first;q.operation=PW_D3D9_WINDOW_CLOSE;assert(ps5_bridge_window_call(&q,sizeof(q))==PW_D3D9_WINDOW_STALE);
+ /* Exhaustion rejects native creation and suppresses unknown input/geometry. */
+ domain(1,0,1);
+ for(unsigned i=0;i<ARRAY_SIZE(bridge_owners);i++)if(!bridge_owners[i].hwnd)
+  assert(!bridge_window_created((HWND)(uintptr_t)(1000+i)));
+ assert(bridge_owner_full());domain(4,11,0);
+ assert(bridge_window_created((HWND)9000)==-1);
+ assert(!bridge_input_window((HWND)9000) && bridge_service_window((HWND)9000));
+ client.hwnd=(HWND)9000;assert(!bridge_surface_reserve(&client));
  puts("PASS driver token/owner binding, mirror, input, surface failure/replacement, teardown and stale epoch");return 0;
 }

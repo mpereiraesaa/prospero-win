@@ -21,7 +21,7 @@ comma := ,
 define test_rule
 $(if $(strip $(3)),\
 $(BUILD)/$(1): $(2) $(HEADERS) | $(BUILD)
-	$(CC) $(CFLAGS) $$(filter %.c %.S,$$^) $(3) -o $$@,\
+	$(CC) $(CFLAGS) $(if $(4),$(2),$$(filter %.c %.S,$$^)) $(3) -o $$@,\
 $(BUILD)/$(1): $$(addprefix $(BUILD)/obj/shared/,$$(addsuffix .o,$$(basename $(2)))) | $(BUILD)
 	$$(CC) $$(CFLAGS) $$^ -o $$@)
 endef
@@ -70,8 +70,9 @@ $(eval $(call test_rule,test_vk_replay,tests/test_vk_replay.c wine/ps5/pw_vk_rep
 $(BUILD)/test_vk_replay: wine/ps5/pw_vk_replay.h
 $(eval $(call test_rule,test_d3d9_window,tests/test_d3d9_window.c wine/ps5/pw_d3d9_window.c,-I.))
 $(BUILD)/test_d3d9_window: wine/ps5/pw_d3d9_window.h
-$(BUILD)/test_d3d9_window_driver: tests/test_d3d9_window_driver.c wine/ps5/pw_d3d9_window_driver.c wine/ps5/pw_d3d9_window_driver.h wine/ps5/pw_d3d9_window.c wine/ps5/pw_d3d9_window.h | $(BUILD)
-	$(CC) $(CFLAGS) $< -I. -pthread -o $@
+# The adapter is included by the fixture; its .c files are dependencies, not separate units.
+$(eval $(call test_rule,test_d3d9_window_driver,tests/test_d3d9_window_driver.c,-I. -pthread,included))
+$(BUILD)/test_d3d9_window_driver: wine/ps5/pw_d3d9_window_driver.c wine/ps5/pw_d3d9_window_driver.h wine/ps5/pw_d3d9_window.c wine/ps5/pw_d3d9_window.h
 $(eval $(call test_rule,test_vk_codec,tests/test_vk_codec.c wine/ps5/vulkan/pw_vk_codec.c,-Iwine/ps5/vulkan))
 $(eval $(call test_rule,test_vk_wire,tests/test_vk_wire.c wine/ps5/pw_vk_wire.c wine/ps5/pw_vk_template_cache.c,-Iwine/ps5))
 $(eval $(call test_rule,test_pw_wine_library,tests/test_pw_wine_library.c native/pw_wine_library.c src/pw_game_profile.c src/pw_app_profile.c src/pw_profile_catalog.c,-D_DEFAULT_SOURCE))

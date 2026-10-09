@@ -92,8 +92,10 @@ The service invokes native `NtUserCallTwoParam(&request, sizeof(request),
 operation and the driver independently requires a native token. Creation hooks
 record hidden and visible HWND owners/domains. Attach checks actual Wine server
 owners, a WoW64 guest, and a service owned by the calling native thread/token.
-The 256-entry owner table leaves ordinary windows usable on exhaustion, but
-unrecorded windows cannot join a bridge.
+At the 256-entry owner limit, native window creation fails before showing the
+window. Untracked windows are excluded from input/view selection while the
+table is full; recorded ordinary windows retain their routing. Unrecorded
+windows cannot join a bridge.
 
 The driver assigns a monotonic nonzero epoch, independently of wire session
 epochs; exhaustion fails. A new token waits until prior associations and surfaces

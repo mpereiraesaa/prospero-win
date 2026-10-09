@@ -32,12 +32,19 @@ static struct bridge_window_owner *bridge_owner( HWND hwnd )
     return NULL;
 }
 
+static BOOL bridge_owner_full(void)
+{
+    unsigned i;
+    for (i = 0; i < ARRAY_SIZE(bridge_owners); ++i) if (!bridge_owners[i].hwnd) return FALSE;
+    return TRUE;
+}
+
 static BOOL bridge_service_window( HWND hwnd )
 {
     struct pw_d3d9_window_id id;
     struct pw_d3d9_window_entry e;
     struct bridge_window_owner *owner = bridge_owner( hwnd );
-    if (owner && owner->token) return TRUE;
+    if ((!owner && bridge_owner_full()) || (owner && owner->token)) return TRUE;
     return !pw_d3d9_window_find( &bridge_windows, (UINT_PTR)hwnd, &id ) &&
            !pw_d3d9_window_get( &bridge_windows, id, &e ) && e.service == (UINT_PTR)hwnd;
 }
@@ -132,7 +139,7 @@ done:
 }
 
 /* Called by real driver window lifetime hooks, including hidden windows. */
-static BOOL bridge_window_created( HWND hwnd )
+static int bridge_window_created( HWND hwnd )
 {
     uint64_t token = bridge_current_token();
     unsigned i;
@@ -144,7 +151,7 @@ static BOOL bridge_window_created( HWND hwnd )
         break;
     }
     pthread_mutex_unlock( &screen_lock );
-    return token != 0;
+    return token ? (i == ARRAY_SIZE(bridge_owners) ? -1 : 1) : 0;
 }
 
 /* screen_lock held. Keep tombstones until pending work and leases drain. */
