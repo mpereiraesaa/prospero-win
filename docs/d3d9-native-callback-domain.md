@@ -19,6 +19,10 @@ The x86-64 callback dispatcher checks the current native TEB's WowTebOffset.
 A nonzero offset selects the saved WoW64 marshal table; zero selects the native
 PEB table. The choice is made for every callback, including native service
 children. There is no process-global table swap around service execution.
+The SDK build explicitly stages patched PE64 wow64win beside ntdll; pairing
+these modules is required for the private registration export. The staging
+fixture checks its target and copied bytes, and excludes a PE32 wow64win target.
+
 The existing exception handler and callback-return frame remain unchanged.
 
 ## Regression scope

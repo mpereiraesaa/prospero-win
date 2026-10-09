@@ -1,3 +1,5 @@
+Subject: ntdll: route native and WoW64 user callbacks by thread domain
+
 --- a/dlls/ntdll/signal_x86_64.c
 +++ b/dlls/ntdll/signal_x86_64.c
 @@ -416,6 +416,18 @@

@@ -62,8 +62,11 @@ make() {
         for arch in ('i386', 'x86_64'):
             for module in ('ntdll', 'win32u'):
                 assert requests.count(f'dlls/{module}/{arch}-windows/{module}.dll') == 1
-        assert requests.count('dlls/wow64/x86_64-windows/wow64.dll') == 1
-        assert 'dlls/wow64/i386-windows/wow64.dll' not in requests
+        for module in ('wow64', 'wow64win'):
+            target = f'dlls/{module}/x86_64-windows/{module}.dll'
+            assert requests.count(target) == 1
+            assert (work / f'pe/x86_64-windows/{module}.dll').read_bytes() == ('MZfresh:' + target).encode()
+            assert f'dlls/{module}/i386-windows/{module}.dll' not in requests
         assert (work / 'status').read_text() == '0'
         failed = 'dlls/winevulkan/i386-windows/winevulkan.dll'
         (build / failed).unlink()

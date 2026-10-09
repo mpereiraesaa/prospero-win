@@ -320,7 +320,7 @@ rm -rf "$work/pe"
 for arch in i386 x86_64; do
     mkdir -p "$work/pe/$arch-windows"
     modules="$PE_MODULES"
-    [ "$arch" != x86_64 ] || modules="$modules wow64"
+    [ "$arch" != x86_64 ] || modules="$modules wow64 wow64win"
     for module in $modules; do
         target=dlls/$module/$arch-windows/$module.dll
         make -C "$build" -k -j"$jobs" "$target" >> "$work/make.log" 2>&1 || status=$?
