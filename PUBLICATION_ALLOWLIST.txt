@@ -763,6 +763,9 @@ wine/ps5/d3d9/pw_d3d9_device_methods.h
 wine/ps5/d3d9/pw_d3d9_device_methods.c
 tests/lab/d3d9_device_methods.c
 tests/lab/d3d9_device_methods.py
+tests/lab/d3d9_binding_adapter.c
+tests/lab/d3d9_binding_adapter.py
+docs/d3d9-binding-adapter.md
 docs/d3d9-device-methods.md
 wine/ps5/d3d9/pw_d3d9_device_object_methods.h
 wine/ps5/d3d9/pw_d3d9_device_object_methods.c
@@ -927,6 +930,3 @@ docs/d3d9-program-tickets.md
 tests/lab/d3d9_buffer_tickets.c
 tests/lab/d3d9_buffer_tickets.py
 docs/d3d9-buffer-tickets.md
-tests/lab/d3d9_binding_adapter.c
-tests/lab/d3d9_binding_adapter.py
-docs/d3d9-binding-adapter.md
