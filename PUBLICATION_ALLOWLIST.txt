@@ -663,6 +663,11 @@ wine/ps5/d3d9/pw_d3d9_buffer_client.c
 wine/ps5/d3d9/pw_d3d9_buffer_client.h
 wine/ps5/d3d9/pw_d3d9_staging.c
 wine/ps5/d3d9/pw_d3d9_staging.h
+wine/ps5/d3d9/pw_d3d9_private_data.c
+wine/ps5/d3d9/pw_d3d9_private_data.h
+tests/lab/d3d9_private_data.c
+tests/lab/d3d9_private_data.py
+docs/d3d9-private-data.md
 wine/ps5/d3d9/pw_d3d9_buffer_proxy.c
 wine/ps5/d3d9/pw_d3d9_buffer_proxy.h
 tests/lab/d3d9_buffer_proxy.c
