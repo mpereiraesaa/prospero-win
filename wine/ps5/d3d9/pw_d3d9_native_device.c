@@ -96,6 +96,8 @@ int pw_d3d9_native_device_shutdown(void)
     }
     return !cleanup_failed;
 }
+void *pw_d3d9_native_device_backend(struct pw_d3d9_native_device *d)
+{return d?d->device:NULL;}
 uintptr_t pw_d3d9_native_device_identity(struct pw_d3d9_native_device *d)
 {
     IUnknown *identity=NULL;
@@ -131,6 +133,7 @@ void pw_d3d9_native_device_call(void *factory,struct pw_d3d9_native_device *devi
         if(!d->window||!mirror(d,1)){pw_d3d9_native_device_destroy(d);return;}
         D3DPRESENT_PARAMETERS p;native_parameters(&p,&q->parameters,d->window);
         r->hresult=IDirect3D9_CreateDevice((IDirect3D9 *)factory,q->adapter,q->device_type,d->window,q->behavior_flags,&p,&d->device);
+        if(SUCCEEDED((HRESULT)r->hresult)&&!d->device)r->hresult=E_FAIL;
         if(p.hDeviceWindow&&p.hDeviceWindow!=d->window)r->hresult=E_FAIL;
         reply_parameters(&r->parameters,&p,guest);
         if(FAILED((HRESULT)r->hresult)){pw_d3d9_native_device_destroy(d);return;}
