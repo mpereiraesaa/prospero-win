@@ -610,6 +610,8 @@ tests/lab/d3d9_native_resource.py
 docs/d3d9-native-resources.md
 wine/ps5/d3d9/pw_d3d9_buffer_client.c
 wine/ps5/d3d9/pw_d3d9_buffer_client.h
+wine/ps5/d3d9/pw_d3d9_staging.c
+wine/ps5/d3d9/pw_d3d9_staging.h
 tests/lab/d3d9_buffer_client.c
 tests/lab/d3d9_buffer_client.py
 docs/d3d9-buffer-client.md

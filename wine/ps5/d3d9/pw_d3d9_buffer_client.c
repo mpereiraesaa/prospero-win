@@ -1,21 +1,11 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_d3d9_buffer_client.h"
+#include "pw_d3d9_staging.h"
 #include <windows.h>
 #include <d3d9.h>
 #include <string.h>
-static LONG staging_bytes;
 uint32_t pw_d3d9_buffer_client_staging_bytes(void)
-{return (uint32_t)InterlockedCompareExchange(&staging_bytes,0,0);}
-static int reserve(uint32_t n)
-{
- LONG old=InterlockedCompareExchange(&staging_bytes,0,0),seen;
- do{
-  if(n>PW_D3D9_RESOURCE_MAX_LOCK-(uint32_t)old)return 0;
-  seen=InterlockedCompareExchange(&staging_bytes,old+(LONG)n,old);
-  if(seen==old)return 1;
-  old=seen;
- }while(1);
-}
+{return pw_d3d9_staging_bytes();}
 static uint32_t invoke(struct pw_d3d9_buffer_client *s,const struct pw_d3d9_resource_request *q,struct pw_d3d9_resource_reply *r)
 {
  uint32_t hr;memset(r,0,sizeof(*r));hr=s->call(s->context,s->object,q,r);
@@ -26,8 +16,8 @@ static uint32_t invoke(struct pw_d3d9_buffer_client *s,const struct pw_d3d9_reso
 static void drop(struct pw_d3d9_buffer_client *s)
 {
  if(s->data){
-  if(!VirtualFree(s->data,0,MEM_RELEASE))s->fail(s->context,E_FAIL);
-  else InterlockedExchangeAdd(&staging_bytes,-(LONG)s->length);
+  uint32_t hr=pw_d3d9_staging_free(s->data,s->length);
+  if(hr&0x80000000u)s->fail(s->context,hr);
  }
  s->data=NULL;s->length=s->flags=0;s->generation=0;
 }
@@ -52,10 +42,7 @@ uint32_t pw_d3d9_buffer_client_lock(struct pw_d3d9_buffer_client *s,uint32_t off
  if(!r.lock_generation||!r.length||r.length>PW_D3D9_RESOURCE_MAX_LOCK){s->fail(s->context,E_FAIL);return E_FAIL;}
  lock_hr=hr;s->last_cleanup_result=S_OK;
  s->generation=r.lock_generation;s->length=r.length;s->flags=flags;
- if(!reserve(s->length)){hr=E_OUTOFMEMORY;goto fail;}
- s->data=VirtualAlloc(NULL,s->length,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
- if(!s->data){InterlockedExchangeAdd(&staging_bytes,-(LONG)s->length);hr=E_OUTOFMEMORY;goto fail;}
- if((uintptr_t)s->data>UINT32_MAX-(s->length-1u)){hr=E_OUTOFMEMORY;goto fail;}
+ hr=pw_d3d9_staging_alloc(s->length,&s->data);if(hr&0x80000000u)goto fail;
  /* Prefill even DISCARD. The backend, not this client, decides when DISCARD is
   * ignored (pool, NOOVERWRITE, lost-device state). This preserves partial edits. */
  q.operation=PW_D3D9_RESOURCE_READ;q.lock_generation=s->generation;

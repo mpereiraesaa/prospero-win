@@ -25,3 +25,8 @@ checks low-address spans, partial edits, read-only locks, read/write errors,
 corrupt generations, cleanup and two-resource global budget exhaustion. The
 separate native resource lab covers real DXVK execution; this controlled test
 makes no backend or end-to-end COM proxy claim.
+
+The allocation implementation lives in `pw_d3d9_staging.[ch]` so buffer and
+texture helpers share the same atomic64MiB process-wide budget. Its internal
+free API requires the original successful allocation pointer and length.
+The existing PE32 fault/budget fixture also runs against this shared allocator.

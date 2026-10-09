@@ -15,7 +15,8 @@ root = Path(__file__).resolve().parents[2]
 out = args.output.resolve()
 out.mkdir(parents=True, exist_ok=False)
 files = ['tests/lab/d3d9_buffer_client.c', 'wine/ps5/d3d9/pw_d3d9_buffer_client.c',
-         'wine/ps5/d3d9/pw_d3d9_buffer_client.h', 'wine/ps5/pw_d3d9_resource_wire.h']
+         'wine/ps5/d3d9/pw_d3d9_buffer_client.h', 'wine/ps5/pw_d3d9_resource_wire.h',
+         'wine/ps5/d3d9/pw_d3d9_staging.c', 'wine/ps5/d3d9/pw_d3d9_staging.h']
 receipt = {'status': 'running', 'sources': {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in files},
            'commands': [], 'console_accessed': False, 'scope': 'Real PE32 low-address allocations and controlled transport faults, not a real backend or COM proxy proof.'}
 def run(command, name, env=None):
@@ -26,7 +27,7 @@ def run(command, name, env=None):
         raise RuntimeError(f'{name} failed: {result.returncode}')
     return result.stdout
 try:
-    run(['i686-w64-mingw32-gcc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', root / files[0], root / files[1], '-o', out / 'client.exe'], 'compile')
+    run(['i686-w64-mingw32-gcc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', root / files[0], root / files[1], root / files[4], '-o', out / 'client.exe'], 'compile')
     receipt['executable_sha256'] = hashlib.sha256((out / 'client.exe').read_bytes()).hexdigest()
     env = os.environ.copy()
     env.update(WINEPREFIX=str(args.prefix.resolve()), WINEDEBUG='-all', WINEDLLOVERRIDES='mscoree,mshtml=')
