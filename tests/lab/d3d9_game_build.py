@@ -4,9 +4,11 @@
 import subprocess,pathlib,json,hashlib,argparse,re
 def production_features(source_root):
  text=(source_root/'wine/ps5/pw_d3d9_command_policy.h').read_text()
- values=re.findall(r'^#define[ \t]+PW_D3D9_COMMAND_POLICY_FEATURE[ \t]+([0-9]+)u[ \t]*$',text,re.M)
- if len(values)!=1:raise ValueError('missing or ambiguous command policy feature')
- feature=int(values[0])
+ definitions=re.findall(r'^[ \t]*#[ \t]*define[ \t]+PW_D3D9_COMMAND_POLICY_FEATURE(?:[ \t]+([^\r\n]*))?$',text,re.M)
+ if len(definitions)!=1:raise ValueError('missing or ambiguous command policy feature')
+ value=re.fullmatch(r'([0-9]+)u[ \t]*',definitions[0])
+ if not value:raise ValueError('nonliteral command policy feature')
+ feature=int(value.group(1))
  if not feature or feature>0xffffffff or feature&(feature-1) or feature&14335:raise ValueError('invalid command policy feature')
  return 14335|feature
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',type=pathlib.Path,required=True)
