@@ -173,7 +173,11 @@ HRESULT pw_d3d9_session_factory(struct pw_d3d9_session *s,struct pw_d3d9_object_
     if(encoded!=PW_D3D9_FACTORY_OK)return E_INVALIDARG;
     m.payload_bytes=(uint32_t)bytes;
     HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
-    if(pw_d3d9_factory_reply_decode(reply,out,r.payload_bytes)!=PW_D3D9_FACTORY_OK || reply->method!=request->method || reply->hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    /* A target failure has no typed result (especially no manufactured count). */
+    if(!r.payload_bytes && FAILED(hr))return hr;
+    struct pw_d3d9_factory_reply decoded;
+    if(pw_d3d9_factory_reply_decode(&decoded,out,r.payload_bytes)!=PW_D3D9_FACTORY_OK || decoded.method!=request->method || decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;
     return hr;
 }
 HRESULT pw_d3d9_session_release(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref)
@@ -335,7 +339,11 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
                 if(!pw_d3d9_object_complete(&objects,ref))goto done;
             }
             hr=(HRESULT)reply.hresult;
-            if(pw_d3d9_factory_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_FACTORY_OK)goto done;
+            /* Invalid targets carry only the outer failure; the typed count
+             * codec deliberately cannot represent a failed count operation. */
+            if(slot && slot->kind==1){
+                if(pw_d3d9_factory_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_FACTORY_OK)goto done;
+            }
         }else goto done;
         m.sequence=0;m.result=hr;m.payload_bytes=(uint32_t)bytes;
         if(send_wake(&ipc,&m,output)!=PW_D3D9_OK)goto done;

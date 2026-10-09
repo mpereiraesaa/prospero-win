@@ -36,6 +36,9 @@ CREATE9 returns a service-authoritative object ID and generation in its
 payload. Factory slots4–14 invoke actual native IDirect3D9 methods. Every
 field is converted through the codec; no native D3D struct is copied to wire.
 Backend canonical IUnknown identity is retained locally by the registry.
+Invalid targets return an outer failure with no payload; count methods never
+manufacture an output. Client reply DTOs are published only after decoding,
+method and outer-HRESULT validation complete.
 Remote RELEASE retires the guest reference and releases the native object
 only when queued references permit destruction. Stale IDs never reach DXVK.
 
@@ -56,7 +59,7 @@ Run `tests/lab/d3d9_persistent_session.py` with `--wine-build`, `--prefix`,
 with warnings as errors and records source/binary hashes and exit codes.
 It requires the native bootstrap and mixed-domain callback/builtin fixes.
 
-Host receipt `/tmp/prospero-d3d9-persistent-r2/receipt.json` passed three
+Host receipt `/tmp/prospero-d3d9-persistent-r3/receipt.json` passed three
 complete sessions, all slots4–14, 1200 concurrent guest calls, malformed
 startup recovery, exclusive-session rejection, backend failure HRESULT,
 unsupported methods, stale IDs, generation reuse, live-object STOP cleanup,

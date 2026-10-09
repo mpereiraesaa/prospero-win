@@ -57,6 +57,13 @@ int wmain(int argc,WCHAR **argv)
         CHECK(pw_d3d9_session_release(s,a)==S_OK);
         q=(struct pw_d3d9_factory_request){.method=14,.device_type=D3DDEVTYPE_HAL};
         CHECK(pw_d3d9_session_factory(s,a,&q,&r)==D3DERR_INVALIDCALL);
+        for(unsigned method=4;method<=6;method+=2){
+            q=(struct pw_d3d9_factory_request){.method=method,.format=format};
+            memset(&r,0xa5,sizeof(r));struct pw_d3d9_factory_reply unchanged=r;
+            CHECK(pw_d3d9_session_factory(s,a,&q,&r)==D3DERR_INVALIDCALL);
+            CHECK(!memcmp(&r,&unchanged,sizeof(r)));
+            q.method=4;CHECK(pw_d3d9_session_factory(s,b,&q,&r)==S_OK&&r.count);
+        }
         CHECK(pw_d3d9_session_create(s,D3D_SDK_VERSION,&c)==S_OK);
         CHECK(c.id!=a.id||c.generation!=a.generation);
         CHECK(pw_d3d9_session_release(s,b)==S_OK);
