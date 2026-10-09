@@ -903,6 +903,9 @@ tests/test_d3d9_command_policy.c
 docs/d3d9-command-policy.md
 tests/lab/d3d9_batch_service.c
 tests/lab/d3d9_batch_service.py
+tests/lab/d3d9_binding_service.c
+tests/lab/d3d9_binding_service.py
+docs/d3d9-binding-service.md
 docs/d3d9-batch-service.md
 tests/lab/d3d9_transport_roundtrip.c
 wine/ps5/pw_d3d9_binding_plan.c
@@ -927,6 +930,3 @@ docs/d3d9-program-tickets.md
 tests/lab/d3d9_buffer_tickets.c
 tests/lab/d3d9_buffer_tickets.py
 docs/d3d9-buffer-tickets.md
-tests/lab/d3d9_binding_service.c
-tests/lab/d3d9_binding_service.py
-docs/d3d9-binding-service.md
