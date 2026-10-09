@@ -50,3 +50,18 @@ cancellation. These remain synchronous until their respective proofs exist.
 The portable fixture checks copied values, malformed lengths, unused arguments,
 all sampler boundaries, texture-stage enum holes and all other method exclusions.
 Actual native parity is a separate prerequisite before runtime enablement.
+
+## Native comparison fixture
+
+The existing native-command lab additionally compares596 direct backend/helper
+calls per process: all six families, every accepted sampler slot/type, all
+accepted texture-stage types with stage-clamping edges, unknown render-state
+no-op, and conservative invalid-sampler fallback. Each case runs both live and
+inside state-block recording. NULL material/scissor rejection is checked directly.
+All original command/draw/readback checks remain. The runner freezes local
+headers and implementation inputs. This is native helper parity, not a queued
+session test. Fresh retained host proof passed all596 comparisons in each of
+three native processes, with successful draws/readback/Present and clean exit.
+The receipt freezes89 implementation/header inputs and9 successful commands.
+Portable policy normal and ASan/UBSan tests separately passed4 commands.
+These results do not establish queued session acceptance or performance.

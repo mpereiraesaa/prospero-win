@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "pw_d3d9_command_wire.h"
+#include "pw_d3d9_command_policy.h"
 #ifdef _WIN64
 #include "pw_d3d9_native_command.h"
 #endif
@@ -21,6 +22,67 @@ static HRESULT acquire(void *context,uint32_t id,uint32_t generation,uint32_t ki
  struct objects *o=context;static const unsigned kinds[]={0,PW_D3D9_KIND_SURFACE,PW_D3D9_KIND_TEXTURE_2D,PW_D3D9_KIND_VERTEX_BUFFER,PW_D3D9_KIND_INDEX_BUFFER};
  if(id>=5 || !id || generation!=1 || kind!=kinds[id] || device!=o->device || !o->entries[id])return D3DERR_INVALIDCALL;
  IUnknown_AddRef(o->entries[id]);*out=o->entries[id];o->pins++;return S_OK;
+}
+static HRESULT direct_policy(IDirect3DDevice9 *device,const struct pw_d3d9_command *c)
+{
+ switch(c->method){
+ case 57:return IDirect3DDevice9_SetRenderState(device,c->args[0],c->args[1]);
+ case 67:return IDirect3DDevice9_SetTextureStageState(device,c->args[0],c->args[1],c->args[2]);
+ case 69:return IDirect3DDevice9_SetSamplerState(device,c->args[0],c->args[1],c->args[2]);
+ case 47:return IDirect3DDevice9_SetViewport(device,(const D3DVIEWPORT9 *)c->data.bytes);
+ case 49:return IDirect3DDevice9_SetMaterial(device,(const D3DMATERIAL9 *)c->data.bytes);
+ case 75:return IDirect3DDevice9_SetScissorRect(device,(const RECT *)c->data.bytes);
+ default:return E_FAIL;
+ }
+}
+static int policy_case(IDirect3DDevice9 *device,struct pw_d3d9_command *c,int eligible,unsigned *count)
+{
+ struct pw_d3d9_command decoded;unsigned char wire[PW_D3D9_COMMAND_MAX];size_t written;
+ if(pw_d3d9_command_can_queue(c)!=eligible || pw_d3d9_command_encode(wire,sizeof(wire),&written,c) ||
+ pw_d3d9_command_decode(&decoded,wire,written) || pw_d3d9_command_can_queue(&decoded)!=eligible)return 0;
+ HRESULT direct=direct_policy(device,c),actual=pw_d3d9_native_command_dispatch(device,&decoded,NULL,NULL);
+ if(actual!=direct || (eligible && actual!=S_OK))return 0;
+ ++*count;return 1;
+}
+static int policy_proof(IDirect3DDevice9 *device)
+{
+ IDirect3DStateBlock9 *saved=NULL,*recorded=NULL;struct pw_d3d9_command c;unsigned count=0;int ok=0;
+ const unsigned types[]={1,2,3,4,5,6,7,8,9,10,11,22,23,24,26,27,28,32};
+ if(FAILED(IDirect3DDevice9_CreateStateBlock(device,D3DSBT_ALL,&saved)))return 0;
+ for(unsigned record=0;record<2;record++){
+  if(record && FAILED(IDirect3DDevice9_BeginStateBlock(device)))goto done;
+  c=(struct pw_d3d9_command){.method=57,.args={D3DRS_ZENABLE,0}};
+  if(!policy_case(device,&c,1,&count))goto done;
+  c.args[0]=0xffffffff;if(!policy_case(device,&c,1,&count))goto done;
+  for(unsigned i=0;i<sizeof(types)/sizeof(types[0]);i++){
+   c=(struct pw_d3d9_command){.method=67,.args={i&1?0xffffffff:0,types[i],1}};
+   if(!policy_case(device,&c,1,&count))goto done;
+  }
+  for(unsigned slot=0;slot<=260;slot++)if(slot<16||slot>=256)for(unsigned type=1;type<=13;type++){
+   c=(struct pw_d3d9_command){.method=69,.args={slot,type,1}};
+   if(!policy_case(device,&c,1,&count))goto done;
+  }
+  c=(struct pw_d3d9_command){.method=69,.args={16,1,1}};
+  if(!policy_case(device,&c,0,&count))goto done; /* Backend no-op, conservative fallback. */
+  c.args[0]=0xffffffff;if(!policy_case(device,&c,0,&count))goto done;
+  c=(struct pw_d3d9_command){.method=47,.data_bytes=24};
+  {D3DVIEWPORT9 value={0,0,64,64,0,1};memcpy(c.data.bytes,&value,sizeof(value));}
+  if(!policy_case(device,&c,1,&count))goto done;
+  c=(struct pw_d3d9_command){.method=49,.data_bytes=68};
+  if(!policy_case(device,&c,1,&count))goto done;
+  c=(struct pw_d3d9_command){.method=75,.data_bytes=16};
+  {RECT value={0,0,64,64};memcpy(c.data.bytes,&value,sizeof(value));}
+  if(!policy_case(device,&c,1,&count))goto done;
+  if(record && FAILED(IDirect3DDevice9_EndStateBlock(device,&recorded)))goto done;
+ }
+ if(IDirect3DDevice9_SetMaterial(device,NULL)!=D3DERR_INVALIDCALL ||
+ IDirect3DDevice9_SetScissorRect(device,NULL)!=D3DERR_INVALIDCALL)goto done;
+ ok=count==596;
+ done:
+ if(recorded)IDirect3DStateBlock9_Release(recorded);
+ if(saved){if(FAILED(IDirect3DStateBlock9_Apply(saved)))ok=0;IDirect3DStateBlock9_Release(saved);}
+ printf("PW_COMMAND_POLICY cases=%u live_and_recorded=1 fallback=4 null_rejects=2 ok=%d\n",count,ok);
+ return ok;
 }
 static LRESULT CALLBACK proc(HWND w,UINT m,WPARAM a,LPARAM b){return DefWindowProcW(w,m,a,b);}
 __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
@@ -47,6 +109,7 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  hr=IDirect3D9_CreateDevice(d3d,0,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING,&pp,&device);
  result[0]=(uint32_t)hr;
  if(FAILED(hr))goto done;
+ if(!policy_proof(device))goto done;
  if(FAILED(IDirect3DDevice9_GetRenderTarget(device,0,&surface)) || FAILED(IDirect3DDevice9_CreateTexture(device,4,4,1,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&texture,NULL)) ||
  FAILED(IDirect3DDevice9_CreateVertexBuffer(device,sizeof(vertices),0,D3DFVF_XYZRHW|D3DFVF_DIFFUSE,D3DPOOL_MANAGED,&vb,NULL)) ||
  FAILED(IDirect3DDevice9_CreateIndexBuffer(device,sizeof(indices),0,D3DFMT_INDEX16,D3DPOOL_MANAGED,&ib,NULL)))goto done;
