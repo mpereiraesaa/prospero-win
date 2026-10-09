@@ -38,6 +38,7 @@ run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-D__WINESRC__','-DWINE_UNIX_
 env=os.environ.copy();env.update(WINEPREFIX=str(out/'wine-prefix'),WINEDEBUG='-all',WINEDLLOVERRIDES='mscoree,mshtml=')
 env.pop('PW_VK_BATCH_MASK',None)
 env.pop('PW_VK_BATCH_GENERATED',None)
+env.pop('PW_VK_BATCH_GENERATED_FILTER',None)
 for mode in ['core','khr']:run([str(pathlib.Path(a.wine_build)/'loader/wine'),str(owned),mode],env)
 for mode in ['on','old','off','stats','profile-no-stats','profile']:
  result=run([str(pathlib.Path(a.wine_build)/'loader/wine'),str(exe),mode],env)
@@ -64,5 +65,14 @@ for mask in ['0','32','127']:
   result=run([str(pathlib.Path(a.wine_build)/'loader/wine'),str(maskexe),mask,mask,value,expected],env)
   if expected=='invalid':assert 'PW_VK_BATCH_CONFIG' not in result.stderr
   else:assert f'PW_VK_BATCH_CONFIG mask={mask} generated={int(mask=="127" and expected=="1")}' in result.stderr
-receipt={'generated_mode_cases':3*len(generated_cases),'schema_version':1,'opcode_mask_cases':len(mask_cases),'status':'pass','actual_pe_runtime_win32_apis':True,'template_producer_forms':6,'template_metadata_create_aliases':2,'deferred_client_lifetime_tested':True,'unix_boundary_mocked':True,'automatic_dll_notification_runtime_tested':False,'automatic_notification_source_wiring_checked':True,'generator_regenerated_equal':bool(a.vk_xml and a.video_xml),'console_accessed':False,'commands':results,'hashes':{str(x.relative_to(r)):hashlib.sha256(x.read_bytes()).hexdigest() for x in [r/'wine/ps5/vulkan/pw_vk_batch_pe.c',r/'wine/ps5/vulkan/pw_vk_batch_unix.c',r/'tools/stage_vk_batch.py',r/'tests/lab/vk_batch_pe.c',r/'tests/lab/vk_batch_owned.c',r/'tests/lab/vk_batch_runtime.py',r/'docs/vulkan-fallback-profile.md',r/'wine/ps5/vulkan/pw_vk_progress_guard.h',r/'tests/lab/vk_batch_progress.c',r/'docs/vulkan-progress-gate.md',r/'tests/lab/vk_batch_masks.c',r/'wine/ps5/vulkan-wire.md']}}
+viewport_code=enum_names.index('vkCmdSetViewport')
+viewport_low_bit=str(viewport_code&1)
+filter_cases=[('0x1:'+viewport_low_bit,'1'),('0x1:'+str((viewport_code&1)^1),'0')]
+for filter_value,selected in filter_cases:
+ result=run([str(pathlib.Path(a.wine_build)/'loader/wine'),str(maskexe),'127','127','1','1',filter_value,selected],env)
+ assert f'PW_VK_BATCH_CONFIG mask=127 generated=1 generated_code_mask=1 generated_code_value={filter_value[-1]}' in result.stderr
+for bad in ['1','1:','1:2','0x100000000:0','0x1:0x',' 1:0','1:0:0']:
+ result=run([str(pathlib.Path(a.wine_build)/'loader/wine'),str(maskexe),'127','127','1','1',bad,'invalid'],env)
+ assert 'PW_VK_BATCH_CONFIG' not in result.stderr
+receipt={'generated_mode_cases':3*len(generated_cases),'generated_code_filter_cases':len(filter_cases),'generated_code_filter_invalid_cases':7,'schema_version':1,'opcode_mask_cases':len(mask_cases),'status':'pass','actual_pe_runtime_win32_apis':True,'template_producer_forms':6,'template_metadata_create_aliases':2,'deferred_client_lifetime_tested':True,'unix_boundary_mocked':True,'automatic_dll_notification_runtime_tested':False,'automatic_notification_source_wiring_checked':True,'generator_regenerated_equal':bool(a.vk_xml and a.video_xml),'console_accessed':False,'commands':results,'hashes':{str(x.relative_to(r)):hashlib.sha256(x.read_bytes()).hexdigest() for x in [r/'wine/ps5/vulkan/pw_vk_batch_pe.c',r/'wine/ps5/vulkan/pw_vk_batch_unix.c',r/'tools/stage_vk_batch.py',r/'tests/lab/vk_batch_pe.c',r/'tests/lab/vk_batch_owned.c',r/'tests/lab/vk_batch_runtime.py',r/'docs/vulkan-fallback-profile.md',r/'wine/ps5/vulkan/pw_vk_progress_guard.h',r/'tests/lab/vk_batch_progress.c',r/'docs/vulkan-progress-gate.md',r/'tests/lab/vk_batch_masks.c',r/'wine/ps5/vulkan-wire.md']}}
 (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');print('PASS actual PE runtime original paths, profiling counts/deltas/top8/ties, stats-off suppression, thread retirement, callback reentry, global ordering; '+str(out/'receipt.json'))

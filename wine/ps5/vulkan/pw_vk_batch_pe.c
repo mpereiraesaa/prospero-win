@@ -27,6 +27,8 @@ static UINT64 fallback_report_present;
 /* Opcode bit N-1 matches stable wire opcode N. Not part of the wire ABI. */
 static uint32_t opcode_mask=0x7f;
 static BOOL generated_enabled=TRUE;
+/* Optional diagnostic filter over stable Unix thunk numbers. */
+static uint32_t generated_code_mask,generated_code_value;
 static LONG sticky_disabled;
 static DWORD owner;
 static unsigned depth;
@@ -62,13 +64,43 @@ static BOOL read_generated_mode(void)
  if(n!=1||(value[0]!='0'&&value[0]!='1'))return FALSE;
  generated_enabled=value[0]=='1';return TRUE;
 }
+static BOOL parse_u32(const char *text,size_t length,uint32_t *result)
+{
+ unsigned base=10,i=0,digit;uint32_t value=0;
+ if(!length)return FALSE;
+ if(length>=2&&text[0]=='0'&&(text[1]=='x'||text[1]=='X')){base=16;i=2;}
+ if(i==length)return FALSE;
+ for(;i<length;i++){
+  if(text[i]>='0'&&text[i]<='9')digit=text[i]-'0';
+  else if(base==16&&text[i]>='a'&&text[i]<='f')digit=text[i]-'a'+10;
+  else if(base==16&&text[i]>='A'&&text[i]<='F')digit=text[i]-'A'+10;
+  else return FALSE;
+  if(digit>=base||value>(UINT32_MAX-digit)/base)return FALSE;
+  value=value*base+digit;
+ }
+ *result=value;return TRUE;
+}
+static BOOL read_generated_code_filter(void)
+{
+ char text[70];DWORD n=GetEnvironmentVariableA("PW_VK_BATCH_GENERATED_FILTER",text,sizeof(text));
+ char *separator;uint32_t mask,value;
+ if(!n)return TRUE;
+ if(n>=sizeof(text)||(separator=strchr(text,':'))==NULL||strchr(separator+1,':'))return FALSE;
+ if(!parse_u32(text,(size_t)(separator-text),&mask)||
+    !parse_u32(separator+1,n-(size_t)(separator+1-text),&value)||(value&~mask))return FALSE;
+ generated_code_mask=mask;generated_code_value=value;return TRUE;
+}
+static BOOL generated_code_selected(unsigned int code)
+{
+ return (code&generated_code_mask)==generated_code_value;
+}
 static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
 {
  char env[8];(void)o;(void)p;(void)ctx;
  stats_enabled=GetEnvironmentVariableA("PW_VK_BATCH_STATS",env,sizeof(env))==1&&env[0]=='1';
  fallback_profile=stats_enabled&&GetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",env,sizeof(env))==1&&env[0]=='1';
  enabled=GetEnvironmentVariableA("PW_VK_BATCH",env,sizeof(env))==1&&env[0]=='1'&&!pw_vk_stream_environment_unsafe();
- if(!read_opcode_mask()||!read_generated_mode())enabled=FALSE; /* Invalid explicit masks fail closed. */
+ if(!read_opcode_mask()||!read_generated_mode()||!read_generated_code_filter())enabled=FALSE; /* Invalid explicit masks fail closed. */
  if(!enabled)return TRUE;
  InitializeCriticalSection(&gate);tls=TlsAlloc();
  pw_vk_stream_registry_init(&registry);
@@ -76,7 +108,7 @@ static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
  encoded_wire=heap_alloc(PW_VK_BATCH_ARENA);
  enabled=tls!=TLS_OUT_OF_INDEXES&&scratch&&encoded_wire;
  /* Diagnostics are independently opt-in; FPS confirmation leaves them off. */
- if(stats_enabled)WINE_MESSAGE("PW_VK_BATCH_CONFIG mask=%u generated=%u\n",opcode_mask,(unsigned)(generated_enabled&&opcode_mask==0x7f));
+ if(stats_enabled)WINE_MESSAGE("PW_VK_BATCH_CONFIG mask=%u generated=%u generated_code_mask=%u generated_code_value=%u\n",opcode_mask,(unsigned)(generated_enabled&&opcode_mask==0x7f),generated_code_mask,generated_code_value);
  return TRUE;
 }
 static void enter(void){EnterCriticalSection(&gate);if(depth&&owner==GetCurrentThreadId())fatal();owner=GetCurrentThreadId();depth=1;}
@@ -245,7 +277,7 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
   InterlockedExchange(&sticky_disabled,1);leave();status=raw_call(code,args);snapshot(code,args);return status;
  }
  bytes=0;opcode=0;
- if(negotiated&&!encode(code,args,wire,&bytes,&opcode)&&opcode_mask==0x7f&&generated_enabled&&
+ if(negotiated&&!encode(code,args,wire,&bytes,&opcode)&&opcode_mask==0x7f&&generated_enabled&&generated_code_selected(code)&&
     pw_vk_generated_encode_templates(code,args,wire+4,PW_VK_BATCH_ARENA-PW_VK_STREAM_HEADER-4,&bytes,template_snapshot,template_device(code,args))){
   memcpy(wire,&code,4);bytes+=4;opcode=PW_VK_BATCH_GENERATED_OPCODE;
  }

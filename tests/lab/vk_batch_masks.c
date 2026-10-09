@@ -50,11 +50,12 @@ static NTSTATUS mock_call(unsigned int code,void *args)
 int main(int argc,char **argv)
 {
  VkInstance instance;VkInstanceCreateInfo info={0};struct vkCreateInstance_params create={0};VkDescriptorUpdateTemplate handle;VkDescriptorUpdateTemplateEntry entry={0};VkDescriptorUpdateTemplateCreateInfo ti={0};struct vkCreateDescriptorUpdateTemplate_params tc={0};VkDescriptorBufferInfo data={0x123456789abcdef0ULL,11,99};struct vkUpdateDescriptorSetWithTemplate_params update={0};struct vkCmdDrawIndexed_params draw={0};struct vkCmdBindDescriptorSets_params ds={0};struct vkCmdBindPipeline_params pipeline={0};struct vkCmdBindVertexBuffers2_params vb={0};struct vkCmdBindIndexBuffer_params ib={0};struct vkCmdPushConstants_params pc={0};struct vkEndCommandBuffer_params end={0};VkDescriptorSet set=17;VkBuffer buffer=18;VkDeviceSize offset=19,size=20,stride=21;uint32_t dynamic=22,value=0x10203040;unsigned i,count=0;uint32_t expected;UINT64 before;
- assert(argc==3||argc==5);expected=(uint32_t)strtoul(argv[2],NULL,0);
+ assert(argc==3||argc==5||argc==7);expected=(uint32_t)strtoul(argv[2],NULL,0);
  SetEnvironmentVariableA("PW_VK_BATCH","1");SetEnvironmentVariableA("PW_VK_BATCH_STATS","1");SetEnvironmentVariableA("PW_VK_BATCH_MASK",strcmp(argv[1],"unset")?argv[1]:NULL);
  if(argc==5)SetEnvironmentVariableA("PW_VK_BATCH_GENERATED",strcmp(argv[3],"unset")?argv[3]:NULL);
+ if(argc==7){SetEnvironmentVariableA("PW_VK_BATCH_GENERATED",argv[3]);SetEnvironmentVariableA("PW_VK_BATCH_GENERATED_FILTER",strcmp(argv[5],"unset")?argv[5]:NULL);}
  create.pCreateInfo=&info;create.pInstance=&instance;assert(pw_vk_batch_call(unix_vkCreateInstance,&create)==0);
- if(expected==0xff||(argc==5&&!strcmp(argv[4],"invalid"))){assert(!enabled&&!negotiated&&tls==TLS_OUT_OF_INDEXES);puts("PASS invalid mask fails closed");return 0;}
+ if(expected==0xff||(argc>=5&&!strcmp(argv[4],"invalid"))||(argc==7&&!strcmp(argv[6],"invalid"))){assert(!enabled&&!negotiated&&tls==TLS_OUT_OF_INDEXES);puts("PASS invalid mask fails closed");return 0;}
  assert(enabled&&negotiated&&opcode_mask==expected);
  entry.descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;entry.descriptorCount=1;entry.stride=sizeof(data);ti.descriptorUpdateEntryCount=1;ti.pDescriptorUpdateEntries=&entry;ti.templateType=VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;tc.device=(VkDevice)(uintptr_t)11;tc.pCreateInfo=&ti;tc.pDescriptorUpdateTemplate=&handle;assert(pw_vk_batch_call(unix_vkCreateDescriptorUpdateTemplate,&tc)==0);before=crossings_total;
  update.device=tc.device;update.descriptorSet=set;update.descriptorUpdateTemplate=handle;update.pData=(expected&(1u<<(PW_VK_UPDATE_TEMPLATE-1)))?&data:(const void *)(uintptr_t)1;assert(pw_vk_batch_call(unix_vkUpdateDescriptorSetWithTemplate,&update)==0);memset(&data,0xee,sizeof(data));
@@ -73,6 +74,7 @@ int main(int argc,char **argv)
  assert(enqueued_total==count&&records_total==count);assert(crossings_total-before==8-count);
  {
   VkViewport viewport={0};struct vkCmdSetViewport_params vp={0};unsigned selected=expected==127&&(argc==3||!strcmp(argv[4],"1"));
+  if(argc==7)selected=!strcmp(argv[6],"1");
   vp.commandBuffer=end.commandBuffer;vp.viewportCount=1;vp.pViewports=&viewport;viewport.width=123.0f;
   assert(pw_vk_batch_call(unix_vkCmdSetViewport,&vp)==0);
   assert(generated_raw==!selected&&generated_played==0);viewport.width=456.0f;

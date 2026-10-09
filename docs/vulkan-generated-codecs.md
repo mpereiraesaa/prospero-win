@@ -55,6 +55,15 @@ With stats enabled, `PW_VK_BATCH_CONFIG` reports the mask and effective generate
 selection once at initialization. Use mask 127 with generated 0 versus 1 to
 isolate generated replay after a same-CPU mask 0 versus 127 comparison implicates
 batching. This is diagnostic isolation, not a graphics correctness fix.
+`PW_VK_BATCH_GENERATED_FILTER=M:V` narrows generated replay further: a generated
+call is recorded only when `(unix_thunk_code & M) == V`; unmatched generated calls
+take the normal synchronous fallback. `M` and `V` accept decimal or `0x` hexadecimal
+uint32 values, and `V` must be a subset of `M`. Unset means no filter. For example,
+`0x1:0` and `0x1:1` split generated calls by the low bit of their Unix thunk number.
+These numbers are specific to the pinned thunk table/package, so compare only
+packages from the same Wine build. Invalid nonempty filters fail closed and disable
+batching. `PW_VK_BATCH_CONFIG` reports the parsed code mask and value. This selector
+is intended for diagnostic bisection; it is not a stable public ABI.
 Unknown shapes drain and dispatch synchronously. All six descriptor-template forms use device-scoped registered metadata, with
 command-buffer client tails retaining the originating device association.
 
