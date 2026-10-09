@@ -11,9 +11,10 @@ native ramp and clean session close. The receipt freezes every local wine/ps5
 header and the exact C/runner sources and artifacts. This establishes host session
 transport acceptance, not PS5 driver or console gamma behavior.
 
-## Proof artifact recovery
+## Retained recovery proof
 
-The three-cycle host result was reviewed before the host reboot on 2026-10-09.
-Its temporary logs and binaries did not survive. Treat that result as historical
-review evidence; a new retained runtime receipt is pending reconstruction of the
-host native-domain runtime. Future receipts belong in persistent artifact storage.
+A fresh run after host runtime reconstruction passed three cycles with exit code
+zero. The receipt retains all fixture/runtime source and header hashes, paired
+binaries and logs in persistent storage. The earlier temporary receipts were lost
+in the host reboot; the new result covers the same bounded host transport scope
+above and does not establish console behavior.
