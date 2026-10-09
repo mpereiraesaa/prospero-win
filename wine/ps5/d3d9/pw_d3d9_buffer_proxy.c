@@ -88,9 +88,17 @@ static HRESULT lock_buffer(struct buffer *p,UINT offset,UINT size,void **data,DW
 }
 static HRESULT unlock_buffer(struct buffer *p)
 {HRESULT hr=begin(p);if(FAILED(hr))return hr;hr=(HRESULT)pw_d3d9_buffer_client_unlock(&p->client);end(p);return hr;}
-/* Until resource metadata/hint operations are implemented, HRESULT methods
- * reject them and void/DWORD methods report a fatal unsupported operation via
- * the session callback. No unperformed backend action is reported as success. */
+static DWORD hint(struct buffer *p,uint32_t operation,DWORD priority)
+{
+ HRESULT hr=begin(p);DWORD result=0;
+ if(FAILED(hr)){ops.fail(p->parent,hr);return 0;}
+ struct pw_d3d9_resource_request q={.operation=operation,.priority=priority};
+ struct pw_d3d9_resource_reply r={0};hr=ops.resource(p->parent,p->remote,&q,&r);
+ if(SUCCEEDED(hr)&&(r.operation!=operation||r.hresult!=(uint32_t)hr))hr=E_FAIL;
+ if(FAILED(hr))ops.fail(p->parent,hr);else result=r.priority;
+ end(p);return result;
+}
+/* Private data remains unsupported until local COM metadata is implemented. */
 #define METHODS(tag,iface) \
 static HRESULT WINAPI tag##_query(iface *p,REFIID id,void **o){return query((struct buffer *)p,id,o);} \
 static ULONG WINAPI tag##_addref(iface *p){return addref((struct buffer *)p);} \
@@ -99,9 +107,9 @@ static HRESULT WINAPI tag##_device(iface *p,IDirect3DDevice9 **o){return device(
 static HRESULT WINAPI tag##_set_private(iface *p,REFGUID g,const void *d,DWORD n,DWORD f){(void)p;(void)g;(void)d;(void)n;(void)f;return D3DERR_NOTAVAILABLE;} \
 static HRESULT WINAPI tag##_get_private(iface *p,REFGUID g,void *d,DWORD *n){(void)p;(void)g;(void)d;(void)n;return D3DERR_NOTAVAILABLE;} \
 static HRESULT WINAPI tag##_free_private(iface *p,REFGUID g){(void)p;(void)g;return D3DERR_NOTAVAILABLE;} \
-static DWORD WINAPI tag##_set_priority(iface *p,DWORD n){(void)n;ops.fail(((struct buffer *)p)->parent,D3DERR_NOTAVAILABLE);return 0;} \
-static DWORD WINAPI tag##_get_priority(iface *p){ops.fail(((struct buffer *)p)->parent,D3DERR_NOTAVAILABLE);return 0;} \
-static void WINAPI tag##_preload(iface *p){ops.fail(((struct buffer *)p)->parent,D3DERR_NOTAVAILABLE);} \
+static DWORD WINAPI tag##_set_priority(iface *p,DWORD n){return hint((struct buffer *)p,PW_D3D9_RESOURCE_SET_PRIORITY,n);} \
+static DWORD WINAPI tag##_get_priority(iface *p){return hint((struct buffer *)p,PW_D3D9_RESOURCE_GET_PRIORITY,0);} \
+static void WINAPI tag##_preload(iface *p){(void)hint((struct buffer *)p,PW_D3D9_RESOURCE_PRELOAD,0);} \
 static D3DRESOURCETYPE WINAPI tag##_type(iface *p){return ((struct buffer *)p)->kind==PW_D3D9_KIND_VERTEX_BUFFER?D3DRTYPE_VERTEXBUFFER:D3DRTYPE_INDEXBUFFER;} \
 static HRESULT WINAPI tag##_lock(iface *p,UINT o,UINT n,void **d,DWORD f){return lock_buffer((struct buffer *)p,o,n,d,f);} \
 static HRESULT WINAPI tag##_unlock(iface *p){return unlock_buffer((struct buffer *)p);}

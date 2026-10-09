@@ -12,6 +12,8 @@ static struct pw_d3d9_deferred *rejected;
 static IDirect3DVertexBuffer9 *reentrant;
 static struct pw_d3d9_deferred *pending;
 static unsigned char bytes[16384];
+static uint32_t priorities[8];
+static unsigned preloads;
 static struct pw_d3d9_buffer_desc desc[8];
 static ULONG WINAPI parent_add(IDirect3DDevice9 *p){(void)p;return ++parent_refs;}
 static ULONG WINAPI parent_drop(IDirect3DDevice9 *p){(void)p;return --parent_refs;}
@@ -33,6 +35,9 @@ static HRESULT resource(IDirect3DDevice9 *p,struct pw_d3d9_object_ref ref,const 
   r->desc=desc[ref.id];
   if(release_in_call){release_in_call=0;IDirect3DVertexBuffer9_Release(reentrant);reentrant=NULL;}
   break;
+ case PW_D3D9_RESOURCE_GET_PRIORITY:r->priority=priorities[ref.id];break;
+ case PW_D3D9_RESOURCE_SET_PRIORITY:r->priority=priorities[ref.id];priorities[ref.id]=q->priority;break;
+ case PW_D3D9_RESOURCE_PRELOAD:preloads++;break;
  case PW_D3D9_RESOURCE_LOCK:r->lock_generation=7;r->length=q->length?q->length:desc[ref.id].size-q->offset;break;
  case PW_D3D9_RESOURCE_READ:r->lock_generation=q->lock_generation;r->offset=q->offset;r->count=q->count;memcpy(r->data,bytes+q->offset,q->count);break;
  case PW_D3D9_RESOURCE_WRITE:memcpy(bytes+q->offset,q->data,q->count);break;
@@ -59,12 +64,18 @@ int main(void)
  CHECK(FAILED(pw_d3d9_buffer_proxy_resolve(&parent,(IUnknown *)(uintptr_t)1,3,&ref)));
  CHECK(FAILED(pw_d3d9_buffer_proxy_resolve(&parent,(IUnknown *)vb,4,&ref)));
  CHECK(SUCCEEDED(pw_d3d9_buffer_proxy_wrap(&parent,3,(struct pw_d3d9_object_ref){1,1},(void **)&same))&&same==vb&&releases==1);IDirect3DVertexBuffer9_Release(same);
+ CHECK(IDirect3DVertexBuffer9_GetPriority(vb)==0);
+ CHECK(IDirect3DVertexBuffer9_SetPriority(vb,0xffffffffu)==0);
+ CHECK(IDirect3DVertexBuffer9_GetPriority(vb)==0xffffffffu);
+ IDirect3DVertexBuffer9_PreLoad(vb);CHECK(preloads==1&&!failed);
  D3DVERTEXBUFFER_DESC vd;CHECK(SUCCEEDED(IDirect3DVertexBuffer9_GetDesc(vb,&vd))&&vd.Size==12000&&vd.FVF==D3DFVF_XYZ);
  CHECK(SUCCEEDED(IDirect3DVertexBuffer9_Lock(vb,0,0,&out,0))&&(uintptr_t)out<=UINT32_MAX);
  memset(out,0x5a,12000);CHECK(SUCCEEDED(IDirect3DVertexBuffer9_Unlock(vb))&&bytes[11999]==0x5a);
  CHECK(SUCCEEDED(IDirect3DVertexBuffer9_Lock(vb,0,12000,&out,D3DLOCK_READONLY))&&((unsigned char *)out)[11999]==0x5a);
  CHECK(SUCCEEDED(IDirect3DVertexBuffer9_Unlock(vb)));
  CHECK(SUCCEEDED(IDirect3DDevice9_CreateIndexBuffer(&parent,8192,0,D3DFMT_INDEX16,D3DPOOL_MANAGED,&ib,NULL)));
+ CHECK(IDirect3DIndexBuffer9_SetPriority(ib,0x12345678)==0&&IDirect3DIndexBuffer9_GetPriority(ib)==0x12345678);
+ IDirect3DIndexBuffer9_PreLoad(ib);CHECK(preloads==2&&!failed);
  D3DINDEXBUFFER_DESC id;CHECK(SUCCEEDED(IDirect3DIndexBuffer9_GetDesc(ib,&id))&&id.Format==D3DFMT_INDEX16&&id.Type==D3DRTYPE_INDEXBUFFER);
  CHECK(SUCCEEDED(IDirect3DIndexBuffer9_Lock(ib,0,8192,&out,0)));
  blocked=1;CHECK(IDirect3DIndexBuffer9_Release(ib)==0&&pending&&parent_refs==3);

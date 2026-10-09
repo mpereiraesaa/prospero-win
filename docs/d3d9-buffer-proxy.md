@@ -23,9 +23,10 @@ context destruction releases any native lock; local staging is then freed.
 
 Lock/Unlock use the bounded copied buffer client, preserving untouched bytes and
 READONLY semantics. GetDesc returns checked actual backend fields. Shared handles
-are rejected. Private-data operations return NOTAVAILABLE. Priority and PreLoad
-currently invoke the fatal unsupported-operation callback; they do not claim an
-unperformed backend operation succeeded. These methods remain a coverage gap.
+are rejected. Private-data operations return NOTAVAILABLE. GetPriority, SetPriority and PreLoad invoke actual native resource operations.
+SetPriority returns the backend previous u32 value; PreLoad completes its native
+void call before reply. A transport/reentrancy failure in these non-HRESULT
+methods marks the session failed. No local pool policy replaces backend semantics.
 
 `tests/lab/d3d9_buffer_proxy.py` compiles actual PE32 COM vtables and runs Wine with
 controlled transport callbacks. It covers VB/IB descriptions, canonical identity,
