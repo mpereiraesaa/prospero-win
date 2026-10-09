@@ -1,10 +1,10 @@
 # Fresh worker desktop recognition
 
 The PS5 server creates a desktop without a process-local `WND`. Wine recognizes
-that handle using `user_thread_info.top_window` and `msg_window`. A fresh native
-DXVK worker can reach `NtUserGetAncestor(GA_ROOT)` through Vulkan presentation
-before any call has initialized those per-thread handles. The ancestor walk then
-fails when it reaches the desktop. This also affects ordinary guest workers.
+that handle using `user_thread_info.top_window` and `msg_window`. A fresh worker
+thread, such as a DXVK presentation worker, can reach `NtUserGetAncestor(GA_ROOT)`
+through Vulkan presentation before any call has initialized those per-thread
+handles. The ancestor walk then fails when it reaches the desktop.
 
 Patch 0910 queries **existing** desktop handles before the PS5 ancestor walk.
 It uses `get_desktop_window(force=FALSE)` directly; it does not invoke the full
@@ -25,7 +25,7 @@ successful ancestor or a valid surface size.
 
 ## Evidence and limits
 
-The R4 console log showed native worker 004c reporting root zero and alternating
+The R4 console log showed worker 004c reporting root zero and alternating
 surface origins `(50331560,32)`, `(50841576,32)`, and `(50841704,32)`. All retained
 1920×1080 extents. Parent 0048 reported the correct root. These are stored internal
 rectangles, not unrelated trace arguments. PS5's fallback client-surface update
@@ -44,17 +44,17 @@ functions from Wine. Controlled server replies reproduce the failed old walk,
 check cached and retry paths, and force ancestor/rectangle failures. Normal and
 ASan/UBSan runs assert zero failure outputs and no subsequent mapping.
 
-For actual PE32 and native PE64 worker execution, also pass `--wine-build` and
+For actual PE32 and PE64 worker execution, also pass `--wine-build` and
 `--prefix`. Build an isolated host Wine overlay with `WINE_PS5_USER_DRIVER` for
 `dce`, `driver`, `ps5drv`, `window`, `winstation`, and `vulkan`, then relink win32u.
 The corrected overlay must additionally recompile `syscall.c`: its sole
 `get_user_thread_info()` allocation uses the extended structure's `sizeof`.
 Existing member offsets are unchanged. This is a private Unix structure, with no
-PE32/PE64 wire mirror or separate native-domain allocation.
+PE32/PE64 wire mirror.
 The runner disables explorer so the desktop has the same server-only ownership
 as the console. A regular explorer-owned X11 desktop does not reproduce this
 failure and is not a substitute. `--expect-worker-failure` records the old-runtime
-negative; omit it for the corrected runtime. Each process creates a parent
+negative; omit it for the corrected runtime. The runner starts a 32-bit and a 64-bit process three times each. Each process creates a parent
 window and then makes the child's first USER call `GetAncestor`, checks client
 extent, repeats lookup, then creates, reads/writes and destroys an unsubclassed
 STATIC on that worker before joining it and destroying the parent window.
@@ -71,7 +71,9 @@ processes with correct roots/extents (`positive-r1`). Normal and sanitizer sourc
 contracts passed in the same runner. `source-closure.json` records both runtime
 source trees and the runner metadata-only difference. An initial explorer-owned
 negative attempt returned valid roots and was retained as a failed expectation.
-No console execution is claimed for 0910.
+That evidence came from an earlier version of the runner, which ran the 64-bit
+probe in a native thread of the 32-bit process instead of a separate 64-bit
+process. No console execution is claimed for 0910.
 
 Review found that the original recognition-only candidate could suppress later
 full USER initialization. Its receipts remain historical evidence for root

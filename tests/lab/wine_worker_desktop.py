@@ -157,26 +157,27 @@ int main(void){
         receipt['runtime'] = {str(a.wine_build.resolve() / name): hashlib.sha256((a.wine_build / name).read_bytes()).hexdigest() for name in ['dlls/win32u/win32u.so', 'dlls/ntdll/ntdll.so']}
         native_source = Path(__file__).with_suffix('.c')
         receipt['sources'][str(native_source)] = hashlib.sha256(native_source.read_bytes()).hexdigest()
-        for arch, target, extra in [('i686', 'client.exe', []), ('x86_64', 'service.dll', ['-shared'])]:
-            run([arch + '-w64-mingw32-gcc', '-O2', '-Wall', '-Wextra', '-Werror', *extra, native_source, '-luser32', '-o', out / target], 'build-' + arch)
+        for arch, target in [('i686', 'worker32.exe'), ('x86_64', 'worker64.exe')]:
+            run([arch + '-w64-mingw32-gcc', '-O2', '-Wall', '-Wextra', '-Werror', native_source, '-luser32', '-o', out / target], 'build-' + arch)
         env = os.environ.copy()
         env.update(WINEPREFIX=str(a.prefix.resolve()), WINEDEBUG='-all', WINE_PS5_DESKTOP='1920x1080', WINEDLLOVERRIDES='explorer.exe=d;winemenubuilder.exe=d;mscoree,mshtml=')
-        service_path = 'Z:' + str(out / 'service.dll').replace('/', chr(92))
-        for i in range(3):
-            command = [str(a.wine_build.resolve() / 'loader/wine'), str(out / 'client.exe'), service_path]
-            with (out / ('native-' + str(i) + '.log')).open('w') as log:
-                result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env, timeout=60)
-            receipt['commands'].append({'command': command, 'exit': result.returncode})
-            expected = 1 if a.expect_worker_failure else 0
-            if result.returncode != expected:
-                raise RuntimeError('native process exit ' + str(result.returncode))
-            text = (out / ('native-' + str(i) + '.log')).read_text()
-            if a.expect_worker_failure:
-                assert 'bits=64 root=0000000000000000' in text, text
-            else:
-                assert 'PW_WORKER_NATIVE status=00000000 result=0 size=592' in text, text
-        receipt['native_scope'] = 'Three PE32 guest and native PE64 fresh-worker ancestor/client-extent runs; PS5 driver overlay identity must be recorded separately.'
-        receipt['native_expected_failure'] = a.expect_worker_failure
+        for bits in (32, 64):
+            for i in range(3):
+                command = [str(a.wine_build.resolve() / 'loader/wine'), str(out / f'worker{bits}.exe')]
+                log_path = out / f'worker{bits}-{i}.log'
+                with log_path.open('w') as log:
+                    result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env, timeout=60)
+                receipt['commands'].append({'command': command, 'exit': result.returncode})
+                expected = 1 if a.expect_worker_failure else 0
+                if result.returncode != expected:
+                    raise RuntimeError(f'{bits}-bit process exit {result.returncode}')
+                text = log_path.read_text()
+                if a.expect_worker_failure:
+                    assert f"bits={bits} root={'0' * (bits // 4)} " in text, text
+                else:
+                    assert f'PW_WORKER_PROCESS bits={bits} status=0' in text, text
+        receipt['runtime_scope'] = 'Three PE32 and three PE64 fresh-worker ancestor/client-extent runs; PS5 driver overlay identity must be recorded separately.'
+        receipt['runtime_expected_failure'] = a.expect_worker_failure
     receipt['status'] = 'pass'
 except BaseException as error:
     receipt['status'] = 'timeout' if isinstance(error, subprocess.TimeoutExpired) else 'failed'

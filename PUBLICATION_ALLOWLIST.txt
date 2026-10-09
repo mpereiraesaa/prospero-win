@@ -532,40 +532,18 @@ tools/stage_vk_replay_barriers.py
 tests/lab/vk_replay_barriers.py
 docs/vulkan-async-pe-boundary.md
 
-wine/patches/0902-ntdll-native-service-domain.patch
-wine/patches/0905-ntdll-native-session-token.patch
-docs/wine-native-session.md
-tests/lab/wine_native_domain.c
-tests/lab/wine_native_domain.py
-tests/lab/wine_native_suspend.c
-tests/lab/wine_native_suspend.py
 tests/lab/wine_worker_desktop.c
 tests/lab/wine_worker_desktop.py
 docs/wine-worker-desktop.md
-docs/wine-native-suspend.md
-docs/wine-native-service-domain.md
-
-wine/ps5/pw_d3d9_objects.c
-wine/ps5/pw_d3d9_objects.h
-tests/test_d3d9_objects.c
-docs/d3d9-object-lifetime.md
-wine/patches/0903-ntdll-native-callback-domain.patch
-docs/wine-native-callback-domain.md
-
-wine/patches/0904-win32u-native-builtin-procs.patch
 
 
 
 
-wine/patches/0908-ntdll-preserve-native-suspend-context.patch
+
+
 wine/patches/0910-win32u-ps5-worker-desktop-cache.patch
 
 
 
-wine/patches/0911-imm32-domain-local-ime-ui-class.patch
-tests/lab/wine_callback_domain.c
-tests/lab/wine_callback_domain.py
-tests/lab/wine_ime_domain.c
-tests/lab/wine_ime_domain.py
 
 # Actual native pipeline transport proof

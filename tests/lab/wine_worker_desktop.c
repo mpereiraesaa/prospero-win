@@ -30,21 +30,9 @@ static DWORD probe(void)
     if(thread){if(WaitForSingleObject(thread,10000)==WAIT_OBJECT_0)GetExitCodeThread(thread,&code);CloseHandle(thread);}
     DestroyWindow(window);UnregisterClassW(cls.lpszClassName,cls.hInstance);return code;
 }
-#ifdef _WIN64
-__declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result){DWORD code=probe();result[0]=code;return code;}
-#else
-struct request { ULONG version,size; WCHAR path[260]; uint64_t result[8]; };
-typedef LONG (WINAPI *query_fn)(HANDLE,ULONG,void *,ULONG,ULONG *);
-int main(int argc,char **argv)
+int main(void)
 {
-    if(argc!=2)return 2;
-    DWORD guest=probe();printf("PW_WORKER_GUEST status=%lu\n",guest);fflush(stdout);
-    struct request r={0};r.version=1;r.size=sizeof(r);ULONG size=0;
-    MultiByteToWideChar(CP_UTF8,0,argv[1],-1,r.path,260);
-    query_fn query=(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"NtQueryInformationProcess");
-    if(!query)return 3;
-    LONG status=query(GetCurrentProcess(),0x50570001,&r,sizeof(r),&size);
-    printf("PW_WORKER_NATIVE status=%08lx result=%llu size=%lu\n",status,(unsigned long long)r.result[0],size);fflush(stdout);
-    return guest||status||r.result[0]?1:0;
+    DWORD code=probe();
+    printf("PW_WORKER_PROCESS bits=%u status=%lu\n",(unsigned)(8*sizeof(void *)),code);fflush(stdout);
+    return code?1:0;
 }
-#endif
