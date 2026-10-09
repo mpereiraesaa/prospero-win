@@ -16,7 +16,7 @@ static HRESULT ticket_defer(IDirect3DDevice9 *d,struct pw_d3d9_deferred *n)
 {if(defer_failure){retained=n;return E_OUTOFMEMORY;}return defer(d,n);}
 int main(void)
 {
- assert(!baseline_main()&&parent_refs==1);
+ assert(!baseline_main()&&parent_refs==1);negative=0;
  IDirect3DDevice9Vtbl table={.AddRef=parent_addref,.Release=parent_release};parent.lpVtbl=&table;IDirect3DDevice9 foreign={&table};
  struct pw_d3d9_texture_proxy_ops ops={exchange,ticket_release,ticket_defer,fail};pw_d3d9_texture_proxy_install(&table,&ops);
  for(unsigned mode=0;mode<5;mode++){
