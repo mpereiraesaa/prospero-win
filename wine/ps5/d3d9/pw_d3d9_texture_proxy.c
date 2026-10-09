@@ -71,7 +71,8 @@ static HRESULT query(void *iface,REFIID iid,void **out)
  if(p->kind==PW_D3D9_KIND_TEXTURE_2D)match|=IsEqualGUID(iid,&IID_IDirect3DBaseTexture9)||IsEqualGUID(iid,&IID_IDirect3DTexture9);
  else match|=IsEqualGUID(iid,&IID_IDirect3DSurface9);
  if(!match)return E_NOINTERFACE;
- if(!addref(iface))return D3DERR_INVALIDCALL;*out=iface;return S_OK;
+ if(!addref(iface))return D3DERR_INVALIDCALL;
+ *out=iface;return S_OK;
 }
 static HRESULT get_device(void *iface,IDirect3DDevice9 **out)
 {if(!out)return D3DERR_INVALIDCALL;*out=NULL;if(!addref(iface))return D3DERR_INVALIDCALL;*out=impl(iface)->parent;IDirect3DDevice9_AddRef(*out);release(iface);return S_OK;}
@@ -133,7 +134,8 @@ static HRESULT get_desc(void *iface,UINT level,D3DSURFACE_DESC *out)
 {
  struct proxy *p=impl(iface);struct pw_d3d9_texture_request q={0};struct pw_d3d9_texture_reply r={0};HRESULT hr;
  if(!out)return D3DERR_INVALIDCALL;
- if(!addref(iface))return D3DERR_INVALIDCALL;q.operation=PW_D3D9_TEXTURE_DESC;q.level=level;hr=invoke(p,&q,&r);if(SUCCEEDED(hr))describe(out,&r.desc);release(iface);return hr;
+ if(!addref(iface))return D3DERR_INVALIDCALL;
+ q.operation=PW_D3D9_TEXTURE_DESC;q.level=level;hr=invoke(p,&q,&r);if(SUCCEEDED(hr))describe(out,&r.desc);release(iface);return hr;
 }
 static void rect(struct pw_d3d9_texture_request *q,const RECT *r)
 {if(r){q->has_rect=1;q->left=r->left;q->top=r->top;q->right=r->right;q->bottom=r->bottom;}}
@@ -141,7 +143,8 @@ static HRESULT lock_rect(void *iface,UINT level,D3DLOCKED_RECT *out,const RECT *
 {
  struct proxy *p=impl(iface);struct pw_d3d9_texture_request q={0};D3DLOCKED_RECT locked={0};HRESULT hr;
  if(!out)return D3DERR_INVALIDCALL;
- if(!addref(iface))return D3DERR_INVALIDCALL;if(InterlockedCompareExchange(&p->busy,1,0)){release(iface);return D3DERR_INVALIDCALL;}
+ if(!addref(iface))return D3DERR_INVALIDCALL;
+ if(InterlockedCompareExchange(&p->busy,1,0)){release(iface);return D3DERR_INVALIDCALL;}
  q.operation=PW_D3D9_TEXTURE_LOCK;q.level=level;q.flags=flags;rect(&q,r);
  hr=pw_d3d9_texture_client_lock(&p->client,&q,(int32_t *)&locked.Pitch,&locked.pBits);
  if(SUCCEEDED(hr)){*out=locked;p->lock_level=level;}
@@ -150,13 +153,15 @@ static HRESULT lock_rect(void *iface,UINT level,D3DLOCKED_RECT *out,const RECT *
 static HRESULT unlock_rect(void *iface,UINT level)
 {
  struct proxy *p=impl(iface);HRESULT hr;
- if(!addref(iface))return D3DERR_INVALIDCALL;if(InterlockedCompareExchange(&p->busy,1,0)){release(iface);return D3DERR_INVALIDCALL;}
+ if(!addref(iface))return D3DERR_INVALIDCALL;
+ if(InterlockedCompareExchange(&p->busy,1,0)){release(iface);return D3DERR_INVALIDCALL;}
  hr=p->client.generation && level!=p->lock_level?D3DERR_INVALIDCALL:(HRESULT)pw_d3d9_texture_client_unlock(&p->client);InterlockedExchange(&p->busy,0);release(iface);return hr;
 }
 static HRESULT hint(void *iface,uint32_t operation,uint32_t value,uint32_t *out,int sticky)
 {
  struct proxy *p=impl(iface);struct pw_d3d9_texture_request q={0};struct pw_d3d9_texture_reply r={0};HRESULT hr;
- if(!addref(iface))return D3DERR_INVALIDCALL;q.operation=operation;q.value=value;hr=invoke(p,&q,&r);
+ if(!addref(iface))return D3DERR_INVALIDCALL;
+ q.operation=operation;q.value=value;hr=invoke(p,&q,&r);
  if(SUCCEEDED(hr)){if(out)*out=r.value;}else if(sticky)ops.fail(p->parent,hr);
  release(iface);return hr;
 }
