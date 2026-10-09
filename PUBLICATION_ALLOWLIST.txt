@@ -546,6 +546,10 @@ docs/d3d9-native-domain.md
 
 wine/ps5/pw_d3d9_objects.c
 wine/ps5/pw_d3d9_objects.h
+wine/ps5/pw_d3d9_stateblock_wire.h
+wine/ps5/pw_d3d9_stateblock_wire.c
+tests/test_d3d9_stateblock_wire.c
+docs/d3d9-stateblock-wire.md
 tests/test_d3d9_objects.c
 docs/d3d9-object-lifetime.md
 wine/ps5/pw_d3d9_window.c
