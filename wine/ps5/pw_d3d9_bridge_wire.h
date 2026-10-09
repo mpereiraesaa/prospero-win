@@ -22,7 +22,7 @@ enum pw_d3d9_wire_opcode {
     PW_D3D9_PROGRAM_CALL = 22, PW_D3D9_TEXTURE_CALL = 23, PW_D3D9_GETTER_CALL = 24,
     PW_D3D9_OBJECT_GETTER_CALL = 25,
     PW_D3D9_STATEBLOCK_CALL = 26, PW_D3D9_PROGRAM_QUERY_CALL = 27,
-    PW_D3D9_UP_DRAW_CALL = 28, PW_D3D9_QUERY_CALL = 29, PW_D3D9_CURSOR_CALL = 30
+    PW_D3D9_UP_DRAW_CALL = 28, PW_D3D9_QUERY_CALL = 29, PW_D3D9_CURSOR_CALL = 30, PW_D3D9_GAMMA_CALL = 31
 };
 /* Target identity is echoed in replies. Newly returned objects belong in a
  * typed payload, never in a pointer field. Sequence is zero for send; replies
