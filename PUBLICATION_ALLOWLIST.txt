@@ -871,3 +871,9 @@ docs/d3d9-implicit-wire.md
 docs/d3d9-implicit-frontend.md
 tests/lab/d3d9_implicit_frontend.c
 tests/lab/d3d9_implicit_frontend.py
+docs/d3d9-surface-lifetime-proof.md
+tests/lab/d3d9_surface_lifetime.c
+tests/lab/d3d9_surface_lifetime.py
+tests/lab/d3d9_surface_lifetime_device.c
+tests/lab/d3d9_surface_owners_control.c
+tests/lab/d3d9_surface_owners_control.py
