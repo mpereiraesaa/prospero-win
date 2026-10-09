@@ -133,11 +133,18 @@ static void wait_tick(const char *stage,struct producer **list,size_t n,uint64_t
  now=GetTickCount();if(!*start)*start=now;
  else if(now-*start>=1000){wait_report(stage,list,n,marker);*reported=TRUE;}
 }
+/* Yields before a drain wait sleeps; a healthy prefix publishes well within it. */
+#define PW_VK_BATCH_SPIN_YIELDS 64u
+/* A missing ticket can belong to a producer preempted between reserving and
+ * publishing it. With Windows priorities applied (thread_scheduling), that may
+ * be a lower-priority thread such as a DXVK compiler worker, which
+ * SwitchToThread never runs; after a short spin, sleep so it can publish. */
+static void backoff(unsigned yields){if(yields<PW_VK_BATCH_SPIN_YIELDS)SwitchToThread();else Sleep(1);}
 static void collect(size_t *bytes,size_t *records)
 {
  struct producer *list[PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA];
  uint64_t marker=pw_vk_spsc_marker(&stream_sequence);size_t n=producers(list),i;
- unsigned spins=0;DWORD start=0;BOOL reported=FALSE;
+ unsigned spins=0,yields=0;DWORD start=0;BOOL reported=FALSE;
  *bytes=*records=0;
  while(next_replay<=marker){
   BOOL found=FALSE;
@@ -147,8 +154,8 @@ static void collect(size_t *bytes,size_t *records)
    if(status)fatal();
    *bytes+=used;(*records)++;next_replay++;found=TRUE;break;
   }
-  if(!found){wait_tick("collect",list,n,marker,&spins,&start,&reported);SwitchToThread();}
-  else {spins=0;start=0;reported=FALSE;}
+  if(!found){wait_tick("collect",list,n,marker,&spins,&start,&reported);backoff(++yields);}
+  else {spins=0;yields=0;start=0;reported=FALSE;}
  }
  enqueued_total=marker; /* Snapshot counts exactly the accepted prefix. */
 }
@@ -157,9 +164,9 @@ static void quiesce(void)
  struct producer *list[PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA];size_t n,i;
  InterlockedExchange(&quiescing,1);n=producers(list);
  for(i=0;i<n;i++){
-  unsigned spins=0;DWORD start=0;BOOL reported=FALSE;
+  unsigned spins=0,yields=0;DWORD start=0;BOOL reported=FALSE;
   while(InterlockedCompareExchange(&list[i]->publishing,0,0)){
-   wait_tick("quiesce",list,n,pw_vk_spsc_marker(&stream_sequence),&spins,&start,&reported);SwitchToThread();
+   wait_tick("quiesce",list,n,pw_vk_spsc_marker(&stream_sequence),&spins,&start,&reported);backoff(++yields);
   }
  }
 }
