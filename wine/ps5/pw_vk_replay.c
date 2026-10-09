@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 struct domain {
  struct domain *next;
  uint64_t key;
@@ -36,7 +37,7 @@ struct pw_vk_replay {
  struct job *head,*tail;
  pw_vk_replay_fn execute;
  size_t limit;
- unsigned started,stopping;
+ unsigned started,stopping,trace,trace_jobs;
  struct pw_vk_replay_stats stats;
 };
 static int failed(struct pw_vk_replay *s)
@@ -46,9 +47,10 @@ static int failed(struct pw_vk_replay *s)
 static void *worker_main(void *arg)
 {
  struct worker *w=arg;struct pw_vk_replay *s=w->owner;
+ if(s->trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=worker_enter worker=%u\n",w->index);
  pthread_mutex_lock(&s->mutex);
  for(;;){
-  struct job *job,*previous=NULL;int result;
+  struct job *job,*previous=NULL;int result;unsigned traced;
   if(failed(s))break;
   /* Earliest ready pool wins. Skipping a busy pool allows an unrelated pool
    * to progress; its own first job can never be overtaken. */
@@ -58,8 +60,12 @@ static void *worker_main(void *arg)
   if(s->tail==job)s->tail=previous;
   job->lane->domain->busy=1;
   if(++s->stats.active>s->stats.peak_active)s->stats.peak_active=s->stats.active;
+  traced=s->trace && s->trace_jobs<8;
+  if(traced)++s->trace_jobs;
   pthread_mutex_unlock(&s->mutex);
+  if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=job_begin worker=%u ticket=%llu bytes=%zu pool=%llu\n",w->index,(unsigned long long)job->ticket,job->bytes,(unsigned long long)job->lane->domain->key);
   result=s->execute(job->lane->context,job->data,job->bytes);
+  if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=job_end worker=%u ticket=%llu result=%d\n",w->index,(unsigned long long)job->ticket,result);
   pthread_mutex_lock(&s->mutex);
   if(result && !s->stats.callback_error)s->stats.callback_error=result;
   job->lane->done=job->ticket;job->lane->domain->busy=0;
@@ -71,17 +77,23 @@ static void *worker_main(void *arg)
 }
 struct pw_vk_replay *pw_vk_replay_create(unsigned workers,size_t limit,pw_vk_replay_fn execute)
 {
- struct pw_vk_replay *s;unsigned i;
+ struct pw_vk_replay *s;unsigned i;const char *value=getenv("PW_VK_REPLAY_TRACE");int trace=value && !strcmp(value,"1");
+ if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=create_begin workers=%u limit=%zu stack=default\n",workers,limit);
  if(!workers || workers>PW_VK_REPLAY_MAX_WORKERS || limit<sizeof(struct job) || !execute)return NULL;
  if(!(s=calloc(1,sizeof(*s))))return NULL;
- s->limit=limit;s->execute=execute;s->stats.workers=workers;
+ s->limit=limit;s->execute=execute;s->stats.workers=workers;s->trace=trace;
  if(pthread_mutex_init(&s->mutex,NULL)){free(s);return NULL;}
  if(pthread_cond_init(&s->changed,NULL)){pthread_mutex_destroy(&s->mutex);free(s);return NULL;}
  for(i=0;i<workers;i++){
   s->workers[i].owner=s;s->workers[i].index=i;
-  if(pthread_create(&s->workers[i].thread,NULL,worker_main,&s->workers[i])){pw_vk_replay_destroy(s);return NULL;}
+  int status;
+  if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=pthread_create_begin worker=%u\n",i);
+  status=pthread_create(&s->workers[i].thread,NULL,worker_main,&s->workers[i]);
+  if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=pthread_create_end worker=%u result=%d\n",i,status);
+  if(status){pw_vk_replay_destroy(s);return NULL;}
   ++s->started;
  }
+ if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=create_end workers=%u\n",s->started);
  return s;
 }
 struct pw_vk_replay_lane *pw_vk_replay_lane_create(struct pw_vk_replay *s,uint64_t pool,void *context)

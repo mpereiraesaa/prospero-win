@@ -49,9 +49,10 @@ extern NTSTATUS pw_vk_batch_dispatch_native(unsigned int,void *);
 /* Each entry owns its arena, including recursive and concurrent invocations.
  * Common records need no heap allocation; unusually large schemas retain the
  * existing bound and grow at most once across preflight and replay. */
+static unsigned startup_trace,trace_records,trace_enqueues;
 struct replay_context {
  uint64_t local[512];
- void *arena; size_t capacity; unsigned version; NTSTATUS failure;
+ void *arena; size_t capacity; unsigned version,trace; NTSTATUS failure;
 };
 static int generated_record(struct replay_context *ctx,const struct pw_vk_stream_record *r,void **params)
 {
@@ -76,10 +77,16 @@ static int preflight(void *context,const struct pw_vk_stream_record *r)
 }
 static int replay(void *context,const struct pw_vk_stream_record *r)
 {
- struct replay_context *ctx=context;void *params;unsigned code;
- if(r->opcode!=PW_VK_BATCH_GENERATED_OPCODE)return !pw_wine_vk_replay(r->opcode,r->payload,r->payload_bytes);
- if(!generated_record(ctx,r,&params))return 1;
- memcpy(&code,r->payload,4);return pw_vk_batch_dispatch_native(code,params)!=STATUS_SUCCESS;
+ struct replay_context *ctx=context;void *params;unsigned code=0,traced=0;int result;
+ if(ctx->trace){unsigned n=__atomic_load_n(&trace_records,__ATOMIC_RELAXED);if(n<8)traced=__atomic_fetch_add(&trace_records,1,__ATOMIC_RELAXED)<8;}
+ if(r->opcode==PW_VK_BATCH_GENERATED_OPCODE){
+  if(!generated_record(ctx,r,&params))return 1;
+  memcpy(&code,r->payload,4);
+ }
+ if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=dispatch_begin opcode=%u code=%u bytes=%u\n",r->opcode,code,r->payload_bytes);
+ result=r->opcode==PW_VK_BATCH_GENERATED_OPCODE?pw_vk_batch_dispatch_native(code,params)!=STATUS_SUCCESS:!pw_wine_vk_replay(r->opcode,r->payload,r->payload_bytes);
+ if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=dispatch_end opcode=%u code=%u result=%d\n",r->opcode,code,result);
+ return result;
 }
 /* Admission protects lane ownership and synchronization snapshots. Workers
  * never acquire it or call Wine TLS helpers. Vulkan application synchronization
@@ -92,7 +99,7 @@ static unsigned report_enabled;
 static uint64_t boundary_count;
 static void context_init(struct replay_context *ctx,unsigned version)
 {
- ctx->version=version;ctx->arena=ctx->local;ctx->capacity=sizeof(ctx->local);ctx->failure=STATUS_SUCCESS;
+ ctx->trace=0;ctx->version=version;ctx->arena=ctx->local;ctx->capacity=sizeof(ctx->local);ctx->failure=STATUS_SUCCESS;
 }
 static void context_free(struct replay_context *ctx)
 {
@@ -101,21 +108,24 @@ static void context_free(struct replay_context *ctx)
 static int worker_replay(void *lane_context,const void *data,size_t bytes)
 {
  struct replay_context ctx;size_t completed;int result;(void)lane_context;
- context_init(&ctx,PW_VK_BATCH_VERSION);
+ context_init(&ctx,PW_VK_BATCH_VERSION);ctx.trace=startup_trace;
  result=pw_vk_stream_replay(data,bytes,replay,&ctx,&completed);
  context_free(&ctx);return result!=PW_VK_STREAM_OK;
 }
 static void initialize_workers(void)
 {
  const char *value=getenv("PW_VK_REPLAY_THREADS"),*stats=getenv("PW_VK_BATCH_STATS");
- unsigned long count=2;char *end;
+ unsigned long count=2;char *end;const char *trace=getenv("PW_VK_REPLAY_TRACE");
+ startup_trace=trace && !strcmp(trace,"1");
+ if(startup_trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=initialize_begin\n");
  pthread_mutex_lock(&admission);
  report_enabled=stats && !strcmp(stats,"1");
  if(value){errno=0;count=strtoul(value,&end,10);if(errno || !*value || *end || count>PW_VK_REPLAY_MAX_WORKERS){startup_failed=1;goto done;}}
  if(!count)goto done;
  workers=pw_vk_replay_create((unsigned)count,2u*PW_VK_BATCH_SCRATCH,worker_replay);
  if(!workers)startup_failed=1;
- done:pthread_mutex_unlock(&admission);
+ done:if(startup_trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=initialize_end workers=%lu failed=%d ready=%d\n",count,startup_failed,workers!=NULL);
+ pthread_mutex_unlock(&admission);
 }
 static void must_complete(int status)
 {
@@ -174,7 +184,9 @@ static int flush_pending(struct schedule_context *ctx)
  if(!cb)return 0;
  if(!cb->replay_lane)cb->replay_lane=pw_vk_replay_lane_create(workers,(uintptr_t)cb->pool,cb);
  if(!cb->replay_lane)return 1;
+ if(startup_trace && trace_enqueues<8)fprintf(stderr,"PW_VK_REPLAY_TRACE event=enqueue_begin cb=%p pool=%p bytes=%zu\n",(void *)cb,(void *)cb->pool,ctx->pending_bytes);
  status=pw_vk_replay_enqueue(cb->replay_lane,ctx->pending_data,ctx->pending_bytes,&ticket);
+ if(startup_trace && trace_enqueues<8){++trace_enqueues;fprintf(stderr,"PW_VK_REPLAY_TRACE event=enqueue_end cb=%p result=%d\n",(void *)cb,status);}
  ctx->pending_cb=NULL;ctx->pending_bytes=0;return status!=PW_VK_REPLAY_OK;
 }
 static int schedule_record(void *context,const struct pw_vk_stream_record *r)

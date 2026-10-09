@@ -37,3 +37,19 @@ generated dispatch. The existing generated-codec and classifier fixtures cover
 that separate path. The fixture calls the adapter's scoped wait hooks directly;
 it does not claim to test every patched Wine submit/lifecycle call site or any
 console driver behavior.
+
+
+## Opt-in startup localization
+
+`PW_VK_REPLAY_TRACE=1` enables native stderr records before and after worker
+creation, on worker entry, and around the first eight jobs, admissions, and
+record dispatches. The default emits none. These traces use native `fprintf`
+and do not call Wine logging or guest TLS helpers. A completed create followed
+by a job/dispatch begin without its matching end narrows the next investigation;
+it does not by itself establish a driver, stack, or scheduler diagnosis.
+
+The worker stack remains the pthread default. No Linux-only stack query API is
+assumed on the target. The host regression captures stderr and checks exact
+startup counts and the eight-job bound across twenty jobs, plus default silence.
+The prior immutable console package is unchanged; the two-worker startup process
+failure requires a separately identified diagnostic package and console review.

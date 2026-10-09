@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import resource
 import runpy
@@ -44,8 +45,9 @@ flags = ['-std=gnu11', '-g', '-Wall', '-Wextra', '-Werror', '-D__WINESRC__', '-D
 inputs = [repo / 'tests/lab/vk_replay_async.c'] + [runtime / 'wine/ps5' / name for name in
           ('pw_vk_wire.c', 'pw_vk_command_stream.c', 'pw_vk_replay.c')]
 commands = []
-def execute(command, failure=False):
+def execute(command, failure=False, trace=False):
     result = subprocess.run(command, text=True, capture_output=True, timeout=45,
+                            env={**os.environ, "PW_VK_REPLAY_TRACE": "1" if trace else "0"},
                             preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
     commands.append(dict(command=command, exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr,
                          expected_failure=failure))
@@ -58,6 +60,13 @@ for name, extra in [('host', []), ('sanitize', ['-fsanitize=address,undefined', 
     execute(['cc', *flags, *extra, *map(str, inputs), '-pthread', '-o', str(output / name)])
     execute([str(output / name)])
     execute([str(output / name), 'legacy'])
+traced = execute([str(output / 'host')], trace=True)
+for event in ('initialize_begin', 'initialize_end', 'create_begin', 'create_end',
+              'worker_enter', 'enqueue_begin', 'enqueue_end', 'job_begin', 'job_end',
+              'dispatch_begin', 'dispatch_end'):
+    assert 'event=' + event in traced.stderr, (event, traced.stderr)
+for event in ('enqueue_begin', 'enqueue_end', 'job_begin', 'job_end', 'dispatch_begin', 'dispatch_end'):
+    assert 1 <= traced.stderr.count('event=' + event + ' ') <= 8, (event, traced.stderr)
 execute([str(output / 'host'), 'fatal'], failure=True)
 receipt = dict(status='pass', console_accessed=False, actual_unix_adapter=True, actual_manual_codec=True,
                generated_codec_tested=False, commands=commands,

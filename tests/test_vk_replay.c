@@ -5,6 +5,8 @@
 #include <sched.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <time.h>
 #include "wine/ps5/pw_vk_replay.h"
@@ -134,7 +136,40 @@ static void errors(void)
  pw_vk_replay_get_stats(s,&stats);assert(stats.callback_error==17 && stats.completed==1);
  pw_vk_replay_destroy(s);finish(&f);
 }
+static unsigned occurrences(const char *text,const char *needle)
+{
+ unsigned count=0;while((text=strstr(text,needle))){++count;text+=strlen(needle);}return count;
+}
+static void startup_trace(void)
+{
+ unsigned enabled,i;char text[16384];
+ for(enabled=0;enabled<2;enabled++){
+  struct fixture f;struct pw_vk_replay *s;struct pw_vk_replay_lane *lane;
+  FILE *capture=tmpfile();int saved=dup(STDERR_FILENO);size_t bytes;
+  assert(capture && saved>=0);assert(!setenv("PW_VK_REPLAY_TRACE",enabled?"1":"0",1));
+  fflush(stderr);assert(dup2(fileno(capture),STDERR_FILENO)>=0);
+  init(&f);struct context c={&f,1,0,0,1};
+  s=pw_vk_replay_create(2,4096,execute);assert(s);
+  lane=pw_vk_replay_lane_create(s,1,&c);assert(lane);
+  for(i=1;i<=20;i++)append(lane,i,0);
+  assert(!pw_vk_replay_wait_all(s));assert(!pw_vk_replay_lane_drop(lane));
+  pw_vk_replay_destroy(s);finish(&f);fflush(stderr);
+  assert(dup2(saved,STDERR_FILENO)>=0);close(saved);rewind(capture);
+  bytes=fread(text,1,sizeof(text)-1,capture);assert(!ferror(capture));text[bytes]=0;fclose(capture);
+  if(!enabled)assert(!bytes);
+  else{
+   assert(occurrences(text,"event=create_begin ")==1);
+   assert(occurrences(text,"event=create_end ")==1);
+   assert(occurrences(text,"event=pthread_create_begin ")==2);
+   assert(occurrences(text,"event=pthread_create_end ")==2);
+   assert(occurrences(text,"event=worker_enter ")==2);
+   assert(occurrences(text,"event=job_begin ")==8);
+   assert(occurrences(text,"event=job_end ")==8);
+  }
+ }
+ assert(!unsetenv("PW_VK_REPLAY_TRACE"));
+}
 int main(void)
 {
- parallel_and_ordered();backpressure();errors();puts("Vulkan replay scheduler: independent overlap, pool exclusion, owned order, scoped waits and failure passed");return 0;
+ startup_trace();parallel_and_ordered();backpressure();errors();puts("Vulkan replay scheduler: independent overlap, pool exclusion, owned order, scoped waits and failure passed");return 0;
 }
