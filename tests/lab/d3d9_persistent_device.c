@@ -3,7 +3,7 @@
 #include "../../wine/ps5/pw_d3d9_window_driver.h"
 #include <d3d9.h>
 #include <stdio.h>
-struct context {WCHAR *service,*backend;struct pw_d3d9_window_id guest;int unavailable;};
+struct context {WCHAR *service,*backend;struct pw_d3d9_window_id guest;int unavailable,fullscreen;};
 static DWORD WINAPI run_device(void *parameter)
 {
     struct context *c=parameter;struct pw_d3d9_session *session=NULL;struct pw_d3d9_object_ref factory;
@@ -15,10 +15,11 @@ static DWORD WINAPI run_device(void *parameter)
     q.focus_window=c->guest;q.parameters.window=c->guest;
     q.parameters.windowed=1;q.parameters.swap_effect=D3DSWAPEFFECT_DISCARD;
     q.parameters.format=D3DFMT_UNKNOWN;q.parameters.count=1;q.parameters.interval=D3DPRESENT_INTERVAL_IMMEDIATE;
+    if(c->fullscreen){q.parameters.windowed=0;q.parameters.width=1920;q.parameters.height=1080;q.parameters.format=D3DFMT_A8R8G8B8;q.parameters.swap_effect=D3DSWAPEFFECT_FLIP;q.parameters.auto_depth_stencil=TRUE;q.parameters.depth_stencil_format=D3DFMT_D16;q.parameters.interval=D3DPRESENT_INTERVAL_DEFAULT;}
     /* Zero dimensions must derive from the mirrored guest window. */
     create=pw_d3d9_session_device(session,factory,&q,&r);
     if(FAILED(create)){
-        if(c->unavailable&&create==D3DERR_NOTAVAILABLE&&!r.object.id&&r.parameters.windowed&&r.parameters.window.id==c->guest.id)result=0;
+        if(c->unavailable&&create==D3DERR_NOTAVAILABLE&&!r.object.id&&r.parameters.windowed==(uint32_t)!c->fullscreen&&r.parameters.window.id==c->guest.id)result=0;
         goto done;
     }
     if(c->unavailable)goto done;
@@ -40,8 +41,9 @@ static LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM wparam,LPARA
 {return DefWindowProcW(window,message,wparam,lparam);}
 int wmain(int argc,WCHAR **argv)
 {
-    if(argc!=3&&argc!=4)return 2;
-    if(argc==4&&wcscmp(argv[3],L"--expect-unavailable"))return 2;
+    if(argc<3||argc>5)return 2;
+    int unavailable=0,fullscreen=0;
+    for(int i=3;i<argc;i++){if(!wcscmp(argv[i],L"--expect-unavailable"))unavailable=1;else if(!wcscmp(argv[i],L"--fullscreen"))fullscreen=1;else return 2;}
     WNDCLASSEXW cls={.cbSize=sizeof(cls),.lpfnWndProc=window_proc,.hInstance=GetModuleHandleW(NULL),.lpszClassName=L"PW_DEVICE_GUEST"};
     if(!RegisterClassExW(&cls))return 3;
     HWND window=CreateWindowExW(0,cls.lpszClassName,L"D3D9 bridge device",WS_OVERLAPPEDWINDOW|WS_VISIBLE,20,20,640,480,NULL,NULL,cls.hInstance,NULL);
@@ -49,7 +51,7 @@ int wmain(int argc,WCHAR **argv)
     ULONG_PTR (WINAPI *call)(ULONG_PTR,ULONG_PTR,DWORD)=(void *)GetProcAddress(GetModuleHandleW(L"win32u.dll"),"NtUserCallTwoParam");
     struct pw_d3d9_guest_window_request guest={.version=1,.size=sizeof(guest),.operation=PW_D3D9_GUEST_REGISTER};
     if(!call||call((ULONG_PTR)window,(ULONG_PTR)&guest,PW_D3D9_GUEST_WINDOW_CALL)!=PW_D3D9_WINDOW_OK)return 5;
-    struct context context={argv[1],argv[2],guest.id,argc==4};DWORD result=0;
+    struct context context={argv[1],argv[2],guest.id,unavailable,fullscreen};DWORD result=0;
     for(unsigned cycle=0;cycle<3;cycle++){
         HANDLE worker=CreateThread(NULL,0,run_device,&context,0,NULL);
         if(!worker)return 6;

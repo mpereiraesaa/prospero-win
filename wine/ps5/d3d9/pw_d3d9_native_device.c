@@ -4,12 +4,13 @@
 #include "../pw_d3d9_window_driver.h"
 #include <d3d9.h>
 #include <string.h>
+#include <stdio.h>
 struct pw_d3d9_native_device {
     IDirect3DDevice9 *device;
     HWND window;
     struct pw_d3d9_window_id guest,association;
     uint64_t sequence;
-    int closed,destroyed;
+    int closed,destroyed,fullscreen,log_geometry;
     struct pw_d3d9_native_device *next;
 };
 static struct pw_d3d9_native_device *devices;
@@ -46,11 +47,25 @@ static int mirror(struct pw_d3d9_native_device *d,int attach)
     if(!driver(d,attach?PW_D3D9_WINDOW_ATTACH:PW_D3D9_WINDOW_QUERY_STATE,&q))return 0;
     if(attach)d->association=q.id;
     if(!q.state.width||!q.state.height||d->sequence==UINT64_MAX)return 0;
+    struct pw_d3d9_window_state guest_state=q.state;
+    if(d->fullscreen){
+        RECT rect;POINT origin={0,0};
+        if(!GetClientRect(d->window,&rect)||!ClientToScreen(d->window,&origin))return 0;
+        int64_t width=(int64_t)rect.right-rect.left,height=(int64_t)rect.bottom-rect.top;
+        if(width<=0||height<=0||width>INT32_MAX||height>INT32_MAX)return 0;
+        q.state.x=origin.x;q.state.y=origin.y;q.state.width=(uint32_t)width;q.state.height=(uint32_t)height;
+        q.state.flags=(q.state.flags&PW_D3D9_WINDOW_FOCUSED)|PW_D3D9_WINDOW_FULLSCREEN;
+        if(IsWindowVisible(d->window))q.state.flags|=PW_D3D9_WINDOW_VISIBLE;
+    }
+    if(d->log_geometry){
+        fprintf(stderr,"PW_BRIDGE_GEOMETRY fullscreen=%d guest=%d,%d,%u,%u service=%d,%d,%u,%u\n",d->fullscreen,guest_state.x,guest_state.y,guest_state.width,guest_state.height,q.state.x,q.state.y,q.state.width,q.state.height);
+        d->log_geometry=0;
+    }
     q.sequence=++d->sequence;
     if(!driver(d,PW_D3D9_WINDOW_BEGIN,&q))return 0;
-    BOOL applied=SetWindowPos(d->window,NULL,q.state.x,q.state.y,(int)q.state.width,(int)q.state.height,
+    BOOL applied=d->fullscreen||SetWindowPos(d->window,NULL,q.state.x,q.state.y,(int)q.state.width,(int)q.state.height,
                               SWP_NOACTIVATE|SWP_NOZORDER);
-    if(applied)ShowWindow(d->window,q.state.flags&PW_D3D9_WINDOW_VISIBLE?SW_SHOWNOACTIVATE:SW_HIDE);
+    if(applied&&!d->fullscreen)ShowWindow(d->window,q.state.flags&PW_D3D9_WINDOW_VISIBLE?SW_SHOWNOACTIVATE:SW_HIDE);
     q.hresult=applied?S_OK:E_FAIL;
     return driver(d,PW_D3D9_WINDOW_ACK,&q)&&applied;
 }
@@ -125,11 +140,11 @@ void pw_d3d9_native_device_call(void *factory,struct pw_d3d9_native_device *devi
     memset(r,0,sizeof(*r));r->operation=q->operation;r->hresult=D3DERR_NOTAVAILABLE;r->parameters=q->parameters;*created=NULL;
     if(q->operation==PW_D3D9_DEVICE_CREATE){
         struct pw_d3d9_window_id guest=null_id(q->parameters.window)?q->focus_window:q->parameters.window;
-        if(!q->parameters.windowed||null_id(guest)||(!null_id(q->focus_window)&&!same(q->focus_window,guest))||!init_class())return;
+        if(null_id(guest)||(!null_id(q->focus_window)&&!same(q->focus_window,guest))||!init_class())return;
         struct pw_d3d9_native_device *d=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*d));
         if(!d){r->hresult=E_OUTOFMEMORY;return;}
         d->next=devices;devices=d;
-        d->guest=guest;d->window=CreateWindowExW(0,class_name,L"D3D9 native presentation",WS_POPUP,0,0,1,1,NULL,NULL,module,NULL);
+        d->guest=guest;d->window=CreateWindowExW(WS_EX_NOACTIVATE,class_name,L"D3D9 native presentation",WS_POPUP,0,0,1,1,NULL,NULL,module,NULL);
         if(!d->window||!mirror(d,1)){pw_d3d9_native_device_destroy(d);return;}
         D3DPRESENT_PARAMETERS p;native_parameters(&p,&q->parameters,d->window);
         r->hresult=IDirect3D9_CreateDevice((IDirect3D9 *)factory,q->adapter,q->device_type,d->window,q->behavior_flags,&p,&d->device);
@@ -137,14 +152,17 @@ void pw_d3d9_native_device_call(void *factory,struct pw_d3d9_native_device *devi
         if(p.hDeviceWindow&&p.hDeviceWindow!=d->window)r->hresult=E_FAIL;
         reply_parameters(&r->parameters,&p,guest);
         if(FAILED((HRESULT)r->hresult)){pw_d3d9_native_device_destroy(d);return;}
+        d->fullscreen=!p.Windowed;d->log_geometry=1;
+        if(!mirror(d,0)){r->hresult=D3DERR_DEVICELOST;pw_d3d9_native_device_destroy(d);return;}
         *created=d;return;
     }
     if(!device){r->hresult=D3DERR_INVALIDCALL;return;}
     if(q->operation==PW_D3D9_DEVICE_RESET){
-        if(!q->parameters.windowed||(!null_id(q->parameters.window)&&!same(q->parameters.window,device->guest)))return;
+        if((!null_id(q->parameters.window)&&!same(q->parameters.window,device->guest)))return;
         if(!mirror(device,0)){r->hresult=D3DERR_DEVICELOST;return;}
         D3DPRESENT_PARAMETERS p;native_parameters(&p,&q->parameters,device->window);
         r->hresult=IDirect3DDevice9_Reset(device->device,&p);
+        if(SUCCEEDED((HRESULT)r->hresult)){device->fullscreen=!p.Windowed;device->log_geometry=1;if(!mirror(device,0))r->hresult=D3DERR_DEVICELOST;}
         if(p.hDeviceWindow&&p.hDeviceWindow!=device->window)r->hresult=E_FAIL;
         reply_parameters(&r->parameters,&p,device->guest);
     }else if(q->operation==PW_D3D9_DEVICE_PRESENT){

@@ -17,9 +17,9 @@ geometry. Every operation performs QUERY_STATE, BEGIN, native geometry/show
 updates outside driver locks, then ACK. Native service waits pump messages.
 Guest input ownership remains with the guest window through the driver pair.
 
-Initial coverage supports windowed presentation with one guest focus/device
-window. Different focus/device windows, fullscreen presentation and a Present
-override naming another guest window return D3DERR_NOTAVAILABLE. These paths
+Coverage supports windowed and fullscreen presentation with one guest focus/device
+window. Different focus/device windows and a Present override naming another
+guest window return D3DERR_NOTAVAILABLE. These paths
 are explicit unsupported cases. A zero presentation width/height is passed to
 DXVK unchanged so it derives dimensions from the mirrored native window.
 Null window fields remain null; only a native service window returned by the
@@ -63,3 +63,19 @@ a separate requirement.
 The unchanged factory-only runner also passed all three sessions,1200 calls
 and cancellation recovery after this extension; receipt
 `/tmp/prospero-d3d9-device-factory-regression-r1/receipt.json`.
+
+## Fullscreen parameters and mirror ownership
+
+The native helper preserves the caller's exact Windowed, swap effect, format,
+depth, refresh and behavior flags. The service window uses WS_EX_NOACTIVATE;
+input remains with the guest owner. After successful fullscreen Create/Reset,
+mirrors acknowledge the actual backend service client rectangle and fullscreen
+flag. Present does not resize or hide the backend fullscreen window according
+to guest windowed geometry. Windowed mode retains guest-rectangle mirroring.
+
+The lab's explicit --fullscreen mode requests the observed GTA SA shape:
+1920x1080 A8R8G8B8, D16 automatic depth, FLIP and fullscreen. Host unavailable
+surface mode remains a negative cleanup proof; it does not claim successful
+PS5 fullscreen presentation or guest input behavior.
+
+Host fullscreen audit: unchanged 1920x1080 fixture completes all three rendering cycles and returns zero, but ordinary host Wine may kill libc/NVIDIA process teardown at its 0.5-second exit deadline. A logging-only Wine server identified itself as the SIGKILL sender; an extended host diagnostic deadline completed cleanly. This does not justify a PS5 runtime change. Production Create/Reset logs guest and service rectangles for input-bound checks.

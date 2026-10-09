@@ -13,6 +13,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 for name in ('wine-build', 'prefix', 'backend64', 'output'):
     parser.add_argument('--' + name, type=Path, required=True)
 parser.add_argument('--expect-unavailable', action='store_true')
+parser.add_argument('--fullscreen', action='store_true')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
 out = args.output.resolve()
@@ -51,12 +52,14 @@ try:
     def windows(path):
         return 'Z:' + str(path).replace('/', chr(92))
     extra = ['--expect-unavailable'] if args.expect_unavailable else []
+    if args.fullscreen: extra.append('--fullscreen')
     output = run([args.wine_build.resolve() / 'loader/wine', out / 'client.exe',
                   windows(out / 'service.dll'), windows(backend), *extra], 'device', env)
     rows = re.findall(r'PW_PERSISTENT_DEVICE create=([0-9a-f]+) reset=([0-9a-f]+) present=([0-9a-f]+) status=0 unavailable=(\d)', output)
     expected = ('8876086a', '80004005', '80004005', '1') if args.expect_unavailable else ('00000000', '00000000', '00000000', '0')
     assert rows == [expected] * 3, rows
     receipt['cycles'] = rows
+    receipt['fullscreen'] = args.fullscreen
     receipt['scope'] = 'backend surface unavailability and cleanup' if args.expect_unavailable else 'real CreateDevice/Reset/Present'
 
 finally:
