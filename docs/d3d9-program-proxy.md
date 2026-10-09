@@ -20,3 +20,5 @@ The fixture checks both actual PE32 and PE64 ABI execution against controlled
 transport callbacks: identity reuse, copied uploads, safe rejected pointers,
 query delegation, parent retention, typed resolver checks and deferred cleanup.
 It does not claim an integrated game run or substitute a backend in production.
+
+Cleanup records and strong parent references are allocated before creation RPCs and cache publication. Duplicate and invalid-output references follow the same deferred release path. A repeated callback rejection requeues cleanup; enqueue failure retains the shell and parent while reporting session failure. The dual-ABI fixture covers these paths.

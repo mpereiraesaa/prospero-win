@@ -14,11 +14,22 @@ struct program_proxy {
 static SRWLOCK lock=SRWLOCK_INIT;
 static struct program_proxy *programs;
 static struct pw_d3d9_program_proxy_ops ops;
+static void destroy_local(struct program_proxy *p)
+{
+    IDirect3DDevice9 *parent=p->parent;
+    HeapFree(GetProcessHeap(),0,p);IDirect3DDevice9_Release(parent);
+}
 static void final_release(void *context)
 {
     struct program_proxy *p=context;HRESULT hr=ops.release(p->parent,p->remote);
+    if(hr==RPC_E_CANTCALLOUT_ININPUTSYNCCALL){
+        p->cleanup.function=final_release;p->cleanup.context=p;
+        hr=ops.defer(p->parent,&p->cleanup);
+        if(FAILED(hr))ops.fail(p->parent,hr); /* Retain shell and parent on enqueue failure. */
+        return;
+    }
     if(FAILED(hr))ops.fail(p->parent,hr);
-    IDirect3DDevice9 *parent=p->parent;HeapFree(GetProcessHeap(),0,p);IDirect3DDevice9_Release(parent);
+    destroy_local(p);
 }
 static ULONG addref(struct program_proxy *p){return (ULONG)InterlockedIncrement(&p->references);}
 static ULONG release(struct program_proxy *p)
@@ -26,16 +37,7 @@ static ULONG release(struct program_proxy *p)
     AcquireSRWLockExclusive(&lock);ULONG refs=(ULONG)InterlockedDecrement(&p->references);
     if(!refs){struct program_proxy **link=&programs;while(*link!=p)link=&(*link)->next;*link=p->next;}
     ReleaseSRWLockExclusive(&lock);
-    if(!refs){
-        HRESULT hr=ops.release(p->parent,p->remote);
-        if(hr==RPC_E_CANTCALLOUT_ININPUTSYNCCALL){
-            p->cleanup.function=final_release;p->cleanup.context=p;
-            HRESULT deferred=ops.defer(p->parent,&p->cleanup);if(FAILED(deferred))ops.fail(p->parent,deferred);
-            return 0;
-        }
-        if(FAILED(hr))ops.fail(p->parent,hr);
-        IDirect3DDevice9 *parent=p->parent;HeapFree(GetProcessHeap(),0,p);IDirect3DDevice9_Release(parent);
-    }
+    if(!refs)final_release(p);
     return refs;
 }
 static HRESULT query(struct program_proxy *p,REFIID iid,void **out)
@@ -64,25 +66,41 @@ METHODS(ps,IDirect3DPixelShader9,void)
 static const IDirect3DVertexDeclaration9Vtbl decl_vtable={decl_query,decl_addref,decl_release,decl_device,decl_data};
 static const IDirect3DVertexShader9Vtbl vs_vtable={vs_query,vs_addref,vs_release,vs_device,vs_data};
 static const IDirect3DPixelShader9Vtbl ps_vtable={ps_query,ps_addref,ps_release,ps_device,ps_data};
+static struct program_proxy *allocate_shell(IDirect3DDevice9 *parent,uint32_t kind)
+{
+    struct program_proxy *p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));
+    if(!p)return NULL;
+    p->parent=parent;p->kind=kind;p->references=1;
+    p->vtable=kind==7?(const void *)&decl_vtable:kind==8?(const void *)&vs_vtable:(const void *)&ps_vtable;
+    IDirect3DDevice9_AddRef(parent); /* No COM calls under the cache lock. */
+    return p;
+}
+static HRESULT publish_shell(struct program_proxy *shell,struct pw_d3d9_object_ref ref,void **out)
+{
+    shell->remote=ref;
+    if(out)*out=NULL;
+    if(!out||shell->kind<7||shell->kind>9||!ref.id||!ref.generation){
+        if(ref.id&&ref.generation)final_release(shell);else destroy_local(shell);
+        return D3DERR_INVALIDCALL;
+    }
+    struct program_proxy *p;
+    AcquireSRWLockExclusive(&lock);
+    for(p=programs;p;p=p->next)
+        if(p->parent==shell->parent&&p->kind==shell->kind&&p->remote.id==ref.id&&p->remote.generation==ref.generation){addref(p);break;}
+    if(!p){p=shell;p->next=programs;programs=p;}
+    ReleaseSRWLockExclusive(&lock);
+    if(p!=shell)final_release(shell);
+    *out=p;return S_OK;
+}
 HRESULT pw_d3d9_program_proxy_wrap(IDirect3DDevice9 *parent,uint32_t kind,struct pw_d3d9_object_ref ref,void **out)
 {
-    HRESULT hr=S_OK;struct program_proxy *p=NULL;int duplicate=0;
     if(out)*out=NULL;
-    if(!out||kind<7||kind>9||!ref.id||!ref.generation){hr=D3DERR_INVALIDCALL;goto failure;}
-    *out=NULL;
-    AcquireSRWLockExclusive(&lock);
-    for(p=programs;p;p=p->next)if(p->parent==parent&&p->kind==kind&&p->remote.id==ref.id&&p->remote.generation==ref.generation){addref(p);duplicate=1;break;}
-    if(!p){
-        p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));
-        if(p){p->vtable=kind==7?(const void *)&decl_vtable:kind==8?(const void *)&vs_vtable:(const void *)&ps_vtable;p->references=1;p->parent=parent;p->kind=kind;p->remote=ref;IDirect3DDevice9_AddRef(parent);p->next=programs;programs=p;}
+    struct program_proxy *shell=allocate_shell(parent,kind);
+    if(!shell){
+        /* Cancellation owns the remote reference if no local cleanup record can be allocated. */
+        ops.fail(parent,E_OUTOFMEMORY);return E_OUTOFMEMORY;
     }
-    ReleaseSRWLockExclusive(&lock);
-    if(!p){hr=E_OUTOFMEMORY;goto failure;}
-    if(duplicate){HRESULT dropped=ops.release(parent,ref);if(FAILED(dropped))ops.fail(parent,dropped);}
-    *out=p;return hr;
- failure:
-    if(ref.id&&ref.generation){HRESULT dropped=ops.release(parent,ref);if(FAILED(dropped))ops.fail(parent,dropped);}
-    return hr;
+    return publish_shell(shell,ref,out);
 }
 HRESULT pw_d3d9_program_proxy_resolve(IDirect3DDevice9 *parent,IUnknown *local,uint32_t kind,struct pw_d3d9_object_ref *out)
 {
@@ -121,20 +139,21 @@ static HRESULT create(IDirect3DDevice9 *parent,uint32_t kind,const void *input,v
         for(size_t n=0;n<bytes/4;n++){uint32_t value;if(token((void *)input,n,&value)){HeapFree(GetProcessHeap(),0,copy);return hr;}put32(copy+n*4,value);}
     }
     if(pw_d3d9_program_validate(kind,copy,bytes)!=PW_D3D9_PROGRAM_OK){HeapFree(GetProcessHeap(),0,copy);return hr;}
-    IDirect3DDevice9_AddRef(parent);
+    struct program_proxy *shell=allocate_shell(parent,kind);
+    if(!shell){HeapFree(GetProcessHeap(),0,copy);return E_OUTOFMEMORY;}
     struct pw_d3d9_program_request q={.operation=PW_D3D9_PROGRAM_BEGIN,.kind=kind,.total=(uint32_t)bytes};struct pw_d3d9_program_reply r;
     uint64_t transfer=0;hr=ops.program(parent,&q,&r);if(FAILED(hr))goto done;transfer=r.transfer;
     q=(struct pw_d3d9_program_request){.operation=PW_D3D9_PROGRAM_WRITE,.kind=kind,.transfer=transfer};
     for(size_t offset=0;offset<bytes;offset+=q.count){q.offset=(uint32_t)offset;q.count=(uint32_t)(bytes-offset>4096?4096:bytes-offset);memcpy(q.data,copy+offset,q.count);hr=ops.program(parent,&q,&r);if(FAILED(hr))goto abort;}
     q=(struct pw_d3d9_program_request){.operation=PW_D3D9_PROGRAM_COMMIT,.kind=kind,.transfer=transfer};hr=ops.program(parent,&q,&r);
-    if(SUCCEEDED(hr))hr=pw_d3d9_program_proxy_wrap(parent,kind,(struct pw_d3d9_object_ref){r.id,r.generation},out);
+    if(SUCCEEDED(hr)){HRESULT published=publish_shell(shell,(struct pw_d3d9_object_ref){r.id,r.generation},out);shell=NULL;if(FAILED(published))hr=published;}
     else goto abort;
     goto done;
  abort:
     q=(struct pw_d3d9_program_request){.operation=PW_D3D9_PROGRAM_ABORT,.kind=kind,.transfer=transfer};
     {HRESULT cleanup=ops.program(parent,&q,&r);if(FAILED(cleanup)&&cleanup!=D3DERR_INVALIDCALL)ops.fail(parent,cleanup);}
  done:
-    HeapFree(GetProcessHeap(),0,copy);IDirect3DDevice9_Release(parent);return hr;
+    HeapFree(GetProcessHeap(),0,copy);if(shell)destroy_local(shell);return hr;
 }
 static HRESULT WINAPI create_decl(IDirect3DDevice9 *d,const D3DVERTEXELEMENT9 *data,IDirect3DVertexDeclaration9 **out){return create(d,7,data,(void **)out);}
 static HRESULT WINAPI create_vs(IDirect3DDevice9 *d,const DWORD *data,IDirect3DVertexShader9 **out){return create(d,8,data,(void **)out);}
