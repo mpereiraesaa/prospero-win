@@ -11,7 +11,13 @@ static DWORD WINAPI worker(void *arg)
     printf("PW_WORKER_DESKTOP bits=%u root=%p window=%p rect=%ld,%ld,%ld,%ld ok=%d\n",
            (unsigned)(8*sizeof(void *)),root,window,r.left,r.top,r.right,r.bottom,ok);fflush(stdout);
     if(root!=window||!ok||r.right!=640||r.bottom!=480)return 1;
-    return GetAncestor(window,GA_ROOT)!=window;
+    if(GetAncestor(window,GA_ROOT)!=window)return 2;
+    /* This invokes full lazy initialization after recognition-only caching. */
+    HWND builtin=CreateWindowW(L"STATIC",L"worker builtin",WS_POPUP,0,0,32,32,NULL,NULL,GetModuleHandleW(NULL),NULL);
+    if(!builtin)return 3;
+    BOOL text=SetWindowTextW(builtin,L"initialized");WCHAR buffer[32]={0};
+    int count=GetWindowTextW(builtin,buffer,32);DestroyWindow(builtin);
+    return !text||count!=11||lstrcmpW(buffer,L"initialized");
 }
 static DWORD probe(void)
 {

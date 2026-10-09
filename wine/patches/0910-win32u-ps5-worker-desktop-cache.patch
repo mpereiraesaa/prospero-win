@@ -1,5 +1,73 @@
 Subject: win32u: recognize existing PS5 desktops on fresh worker threads
 
+--- a/dlls/win32u/winstation.c
++++ b/dlls/win32u/winstation.c
+@@ -609,6 +609,7 @@
+         memset( &data->shared_foreground, 0, sizeof(data->shared_foreground) );
+         thread_info->top_window = 0;
+         thread_info->msg_window = 0;
++        thread_info->desktop_cache_only = FALSE;
+         if (was_virtual_desktop != is_virtual_desktop()) update_display_cache( TRUE );
+     }
+     return ret;
+@@ -816,12 +817,36 @@
+ static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiBatchCount; }
+ #endif
+
++/* Query existing desktop handles only.  Unlike get_desktop_window(), this
++ * must not create windows, load a driver, or register builtin classes. */
++void cache_thread_desktop_windows(void)
++{
++    struct user_thread_info *thread_info = get_user_thread_info();
++
++    if (thread_info->top_window) return;
++    SERVER_START_REQ( get_desktop_window )
++    {
++        req->force = FALSE;
++        if (!wine_server_call( req ))
++        {
++            thread_info->top_window = wine_server_ptr_handle( reply->top_window );
++            thread_info->msg_window = wine_server_ptr_handle( reply->msg_window );
++            thread_info->desktop_cache_only = !!thread_info->top_window;
++        }
++    }
++    SERVER_END_REQ;
++}
++
+ HWND get_desktop_window(void)
+ {
+     struct user_thread_info *thread_info = get_user_thread_info();
+     BOOL is_service;
+
+-    if (thread_info->top_window) return thread_info->top_window;
++    if (thread_info->top_window)
++    {
++        if (!thread_info->desktop_cache_only) return thread_info->top_window;
++        goto initialize;
++    }
+
+     /* don't create an actual explorer desktop window for services */
+     is_service = is_service_process();
+@@ -929,6 +954,9 @@
+         }
+         SERVER_END_REQ;
+     }
++initialize:
++    /* Mark before callbacks, matching the old top_window reentrancy guard. */
++    thread_info->desktop_cache_only = FALSE;
+     if (!thread_info->top_window) ERR_(win)( "failed to create desktop window\n" );
+     else user_driver->pSetDesktopWindow( thread_info->top_window );
+
+--- a/dlls/win32u/ntuser_private.h
++++ b/dlls/win32u/ntuser_private.h
+@@ -132,6 +132,7 @@
+     struct mouse_tracking_info   *mouse_tracking_info;    /* NtUserTrackMouseEvent handling */
+     struct opengl_thread_data    *opengl_data;            /* OpenGL private thread data */
+     struct list                   known_pointers;         /* list of known pointers */
++    BOOL                          desktop_cache_only;     /* handles cached without USER initialization */
+ };
+
+ extern struct user_thread_info *get_user_thread_info(void);
 --- a/dlls/win32u/window.c
 +++ b/dlls/win32u/window.c
 @@ -335,11 +335,12 @@
@@ -29,34 +97,6 @@ Subject: win32u: recognize existing PS5 desktops on fresh worker threads
          if (!(list = list_window_parents( hwnd ))) return 0;
 
          if (!list[0] || !list[1]) ret = get_full_window_handle( hwnd );  /* top-level window */
---- a/dlls/win32u/winstation.c
-+++ b/dlls/win32u/winstation.c
-@@ -815,6 +815,25 @@
- #else
- static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiBatchCount; }
- #endif
-+
-+/* Query existing desktop handles only.  Unlike get_desktop_window(), this
-+ * must not create windows, load a driver, or register builtin classes. */
-+void cache_thread_desktop_windows(void)
-+{
-+    struct user_thread_info *thread_info = get_user_thread_info();
-+
-+    if (thread_info->top_window) return;
-+    SERVER_START_REQ( get_desktop_window )
-+    {
-+        req->force = FALSE;
-+        if (!wine_server_call( req ))
-+        {
-+            thread_info->top_window = wine_server_ptr_handle( reply->top_window );
-+            thread_info->msg_window = wine_server_ptr_handle( reply->msg_window );
-+        }
-+    }
-+    SERVER_END_REQ;
-+}
-
- HWND get_desktop_window(void)
- {
 --- a/dlls/win32u/win32u_private.h
 +++ b/dlls/win32u/win32u_private.h
 @@ -290,6 +290,7 @@

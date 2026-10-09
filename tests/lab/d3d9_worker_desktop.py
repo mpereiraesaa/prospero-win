@@ -39,7 +39,7 @@ def function(s, signature):
     return s[start:end] + '\n'
 
 try:
-    for f in ['window.c', 'winstation.c', 'win32u_private.h']:
+    for f in ['window.c', 'winstation.c', 'win32u_private.h', 'ntuser_private.h']:
         src = a.wine_source.resolve() / 'dlls/win32u' / f
         receipt['sources'][str(src)] = hashlib.sha256(src.read_bytes()).hexdigest()
         target = out / 'source/dlls/win32u' / f
@@ -64,10 +64,16 @@ typedef struct { int x,y; } POINT;
 typedef struct { HWND parent; } WND;
 struct ratio { int num,den; };
 struct window_rects { RECT window,client,visible; };
-struct user_thread_info { HWND top_window,msg_window; };
+struct user_thread_info { HWND top_window,msg_window; BOOL desktop_cache_only; };
 static struct user_thread_info info;
 static WND service={0x10024};
 static int server_calls, server_fail, held, rect_fail, map_calls;
+static int desktop_callbacks, builtin_callbacks;
+static HWND get_desktop_window(void);
+static void set_desktop(HWND hwnd){desktop_callbacks++;assert(hwnd==0x10024);assert(get_desktop_window()==hwnd);}
+static void register_builtin_classes(void){builtin_callbacks++;assert(get_desktop_window()==0x10024);}
+static struct { void (*pSetDesktopWindow)(HWND); } driver={set_desktop},*user_driver=&driver;
+#define ERR_(channel) printf
 #define TRUE 1
 #define FALSE 0
 #define GA_ROOT 2
@@ -108,6 +114,9 @@ static RECT map_dpi_rect(RECT r,struct ratio a,struct ratio b){(void)a;(void)b;r
 static void OffsetRect(RECT *r,int x,int y){r->left+=x;r->right+=x;r->top+=y;r->bottom+=y;}
 static void SetRectEmpty(RECT *r){memset(r,0,sizeof(*r));}
 '''
+    reset_start = station.index('        thread_info->top_window = 0;')
+    reset_end = station.index('        if (was_virtual_desktop', reset_start)
+    reset = 'static void reset_cache(void){struct user_thread_info *thread_info=&info;\n' + station[reset_start:reset_end] + '}\n'
     tests = r'''
 int main(void){
  HWND *parents; RECT r,m;
@@ -115,16 +124,26 @@ int main(void){
  parents=list_window_parents(0x1003e);assert(!parents&&!held&&!server_calls);
  assert(NtUserGetAncestor(0x1003e,GA_ROOT)==0x1003e);assert(server_calls==1&&!held);
  assert(NtUserGetAncestor(0x1003e,GA_ROOT)==0x1003e&&server_calls==1);
+ assert(info.desktop_cache_only&&!desktop_callbacks&&!builtin_callbacks);
+ assert(get_desktop_window()==0x10024&&!info.desktop_cache_only);
+ assert(desktop_callbacks==1&&builtin_callbacks==1);
+ assert(get_desktop_window()==0x10024&&desktop_callbacks==1&&builtin_callbacks==1);
  r=get_client_surface_rects(0,0x1003e,&m);assert(r.right==1920&&r.bottom==1080&&!r.left&&!r.top);
  rect_fail=1;map_calls=0;memset(&m,0xa5,sizeof(m));r=get_client_surface_rects(0x1003e,0x1003e,&m);
  assert(!memcmp(&r,&(RECT){0},sizeof(r))&&!memcmp(&m,&(RECT){0},sizeof(m))&&!map_calls);
- rect_fail=0;info=(struct user_thread_info){0};server_fail=1;map_calls=0;memset(&m,0xa5,sizeof(m));
+ rect_fail=0;reset_cache();assert(!info.top_window&&!info.msg_window&&!info.desktop_cache_only);server_fail=1;map_calls=0;memset(&m,0xa5,sizeof(m));
  r=get_client_surface_rects(0,0x1003e,&m);assert(!memcmp(&r,&(RECT){0},sizeof(r))&&!memcmp(&m,&(RECT){0},sizeof(m))&&!map_calls);
  server_fail=0;assert(NtUserGetAncestor(0x1003e,GA_ROOT)==0x1003e);assert(!held);
+ assert(info.desktop_cache_only);assert(get_desktop_window()==0x10024);
+ assert(desktop_callbacks==2&&builtin_callbacks==2);
  puts("worker desktop: negative walk, cache/retry, valid extent, zero failure outputs PASS");return 0;
 }
 '''
-    code = prelude + function(station, 'void cache_thread_desktop_windows(') + common + ancestor + mocks + function(window, 'static RECT get_client_surface_rects(') + tests
+    full = function(station, 'HWND get_desktop_window(void)')
+    prefix = full.split('    /* don\'t create', 1)[0].replace('HWND get_desktop_window', 'static HWND get_desktop_window').replace('    BOOL is_service;\n', '')
+    tail = full[full.index('initialize:'):]
+    lazy = prefix + 'assert(!"unexpected uncached full-init path"); return 0;\n' + tail
+    code = prelude + function(station, 'void cache_thread_desktop_windows(') + lazy + common + ancestor + mocks + function(window, 'static RECT get_client_surface_rects(') + reset + tests
     source = out / 'contract.c'
     source.write_text(code)
     for name, flags in [('plain', []), ('sanitize', ['-fsanitize=address,undefined', '-fno-omit-frame-pointer'])]:

@@ -11,8 +11,12 @@ It uses `get_desktop_window(force=FALSE)` directly; it does not invoke the full
 client initialization routine, create windows, install drivers, or register
 classes. There is no loader/thread-attach hook, recursive `get_win_ptr` call, or
 RPC while the ancestor walk holds a USER object lock. A failed query leaves the
-cache empty and a later call retries. Changing thread desktop already clears the
-same cache in Wine. Other platforms retain the existing ancestor path.
+cache empty and a later call retries. A `desktop_cache_only` marker is appended
+to the Unix thread structure: recognizing handles must not make subsequent full
+`get_desktop_window()` initialization return early. The full routine runs its
+original driver/class-registration tail and clears the marker before callbacks,
+preserving the existing reentrant fast path. Changing thread desktop clears both
+handles and the marker. Other platforms retain the existing ancestor path.
 
 The surface rectangle helper additionally returns empty virtual/monitor rectangles
 when the root or its rectangle cannot be fetched. It cannot publish uninitialized
@@ -43,12 +47,17 @@ ASan/UBSan runs assert zero failure outputs and no subsequent mapping.
 For actual PE32 and native PE64 worker execution, also pass `--wine-build` and
 `--prefix`. Build an isolated host Wine overlay with `WINE_PS5_USER_DRIVER` for
 `dce`, `driver`, `ps5drv`, `window`, `winstation`, and `vulkan`, then relink win32u.
+The corrected overlay must additionally recompile `syscall.c`: its sole
+`get_user_thread_info()` allocation uses the extended structure's `sizeof`.
+Existing member offsets are unchanged. This is a private Unix structure, with no
+PE32/PE64 wire mirror or separate native-domain allocation.
 The runner disables explorer so the desktop has the same server-only ownership
 as the console. A regular explorer-owned X11 desktop does not reproduce this
 failure and is not a substitute. `--expect-worker-failure` records the old-runtime
 negative; omit it for the corrected runtime. Each process creates a parent
 window and then makes the child's first USER call `GetAncestor`, checks client
-extent, repeats lookup, and destroys the window after joining the child.
+extent, repeats lookup, then creates, reads/writes and destroys an unsubclassed
+STATIC on that worker before joining it and destroying the parent window.
 
 Wine build scripts discover numerically named patches automatically, so no
 builder manifest edit is needed. Runtime deployment needs the corrected win32u
@@ -63,3 +72,10 @@ contracts passed in the same runner. `source-closure.json` records both runtime
 source trees and the runner metadata-only difference. An initial explorer-owned
 negative attempt returned valid roots and was retained as a failed expectation.
 No console execution is claimed for 0910.
+
+Review found that the original recognition-only candidate could suppress later
+full USER initialization. Its receipts remain historical evidence for root
+recognition only. The corrected controlled regression explicitly starts with no
+driver/class initialization, resolves the root, then enters full initialization
+and verifies both callbacks once, including reentrant desktop lookup. It also
+checks retry/reset state. Corrected runtime proof uses the STATIC follow-up.
