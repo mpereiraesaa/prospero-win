@@ -36,9 +36,8 @@ python3 tests/lab/d3d9_pipeline_native.py \
 An optional `--pair` reuses a production build only after verifying its recorded
 source hashes and both binary hashes. The host adapter is rebuilt from the same
 verified recipe. Receipts freeze local source/header inputs, commit/dirty state,
-commands, logs, binary hashes and observed counters. This runner is prepared
-for the pipeline source; runtime acceptance remains pending execution. It does
-not establish console compatibility or game performance.
+commands, logs, binary hashes and observed counters. The retained host proof below covers the frozen pipeline source. It does not
+establish console compatibility or game performance.
 
 ## Mixed pairs
 
@@ -49,3 +48,24 @@ factory entry point in both cross-pair combinations. Both must return NULL and
 report service startup rejection before object publication. The changed ring
 size rejects these pairs before HELLO; this is not a claim that the HELLO
 feature-comparison branch executed. No host window adapter is needed.
+
+## Retained host result
+
+Frozen runner `aecb1feb` tested production source `92c35e5d` with the actual
+pinned native backend. The primary receipt contains 194 source/header inputs,
+eight binaries and 19 successful commands. Three seeded native/OFF/ON transcript
+comparisons and controlled red readbacks passed, as did the separate lifetime
+clients in all modes. Controlled command RPCs changed from 56 to 12 with 44
+queued commands in each seed. Published/acknowledged batches were 498/498,
+522/522 and 543/543; the first seed observed pending peak two, and the others
+observed one. Disabled runs had zero pipeline counters. This establishes actual
+concurrent outstanding work for one observed run, not an eight-deep GPU workload.
+
+Primary receipt SHA256:
+`ebd25fd5e5ea4e50a0249129f0410c2275f1f2f423548ef978b299964fde7ae8`.
+
+The separate four-command mixed-pair receipt passed both old/new directions.
+Each service reported opcode zero, startup rejection, and the guest received no
+factory. Receipt SHA256:
+`f18f34f58d4dbdc0ca9a13c2cb4adfea061fab8b9ceac400814a074ab4dda081`.
+All retained source, binary and log hashes were checked after execution.
