@@ -1,8 +1,9 @@
 # Immutable texture description cache
 
-Successful Texture2D GetLevelDesc replies are cached lazily in the proxy for the
+S_OK Texture2D GetLevelDesc replies are cached lazily in the proxy for the
 same native object generation. Each level has its own entry; failures never
-populate it. At most 32 levels are cached. Allocation failure or a larger level
+populate it. Other success codes retain their original result and remain
+uncached. At most 32 levels are cached. Allocation failure or a larger level
 uses the existing synchronous path without changing its result.
 
 The native texture's dimensions, format, pool, usage and sample description do

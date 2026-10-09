@@ -150,7 +150,7 @@ static HRESULT get_desc(void *iface,UINT level,D3DSURFACE_DESC *out)
  if(cached){describe(out,&r.desc);release(iface);return S_OK;}
  q.operation=PW_D3D9_TEXTURE_DESC;q.level=level;hr=invoke(p,&q,&r);
  if(SUCCEEDED(hr)){
-  if(eligible){
+  if(eligible&&hr==S_OK){
    /* Allocation failure merely skips caching. No cache lock crosses an RPC,
     * guest output write or reference retirement. Concurrent misses may query
     * twice but publish the same immutable native description. */

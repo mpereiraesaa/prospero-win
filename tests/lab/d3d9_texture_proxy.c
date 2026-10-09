@@ -7,6 +7,7 @@
 #include <string.h>
 static IDirect3DDevice9 parent;static LONG parent_refs=1;static unsigned refs[16],active[16],calls,writes,failures,priority[16],lod,filter=2,preloads,mips;static int blocked,negative,fail_operation;static uint64_t generation;
 static unsigned char contents[24];static struct pw_d3d9_deferred *pending;
+static HRESULT desc_result=S_OK;
 static ULONG WINAPI parent_addref(IDirect3DDevice9 *d){assert(d==&parent);return InterlockedIncrement(&parent_refs);}
 static ULONG WINAPI parent_release(IDirect3DDevice9 *d){assert(d==&parent);return InterlockedDecrement(&parent_refs);}
 static HRESULT WINAPI parent_query(IDirect3DDevice9 *d,REFIID iid,void **out)
@@ -30,7 +31,7 @@ static HRESULT exchange(IDirect3DDevice9 *d,struct pw_d3d9_object_ref ref,const 
   else if(id==9 && (q->value==PW_D3D9_CONTAINER_UNKNOWN || q->value==PW_D3D9_CONTAINER_DEVICE)){r->container_kind=PW_D3D9_KIND_DEVICE;id=2;r->levels=0;}
   else {r->hresult=E_NOINTERFACE;return E_NOINTERFACE;}
   refs[id]++;r->object=(struct pw_d3d9_object_ref){id,9};break;
- case PW_D3D9_TEXTURE_DESC:r->levels=id==7?6:1;if(q->level>=r->levels){r->hresult=D3DERR_INVALIDCALL;return D3DERR_INVALIDCALL;}break;
+ case PW_D3D9_TEXTURE_DESC:r->levels=id==7?6:1;if(q->level>=r->levels){r->hresult=D3DERR_INVALIDCALL;return D3DERR_INVALIDCALL;}r->hresult=desc_result;break;
  case PW_D3D9_TEXTURE_LOCK:assert(!active[id]);active[id]=1;generation++;r->lock_generation=generation;r->pitch=negative?-16:16;r->rows=2;r->row_bytes=8;r->length=24;break;
  case PW_D3D9_TEXTURE_READ:assert(active[id] && q->lock_generation==generation && !q->offset && q->count==24);r->lock_generation=generation;r->count=24;memcpy(r->data,contents,24);break;
  case PW_D3D9_TEXTURE_WRITE:assert(active[id] && q->lock_generation==generation && !q->offset && q->count==24);memcpy(contents,q->data,24);writes++;break;
@@ -52,7 +53,7 @@ static HRESULT exchange(IDirect3DDevice9 *d,struct pw_d3d9_object_ref ref,const 
  default:assert(0);
  }
  r->desc=(struct pw_d3d9_surface_desc){D3DFMT_A8R8G8B8,D3DRTYPE_SURFACE,0,D3DPOOL_SYSTEMMEM,0,0,16,8};
- assert(!pw_d3d9_texture_reply_encode(wire,sizeof(wire),&bytes,r));assert(!pw_d3d9_texture_reply_decode(r,wire,bytes));return S_OK;
+ assert(!pw_d3d9_texture_reply_encode(wire,sizeof(wire),&bytes,r));assert(!pw_d3d9_texture_reply_decode(r,wire,bytes));return (HRESULT)r->hresult;
 }
 static HRESULT remote_release(IDirect3DDevice9 *d,struct pw_d3d9_object_ref r)
 {assert(d==&parent && r.id<16 && refs[r.id] && r.generation==9);if(blocked)return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;if(!--refs[r.id])active[r.id]=0;return S_OK;}
@@ -82,6 +83,10 @@ int main(void)
   memset(&again,0xa5,sizeof(again));
   assert(IDirect3DTexture9_GetLevelDesc(t,6,&again)==D3DERR_INVALIDCALL && again.Width==0xa5a5a5a5 && calls==before+3);
   assert(IDirect3DTexture9_GetLevelDesc(t,6,&again)==D3DERR_INVALIDCALL && calls==before+4);
+  desc_result=S_FALSE;
+  assert(IDirect3DTexture9_GetLevelDesc(t,5,&again)==S_FALSE && calls==before+5);
+  assert(IDirect3DTexture9_GetLevelDesc(t,5,&again)==S_FALSE && calls==before+6);
+  desc_result=S_OK;
  }
  assert(IDirect3DTexture9_GetSurfaceLevel(t,2,&s)==S_OK && IDirect3DSurface9_GetType(s)==D3DRTYPE_SURFACE);
  assert(IDirect3DSurface9_GetDesc(s,&desc)==S_OK && desc.Format==D3DFMT_A8R8G8B8);
