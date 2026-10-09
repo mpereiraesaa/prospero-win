@@ -389,6 +389,7 @@ wine/patches/0888-ntdll-ps5-shared-sync-default-on.patch
 wine/patches/0890-ntdll-ps5-share-name-changes-with-the-server.patch
 wine/patches/0895-ntdll-ps5-reserve-the-low-gap.patch
 wine/patches/0896-ntdll-ps5-leave-through-exit-when-a-process-ends-itself.patch
+wine/patches/0871-server-ps5-anonymous-sections-in-direct-memory.patch
 wine/patches/0899-include-list-the-ps5-headers-for-makedep.patch
 tests/test_wine_decommit_zero.py
 tests/test_wine_protect_writecopy.py

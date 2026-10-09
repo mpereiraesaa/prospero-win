@@ -78,7 +78,7 @@ $(eval $(call test_rule,test_pw_profile_catalog,tests/test_pw_profile_catalog.c 
 $(eval $(call test_rule,test_pw_present,tests/test_pw_present.c src/pw_present.c,))
 $(eval $(call test_rule,test_pw_wine_heap,tests/test_pw_wine_heap.c wine/ps5/pw_wine_heap.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_dmem,tests/test_pw_wine_dmem.c wine/ps5/pw_wine_dmem.c,))
-$(eval $(call test_rule,test_pw_wine_dmem_ps5,tests/test_pw_wine_dmem_ps5.c wine/ps5/pw_wine_dmem_ps5.c wine/ps5/pw_wine_dmem.c wine/ps5/pw_wine_heap.c,-std=gnu11 -pthread))
+$(eval $(call test_rule,test_pw_wine_dmem_ps5,tests/test_pw_wine_dmem_ps5.c wine/ps5/pw_wine_dmem_ps5.c wine/ps5/pw_wine_dmem.c wine/ps5/pw_wine_heap.c,-std=gnu11 -pthread -DPW_WINE_SECTION_VIEWS=24))
 $(eval $(call test_rule,test_pw_wine_prx,tests/test_pw_wine_prx.c wine/ps5/pw_wine_prx.c,-I.))
 $(eval $(call test_rule,test_pw_wine_threads,tests/test_pw_wine_threads.c wine/ps5/pw_wine_threads.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_sink,tests/test_pw_wine_sink.c wine/ps5/pw_wine_sink.c,-pthread))

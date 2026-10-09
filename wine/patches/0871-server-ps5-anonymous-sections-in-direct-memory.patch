@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 5 Oct 2026 19:30:00 +0200
+Subject: [PATCH] server, ntdll: Back anonymous sections with direct memory on PS5.
+
+Patch 0730 backs an anonymous section with a POSIX shared memory object,
+and on the console every view of one draws on the title's ~440 MiB of
+flexible memory. A browser creates hundreds of them: Battle.net's login
+page ran flexible memory down to 0 KiB and its 2 MiB section views failed
+with ENOMEM (map_file_into_view, then ERR_INSUFFICIENT_RESOURCES in the
+page), while 1.3 GiB of direct memory was in use with no failure.
+
+ntdll gives the in-process server two functions of
+wine/ps5/pw_wine_dmem_ps5.c through pw_wineserver_set_section_backing,
+once connected and before the process can ask for a section.
+The server registers each anonymous section a process creates with
+NtCreateSection; it gets its own direct memory, zeroed, and every view
+ntdll maps of it inside the reserved areas maps that memory, so all
+views show the same bytes. The memory is released once the section
+object is destroyed and its last view is unmapped. The server's own
+sections (the session block, which it grows, and the user shared data)
+keep their shared memory object, since the server maps those itself.
+
+A section over 256 MiB, or every section when the console refuses to map
+one block of direct memory twice (checked once), keeps its shared memory
+object. WINE_PS5_SECTION_DMEM=0 turns this off. A view of a registered
+section never falls back to the object (wine/ps5/pw_wine_dmem_ps5.c):
+the object is never written again, so such a view would show zeros.
+---
+ dlls/ntdll/unix/server.c | 28 ++++++++++++++++++++++++++++
+ server/mapping.c         | 35 ++++++++++++++++++++++++++++++++++-
+ 2 files changed, 62 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index 02689a32f8..eef965eb96 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -1643,6 +1643,31 @@ static int setup_config_dir(void)
+ }
+
+
++#if defined(__PROSPERO__) && defined(WINE_INPROCESS_SERVER)
++/* wine/ps5/pw_wine_dmem_ps5.c: an anonymous section a process creates gets
++ * its own direct memory, which every view maps, instead of a shared memory
++ * object whose views draw on the title's ~440 MiB of flexible memory. */
++extern int __wine_ps5_section_create( int fd, unsigned long long size );
++extern void __wine_ps5_section_release( int cookie );
++
++/***********************************************************************
++ *           share_section_backing
++ *
++ * Give the in-process server the two functions once it is connected, before
++ * the process can ask it for a section; the server's own sections keep
++ * their shared memory object. WINE_PS5_SECTION_DMEM=0 keeps every
++ * section's object.
++ */
++static void share_section_backing( void *module )
++{
++    void (*set)( int (*)( int, unsigned long long ), void (*)( int ) ) =
++        dlsym( module, "pw_wineserver_set_section_backing" );
++    const char *env = getenv( "WINE_PS5_SECTION_DMEM" );
++
++    if (set && !(env && !strcmp( env, "0" ))) set( __wine_ps5_section_create, __wine_ps5_section_release );
++}
++#endif
++
+ /***********************************************************************
+  *           server_connect_error
+  *
+@@ -1742,6 +1767,9 @@ static int connect_inprocess_server(void)
+     free( dir );
+     free( module_path );
+     free( nls_dir );
++#ifdef __PROSPERO__
++    share_section_backing( module );  /* the process has no section yet */
++#endif
+     return fd;
+ }
+
+diff --git a/server/mapping.c b/server/mapping.c
+index 67a6c18212..5ca42c3cab 100644
+--- a/server/mapping.c
++++ b/server/mapping.c
+@@ -136,6 +136,9 @@ struct mapping
+     void                *ver_res;    /* version resource (for PE image mapping) */
+     data_size_t          exp_len;    /* length of export name (for PE image mapping) */
+     data_size_t          ver_len;    /* length of version resource (for PE image mapping) */
++#ifdef __PROSPERO__
++    int                  dmem;       /* ntdll's cookie for the section's direct memory, or 0 */
++#endif
+ };
+
+ struct mapping_init_data
+@@ -144,8 +147,27 @@ struct mapping_init_data
+     unsigned int flags;
+     unsigned int file_access;
+     struct fd   *fd;
++    unsigned int client;             /* created by a process, not by the server for itself */
+ };
+
++#ifdef __PROSPERO__
++/* ntdll's direct memory for the anonymous sections processes create
++ * (wine/ps5/pw_wine_dmem_ps5.c): every view of one maps the same direct
++ * memory instead of the shared memory object, whose views would draw on
++ * the title's flexible memory. The server's own sections (the session
++ * block, which grows, and the user shared data) keep their object, since
++ * the server maps those itself. */
++static int (*section_dmem_create)( int fd, unsigned long long size );
++static void (*section_dmem_release)( int cookie );
++
++DECLSPEC_EXPORT void pw_wineserver_set_section_backing( int (*create)( int fd, unsigned long long size ),
++                                                         void (*release)( int cookie ) )
++{
++    section_dmem_create = create;
++    section_dmem_release = release;
++}
++#endif
++
+ static void mapping_dump( struct object *obj, int verbose );
+ static bool mapping_init( struct object *obj, const void *init_data );
+ static struct fd *mapping_get_fd( struct object *obj );
+@@ -1114,6 +1136,9 @@ static bool mapping_init( struct object *obj, const void *init_data )
+     mapping->ver_res     = NULL;
+     mapping->exp_len     = 0;
+     mapping->ver_len     = 0;
++#ifdef __PROSPERO__
++    mapping->dmem        = 0;
++#endif
+
+     if (data->fd)
+     {
+@@ -1175,6 +1200,10 @@ static bool mapping_init( struct object *obj, const void *init_data )
+         if (!(mapping->fd = create_anonymous_fd( &mapping_fd_ops, unix_fd, &mapping->obj,
+                                                  FILE_SYNCHRONOUS_IO_NONALERT ))) goto error;
+         allow_fd_caching( mapping->fd );
++#ifdef __PROSPERO__
++        if (data->client && section_dmem_create)
++            mapping->dmem = section_dmem_create( unix_fd, mapping->size );
++#endif
+     }
+     return true;
+
+@@ -1317,6 +1346,9 @@ static void mapping_destroy( struct object *obj )
+ {
+     struct mapping *mapping = (struct mapping *)obj;
+     assert( obj->ops == &mapping_ops );
++#ifdef __PROSPERO__
++    if (mapping->dmem && section_dmem_release) section_dmem_release( mapping->dmem );
++#endif
+     if (mapping->fd)
+     {
+         release_mapping_image_view_fd( mapping->fd, mapping->flags, mapping->shared );
+@@ -1580,7 +1612,8 @@ struct object *create_user_data_mapping( struct object *root, struct unicode_str
+ DECL_HANDLER(create_mapping)
+ {
+     struct file *file = NULL;
+-    struct mapping_init_data data = { .size = req->size, .file_access = req->file_access };
++    struct mapping_init_data data = { .size = req->size, .file_access = req->file_access,
++                                      .client = !req->file_handle };
+     struct object_params params = { .ops = &mapping_ops, .access = req->access, .init_data = &data };
+
+     if (!get_req_object_attributes( &params )) return;

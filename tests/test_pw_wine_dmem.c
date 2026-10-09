@@ -278,6 +278,45 @@ static void test_merge_and_failures(void)
     check_consistent();
 }
 
+/* One block of direct memory shared by two views, as a section's: both
+ * show the same bytes, unmapping a view never releases it, and the owner
+ * releases it once no view is left. */
+static void test_shared(void)
+{
+    int64_t section;
+    PwWineDmemStats before, after;
+
+    assert(pw_wine_dmem_replace(&dmem, at(16), 256 * PAGE, 0) == 0);
+    check_consistent();
+    pw_wine_dmem_stats(&dmem, &before);
+    assert(model_allocate(NULL, 4 * PAGE, &section) == 0);
+    assert(pw_wine_dmem_map_shared(&dmem, at(40), 4 * PAGE, section, 3) == 0);
+    assert(pw_wine_dmem_map_shared(&dmem, at(60), 2 * PAGE, section + 2 * PAGE, 1) == 0);
+    memset((void *)at(42), 0x3c, PAGE);
+    assert(((volatile uint8_t *)at(60))[100] == 0x3c && prot_of[60] == 1);
+    /* Shared memory is nobody's to release: the views do not count as
+     * backed, and the owner cannot free it while a view shows it. */
+    pw_wine_dmem_stats(&dmem, &after);
+    assert(after.backed_bytes == before.backed_bytes);
+    assert(pw_wine_dmem_replace(&dmem, at(40), 4 * PAGE, 0) == 0 && state[40] == RESERVED);
+    assert(allocated[section / PAGE] && model_release(NULL, section + 2 * PAGE, 2 * PAGE) == -1);
+    /* Committing over a view keeps it shared; replacing it frees nothing. */
+    assert(pw_wine_dmem_protect(&dmem, at(60), 2 * PAGE, 3) == 0 && prot_of[61] == 3);
+    assert(((volatile uint8_t *)at(60))[100] == 0x3c);
+    assert(pw_wine_dmem_replace(&dmem, at(60), 2 * PAGE, 0) == 0);
+    assert(model_release(NULL, section, 4 * PAGE) == 0);
+    /* Protection 0 maps it inaccessible (a PROT_NONE view); refused outside
+     * a region, or when the kernel's map fails (the range is left reserved). */
+    assert(model_allocate(NULL, PAGE, &section) == 0);
+    assert(pw_wine_dmem_map_shared(&dmem, at(40), PAGE, section, 0) == 0 && prot_of[40] == 0);
+    assert(pw_wine_dmem_replace(&dmem, at(40), PAGE, 0) == 0);
+    assert(pw_wine_dmem_map_shared(&dmem, at(280), PAGE, section, 3) == -1);
+    fail_map = 1;
+    assert(pw_wine_dmem_map_shared(&dmem, at(40), PAGE, section, 3) == -1 && state[40] == RESERVED);
+    assert(model_release(NULL, section, PAGE) == 0);
+    check_consistent();
+}
+
 /* Random replace/protect/adopt/write against a byte-per-page reference. */
 static void test_random(void)
 {
@@ -374,6 +413,7 @@ int main(void)
     assert(pw_wine_dmem_init(&dmem, &ops, runs, RUNS, 1) == 0);
     test_basics();
     test_merge_and_failures();
+    test_shared();
     test_random();
     test_remove_regions();
     pw_wine_dmem_stats(&dmem, &stats);
@@ -381,7 +421,7 @@ int main(void)
     assert(!straddles ||
            (stats.peak_low_backed_bytes > 0 && stats.peak_low_backed_bytes < stats.peak_backed_bytes));
     printf("wine dmem passed: regions, commit, protect, replace, split and merged runs, "
-           "caller mappings, kernel failures, a full table, 20000 random operations, dropped regions and the "
+           "caller mappings, views sharing direct memory, kernel failures, a full table, 20000 random operations, dropped regions and the "
            "below-4-GiB split%s; peak %u runs, %llu KiB, %llu KiB below 4 GiB\n",
            straddles ? "" : " (one side only)",
            stats.peak_runs, (unsigned long long)(stats.peak_backed_bytes >> 10),

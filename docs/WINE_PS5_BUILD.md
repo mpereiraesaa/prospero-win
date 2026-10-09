@@ -101,6 +101,7 @@ before evaluating a candidate built from that cache.
 | 0611 | `wow64`: `WINE_PS5_WOW64_CPU` names the process's CPU backend (`wow64native.dll` or `wowprospero.dll`); when the named one cannot be loaded, the prefix's own choice is used instead of ending the process |
 | 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
 | 0790 | `server`, `ntdll`: opt-in immediate mutex acquire/release using the authoritative server object without request marshalling or waiter allocation; see [Immediate mutex calls](#immediate-mutex-calls) |
+| 0871 | `server`, `ntdll`: an anonymous section a process creates gets its own direct memory, which every view maps, wherever the view is, instead of 0730's shared memory object, whose views draw on the ~440 MiB of flexible memory (Battle.net's login page ran it to 0 KiB and its 2 MiB views failed); a view that cannot map it fails rather than falling back to the object; see [Anonymous sections in direct memory](#anonymous-sections-in-direct-memory) |
 | 0881 | `ntdll`: the number of processors is the CPUs the process may run on (`cpuset_getaffinity`), 13 for a game on the console, not the 16 online; threads of one priority there never share a CPU, so a program that started a worker per reported CPU had three that did not run until another blocked |
 | 0882 | `server`: Windows threads run SCHED_RR, so threads of one priority take turns on the CPUs, and priorities above normal raise the native priority one step per band (normal and below stay at the title's 700); a title's threads are otherwise SCHED_FIFO at one priority, where a 14th busy thread waits for one of the game's 13 CPUs and a Windows priority change does nothing. Opt-in: `WINE_PS5_SCHED=1` or the file `/data/prospero-win/pw_sched` |
 | 0884 | `server`: a watched directory is polled for changes (25 ms to 2 s apart, slower for a directory that takes long to list) and the differences are reported as inotify would, renames included; the console has no inotify, dnotify or kqueue, and change notifications never fired |
@@ -184,6 +185,50 @@ it can when its preferred base is taken, and before 0601 that was the high
 area, where the guest saw its base truncated to 32 bits. The host tests run the policy against a model of the kernel (a memfd
 for physical memory, reservations that refuse to overlap, execute refused at
 map time) with 20,000 random operations checked page by page.
+
+### Anonymous sections in direct memory
+
+Patch 0730 backs an anonymous section (`NtCreateSection` without a file)
+with a POSIX shared memory object, and each view of one is a shared file
+mapping, which draws on the flexible memory. A browser creates hundreds:
+Battle.net's login page ran flexible memory to 0 KiB, its 2 MiB views
+failed with `ENOMEM` and the page reported `ERR_INSUFFICIENT_RESOURCES`,
+while 1.3 GiB of direct memory was in use with no failure.
+
+With patch 0871 the in-process server registers each anonymous section a
+process creates (`pw_wineserver_set_section_backing`, given ntdll's
+functions once the server is connected and before the process can ask for
+a section). The section gets its own direct memory, zeroed through a
+mapping the kernel places. Every view ntdll maps of it maps that memory,
+so all views show the same bytes: a view inside a region through the
+direct-memory module (`pw_wine_dmem_map_shared`, a run the module never
+releases, so a region holding a view is never dropped by 0897's unmapping
+while the view is there), a view outside the regions, one straddling a
+region's edge or one the kernel places straight from the kernel, piece by
+piece along the regions' edges. A copy-on-write view gets a copy: the
+module's direct memory inside the regions, ordinary anonymous memory
+outside. A view of a registered section never falls back to the shared
+memory object, which is not written again once the section has its direct
+memory and would show zeros while the other views show the contents; what
+cannot be mapped (a view past the section's end, a view table of 8192
+slots full, a kernel refusal) fails with `ENOMEM` instead, and a full table
+is logged once. The views are kept in a table scanned only up to its
+highest used slot. The memory is released once the section object is
+destroyed and its last view is unmapped or replaced. The server's own
+sections, the session block it grows and the user shared data, keep their
+shared memory object, since the server maps those itself.
+
+A section over 256 MiB keeps its object. So does every section when the
+console refuses to map one block of direct memory at two addresses, which
+is checked once, on the first section; the log says
+`wine-ps5: anonymous sections in direct memory: on` or `off`.
+`WINE_PS5_SECTION_DMEM=0` turns it off. The title's memory line counts the
+sections' direct memory as `sections=` and `sections_peak=`. The host
+tests (`tests/test_pw_wine_dmem_ps5.c`, with a 24-slot view table) cover
+views inside, outside and across a region's edge, views the kernel places,
+copy-on-write views, a view past the end and a full table refused, a region
+unmapped under a view, release with the last view, an oversize section and
+a console that refuses to alias.
 
 ## PRX modules
 

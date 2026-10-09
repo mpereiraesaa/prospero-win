@@ -285,6 +285,44 @@ int pw_wine_dmem_replace(PwWineDmem *d, uintptr_t address, size_t bytes, unsigne
     return status;
 }
 
+int pw_wine_dmem_map_shared(PwWineDmem *d, uintptr_t address, size_t bytes, int64_t offset,
+                            unsigned protection)
+{
+    protection &= 7;
+    lock(d);
+    if (!valid(d, address, bytes) ||
+        d->run_count + replace_needs(d, address, bytes, 1) > d->run_capacity ||
+        d->ops.unmap(d->ops.context, address, bytes)) {
+        d->stats.failures++;
+        unlock(d);
+        return -1;
+    }
+    forget(d, address, address + bytes);
+    /* A fixed map lands on a reservation; refused, the range is merely
+     * free and the map still takes it. */
+    if (d->ops.reserve(d->ops.context, address, bytes)) d->stats.failures++;
+    if (d->ops.map(d->ops.context, address, bytes, offset)) goto failed;
+    d->stats.maps++;
+    if (protection != READ_WRITE) {
+        if (d->ops.protect(d->ops.context, address, bytes, protection)) {
+            (void)d->ops.unmap(d->ops.context, address, bytes);
+            goto unmapped;
+        }
+        d->stats.protects++;
+    }
+    /* The direct memory belongs to whoever shares it out: never released
+     * here, like a mapping of the caller's. */
+    add_run(d, (PwWineDmemRun){ address, bytes, PW_WINE_DMEM_CALLER });
+    unlock(d);
+    return 0;
+unmapped:
+    if (d->ops.reserve(d->ops.context, address, bytes)) d->stats.failures++;
+failed:
+    d->stats.failures++;
+    unlock(d);
+    return -1;
+}
+
 int pw_wine_dmem_adopt(PwWineDmem *d, uintptr_t address, size_t bytes)
 {
     lock(d);

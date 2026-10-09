@@ -462,7 +462,7 @@ if [ "$prx_status" = 0 ]; then
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineserver_desc.c" \
         pw_wineserver_connect pw_wine_thread_register pw_wine_thread_unregister pw_wineserver_call_direct pw_wineserver_try_fast_mutex \
         pw_wineserver_mutex_backend \
-        pw_wineserver_sync_backend \
+        pw_wineserver_sync_backend pw_wineserver_set_section_backing \
         pw_cwd_share_changes
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wowprospero_desc.c" __wine_unix_call_funcs
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/wineps5_desc.c" \
