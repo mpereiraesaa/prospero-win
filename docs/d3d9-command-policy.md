@@ -111,3 +111,8 @@ becomes the identity matrix, matching pinned ConvertMatrix in live and recorded
 paths. MultiplyTransform and getters are unchanged by this correction.
 The controlled frontend fixture covers all three creation modes, poisoned
 non-NULL pointers with zero effective count and short buffers after clamping.
+
+The paired builder derives its recorded feature mask from the exact policy
+header used by both compilers. Missing, duplicate, non-power-of-two or colliding
+feature declarations fail the build description. The receipt hashes that header
+and the builder; expanded builds report30719 rather than the old14335 mask.

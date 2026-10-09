@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Build paired production PE32 proxy and native PE64 D3D9 service."""
-import subprocess,pathlib,json,hashlib,argparse
+import subprocess,pathlib,json,hashlib,argparse,re
+def production_features(source_root):
+ text=(source_root/'wine/ps5/pw_d3d9_command_policy.h').read_text()
+ values=re.findall(r'^#define[ \t]+PW_D3D9_COMMAND_POLICY_FEATURE[ \t]+([0-9]+)u[ \t]*$',text,re.M)
+ if len(values)!=1:raise ValueError('missing or ambiguous command policy feature')
+ feature=int(values[0])
+ if not feature or feature&(feature-1) or feature&14335:raise ValueError('invalid command policy feature')
+ return 14335|feature
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',type=pathlib.Path,required=True)
 parser.add_argument('--api-diagnostics',action='store_true',help='compile opt-in guest COM result observation')
 args=parser.parse_args()
@@ -11,7 +18,8 @@ flags=['-std=c11','-O2','-Wall','-Wextra','-Werror','-Wno-array-bounds','-DPW_D3
 shared=['d3d9/pw_d3d9_session.c','pw_d3d9_bridge_wire.c','pw_d3d9_objects.c','pw_d3d9_factory_wire.c','pw_d3d9_device_wire.c','pw_d3d9_resource_wire.c','pw_d3d9_command_wire.c','pw_d3d9_getter_wire.c','pw_d3d9_program_wire.c','pw_d3d9_program_query.c','pw_d3d9_texture_wire.c','pw_d3d9_stateblock_wire.c','pw_d3d9_object_getter.c','pw_d3d9_up_wire.c','pw_d3d9_query_wire.c','pw_d3d9_cursor_wire.c','d3d9/pw_d3d9_cursor.c','pw_d3d9_gamma_wire.c','pw_d3d9_implicit_wire.c','pw_d3d9_command_batch.c','pw_d3d9_command_policy.c']
 client=['d3d9/pw_d3d9_proxy.c','d3d9/pw_d3d9_device_proxy.c','d3d9/pw_d3d9_device_methods.c','d3d9/pw_d3d9_program_proxy.c','d3d9/pw_d3d9_buffer_proxy.c','d3d9/pw_d3d9_buffer_client.c','d3d9/pw_d3d9_staging.c','d3d9/pw_d3d9_texture_client.c','d3d9/pw_d3d9_texture_proxy.c','d3d9/pw_d3d9_private_data.c','d3d9/pw_d3d9_stateblock_client.c','d3d9/pw_d3d9_device_object_methods.c','d3d9/pw_d3d9_up_client.c','d3d9/pw_d3d9_query_proxy.c','d3d9/pw_d3d9_gamma_proxy.c']
 service=['d3d9/pw_d3d9_native_device.c','d3d9/pw_d3d9_native_resource.c','d3d9/pw_d3d9_native_command.c','d3d9/pw_d3d9_native_getter.c','d3d9/pw_d3d9_native_program.c','d3d9/pw_d3d9_native_program_query.c','d3d9/pw_d3d9_service_resource.c','d3d9/pw_d3d9_service_methods.c','d3d9/pw_d3d9_service_program.c','d3d9/pw_d3d9_service_texture.c','d3d9/pw_d3d9_native_texture.c','d3d9/pw_d3d9_service_stateblock.c','d3d9/pw_d3d9_native_stateblock.c','d3d9/pw_d3d9_service_object_getter.c','d3d9/pw_d3d9_native_object_getter.c','d3d9/pw_d3d9_service_up.c','d3d9/pw_d3d9_native_up.c','d3d9/pw_d3d9_service_query.c','d3d9/pw_d3d9_native_query.c','d3d9/pw_d3d9_native_gamma.c']
-r={'api_diagnostics_compiled':args.api_diagnostics,'features':14335,'sources':{},'builds':[],'scope':'Paired production build; runtime acceptance is separate.'}
+r={'api_diagnostics_compiled':args.api_diagnostics,'features':production_features(root),'sources':{},'builds':[],'scope':'Paired production build; runtime acceptance is separate.'}
+r['sources'][str(pathlib.Path(__file__).relative_to(root))]=hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
 for path in sorted((root/'wine/ps5').rglob('*.h')):r['sources'][str(path.relative_to(root))]=hashlib.sha256(path.read_bytes()).hexdigest()
 for arch,extra,output in [('i686',client,'d3d9.dll'),('x86_64',service,'service.dll')]:
  observe=args.api_diagnostics and arch=='i686'
