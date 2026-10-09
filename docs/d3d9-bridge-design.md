@@ -1,7 +1,8 @@
 # D3D9 bridge: 32-bit client, 64-bit DXVK service
 
-Status: design for owner review. No bridge implementation or gameplay result is
-claimed. Prototype work starts only after this design is approved. The Vulkan
+Status: approved by the owner on 2026-10-09. B1 prototype implementation is
+authorized, beginning with the native PE64 bootstrap proof below. No bridge
+implementation or gameplay result is claimed. The Vulkan
 append/replay work remains necessary for other graphics APIs.
 
 ## Decision and evidence
@@ -279,7 +280,8 @@ Split implementation into small dependency-ordered PRs with host tests, targeted
 builds, applicable console evidence and green CI. Do not claim that stock PE64
 loading, extra threads or higher address space alone proves a performance gain.
 
-Owner review requested: approve the in-process PE64 service architecture and its
-bootstrap/window proof gates before B1. If those gates fail, return with evidence
+Owner approved the in-process PE64 service architecture on 2026-10-09. The
+bootstrap/window proof gates remain implementation requirements. If those gates
+fail, return with evidence
 and an amended design; do not silently switch to a separate process, a custom
 D3D9 renderer or a 32-bit backend.
