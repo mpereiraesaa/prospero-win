@@ -8,7 +8,7 @@ static void roundtrip(unsigned op)
  struct pw_d3d9_texture_request q={0},decoded,old;
  struct pw_d3d9_texture_reply r={0},reply,old_reply;
  unsigned char wire[PW_D3D9_TEXTURE_MAX_WIRE],copy[sizeof(wire)];size_t n,i,k;
- q.operation=op;q.value=UINT32_MAX;q.width=128;q.height=64;q.levels=8;q.format=21;q.pool=1;q.usage=0x200;
+ q.operation=op;q.value=op==PW_D3D9_TEXTURE_CONTAINER?PW_D3D9_CONTAINER_TEXTURE_2D:UINT32_MAX;q.width=128;q.height=64;q.levels=8;q.format=21;q.pool=1;q.usage=0x200;
  q.level=3;q.flags=0x3010;q.has_rect=1;q.left=4;q.top=8;q.right=20;q.bottom=40;
  q.multisample_type=4;q.multisample_quality=7;q.lockable=2;q.discard=0xffffffffu;q.filter=2;q.color=0xffa56789;q.has_destination_rect=1;q.destination_left=-1;q.destination_top=2;q.destination_right=30;q.destination_bottom=40;
  q.has_point=1;q.x=-3;q.y=99;q.source=(struct pw_d3d9_object_ref){1,2};q.destination=(struct pw_d3d9_object_ref){3,4};
@@ -22,7 +22,7 @@ static void roundtrip(unsigned op)
  wire[12]=1;assert(pw_d3d9_texture_request_decode(&decoded,wire,n));wire[12]=0;
  assert(pw_d3d9_texture_request_decode(&decoded,wire,n+1));
  wire[0]=1;assert(pw_d3d9_texture_request_decode(&decoded,wire,n));wire[0]=PW_D3D9_TEXTURE_VERSION;
- r.operation=op;r.value=0x87654321;r.object=(struct pw_d3d9_object_ref){7,8};r.levels=8;
+ r.operation=op;r.value=0x87654321;r.container_kind=PW_D3D9_KIND_TEXTURE_2D;r.object=(struct pw_d3d9_object_ref){7,8};r.levels=8;
  r.desc=(struct pw_d3d9_surface_desc){21,1,0x200,1,0,0,128,64};
  r.lock_generation=UINT64_C(0xfedcba9876543210);r.pitch=-64;r.rows=3;r.row_bytes=48;r.length=176;
  r.count=4096;r.offset=9;memcpy(r.data,q.data,sizeof(r.data));
@@ -41,7 +41,7 @@ int main(void)
 {
  struct pw_d3d9_texture_request q={.operation=PW_D3D9_TEXTURE_LOCK,.has_rect=2};
  unsigned char wire[PW_D3D9_TEXTURE_MAX_WIRE];size_t n;unsigned op;
- for(op=1;op<=25;op++)roundtrip(op);
+ for(op=1;op<=26;op++)roundtrip(op);
  assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));q.has_rect=0;q.left=1;
  assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));
  q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_UPDATE};assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));
@@ -52,5 +52,11 @@ int main(void)
  assert(!pw_d3d9_texture_layout_valid(64,0,48,48));assert(!pw_d3d9_texture_layout_valid(64,3,0,128));
  q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_STRETCH,.source={1,1},.destination={2,1},.has_destination_rect=2};assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));
  q.has_destination_rect=0;q.destination_left=1;assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_CONTAINER};
+ assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));q.value=7;assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));
+ struct pw_d3d9_texture_reply r={.operation=PW_D3D9_TEXTURE_CONTAINER,.object={1,2},.container_kind=PW_D3D9_KIND_DEVICE};
+ assert(!pw_d3d9_texture_reply_encode(wire,sizeof(wire),&n,&r));r.levels=1;assert(pw_d3d9_texture_reply_encode(wire,sizeof(wire),&n,&r));
+ r.container_kind=PW_D3D9_KIND_TEXTURE_2D;r.levels=0;assert(pw_d3d9_texture_reply_encode(wire,sizeof(wire),&n,&r));
+ r.levels=1;r.container_kind=11;assert(pw_d3d9_texture_reply_encode(wire,sizeof(wire),&n,&r));
  puts("d3d9 texture wire: PASS");return 0;
 }

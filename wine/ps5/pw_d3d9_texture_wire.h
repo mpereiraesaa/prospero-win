@@ -2,6 +2,7 @@
 #ifndef PW_D3D9_TEXTURE_WIRE_H
 #define PW_D3D9_TEXTURE_WIRE_H
 #include "pw_d3d9_resource_wire.h"
+#include "d3d9/pw_d3d9_kinds.h"
 #define PW_D3D9_TEXTURE_VERSION 2u
 #define PW_D3D9_TEXTURE_MAX_WIRE PW_D3D9_RESOURCE_MAX_WIRE
 enum pw_d3d9_texture_operation {
@@ -14,7 +15,16 @@ enum pw_d3d9_texture_operation {
  PW_D3D9_TEXTURE_COLOR_FILL, PW_D3D9_TEXTURE_RT_DATA,
  PW_D3D9_TEXTURE_GET_PRIORITY=18, PW_D3D9_TEXTURE_SET_PRIORITY, PW_D3D9_TEXTURE_PRELOAD,
  PW_D3D9_TEXTURE_GET_LOD, PW_D3D9_TEXTURE_SET_LOD, PW_D3D9_TEXTURE_GET_AUTOGEN_FILTER,
- PW_D3D9_TEXTURE_SET_AUTOGEN_FILTER, PW_D3D9_TEXTURE_GENERATE_MIPS
+ PW_D3D9_TEXTURE_SET_AUTOGEN_FILTER, PW_D3D9_TEXTURE_GENERATE_MIPS,
+ PW_D3D9_TEXTURE_CONTAINER
+};
+/* Bounded requested interfaces, never a guest COM pointer. Unsupported guest
+ * IIDs are rejected by the frontend. Swapchain containers are currently queried
+ * then explicitly rejected because there is no registered swapchain proxy. */
+enum pw_d3d9_container_interface {
+ PW_D3D9_CONTAINER_UNKNOWN=1, PW_D3D9_CONTAINER_DEVICE,
+ PW_D3D9_CONTAINER_RESOURCE, PW_D3D9_CONTAINER_BASE_TEXTURE,
+ PW_D3D9_CONTAINER_TEXTURE_2D, PW_D3D9_CONTAINER_SWAPCHAIN
 };
 struct pw_d3d9_surface_desc {
  uint32_t format,type,usage,pool,multisample_type,multisample_quality,width,height;
@@ -34,7 +44,7 @@ struct pw_d3d9_texture_request {
 struct pw_d3d9_texture_reply {
  uint32_t operation,hresult;
  struct pw_d3d9_object_ref object;
- uint32_t levels;
+ uint32_t levels,container_kind;
  struct pw_d3d9_surface_desc desc;
  uint64_t lock_generation;
  int32_t pitch;

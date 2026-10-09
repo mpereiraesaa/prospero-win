@@ -10,7 +10,7 @@ static void put32(unsigned char *p,uint32_t n)
 static void put64(unsigned char *p,uint64_t n)
 {put32(p,(uint32_t)n);put32(p+4,(uint32_t)(n>>32));}
 static int valid_op(uint32_t op)
-{return op>=PW_D3D9_TEXTURE_CREATE&&op<=PW_D3D9_TEXTURE_GENERATE_MIPS;}
+{return op>=PW_D3D9_TEXTURE_CREATE&&op<=PW_D3D9_TEXTURE_CONTAINER;}
 static int chunk(uint64_t gen,uint32_t off,uint32_t count)
 {return gen&&count&&count<=PW_D3D9_RESOURCE_CHUNK&&off<=UINT32_MAX-count;}
 int pw_d3d9_texture_layout_valid(int32_t pitch,uint32_t rows,uint32_t row_bytes,uint32_t length)
@@ -20,7 +20,7 @@ int pw_d3d9_texture_layout_valid(int32_t pitch,uint32_t rows,uint32_t row_bytes,
 }
 #define O(f) offsetof(struct pw_d3d9_texture_request,f)
 struct schema {unsigned n;size_t fields[15];};
-static const struct schema schema[26]={
+static const struct schema schema[27]={
  [PW_D3D9_TEXTURE_CREATE]={6,{O(width),O(height),O(levels),O(usage),O(format),O(pool)}},
  [PW_D3D9_TEXTURE_CREATE_SURFACE]={4,{O(width),O(height),O(format),O(pool)}},
  [PW_D3D9_TEXTURE_DESC]={1,{O(level)}},[PW_D3D9_TEXTURE_SURFACE_LEVEL]={1,{O(level)}},
@@ -35,12 +35,14 @@ static const struct schema schema[26]={
  [PW_D3D9_TEXTURE_RT_DATA]={4,{O(source.id),O(source.generation),O(destination.id),O(destination.generation)}},
  [PW_D3D9_TEXTURE_SET_PRIORITY]={1,{O(value)}},
  [PW_D3D9_TEXTURE_SET_LOD]={1,{O(value)}},
- [PW_D3D9_TEXTURE_SET_AUTOGEN_FILTER]={1,{O(value)}}
+ [PW_D3D9_TEXTURE_SET_AUTOGEN_FILTER]={1,{O(value)}},
+ [PW_D3D9_TEXTURE_CONTAINER]={1,{O(value)}}
 };
 #undef O
 static int request_size(const struct pw_d3d9_texture_request *q,size_t *n)
 {
  if(!valid_op(q->operation))return 0;
+ if(q->operation==PW_D3D9_TEXTURE_CONTAINER&&(q->value<PW_D3D9_CONTAINER_UNKNOWN||q->value>PW_D3D9_CONTAINER_SWAPCHAIN))return 0;
  if(q->operation==PW_D3D9_TEXTURE_READ||q->operation==PW_D3D9_TEXTURE_WRITE){
   if(!chunk(q->lock_generation,q->offset,q->count))return 0;
   *n=16+(q->operation==PW_D3D9_TEXTURE_WRITE?q->count:0);return 1;
@@ -109,6 +111,11 @@ static int reply_size(const struct pw_d3d9_texture_reply *r,size_t *n)
  if(!valid_op(r->operation))return 0;
  *n=0;if(r->hresult&0x80000000u)return 1;
  switch(r->operation){
+ case PW_D3D9_TEXTURE_CONTAINER:
+  if(!r->object.id||!r->object.generation)return 0;
+  if(r->container_kind==PW_D3D9_KIND_DEVICE){if(r->levels)return 0;}
+  else if(r->container_kind==PW_D3D9_KIND_TEXTURE_2D){if(!r->levels)return 0;}else return 0;
+  *n=16;break;
  case PW_D3D9_TEXTURE_GET_PRIORITY:case PW_D3D9_TEXTURE_SET_PRIORITY:case PW_D3D9_TEXTURE_GET_LOD:case PW_D3D9_TEXTURE_SET_LOD:case PW_D3D9_TEXTURE_GET_AUTOGEN_FILTER:*n=4;break;
  case PW_D3D9_TEXTURE_CREATE:case PW_D3D9_TEXTURE_CREATE_SURFACE:case PW_D3D9_TEXTURE_CREATE_RT:case PW_D3D9_TEXTURE_CREATE_DEPTH:case PW_D3D9_TEXTURE_SURFACE_LEVEL:
   if(!r->object.id||!r->object.generation||!r->levels)return 0;
@@ -133,6 +140,7 @@ int pw_d3d9_texture_reply_encode(void *wire,size_t cap,size_t *written,const str
  if(!wire)return PW_D3D9_RESOURCE_INVALID;
  put32(tmp,PW_D3D9_TEXTURE_VERSION);put32(tmp+4,r->operation);put32(tmp+8,r->hresult);put32(tmp+12,(uint32_t)n);
  if(n)switch(r->operation){
+ case PW_D3D9_TEXTURE_CONTAINER:put32(p,r->object.id);put32(p+4,r->object.generation);put32(p+8,r->container_kind);put32(p+12,r->levels);break;
  case PW_D3D9_TEXTURE_GET_PRIORITY:case PW_D3D9_TEXTURE_SET_PRIORITY:case PW_D3D9_TEXTURE_GET_LOD:case PW_D3D9_TEXTURE_SET_LOD:case PW_D3D9_TEXTURE_GET_AUTOGEN_FILTER:put32(p,r->value);break;
  case PW_D3D9_TEXTURE_CREATE:case PW_D3D9_TEXTURE_CREATE_SURFACE:case PW_D3D9_TEXTURE_CREATE_RT:case PW_D3D9_TEXTURE_CREATE_DEPTH:case PW_D3D9_TEXTURE_SURFACE_LEVEL:
   put32(p,r->object.id);put32(p+4,r->object.generation);put32(p+8,r->levels);desc_put(p+12,&r->desc);break;
@@ -149,6 +157,9 @@ int pw_d3d9_texture_reply_decode(struct pw_d3d9_texture_reply *out,const void *w
  if(!out||!p||bytes<16||bytes>PW_D3D9_TEXTURE_MAX_WIRE||get32(p)!=PW_D3D9_TEXTURE_VERSION||get32(p+12)!=bytes-16)return PW_D3D9_RESOURCE_INVALID;
  r.operation=get32(p+4);r.hresult=get32(p+8);p+=16;if(!valid_op(r.operation))return PW_D3D9_RESOURCE_UNSUPPORTED;
  if(!(r.hresult&0x80000000u))switch(r.operation){
+ case PW_D3D9_TEXTURE_CONTAINER:
+  if(bytes!=32)return PW_D3D9_RESOURCE_INVALID;
+  r.object.id=get32(p);r.object.generation=get32(p+4);r.container_kind=get32(p+8);r.levels=get32(p+12);break;
  case PW_D3D9_TEXTURE_GET_PRIORITY:case PW_D3D9_TEXTURE_SET_PRIORITY:case PW_D3D9_TEXTURE_GET_LOD:case PW_D3D9_TEXTURE_SET_LOD:case PW_D3D9_TEXTURE_GET_AUTOGEN_FILTER:
   if(bytes!=20)return PW_D3D9_RESOURCE_INVALID;
   r.value=get32(p);break;

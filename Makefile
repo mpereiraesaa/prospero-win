@@ -72,7 +72,7 @@ $(BUILD)/test_d3d9_program_query: wine/ps5/pw_d3d9_program_query.h wine/ps5/pw_d
 $(eval $(call test_rule,test_d3d9_factory_wire,tests/test_d3d9_factory_wire.c wine/ps5/pw_d3d9_factory_wire.c,-I.))
 $(eval $(call test_rule,test_d3d9_resource_wire,tests/test_d3d9_resource_wire.c wine/ps5/pw_d3d9_resource_wire.c,-Iwine/ps5))
 $(eval $(call test_rule,test_d3d9_texture_wire,tests/test_d3d9_texture_wire.c wine/ps5/pw_d3d9_texture_wire.c,-Iwine/ps5))
-$(BUILD)/test_d3d9_texture_wire: wine/ps5/pw_d3d9_texture_wire.h wine/ps5/pw_d3d9_resource_wire.h
+$(BUILD)/test_d3d9_texture_wire: wine/ps5/pw_d3d9_texture_wire.h wine/ps5/pw_d3d9_resource_wire.h wine/ps5/d3d9/pw_d3d9_kinds.h
 $(BUILD)/test_d3d9_resource_wire: wine/ps5/pw_d3d9_resource_wire.h wine/ps5/pw_d3d9_objects.h
 $(BUILD)/test_d3d9_factory_wire: wine/ps5/pw_d3d9_factory_wire.h
 $(eval $(call test_rule,test_d3d9_getter_wire,tests/test_d3d9_getter_wire.c wine/ps5/pw_d3d9_getter_wire.c,-Iwine/ps5))

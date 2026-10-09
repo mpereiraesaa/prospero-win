@@ -217,6 +217,40 @@ void pw_d3d9_native_texture_call(struct pw_d3d9_native_texture *r,const struct p
  }
  reply->hresult=(uint32_t)hr;
 }
+void pw_d3d9_native_texture_container(struct pw_d3d9_native_texture *r,const struct pw_d3d9_texture_request *q,
+ struct pw_d3d9_texture_reply *reply,void **owned)
+{
+ static const IID *const interfaces[]={NULL,&IID_IUnknown,&IID_IDirect3DDevice9,&IID_IDirect3DResource9,
+  &IID_IDirect3DBaseTexture9,&IID_IDirect3DTexture9,&IID_IDirect3DSwapChain9};
+ IUnknown *raw=NULL;IDirect3DDevice9 *device=NULL,*actual=NULL;IDirect3DTexture9 *texture=NULL;HRESULT hr=D3DERR_INVALIDCALL;
+ memset(reply,0,sizeof(*reply));reply->operation=q->operation;if(owned)*owned=NULL;
+ if(!owned||!r||r->kind!=PW_D3D9_KIND_SURFACE||q->operation!=PW_D3D9_TEXTURE_CONTAINER||q->value<1||q->value>PW_D3D9_CONTAINER_SWAPCHAIN)goto done;
+ hr=IDirect3DSurface9_GetContainer(r->object.surface,interfaces[q->value],(void **)&raw);
+ if(FAILED(hr))goto done;
+ if(!raw){hr=E_FAIL;goto done;}
+ hr=IUnknown_QueryInterface(raw,&IID_IDirect3DDevice9,(void **)&device);
+ if(SUCCEEDED(hr)){
+  if(!device){hr=E_FAIL;goto done;}
+  if(device!=r->device){hr=D3DERR_INVALIDCALL;goto done;}
+  reply->container_kind=PW_D3D9_KIND_DEVICE;*owned=device;device=NULL;goto done;
+ }
+ if(hr!=E_NOINTERFACE)goto done;
+ hr=IUnknown_QueryInterface(raw,&IID_IDirect3DTexture9,(void **)&texture);
+ if(FAILED(hr))goto done; /* includes unsupported swapchain/cube containers */
+ if(!texture){hr=E_FAIL;goto done;}
+ hr=IDirect3DTexture9_GetDevice(texture,&actual);if(FAILED(hr))goto done;
+ if(!actual||actual!=r->device){hr=D3DERR_INVALIDCALL;goto done;}
+ reply->levels=IDirect3DTexture9_GetLevelCount(texture);
+ if(!reply->levels){hr=E_FAIL;goto done;}
+ reply->container_kind=PW_D3D9_KIND_TEXTURE_2D;*owned=texture;texture=NULL;
+ done:
+ if(actual)IDirect3DDevice9_Release(actual);
+ if(device)IDirect3DDevice9_Release(device);
+ if(texture)IDirect3DTexture9_Release(texture);
+ if(raw)IUnknown_Release(raw);
+ if(FAILED(hr)){reply->levels=0;reply->container_kind=0;}
+ reply->hresult=(uint32_t)hr;
+}
 void pw_d3d9_native_texture_copy(void *device,struct pw_d3d9_native_texture *source,struct pw_d3d9_native_texture *destination,const struct pw_d3d9_texture_request *q,struct pw_d3d9_texture_reply *reply)
 {
  HRESULT hr=D3DERR_INVALIDCALL;memset(reply,0,sizeof(*reply));reply->operation=q->operation;reply->hresult=hr;
