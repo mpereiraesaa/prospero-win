@@ -193,7 +193,9 @@ HRESULT pw_d3d9_service_texture_owners_begin_reset(struct pw_d3d9_objects *objec
 {
  for(UINT i=0;i<objects->capacity;i++){
   struct texture_owner *owner=implicit_owner(objects,i,parent);if(!owner)continue;
-  if(!owner->prepared||owner->parked||((owner->zero||!objects->slots[i].guest_refs)&&!pw_d3d9_native_texture_can_park(owner->native)))return D3DERR_INVALIDCALL;
+  if(!owner->prepared||owner->parked||
+     (owner->zero&&(objects->slots[i].guest_refs>1||objects->slots[i].queued_refs))||
+     ((owner->zero||!objects->slots[i].guest_refs)&&!pw_d3d9_native_texture_can_park(owner->native)))return D3DERR_INVALIDCALL;
  }
  /* A getter between PREPARE and Reset can expose a previously unseen owner.
   * Only classify those unsnapshotted entries using their current guest count. */
