@@ -638,3 +638,9 @@ tests/lab/d3d9_native_command.py
 tests/lab/d3d9_native_command_pe.c
 wine/ps5/d3d9/pw_d3d9_native_command.c
 wine/ps5/d3d9/pw_d3d9_native_command.h
+wine/ps5/d3d9/pw_d3d9_native_getter.h
+wine/ps5/d3d9/pw_d3d9_native_getter.c
+tests/lab/d3d9_native_getter.c
+tests/lab/d3d9_native_getter_pe.c
+tests/lab/d3d9_native_getter.py
+docs/d3d9-native-getter.md
