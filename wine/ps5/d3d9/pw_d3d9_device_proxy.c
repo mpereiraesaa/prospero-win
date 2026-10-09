@@ -16,6 +16,9 @@
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
 #include "pw_d3d9_stateblock_client.h"
 #endif
+#ifdef PW_D3D9_ENABLE_OBJECT_GETTER
+#include "pw_d3d9_device_object_methods.h"
+#endif
 #include "pw_d3d9_inventory.h"
 #include "../pw_d3d9_window_driver.h"
 #include <stdio.h>
@@ -301,6 +304,21 @@ static HRESULT resolve_object(IDirect3DDevice9 *iface,IUnknown *local,uint32_t k
     return D3DERR_INVALIDCALL;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_OBJECT_GETTER
+static HRESULT object_getter_call(IDirect3DDevice9 *iface,const struct pw_d3d9_object_getter_request *q,struct pw_d3d9_object_getter_reply *r)
+{
+    struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
+    addref(iface);HRESULT hr=pw_d3d9_session_object_getter(d->session,d->remote,q,r);release(iface);return hr;
+}
+static HRESULT wrap_object(IDirect3DDevice9 *iface,uint32_t kind,struct pw_d3d9_object_ref ref,void **out)
+{
+    if(kind==3||kind==4)return pw_d3d9_buffer_proxy_wrap(iface,kind,ref,out);
+    if(kind==5||kind==6)return pw_d3d9_texture_proxy_wrap(iface,kind,ref,0,out);
+    if(kind>=7&&kind<=9)return pw_d3d9_program_proxy_wrap(iface,kind,ref,out);
+    if(out)*out=NULL;
+    fail_device(iface,E_NOINTERFACE);return E_NOINTERFACE;
+}
+#endif
 static BOOL CALLBACK init_vtable(INIT_ONCE *once,void *parameter,void **context)
 {
     (void)once;(void)parameter;(void)context;
@@ -325,6 +343,9 @@ static BOOL CALLBACK init_vtable(INIT_ONCE *once,void *parameter,void **context)
 #endif
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
     const struct pw_d3d9_stateblock_client_ops blocks={stateblock_call,release_object,defer_object,fail_device};pw_d3d9_stateblock_client_install(&vtable,&blocks);
+#endif
+#ifdef PW_D3D9_ENABLE_OBJECT_GETTER
+    const struct pw_d3d9_device_object_methods_ops objects={object_getter_call,wrap_object,fail_device};pw_d3d9_device_object_methods_install(&vtable,&objects);
 #endif
     return TRUE;
 }
