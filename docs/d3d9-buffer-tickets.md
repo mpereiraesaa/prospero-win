@@ -15,4 +15,5 @@ alone does not enable asynchronous bindings or replace immediate HRESULT checks.
 The controlled test covers both kinds, invalid typed resolution, duplicate
 private pins, public-zero barrier, completion inside release, deferred cleanup,
 failed defer, terminal failure and final parent balance. Enabled and disabled
-PE32/64 builds are separate controls. No production queue/backend proof is claimed.
+PE32/64 builds are separate controls. Live low32 staging retention is checked
+in PE32; PE64 explicitly retains the existing allocation rejection. No production queue/backend proof is claimed.

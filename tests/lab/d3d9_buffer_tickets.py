@@ -20,7 +20,7 @@ def run(cmd,name,env=None):
 try:
  for arch in ('i686','x86_64'):
   for enabled in (0,1):
-   name=arch+'-'+str(enabled);binary=out/(name+'.exe');source=files[0] if enabled else 'tests/lab/d3d9_buffer_proxy.c'
+   name=arch+'-'+str(enabled);binary=out/(name+'.exe');source=files[0]
    flags=['-DPW_D3D9_ENABLE_BINDING_TICKETS'] if enabled else []
    run([arch+'-w64-mingw32-gcc','-std=c11','-O2','-Wall','-Wextra','-Werror',*flags,root/source,*[root/f for f in files[1:]],'-luuid','-ldxguid','-o',binary],name+'-build')
    env=os.environ.copy();env.update(WINEPREFIX=str(a.prefix.resolve()),WINEDEBUG='-all',WINEDLLOVERRIDES='mscoree,mshtml=')
