@@ -953,3 +953,6 @@ docs/d3d9-buffer-tickets.md
 wine/patches/0911-imm32-domain-local-ime-ui-class.patch
 tests/lab/wine_ime_domain.c
 tests/lab/wine_ime_domain.py
+tests/lab/d3d9_draw_client.c
+tests/lab/d3d9_draw_client.py
+docs/d3d9-session-observers.md

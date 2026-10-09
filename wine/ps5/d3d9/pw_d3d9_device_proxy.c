@@ -35,6 +35,10 @@
 #endif
 #include "pw_d3d9_inventory.h"
 #include "../pw_d3d9_window_driver.h"
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+#include "../pw_d3d9_bridge_wire.h"
+#include "pw_d3d9_transform_observer.h"
+#endif
 #include <stdio.h>
 #include <string.h>
 struct guest_window {
@@ -54,6 +58,11 @@ struct device_proxy {
     struct guest_window *window;
     D3DDEVICE_CREATION_PARAMETERS creation;
     struct pw_d3d9_deferred cleanup;
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    struct pw_d3d9_draw_shadow draw;
+    struct pw_d3d9_transform_shadow transform;
+    unsigned draw_recording_known;
+#endif
 };
 static SRWLOCK windows_lock=SRWLOCK_INIT;
 static struct guest_window *windows;
@@ -120,6 +129,97 @@ void pw_d3d9_device_proxy_detach(void)
 {if(helper_class&&!windows)UnregisterClassW(helper_name,module);}
 static struct device_proxy *device(IDirect3DDevice9 *iface){return (struct device_proxy *)iface;}
 static ULONG WINAPI addref(IDirect3DDevice9 *iface){return (ULONG)InterlockedIncrement(&device(iface)->references);}
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+struct draw_observation {struct device_proxy *device;struct pw_d3d9_stateblock_evidence *block;};
+static void invalidate_block(struct pw_d3d9_stateblock_evidence *block)
+{block->draw.captures_decl=1;block->draw.declaration=PW_D3D9_DECL_UNKNOWN;pw_d3d9_transform_invalidate_evidence(block);}
+static void draw_command_outcome(struct device_proxy *d,const struct pw_d3d9_command *q)
+{
+    if(q->method==87)pw_d3d9_draw_declaration(&d->draw,q->args[0]!=0,0);
+    else if(q->method==89)pw_d3d9_draw_fvf(&d->draw,q->args[0],0);
+    pw_d3d9_transform_on_command(&d->transform,q,S_OK);
+}
+static HRESULT draw_completed(void *opaque,uint32_t opcode,const void *input,size_t input_bytes,
+ const void *output,size_t output_bytes,HRESULT hr)
+{
+    struct draw_observation *context=opaque;struct device_proxy *d=context->device;
+    if(opcode==PW_D3D9_COMMAND_CALL){
+        struct pw_d3d9_command q;uint32_t method,result;
+        if(pw_d3d9_command_decode(&q,input,input_bytes))return E_FAIL;
+        if(!output_bytes&&FAILED(hr)){pw_d3d9_transform_on_command(&d->transform,&q,hr);return S_OK;}
+        if(pw_d3d9_command_reply_decode(&method,&result,output,output_bytes)||method!=q.method||result!=(uint32_t)hr)return E_FAIL;
+        if(hr==S_OK)draw_command_outcome(d,&q);
+        else pw_d3d9_transform_on_command(&d->transform,&q,hr);
+    }else if(opcode==PW_D3D9_GETTER_CALL){
+        struct pw_d3d9_getter_request q;struct pw_d3d9_getter_reply r;
+        if(pw_d3d9_getter_decode(&q,input,input_bytes))return E_FAIL;
+        if(!output_bytes&&FAILED(hr))return S_OK;
+        if(pw_d3d9_getter_reply_decode(&r,&q,output,output_bytes)||r.hresult!=(uint32_t)hr)return E_FAIL;
+        pw_d3d9_transform_on_getter(&d->transform,&q,&r,hr);
+    }else if(opcode==PW_D3D9_DEVICE_CALL){
+        struct pw_d3d9_device_request q;struct pw_d3d9_device_reply r;
+        if(pw_d3d9_device_request_decode(&q,input,input_bytes))return E_FAIL;
+        if(output_bytes){
+            if(pw_d3d9_device_reply_decode(&r,output,output_bytes)||r.operation!=q.operation||r.hresult!=(uint32_t)hr)return E_FAIL;
+        }else if(SUCCEEDED(hr))return E_FAIL;
+        if(q.operation==PW_D3D9_DEVICE_RESET){pw_d3d9_draw_invalidate(&d->draw);pw_d3d9_transform_on_reset(&d->transform);}
+    }else if(opcode==PW_D3D9_OBJECT_GETTER_CALL){
+        struct pw_d3d9_object_getter_request q;struct pw_d3d9_object_getter_reply r;
+        if(pw_d3d9_object_getter_decode(&q,input,input_bytes))return E_FAIL;
+        if(!output_bytes&&FAILED(hr))return S_OK;
+        if(pw_d3d9_object_getter_reply_decode(&r,&q,output,output_bytes)||r.hresult!=(uint32_t)hr)return E_FAIL;
+        if(hr==S_OK&&q.method==88)pw_d3d9_draw_observe(&d->draw,r.id!=0,0);
+    }else if(opcode==PW_D3D9_STATEBLOCK_CALL){
+        struct pw_d3d9_stateblock_request q;struct pw_d3d9_stateblock_reply r;
+        if(pw_d3d9_stateblock_decode(&q,input,input_bytes))return E_FAIL;
+        if(!output_bytes&&FAILED(hr)){
+            pw_d3d9_transform_on_stateblock(&d->transform,q.method,q.type,context->block,hr);
+            if(q.method==PW_D3D9_SB_END){d->draw_recording_known=0;pw_d3d9_draw_invalidate(&d->draw);}
+            return S_OK;
+        }
+        if(pw_d3d9_stateblock_reply_decode(&r,&q,output,output_bytes)||r.hresult!=(uint32_t)hr)return E_FAIL;
+        if(hr!=S_OK&&SUCCEEDED(hr))return E_FAIL;
+        pw_d3d9_transform_on_stateblock(&d->transform,q.method,q.type,context->block,hr);
+        if(FAILED(hr)&&q.method==PW_D3D9_SB_END){
+            /* Native End may have completed before registry publication failed.
+             * Preserve pending storage but do not guess the recording domain. */
+            d->draw_recording_known=0;pw_d3d9_draw_invalidate(&d->draw);
+        }
+        if(hr==S_OK){
+            if(q.method==PW_D3D9_SB_BEGIN||q.method==PW_D3D9_SB_END)d->draw_recording_known=1;
+            if(q.method!=PW_D3D9_SB_BEGIN&&!context->block)return E_FAIL;
+            switch(q.method){
+            case PW_D3D9_SB_BEGIN:pw_d3d9_draw_begin(&d->draw,0);break;
+            case PW_D3D9_SB_CREATE:pw_d3d9_draw_create_block(&d->draw,&context->block->draw,q.type,0);break;
+            case PW_D3D9_SB_END:pw_d3d9_draw_end(&d->draw,&context->block->draw,0);break;
+            case PW_D3D9_SB_CAPTURE:pw_d3d9_draw_capture(&d->draw,&context->block->draw,0);break;
+            case PW_D3D9_SB_APPLY:pw_d3d9_draw_apply(&d->draw,&context->block->draw,0);break;
+            default:return E_FAIL;
+            }
+            if(q.method==PW_D3D9_SB_CREATE||q.method==PW_D3D9_SB_END)
+                return pw_d3d9_stateblock_client_commit(context->block,r.object,invalidate_block);
+        }
+    }else return E_FAIL;
+    return hr==S_OK||FAILED(hr)?S_OK:E_FAIL;
+}
+static int draw_eligible(void *opaque,const struct pw_d3d9_command *q)
+{struct device_proxy *d=((struct draw_observation *)opaque)->device;return d->draw_recording_known&&pw_d3d9_draw_can_queue(&d->draw,q);}
+static HRESULT draw_queued(void *opaque,const struct pw_d3d9_command *q)
+{draw_command_outcome(((struct draw_observation *)opaque)->device,q);return S_OK;}
+static int transform_answer(void *opaque,const struct pw_d3d9_getter_request *q,struct pw_d3d9_getter_reply *r)
+{return pw_d3d9_transform_answer(&((struct draw_observation *)opaque)->device->transform,q,r);}
+static struct pw_d3d9_session_observer draw_observer(struct draw_observation *context)
+{return (struct pw_d3d9_session_observer){context,draw_completed,draw_eligible,draw_queued,transform_answer};}
+#endif
+static HRESULT device_transaction(struct device_proxy *d,const struct pw_d3d9_device_request *q,struct pw_d3d9_device_reply *r)
+{
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    struct draw_observation context={d,NULL};struct pw_d3d9_session_observer observer=draw_observer(&context);
+    return pw_d3d9_session_device_observed(d->session,d->remote,q,r,&observer);
+#else
+    return pw_d3d9_session_device(d->session,d->remote,q,r);
+#endif
+}
 #ifdef PW_D3D9_ENABLE_IMPLICIT
 static void implicit_failure(struct device_proxy *d)
 {InterlockedExchange(&d->failed,1);pw_d3d9_session_cancel(d->session);}
@@ -261,7 +361,7 @@ static HRESULT WINAPI reset(IDirect3DDevice9 *iface,D3DPRESENT_PARAMETERS *param
     if(FAILED(hr))goto reset_done;
     prepare.count=count;hr=implicit_call(d,&prepare,&control);
     if(FAILED(hr)){pw_d3d9_texture_proxy_owners_finish_reset(iface,TRUE);goto reset_done;}
-    hr=pw_d3d9_session_device(d->session,d->remote,&q,&r);
+    hr=device_transaction(d,&q,&r);
     if(r.operation!=q.operation||r.hresult!=(uint32_t)hr||!parameters_from_wire(parameters,&r.parameters,d->window)){
         pw_d3d9_texture_proxy_owners_finish_reset(iface,TRUE);implicit_failure(d);hr=E_FAIL;goto reset_done;
     }
@@ -282,7 +382,7 @@ static HRESULT WINAPI reset(IDirect3DDevice9 *iface,D3DPRESENT_PARAMETERS *param
         if(FAILED(installed)){implicit_failure(d);if(SUCCEEDED(hr))hr=installed;goto reset_done;}
     }
 #else
-    HRESULT hr=pw_d3d9_session_device(d->session,d->remote,&q,&r);
+    HRESULT hr=device_transaction(d,&q,&r);
     if(r.operation==q.operation&&!parameters_from_wire(parameters,&r.parameters,d->window)){
         hr=E_FAIL;pw_d3d9_session_cancel(d->session);pw_d3d9_session_join(d->session);
     }
@@ -310,7 +410,7 @@ static HRESULT WINAPI present(IDirect3DDevice9 *iface,const RECT *source,const R
         q.dirty_bounds=(struct pw_d3d9_rect){dirty->rdh.rcBound.left,dirty->rdh.rcBound.top,dirty->rdh.rcBound.right,dirty->rdh.rcBound.bottom};
         for(unsigned n=0;n<q.dirty_count;n++){const RECT *r=(const RECT *)dirty->Buffer+n;q.dirty[n]=(struct pw_d3d9_rect){r->left,r->top,r->right,r->bottom};}
     }
-    addref(iface);HRESULT hr=pw_d3d9_session_device(d->session,d->remote,&q,&r);release(iface);return hr;
+    addref(iface);HRESULT hr=device_transaction(d,&q,&r);release(iface);return hr;
 }
 #if defined(PW_D3D9_ENABLE_METHODS)||defined(PW_D3D9_ENABLE_RESOURCE)||defined(PW_D3D9_ENABLE_PROGRAM)||defined(PW_D3D9_ENABLE_TEXTURE)||defined(PW_D3D9_ENABLE_STATEBLOCK)||defined(PW_D3D9_ENABLE_QUERY)
 static void fail_device(IDirect3DDevice9 *iface,HRESULT hr)
@@ -373,6 +473,16 @@ static HRESULT stateblock_call(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref
     if(!ref.id&&!ref.generation)ref=d->remote;
     addref(iface);HRESULT hr=pw_d3d9_session_stateblock(d->session,ref,q,r);release(iface);return hr;
 }
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+static HRESULT stateblock_observed_call(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref ref,
+ const struct pw_d3d9_stateblock_request *q,struct pw_d3d9_stateblock_reply *r,struct pw_d3d9_stateblock_evidence *block)
+{
+    struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
+    if(!ref.id&&!ref.generation)ref=d->remote;
+    struct draw_observation context={d,block};struct pw_d3d9_session_observer observer=draw_observer(&context);
+    addref(iface);HRESULT hr=pw_d3d9_session_stateblock_observed(d->session,ref,q,r,&observer);release(iface);return hr;
+}
+#endif
 #endif
 #ifdef PW_D3D9_ENABLE_PROGRAM
 static HRESULT program_call(IDirect3DDevice9 *iface,const struct pw_d3d9_program_request *q,struct pw_d3d9_program_reply *r)
@@ -412,7 +522,14 @@ static HRESULT program_query(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref r
 static HRESULT command_call(IDirect3DDevice9 *iface,const struct pw_d3d9_command *q)
 {
     struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
-    addref(iface);HRESULT hr=pw_d3d9_session_command(d->session,d->remote,q);release(iface);return hr;
+    addref(iface);
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    struct draw_observation context={d,NULL};struct pw_d3d9_session_observer observer=draw_observer(&context);
+    HRESULT hr=pw_d3d9_session_command_observed(d->session,d->remote,q,&observer);
+#else
+    HRESULT hr=pw_d3d9_session_command(d->session,d->remote,q);
+#endif
+    release(iface);return hr;
 }
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
 struct binding_context {IDirect3DDevice9 *parent;IUnknown *local;uint32_t kind,word;};
@@ -434,13 +551,26 @@ static HRESULT binding_call(IDirect3DDevice9 *iface,struct pw_d3d9_command *q,IU
 {
     struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
     struct binding_context context={iface,local,kind,word};
-    addref(iface);HRESULT hr=pw_d3d9_session_binding(d->session,d->remote,q,binding_acquire,&context);release(iface);return hr;
+    addref(iface);
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    struct draw_observation draw_context={d,NULL};struct pw_d3d9_session_observer observer=draw_observer(&draw_context);
+    HRESULT hr=pw_d3d9_session_binding_observed(d->session,d->remote,q,binding_acquire,&context,&observer);
+#else
+    HRESULT hr=pw_d3d9_session_binding(d->session,d->remote,q,binding_acquire,&context);
+#endif
+    release(iface);return hr;
 }
 #endif
 static HRESULT getter_call(IDirect3DDevice9 *iface,const struct pw_d3d9_getter_request *q,struct pw_d3d9_getter_reply *r)
 {
     struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
-    addref(iface);HRESULT hr=pw_d3d9_session_getter(d->session,d->remote,q,r);
+    addref(iface);
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    struct draw_observation context={d,NULL};struct pw_d3d9_session_observer observer=draw_observer(&context);
+    HRESULT hr=pw_d3d9_session_getter_observed(d->session,d->remote,q,r,&observer);
+#else
+    HRESULT hr=pw_d3d9_session_getter(d->session,d->remote,q,r);
+#endif
     if(FAILED(hr)&&hr!=RPC_E_CANTCALLOUT_ININPUTSYNCCALL&&(q->method==4||q->method==15||q->method==78||q->method==80))fail_device(iface,hr);
     release(iface);return hr;
 }
@@ -464,7 +594,14 @@ static HRESULT resolve_object(IDirect3DDevice9 *iface,IUnknown *local,uint32_t k
 static HRESULT object_getter_call(IDirect3DDevice9 *iface,const struct pw_d3d9_object_getter_request *q,struct pw_d3d9_object_getter_reply *r)
 {
     struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
-    addref(iface);HRESULT hr=pw_d3d9_session_object_getter(d->session,d->remote,q,r);release(iface);return hr;
+    addref(iface);
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    struct draw_observation context={d,NULL};struct pw_d3d9_session_observer observer=draw_observer(&context);
+    HRESULT hr=pw_d3d9_session_object_getter_observed(d->session,d->remote,q,r,&observer);
+#else
+    HRESULT hr=pw_d3d9_session_object_getter(d->session,d->remote,q,r);
+#endif
+    release(iface);return hr;
 }
 static HRESULT wrap_object(IDirect3DDevice9 *iface,uint32_t kind,struct pw_d3d9_object_ref ref,void **out)
 {
@@ -517,7 +654,11 @@ static BOOL CALLBACK init_vtable(INIT_ONCE *once,void *parameter,void **context)
     const struct pw_d3d9_query_proxy_ops queries={query_call,release_object,defer_object,fail_device};pw_d3d9_query_proxy_install(&vtable,&queries);
 #endif
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
-    const struct pw_d3d9_stateblock_client_ops blocks={stateblock_call,release_object,defer_object,fail_device};pw_d3d9_stateblock_client_install(&vtable,&blocks);
+    const struct pw_d3d9_stateblock_client_ops blocks={stateblock_call,release_object,defer_object,fail_device
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+        ,stateblock_observed_call
+#endif
+    };pw_d3d9_stateblock_client_install(&vtable,&blocks);
 #endif
 #ifdef PW_D3D9_ENABLE_OBJECT_GETTER
     const struct pw_d3d9_device_object_methods_ops objects={object_getter_call,wrap_object,fail_device};pw_d3d9_device_object_methods_install(&vtable,&objects);
@@ -569,5 +710,9 @@ HRESULT pw_d3d9_device_proxy_create(IDirect3D9 *parent,struct pw_d3d9_session *s
         IDirect3D9_Release(parent);HeapFree(GetProcessHeap(),0,d);return hr;
     }
     d->iface.lpVtbl=(IDirect3DDevice9Vtbl *)observed_vtable;d->references=1;d->remote=r.object;
+    #ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    pw_d3d9_draw_init(&d->draw);d->draw_recording_known=hr==S_OK;pw_d3d9_transform_init(&d->transform);
+    if(hr!=S_OK){pw_d3d9_draw_invalidate(&d->draw);pw_d3d9_transform_invalidate(&d->transform);}
+#endif
     d->creation=(D3DDEVICE_CREATION_PARAMETERS){adapter,type,focus,flags};*out=&d->iface;return hr;
 }
