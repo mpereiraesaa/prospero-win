@@ -32,3 +32,11 @@ PE32 client, records their source/binary hashes, and runs three complete
 sessions. Each checks canonical identity, all11 supported factory methods,
 failed output preservation, null output rejection, unsupported exports/methods,
 multiple factories, independent release and final service teardown.
+
+
+GetAdapterMonitor maps the real backend adapter identifier DeviceName to a guest
+monitor using EnumDisplayMonitors/GetMonitorInfoA. The returned HMONITOR is owned
+by the guest display system and never crosses the bridge wire. Invalid adapters,
+empty or unterminated names, and missing guest matches return NULL. No default
+monitor is substituted for an unmatched native adapter. The actual backend
+fixture checks a valid guest monitor's name and invalid adapter rejection.

@@ -54,7 +54,7 @@ try:
     output = run([args.wine_build.resolve() / 'loader/wine', out / 'client.exe',
                   windows(out / 'd3d9.dll'), windows(out / 'service.dll'),
                   windows(backend)], 'proxy', env)
-    rows = re.findall(r'PW_FACTORY_PROXY cycle=(\d+) identity=1 methods=11 unsupported=4 status=0', output)
+    rows = re.findall(r'PW_FACTORY_PROXY cycle=(\d+) identity=1 methods=12 unsupported=3 status=0', output)
     assert rows == ['0', '1', '2'], rows
     receipt['cycles'] = rows
 finally:

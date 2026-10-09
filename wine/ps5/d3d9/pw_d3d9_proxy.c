@@ -156,8 +156,24 @@ static HRESULT WINAPI proxy_caps(IDirect3D9 *iface,UINT adapter,D3DDEVTYPE type,
 #undef COPY_CAP
     *out=value;return hr;
 }
+struct monitor_match {const char *device;HMONITOR monitor;};
+static BOOL CALLBACK match_monitor(HMONITOR monitor,HDC dc,LPRECT rect,LPARAM parameter)
+{
+    (void)dc;(void)rect;struct monitor_match *match=(void *)parameter;
+    MONITORINFOEXA info={.cbSize=sizeof(info)};
+    if(GetMonitorInfoA(monitor,(MONITORINFO *)&info)&&!lstrcmpiA(info.szDevice,match->device)){
+        match->monitor=monitor;return FALSE;
+    }
+    return TRUE;
+}
 static HMONITOR WINAPI proxy_monitor(IDirect3D9 *iface,UINT adapter)
-{(void)iface;(void)adapter;return NULL;}
+{
+    D3DADAPTER_IDENTIFIER9 identifier;
+    if(FAILED(proxy_identifier(iface,adapter,0,&identifier))||!identifier.DeviceName[0]||
+       !memchr(identifier.DeviceName,0,sizeof(identifier.DeviceName)))return NULL;
+    struct monitor_match match={identifier.DeviceName,NULL};
+    EnumDisplayMonitors(NULL,NULL,match_monitor,(LPARAM)&match);return match.monitor;
+}
 static HRESULT WINAPI proxy_device(IDirect3D9 *iface,UINT adapter,D3DDEVTYPE type,HWND focus,DWORD flags,D3DPRESENT_PARAMETERS *parameters,IDirect3DDevice9 **out)
 {
 #ifdef PW_D3D9_ENABLE_DEVICE

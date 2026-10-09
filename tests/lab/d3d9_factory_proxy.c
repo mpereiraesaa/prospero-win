@@ -37,13 +37,15 @@ int wmain(int argc,WCHAR **argv)
         CHECK(IDirect3D9_GetDeviceCaps(a,0xffffffff,D3DDEVTYPE_HAL,&caps)==D3DERR_INVALIDCALL&&!memcmp(&caps,&unchanged,sizeof(caps)));
         CHECK(IDirect3D9_GetDeviceCaps(a,0,D3DDEVTYPE_HAL,NULL)==D3DERR_INVALIDCALL);
         CHECK(IDirect3D9_RegisterSoftwareDevice(a,NULL)==D3DERR_NOTAVAILABLE);
-        CHECK(!IDirect3D9_GetAdapterMonitor(a,0));
+        HMONITOR monitor=IDirect3D9_GetAdapterMonitor(a,0);MONITORINFOEXA info={.cbSize=sizeof(info)};
+        CHECK(monitor&&GetMonitorInfoA(monitor,(MONITORINFO *)&info)&&!lstrcmpiA(info.szDevice,id.DeviceName));
+        CHECK(!IDirect3D9_GetAdapterMonitor(a,0xffffffff));
         IDirect3DDevice9 *device=(void *)1;
         CHECK(IDirect3D9_CreateDevice(a,0,D3DDEVTYPE_HAL,NULL,0,NULL,&device)==D3DERR_NOTAVAILABLE&&!device);
         CHECK(IDirect3D9_Release(a)==0);
         CHECK(IDirect3D9_GetAdapterCount(b)>0);
         CHECK(IDirect3D9_Release(b)==0);
-        printf("PW_FACTORY_PROXY cycle=%u identity=1 methods=11 unsupported=4 status=0\n",cycle);fflush(stdout);
+        printf("PW_FACTORY_PROXY cycle=%u identity=1 methods=12 unsupported=3 status=0\n",cycle);fflush(stdout);
     }
     CHECK(FreeLibrary(module));return 0;
 }
