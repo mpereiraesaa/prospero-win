@@ -14,7 +14,11 @@ artifacts are hashed. Direct file capture avoids waiting on inherited descendant
 pipes after the client exits. Compile-only mode starts no Wine or GPU process and
 reports `compiled-only`, never a runtime pass.
 
-Runtime acceptance is pending. Initial transport attempts failed during factory
-startup before device creation, so they do not establish INTZ support or failure.
+A fresh recovery run on 2026-10-09 passed three ordinary PE64 control cycles and
+three typed transport cycles, both with exit code zero. The retained receipt
+freezes 104 source/header hashes plus binaries and logs. It establishes the
+creation, depth clear and restoration paths described above, not shader sampling,
+Reset or console behavior. Earlier attempts failed during factory startup before
+device creation and are not evidence of INTZ support or failure.
 The optional `--disable-vr-host-control` is an explicitly recorded host diagnostic;
 it must not be interpreted as a console profile or runtime change.
