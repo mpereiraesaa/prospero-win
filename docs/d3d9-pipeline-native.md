@@ -39,3 +39,13 @@ verified recipe. Receipts freeze local source/header inputs, commit/dirty state,
 commands, logs, binary hashes and observed counters. This runner is prepared
 for the pipeline source; runtime acceptance remains pending execution. It does
 not establish console compatibility or game performance.
+
+## Mixed pairs
+
+The separate `d3d9_pipeline_mixed.py` runner takes `--old-pair` (260095) and
+`--new-pair` (522239), plus recovery, new prefix and output paths. It verifies
+binary hashes against both retained build receipts, then calls the real proxy
+factory entry point in both cross-pair combinations. Both must return NULL and
+report service startup rejection before object publication. The changed ring
+size rejects these pairs before HELLO; this is not a claim that the HELLO
+feature-comparison branch executed. No host window adapter is needed.
