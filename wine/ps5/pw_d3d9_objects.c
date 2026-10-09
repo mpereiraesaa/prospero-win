@@ -131,6 +131,10 @@ void pw_d3d9_objects_cancel(struct pw_d3d9_objects *t)
 const struct pw_d3d9_object_slot *pw_d3d9_object_lookup(const struct pw_d3d9_objects *t,
     uint32_t device, uint32_t epoch, struct pw_d3d9_object_ref r)
 {
+    struct pw_d3d9_object_slot *s;
     if (t->device != device || t->epoch != epoch) return NULL;
-    return slot(t, r);
+    s = slot(t, r);
+    if (!s || (s->state != PW_D3D9_LIVE &&
+        !(s->state == PW_D3D9_RETIRING && s->queued_refs))) return NULL;
+    return s;
 }

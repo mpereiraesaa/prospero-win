@@ -9,7 +9,12 @@ hold the adapter's lock. The registry performs no allocation, callbacks, COM
 calls or waiting. Canonical IUnknown identities and backend contexts remain
 local pointer-width values. Only `{id, generation}` is serialized, accompanied
 by the transport's device ID and epoch. Validate those through lookup before
-acting on untrusted transport targets. Do not serialize this registry's structs.
+acting on untrusted transport targets. Lookup exposes only live objects, or
+retiring objects with queued work still holding their backend. Reserved,
+fully drained, and destroying slots are never executable targets, even with a
+matching generation. A new incoming command must acquire its own queued reference
+before publication; lookup alone does not acquire a reference. Do not serialize
+this registry's structs.
 
 Creation reserves a slot before calling the backend outside the lock. On return,
 commit requires a unique canonical identity. If another creation already

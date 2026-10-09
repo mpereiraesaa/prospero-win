@@ -15,6 +15,7 @@ int main(void)
     assert(!pw_d3d9_objects_init(&t, slots, 2, 1, 0));
     assert(pw_d3d9_objects_init(&t, slots, 2, 7, 9));
     assert(pw_d3d9_object_reserve(&t, &a));
+    assert(!pw_d3d9_object_lookup(&t, 7, 9, a)); /* reservation is not callable */
     stale = a;
     assert(!pw_d3d9_object_commit(&t, a, 0, high, 1));
     assert(pw_d3d9_object_abort(&t, a));
@@ -42,6 +43,7 @@ int main(void)
     assert(!pw_d3d9_object_complete(&t, a));
     assert(pw_d3d9_object_queue(&t, a));
     assert(pw_d3d9_object_release(&t, a));
+    assert(pw_d3d9_object_lookup(&t, 7, 9, a)); /* queued work retains context */
     assert(!pw_d3d9_object_release(&t, a));
     assert(!pw_d3d9_object_queue(&t, a));
     assert(!pw_d3d9_object_addref(&t, a, 0));
@@ -52,6 +54,7 @@ int main(void)
     assert(pw_d3d9_object_release(&t, a));
     assert(pw_d3d9_object_take_destroy(&t, a, &context));
     assert(context == high);
+    assert(!pw_d3d9_object_lookup(&t, 7, 9, a)); /* backend release may be running */
     assert(!pw_d3d9_object_take_destroy(&t, a, &context));
     assert(!pw_d3d9_object_addref(&t, a, 1));
     assert(pw_d3d9_object_find(&t, 42, &found));
@@ -69,7 +72,9 @@ int main(void)
     assert(!pw_d3d9_object_addref(&t, a, 1));
     assert(!pw_d3d9_object_queue(&t, a));
     assert(!pw_d3d9_object_take_destroy(&t, a, &context));
+    assert(pw_d3d9_object_lookup(&t, 7, 9, a));
     assert(pw_d3d9_object_complete(&t, a));
+    assert(!pw_d3d9_object_lookup(&t, 7, 9, a)); /* retired and fully drained */
     assert(pw_d3d9_object_take_destroy(&t, a, &context));
     assert(pw_d3d9_object_finish_destroy(&t, a));
     assert(pw_d3d9_objects_init(&t, slots, 1, 7, 10));
