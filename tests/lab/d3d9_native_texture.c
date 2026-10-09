@@ -130,6 +130,36 @@ static void adopt_existing(IDirect3DDevice9 *device)
  assert(pw_d3d9_native_texture_destroy(a)==S_OK);
  puts("PW_NATIVE_TEXTURE_ADOPT pass=1");
 }
+static void surface_ops(IDirect3DDevice9 *device)
+{
+ struct pw_d3d9_native_texture *rt[2]={NULL,NULL},*depth=NULL,*unused=NULL,*mips=NULL;
+ struct pw_d3d9_texture_request q={.operation=PW_D3D9_TEXTURE_CREATE_RT,.width=32,.height=32,.format=D3DFMT_A8R8G8B8,.lockable=TRUE},decoded;
+ struct pw_d3d9_texture_reply reply;unsigned char wire[PW_D3D9_TEXTURE_MAX_WIRE];size_t n;
+ for(unsigned i=0;i<2;i++){
+  assert(!pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));assert(!pw_d3d9_texture_request_decode(&decoded,wire,n));
+  pw_d3d9_native_texture_create(device,&decoded,&reply,&rt[i]);assert(reply.hresult==S_OK&&rt[i]&&reply.desc.usage==D3DUSAGE_RENDERTARGET);
+ }
+ q.operation=PW_D3D9_TEXTURE_CREATE_DEPTH;q.format=D3DFMT_D16;q.discard=TRUE;
+ pw_d3d9_native_texture_create(device,&q,&reply,&depth);assert(reply.hresult==S_OK&&depth&&reply.desc.usage==D3DUSAGE_DEPTHSTENCIL);
+ IDirect3DSurface9 *source=pw_d3d9_native_texture_backend(rt[0]),*destination=pw_d3d9_native_texture_backend(rt[1]);
+ assert(IDirect3DDevice9_ColorFill(device,source,NULL,0xff123456)==S_OK);
+ assert(IDirect3DDevice9_ColorFill(device,destination,NULL,0xff000000)==S_OK);
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_STRETCH,.source={1,1},.destination={2,1},.has_rect=1,.left=2,.top=2,.right=10,.bottom=10,.has_destination_rect=1,.destination_left=4,.destination_top=4,.destination_right=20,.destination_bottom=20,.filter=D3DTEXF_POINT};
+ assert(!pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));assert(!pw_d3d9_texture_request_decode(&decoded,wire,n));
+ pw_d3d9_native_texture_copy(device,rt[0],rt[1],&decoded,&reply);assert(reply.hresult==S_OK);
+ D3DLOCKED_RECT locked;assert(IDirect3DSurface9_LockRect(destination,&locked,NULL,D3DLOCK_READONLY)==S_OK);
+ assert(*(DWORD *)((unsigned char *)locked.pBits+4*locked.Pitch+4*4)==0xff123456);
+ assert(*(DWORD *)locked.pBits==0xff000000);assert(IDirect3DSurface9_UnlockRect(destination)==S_OK);
+ q.has_rect=q.has_destination_rect=0;q.left=q.top=q.right=q.bottom=q.destination_left=q.destination_top=q.destination_right=q.destination_bottom=0;q.filter=D3DTEXF_NONE;
+ pw_d3d9_native_texture_copy(device,rt[0],rt[1],&q,&reply);assert(reply.hresult==(uint32_t)IDirect3DDevice9_StretchRect(device,source,NULL,destination,NULL,D3DTEXF_NONE));
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_CREATE,.width=32,.height=16,.levels=0,.format=D3DFMT_A8R8G8B8,.pool=D3DPOOL_MANAGED};
+ pw_d3d9_native_texture_create(device,&q,&reply,&mips);assert(reply.hresult==S_OK&&mips);
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_DESC};reply=call(mips,&q,&unused);
+ assert(reply.hresult==S_OK&&reply.levels==IDirect3DTexture9_GetLevelCount((IDirect3DTexture9 *)pw_d3d9_native_texture_backend(mips))&&reply.levels==6);
+ reply=call(depth,&q,&unused);assert(reply.hresult==S_OK&&reply.levels==1);
+ pw_d3d9_native_texture_destroy(mips);pw_d3d9_native_texture_destroy(depth);pw_d3d9_native_texture_destroy(rt[0]);pw_d3d9_native_texture_destroy(rt[1]);
+ puts("PW_NATIVE_SURFACE_OPS pass=1");
+}
 static void negative_pitch(void)
 {
  unsigned char native[32],copy[28];memset(native,0xcc,sizeof(native));
@@ -153,7 +183,7 @@ int wmain(int argc,WCHAR **argv)
  pp.Windowed=TRUE;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;pp.BackBufferFormat=D3DFMT_X8R8G8B8;pp.BackBufferWidth=64;pp.BackBufferHeight=64;pp.hDeviceWindow=window;pp.EnableAutoDepthStencil=TRUE;pp.AutoDepthStencilFormat=D3DFMT_D16;
  assert(IDirect3D9_CreateDevice(d3d,0,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING,&pp,&device)==S_OK&&device);
  texture(device,D3DFMT_A8R8G8B8,67,41);texture(device,D3DFMT_DXT1,256,128);texture(device,D3DFMT_DXT3,256,128);texture(device,D3DFMT_DXT5,256,128);
- copies(device,0);copies(device,1);capacity(device);adopt_existing(device);
+ copies(device,0);copies(device,1);capacity(device);adopt_existing(device);surface_ops(device);
  IDirect3DDevice9_Release(device);IDirect3D9_Release(d3d);DestroyWindow(window);UnregisterClassW(cls.lpszClassName,cls.hInstance);FreeLibrary(module);
  puts("PW_NATIVE_TEXTURE PASS");return 0;
 }

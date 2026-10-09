@@ -2,14 +2,15 @@
 #ifndef PW_D3D9_TEXTURE_WIRE_H
 #define PW_D3D9_TEXTURE_WIRE_H
 #include "pw_d3d9_resource_wire.h"
-#define PW_D3D9_TEXTURE_VERSION 1u
+#define PW_D3D9_TEXTURE_VERSION 2u
 #define PW_D3D9_TEXTURE_MAX_WIRE PW_D3D9_RESOURCE_MAX_WIRE
 enum pw_d3d9_texture_operation {
  PW_D3D9_TEXTURE_CREATE=1, PW_D3D9_TEXTURE_CREATE_SURFACE,
  PW_D3D9_TEXTURE_DESC, PW_D3D9_TEXTURE_SURFACE_LEVEL,
  PW_D3D9_TEXTURE_LOCK, PW_D3D9_TEXTURE_READ, PW_D3D9_TEXTURE_WRITE,
  PW_D3D9_TEXTURE_UNLOCK, PW_D3D9_TEXTURE_CANCEL_LOCK,
- PW_D3D9_TEXTURE_DIRTY, PW_D3D9_TEXTURE_UPDATE, PW_D3D9_TEXTURE_UPDATE_SURFACE
+ PW_D3D9_TEXTURE_DIRTY, PW_D3D9_TEXTURE_UPDATE, PW_D3D9_TEXTURE_UPDATE_SURFACE,
+ PW_D3D9_TEXTURE_CREATE_RT, PW_D3D9_TEXTURE_CREATE_DEPTH, PW_D3D9_TEXTURE_STRETCH
 };
 struct pw_d3d9_surface_desc {
  uint32_t format,type,usage,pool,multisample_type,multisample_quality,width,height;
@@ -17,6 +18,8 @@ struct pw_d3d9_surface_desc {
 struct pw_d3d9_texture_request {
  uint32_t operation,width,height,levels,usage,format,pool,level,flags,has_rect;
  int32_t left,top,right,bottom;
+ uint32_t multisample_type,multisample_quality,lockable,discard,filter,has_destination_rect;
+ int32_t destination_left,destination_top,destination_right,destination_bottom;
  uint32_t has_point;
  int32_t x,y;
  struct pw_d3d9_object_ref source,destination;

@@ -39,3 +39,19 @@ retains the actual backend device. This handles implicit backbuffers/depth
 surfaces and resources recovered from backend bindings after the original guest
 proxy is released. The fixture proves backbuffer/render-target identity reuse,
 depth adoption, wrong-interface rejection and retained texture binding adoption.
+
+
+## Render targets, depth surfaces and StretchRect
+
+Texture protocol version 2 adds operations 13 CreateRenderTarget, 14
+CreateDepthStencilSurface and 15 StretchRect. Multisample type/quality and native
+BOOL lockable/discard bits pass to the actual backend. StretchRect resolves two
+same-device surface contexts and reconstructs independent optional source and
+destination rectangles plus the native filter enum. No shared handles are sent.
+All existing operation numbers remain stable, but both peers must deploy v2.
+
+DESC now includes actual GetLevelCount for textures and 1 for surfaces, enabling
+correct adopted texture proxies. Wire encoders/decoders reject the old layout.
+The native fixture creates render/depth surfaces, verifies a scaled subrectangle
+copy through changed pixels and untouched outside pixels, compares a full-surface
+copy's HRESULT directly, and queries a genuine six-level texture chain.

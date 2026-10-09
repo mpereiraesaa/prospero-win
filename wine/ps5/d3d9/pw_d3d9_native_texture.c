@@ -103,10 +103,12 @@ void pw_d3d9_native_texture_create(void *device,const struct pw_d3d9_texture_req
  struct pw_d3d9_native_texture *r;D3DSURFACE_DESC d;HRESULT hr;
  memset(reply,0,sizeof(*reply));reply->operation=q->operation;reply->hresult=D3DERR_INVALIDCALL;*out=NULL;
  if(!device)return;
- if(q->operation!=PW_D3D9_TEXTURE_CREATE&&q->operation!=PW_D3D9_TEXTURE_CREATE_SURFACE){reply->hresult=E_NOTIMPL;return;}
+ if(q->operation!=PW_D3D9_TEXTURE_CREATE&&q->operation!=PW_D3D9_TEXTURE_CREATE_SURFACE&&q->operation!=PW_D3D9_TEXTURE_CREATE_RT&&q->operation!=PW_D3D9_TEXTURE_CREATE_DEPTH){reply->hresult=E_NOTIMPL;return;}
  r=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*r));if(!r){reply->hresult=E_OUTOFMEMORY;return;}
  r->kind=q->operation==PW_D3D9_TEXTURE_CREATE?PW_D3D9_KIND_TEXTURE_2D:PW_D3D9_KIND_SURFACE;
  if(r->kind==PW_D3D9_KIND_TEXTURE_2D)hr=IDirect3DDevice9_CreateTexture((IDirect3DDevice9 *)device,q->width,q->height,q->levels,q->usage,q->format,q->pool,&r->object.texture,NULL);
+ else if(q->operation==PW_D3D9_TEXTURE_CREATE_RT)hr=IDirect3DDevice9_CreateRenderTarget((IDirect3DDevice9 *)device,q->width,q->height,q->format,q->multisample_type,q->multisample_quality,(BOOL)q->lockable,&r->object.surface,NULL);
+ else if(q->operation==PW_D3D9_TEXTURE_CREATE_DEPTH)hr=IDirect3DDevice9_CreateDepthStencilSurface((IDirect3DDevice9 *)device,q->width,q->height,q->format,q->multisample_type,q->multisample_quality,(BOOL)q->discard,&r->object.surface,NULL);
  else hr=IDirect3DDevice9_CreateOffscreenPlainSurface((IDirect3DDevice9 *)device,q->width,q->height,q->format,q->pool,&r->object.surface,NULL);
  if(SUCCEEDED(hr)&&!r->object.unknown)hr=E_FAIL;
  if(SUCCEEDED(hr)){
@@ -163,7 +165,7 @@ void pw_d3d9_native_texture_call(struct pw_d3d9_native_texture *r,const struct p
  HRESULT hr=D3DERR_INVALIDCALL;D3DSURFACE_DESC d;struct pw_d3d9_native_texture *child;
  memset(reply,0,sizeof(*reply));reply->operation=q->operation;reply->hresult=hr;*out=NULL;if(!r)return;
  switch(q->operation){
- case PW_D3D9_TEXTURE_DESC:hr=desc(r,q->level,&d);if(SUCCEEDED(hr))describe(&reply->desc,&d);break;
+ case PW_D3D9_TEXTURE_DESC:hr=desc(r,q->level,&d);if(SUCCEEDED(hr)){describe(&reply->desc,&d);reply->levels=r->kind==PW_D3D9_KIND_TEXTURE_2D?IDirect3DTexture9_GetLevelCount(r->object.texture):1;if(!reply->levels)hr=E_FAIL;}break;
  case PW_D3D9_TEXTURE_SURFACE_LEVEL:
   if(r->kind!=PW_D3D9_KIND_TEXTURE_2D)break;
   child=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*child));if(!child){hr=E_OUTOFMEMORY;break;}
@@ -204,6 +206,11 @@ void pw_d3d9_native_texture_copy(void *device,struct pw_d3d9_native_texture *sou
  else if(q->operation==PW_D3D9_TEXTURE_UPDATE_SURFACE&&source->kind==PW_D3D9_KIND_SURFACE&&destination->kind==PW_D3D9_KIND_SURFACE){
   RECT rect={q->left,q->top,q->right,q->bottom};POINT point={q->x,q->y};
   hr=IDirect3DDevice9_UpdateSurface((IDirect3DDevice9 *)device,source->object.surface,q->has_rect?&rect:NULL,destination->object.surface,q->has_point?&point:NULL);
+ }
+ else if(q->operation==PW_D3D9_TEXTURE_STRETCH&&source->kind==PW_D3D9_KIND_SURFACE&&destination->kind==PW_D3D9_KIND_SURFACE){
+  RECT source_rect={q->left,q->top,q->right,q->bottom};
+  RECT destination_rect={q->destination_left,q->destination_top,q->destination_right,q->destination_bottom};
+  hr=IDirect3DDevice9_StretchRect((IDirect3DDevice9 *)device,source->object.surface,q->has_rect?&source_rect:NULL,destination->object.surface,q->has_destination_rect?&destination_rect:NULL,q->filter);
  }
  reply->hresult=(uint32_t)hr;
 }

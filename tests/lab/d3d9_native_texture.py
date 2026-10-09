@@ -45,6 +45,7 @@ try:
         assert 'PW_NATIVE_TEXTURE_NEGATIVE_PITCH pass=1' in text, text
         assert 'PW_NATIVE_TEXTURE_CAPACITY pass=1' in text, text
         assert 'PW_NATIVE_TEXTURE_ADOPT pass=1' in text, text
+        assert 'PW_NATIVE_SURFACE_OPS pass=1' in text
         assert 'PW_NATIVE_TEXTURE PASS' in text, text
     receipt['status'] = 'pass'
 except Exception:
