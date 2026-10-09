@@ -57,6 +57,8 @@ $(eval $(call test_rule,test_pw_game_profile,tests/test_pw_game_profile.c src/pw
 $(eval $(call test_rule,test_pw_prefix_temp,tests/test_pw_prefix_temp.c src/pw_prefix_temp.c native/pw_wine_prefix.c,-D_DEFAULT_SOURCE))
 $(eval $(call test_rule,test_pw_tsc_calibrate,tests/test_pw_tsc_calibrate.c src/pw_tsc_calibrate.c,))
 $(eval $(call test_rule,test_pw_wine_prefix_cpu,tests/test_pw_wine_prefix_cpu.c src/pw_prefix_temp.c native/pw_wine_prefix.c,-D_DEFAULT_SOURCE))
+$(eval $(call test_rule,test_vk_present_interval,tests/test_vk_present_interval.c,-I.))
+$(BUILD)/test_vk_present_interval: wine/ps5/vulkan/pw_vk_present_interval.h
 $(eval $(call test_rule,test_vk_command_stream,tests/test_vk_command_stream.c wine/ps5/pw_vk_command_stream.c,-Iwine/ps5))
 $(eval $(call test_rule,test_vk_spsc,tests/test_vk_spsc.c wine/ps5/pw_vk_spsc.c wine/ps5/pw_vk_command_stream.c,-I. -pthread))
 $(BUILD)/test_vk_spsc: wine/ps5/pw_vk_spsc.h wine/ps5/pw_vk_command_stream.h
@@ -171,10 +173,12 @@ TESTS := test_d3d9_object_getter test_pw_qpc_clock test_pw_key_shared test_pw_di
 	test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_global_residency test_pw_x86_reencode test_pw_x86_smc test_pw_x86_fault_markers test_pw_x86_lazyflags \
 	test_pw_guest_call test_pw_x87 test_pw_x87_native test_pw_audio_ps5 test_pw_audio_mix test_pw_agc_submit_lifecycle \
 	test_pw_videoout_layout test_pw_videoout_tile test_pw_pad_ps5 test_pw_data_mount \
-	test_d3d9_getter_wire test_pw_data_mount_native test_pw_lapy_elevation test_d3d9_device_wire test_d3d9_command_wire
+	test_d3d9_getter_wire test_pw_data_mount_native test_pw_lapy_elevation test_d3d9_device_wire test_d3d9_command_wire \
+	test_vk_present_interval
 
 # The Python suites drive the built DBT tools and check the contracts the
 # host compiler cannot.
+
 test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differential $(BUILD)/bench_dynarec
 	@set -e; for test in $(addprefix $(BUILD)/,$(TESTS)); do $$test; done
 	python3 tests/test_title_identity.py

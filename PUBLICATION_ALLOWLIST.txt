@@ -453,6 +453,9 @@ wine/ps5/pw_vk_wire.c
 wine/ps5/pw_vk_wire.h
 wine/ps5/vulkan-command-stream.md
 wine/ps5/vulkan/pw_vk_batch.h
+wine/ps5/vulkan/pw_vk_present_interval.h
+tests/test_vk_present_interval.c
+docs/vulkan-present-counter.md
 wine/ps5/vulkan/pw_vk_batch_pe.c
 wine/ps5/vulkan/pw_vk_batch_unix.c
 wine/ps5/vulkan/pw_vk_disable_guard.h
