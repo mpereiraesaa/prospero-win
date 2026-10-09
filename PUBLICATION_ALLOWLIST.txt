@@ -561,6 +561,10 @@ wine/ps5/pw_d3d9_device_wire.h
 wine/ps5/pw_d3d9_device_wire.c
 tests/test_d3d9_device_wire.c
 docs/d3d9-device-wire.md
+wine/ps5/pw_d3d9_object_getter.h
+wine/ps5/pw_d3d9_object_getter.c
+tests/test_d3d9_object_getter.c
+docs/d3d9-object-getter.md
 wine/ps5/pw_d3d9_program_wire.h
 wine/ps5/pw_d3d9_program_wire.c
 tests/test_d3d9_program_wire.c
