@@ -192,3 +192,28 @@ follow-up is covered by the actual-adapter host/ASan lab and explicit mixed
 record assertions in `/tmp/prospero-replay-epochs-async-r8/receipt.json`. The PE
 lab and full all/sanitize receipts precede this diagnostic-only change; the SDK
 candidate compiles the final source, with the exact stage delta recorded.
+
+### Frozen epoch SDK candidate
+
+Source `c5ddad6fc55bf4adb61b98e158f9b8214ce8b613` was clean when built.
+`/tmp/prospero-replay-epochs-build/package/PPSA99995` contains exactly the new
+winevulkan PE, native PRX and `SOURCES.txt` over the fixed-hostname baseline.
+All 20 winevulkan compilation units were rebuilt. The baseline PE matched after
+normalizing linker timestamp/checksum and the baseline native PRX matched byte
+for byte. Candidate imports passed the title-visible SDK gate and disassembly
+contained no raw syscall instruction.
+
+- PE SHA-256: `120076b9b453a74881d4880adf22236e95a60762591ef36280fd918653c6b7c2`
+- PRX SHA-256: `895dd55bf04ca084fadd819b5b04068de7fe8fff5d37d1b93d1c2af895d51f9d`
+- Manifest `/tmp/prospero-replay-epochs-build/package.json` SHA-256:
+  `ff5601cd578d040e88b475ccd632ae40ab6b8e26f6cae50422cf5f53475c1564`
+
+The manifest includes hashes of the final actual-adapter host/ASan receipt,
+negative dependency mutations, full all/sanitize log, actual PE/generator lab
+and the trace-only stage delta. The PE lab passed 20 opcode-mask cases, six
+template producer forms, retirement/reentry cases and generator equality. The
+Unix boundary in that PE lab is mocked. The SDK build receipt records every
+command and staged source hash. Console performance and actual two-worker
+overlap remain unverified; merging the replay performance stack is held pending
+new console evidence. This package includes ordered epochs, fixed 1 MiB stacks,
+optional bounded pool fanout, empty-admission elision and present cadence stats.
