@@ -529,3 +529,6 @@ wine/ps5/vulkan/pw_vk_async.h
 tests/lab/vk_replay_async.c
 tests/lab/vk_replay_async.py
 docs/vulkan-async-replay-tests.md
+tools/stage_vk_replay_fanout.py
+tests/lab/vk_replay_fanout.py
+docs/vulkan-replay-pool-fanout.md
