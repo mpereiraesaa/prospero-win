@@ -47,6 +47,24 @@ void *pw_d3d9_native_resource_backend(struct pw_d3d9_native_resource *r)
 {return r?r->object.unknown:NULL;}
 uint32_t pw_d3d9_native_resource_kind(struct pw_d3d9_native_resource *r)
 {return r?r->kind:0;}
+uint32_t pw_d3d9_native_resource_adopt(void *device,uint32_t kind,void *owned,struct pw_d3d9_native_resource **out)
+{
+ struct pw_d3d9_native_resource *r;IUnknown *object=owned;HRESULT hr;
+ if(out)*out=NULL;
+ if(!out||!device||!object){if(object)IUnknown_Release(object);return E_INVALIDARG;}
+ if(kind!=PW_D3D9_KIND_VERTEX_BUFFER&&kind!=PW_D3D9_KIND_INDEX_BUFFER){IUnknown_Release(object);return E_NOTIMPL;}
+ r=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*r));if(!r){IUnknown_Release(object);return E_OUTOFMEMORY;}
+ r->kind=kind;
+ hr=IUnknown_QueryInterface(object,kind==PW_D3D9_KIND_VERTEX_BUFFER?&IID_IDirect3DVertexBuffer9:&IID_IDirect3DIndexBuffer9,(void **)&r->object.unknown);
+ IUnknown_Release(object);
+ if(SUCCEEDED(hr)&&!r->object.unknown)hr=E_FAIL;
+ if(SUCCEEDED(hr)){
+  hr=kind==PW_D3D9_KIND_VERTEX_BUFFER?IDirect3DVertexBuffer9_GetDevice(r->object.vb,&r->device):IDirect3DIndexBuffer9_GetDevice(r->object.ib,&r->device);
+  if(SUCCEEDED(hr)&&r->device!=device)hr=D3DERR_INVALIDCALL;
+ }
+ if(FAILED(hr))pw_d3d9_native_resource_destroy(r);else *out=r;
+ return (uint32_t)hr;
+}
 void pw_d3d9_native_resource_create(void *native_device,const struct pw_d3d9_resource_request *q,
  struct pw_d3d9_resource_reply *reply,struct pw_d3d9_native_resource **out)
 {

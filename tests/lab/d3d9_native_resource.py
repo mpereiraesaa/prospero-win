@@ -33,7 +33,7 @@ def run(command, name, env=None):
     return result.stdout
 try:
     run(['x86_64-w64-mingw32-gcc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-municode',
-         root / files[0], root / files[1], root / files[4], '-luuid', '-o', out / 'native.exe'], 'compile')
+         root / files[0], root / files[1], root / files[4], '-luuid', '-ldxguid', '-o', out / 'native.exe'], 'compile')
     receipt['executable_sha256'] = digest(out / 'native.exe')
     env = os.environ.copy()
     env.update(WINEPREFIX=str(args.prefix.resolve()), WINEDEBUG='-all', WINEDLLOVERRIDES='mscoree,mshtml=;d3d9=n')

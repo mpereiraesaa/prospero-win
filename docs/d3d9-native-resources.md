@@ -32,3 +32,11 @@ controlled CreateVertexBuffer returning success with a null output verifies the
 defensive guard without dereferencing or publishing that output. This proves the PE64 adapter and copied
 payloads; PE32 low-address staging, COM identity proxies and session dispatch are
 separate integration work.
+
+Owned references returned by GetStreamSource/GetIndices can be adopted after
+the guest proxy was released while the backend retained a binding. Adoption
+consumes the returned COM reference on every path, validates the VB/IB interface
+with QueryInterface and checks GetDevice ownership. The session deduplicates
+canonical identity or assigns a new generation. The actual host fixture binds
+each buffer, destroys its first wrapper, gets it back, adopts it and checks the
+same IUnknown identity before unbinding and final release.

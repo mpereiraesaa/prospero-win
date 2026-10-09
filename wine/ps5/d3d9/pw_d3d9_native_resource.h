@@ -4,6 +4,9 @@
 #include "../pw_d3d9_resource_wire.h"
 #include "pw_d3d9_kinds.h"
 struct pw_d3d9_native_resource;
+/* Consume an owned VB/IB reference on every path, validate its interface and
+ * backend device, then represent it for registry canonical-identity lookup. */
+uint32_t pw_d3d9_native_resource_adopt(void *native_device,uint32_t kind,void *owned_native_object,struct pw_d3d9_native_resource **);
 /* Service-thread local API, externally serialized. Registry owns returned
  * contexts; it must retain the parent device/window until resource destruction.
  * The dispatcher supplies the service-assigned object ID in CREATE replies. */

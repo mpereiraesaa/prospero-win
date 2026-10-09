@@ -56,6 +56,24 @@ static void buffer(IDirect3DDevice9 *device,int index,D3DPOOL pool)
  assert(pw_d3d9_native_resource_destroy(r)==S_OK);
  printf("PW_NATIVE_BUFFER kind=%u pool=%u bytes=%u pass=1\n",index?4:3,(unsigned)pool,span);fflush(stdout);
 }
+static void adopted_binding(IDirect3DDevice9 *device,int index)
+{
+ struct pw_d3d9_native_resource *r=NULL,*adopted=NULL;struct pw_d3d9_resource_reply reply;
+ struct pw_d3d9_resource_request q={.operation=index?PW_D3D9_RESOURCE_CREATE_IB:PW_D3D9_RESOURCE_CREATE_VB,.length=1024,.format_fvf=index?D3DFMT_INDEX16:D3DFVF_XYZ};
+ pw_d3d9_native_resource_create(device,&q,&reply,&r);assert(reply.hresult==S_OK&&r);
+ uintptr_t identity=pw_d3d9_native_resource_identity(r);
+ if(index)assert(IDirect3DDevice9_SetIndices(device,pw_d3d9_native_resource_backend(r))==S_OK);
+ else assert(IDirect3DDevice9_SetStreamSource(device,0,pw_d3d9_native_resource_backend(r),0,12)==S_OK);
+ assert(pw_d3d9_native_resource_destroy(r)==S_OK); /* backend binding retains it */
+ if(index){IDirect3DIndexBuffer9 *buffer=NULL;assert(IDirect3DDevice9_GetIndices(device,&buffer)==S_OK&&buffer);
+  assert(pw_d3d9_native_resource_adopt(device,PW_D3D9_KIND_INDEX_BUFFER,buffer,&adopted)==S_OK);}
+ else {IDirect3DVertexBuffer9 *buffer=NULL;UINT offset,stride;assert(IDirect3DDevice9_GetStreamSource(device,0,&buffer,&offset,&stride)==S_OK&&buffer&&stride==12);
+  assert(pw_d3d9_native_resource_adopt(device,PW_D3D9_KIND_VERTEX_BUFFER,buffer,&adopted)==S_OK);}
+ assert(adopted&&pw_d3d9_native_resource_identity(adopted)==identity);
+ if(index)assert(IDirect3DDevice9_SetIndices(device,NULL)==S_OK);else assert(IDirect3DDevice9_SetStreamSource(device,0,NULL,0,0)==S_OK);
+ assert(pw_d3d9_native_resource_destroy(adopted)==S_OK);
+ printf("PW_NATIVE_BUFFER_ADOPT kind=%u pass=1\n",index?4:3);
+}
 static HRESULT WINAPI null_buffer(IDirect3DDevice9 *d,UINT size,DWORD usage,DWORD fvf,D3DPOOL pool,IDirect3DVertexBuffer9 **out,HANDLE *shared)
 {(void)d;(void)size;(void)usage;(void)fvf;(void)pool;(void)shared;*out=NULL;return S_OK;}
 static void null_output_guard(void)
@@ -76,6 +94,7 @@ int wmain(int argc,WCHAR **argv)
  module=LoadLibraryW(argv[1]);assert(module);factory=(void *)GetProcAddress(module,"Direct3DCreate9");assert(factory);d3d=factory(D3D_SDK_VERSION);assert(d3d);
  pp.Windowed=TRUE;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;pp.BackBufferFormat=D3DFMT_X8R8G8B8;pp.BackBufferWidth=64;pp.BackBufferHeight=64;pp.hDeviceWindow=window;
  hr=IDirect3D9_CreateDevice(d3d,0,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING,&pp,&device);assert(hr==S_OK&&device);
+ adopted_binding(device,0);adopted_binding(device,1);
  buffer(device,0,D3DPOOL_DEFAULT);buffer(device,1,D3DPOOL_DEFAULT);buffer(device,0,D3DPOOL_MANAGED);buffer(device,1,D3DPOOL_MANAGED);
  /* Compare an actual backend creation failure with the adapter result. */
  {IDirect3DIndexBuffer9 *bad=NULL;struct pw_d3d9_native_resource *r=NULL;struct pw_d3d9_resource_reply reply;
