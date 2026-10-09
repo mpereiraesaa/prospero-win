@@ -548,3 +548,8 @@ wine/ps5/pw_d3d9_factory_wire.h
 wine/ps5/pw_d3d9_factory_wire.c
 tests/test_d3d9_factory_wire.c
 docs/d3d9-factory-wire.md
+wine/ps5/pw_d3d9_bridge_wire.h
+wine/ps5/pw_d3d9_bridge_wire.c
+tests/test_d3d9_bridge_wire.c
+tests/lab/d3d9_bridge_wire.c
+docs/d3d9-bridge-transport.md
