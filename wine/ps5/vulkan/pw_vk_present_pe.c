@@ -20,20 +20,19 @@ void pw_vk_present_forget(void)
  if(!enabled)return;
  EnterCriticalSection(&gate);memset(queues,0,sizeof(queues));LeaveCriticalSection(&gate);
 }
-NTSTATUS pw_vk_present_call(unsigned int code,void *args)
+void pw_vk_present_observe(unsigned int code,void *args,NTSTATUS status)
 {
- NTSTATUS status;LARGE_INTEGER now;unsigned i;uint64_t us=0;int valid;
+ LARGE_INTEGER now;unsigned i;uint64_t us=0;int valid;
  struct pw_vk_present_interval copy;struct vkQueuePresentKHR_params *q=args;
- if(code!=unix_vkQueuePresentKHR&&code!=unix_vkDestroyDevice)return WINE_UNIX_CALL(code,args);
+ if(code!=unix_vkQueuePresentKHR&&code!=unix_vkDestroyDevice)return;
  InitOnceExecuteOnce(&once,initialize,NULL,NULL);
- status=WINE_UNIX_CALL(code,args);
- if(!enabled)return status;
- if(code==unix_vkDestroyDevice){if(!status)pw_vk_present_forget();return status;}
+ if(!enabled)return;
+ if(code==unix_vkDestroyDevice){if(!status)pw_vk_present_forget();return;}
  /* Capture before taking the diagnostic lock on both architectures. */
- if(!QueryPerformanceCounter(&now)){pw_vk_present_forget();return status;}
+ if(!QueryPerformanceCounter(&now)){pw_vk_present_forget();return;}
  EnterCriticalSection(&gate);
  for(i=0;i<8;i++)if(!queues[i].queue||queues[i].queue==q->queue)break;
- if(i==8){LeaveCriticalSection(&gate);WINE_MESSAGE("PW_VK_PRESENT_INTERVAL version=1 dropped=1 reason=queue_capacity\n");return status;}
+ if(i==8){LeaveCriticalSection(&gate);WINE_MESSAGE("PW_VK_PRESENT_INTERVAL version=1 dropped=1 reason=queue_capacity\n");return;}
  queues[i].queue=q->queue;
  valid=pw_vk_present_interval_add(&queues[i].stats,now.QuadPart,frequency.QuadPart,
      !status&&(q->result==VK_SUCCESS||q->result==VK_SUBOPTIMAL_KHR),&us);
@@ -42,5 +41,13 @@ NTSTATUS pw_vk_present_call(unsigned int code,void *args)
  WINE_MESSAGE("PW_VK_PRESENT_INTERVAL version=1 scope=queue_return queue=%p tick=%llu frequency=%llu result=%d status=%lu valid=%u interval_us=%llu intervals=%llu max_us=%llu over25ms=%llu over33ms=%llu over50ms=%llu\n",
      q->queue,(UINT64)now.QuadPart,(UINT64)frequency.QuadPart,status?VK_ERROR_UNKNOWN:q->result,(ULONG)status,valid,
      (UINT64)us,(UINT64)copy.intervals,(UINT64)copy.maximum_us,(UINT64)copy.over25,(UINT64)copy.over33,(UINT64)copy.over50);
+}
+
+NTSTATUS pw_vk_present_call(unsigned int code,void *args)
+{
+ if(code!=unix_vkQueuePresentKHR&&code!=unix_vkDestroyDevice)return WINE_UNIX_CALL(code,args);
+ InitOnceExecuteOnce(&once,initialize,NULL,NULL);
+ NTSTATUS status=WINE_UNIX_CALL(code,args);
+ pw_vk_present_observe(code,args,status);
  return status;
 }

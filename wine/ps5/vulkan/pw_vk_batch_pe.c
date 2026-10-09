@@ -177,7 +177,7 @@ static NTSTATUS flush_call(unsigned int code,void *args)
  if(!bytes&&!async_backend){status=code==unix_count?STATUS_SUCCESS:raw_call(code,args);pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return status;}
  p.version=async_backend?PW_VK_BATCH_ASYNC_VERSION:PW_VK_BATCH_VERSION;p.batch=(UINT_PTR)scratch;p.bytes=bytes;p.code=code;p.args=(UINT_PTR)args;p.status=STATUS_SUCCESS;
  status=raw_call(unix_pw_vk_batch,&p);if(status)fatal();
- if(code==unix_vkDestroyDevice&&!p.status)pw_vk_present_forget();
+ pw_vk_present_observe(code,args,p.status);
  dispatches_total++;records_total+=records;if(code<unix_count)piggyback_total++;
  pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return p.status;
 }

@@ -27,3 +27,17 @@ capacity, clock failure and device lifetime reset. It does not prove actual
 Vulkan presentation, console cadence or game performance. Final integration must
 build against pinned Wine headers and deploy both PE DLLs, and matched captures
 must use the same instrumentation on both sides.
+
+## Present carried by a batch
+
+A PE32 flush can carry Present inside the batch Unix call. Its outer opcode is
+not Present, so the direct wrapper cannot observe that completed tail itself.
+After batch dispatch succeeds, the flush now observes the tail's actual status
+without dispatching Present again. Standalone flushes are ignored; direct calls
+retain one observation. Batched device destruction uses the same completion path.
+
+The controlled fixture exercises both direct calls and an already-completed batch
+tail, including nested failure and recovery. `--host-control` runs the actual
+observer with scalar Win32 API stubs and a controlled thunk/clock, without Wine
+or GPU initialization. It does not prove Win32 synchronization or real batch/GPU
+execution. PE32/PE64 compile checks and later console integration remain distinct.
