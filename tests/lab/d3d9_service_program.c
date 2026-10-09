@@ -25,6 +25,9 @@ static void registry_proof(IDirect3DDevice9 *device)
  q=(struct pw_d3d9_program_request){.operation=PW_D3D9_PROGRAM_COMMIT,.kind=7,.transfer=transfer};
  pw_d3d9_service_program_call(&objects,parent,&q,&r);assert(r.hresult==S_OK&&r.id&&r.generation);
  struct pw_d3d9_object_ref program={r.id,r.generation};assert(slots[parent.id-1].queued_refs==1);
+ struct pw_d3d9_program_query_request read={.operation=PW_D3D9_PROGRAM_READ,.kind=7,.capacity=0,.count=16};
+ struct pw_d3d9_program_query_reply data;pw_d3d9_service_program_query(&objects,program,&read,&data);
+ assert(data.hresult==S_OK&&data.size==2&&data.total==16&&data.count==16&&!memcmp(data.data,declaration,16));
  void *owned=NULL;assert(pw_d3d9_service_program_acquire(&objects,program,8,device,&owned)==D3DERR_INVALIDCALL&&!owned);
  assert(pw_d3d9_service_program_acquire(&objects,program,7,device,&owned)==S_OK&&owned);
  D3DVERTEXELEMENT9 copied[3];UINT count=3;assert(IDirect3DVertexDeclaration9_GetDeclaration((IDirect3DVertexDeclaration9 *)owned,copied,&count)==S_OK&&count==2);IUnknown_Release((IUnknown *)owned);

@@ -2,6 +2,7 @@
 #define COBJMACROS
 #include "pw_d3d9_service_program.h"
 #include "pw_d3d9_native_program.h"
+#include "pw_d3d9_native_program_query.h"
 #include "pw_d3d9_session.h"
 #include "pw_d3d9_kinds.h"
 #include <d3d9.h>
@@ -92,4 +93,13 @@ HRESULT pw_d3d9_service_program_acquire(struct pw_d3d9_objects *objects,struct p
     struct program_owner *owner=(void *)slot->context;const struct pw_d3d9_object_slot *parent=lookup(objects,owner->parent);
     if(!parent||parent->kind!=PW_D3D9_KIND_DEVICE||pw_d3d9_native_device_backend((void *)parent->context)!=native_device)return D3DERR_INVALIDCALL;
     IUnknown *backend=pw_d3d9_native_program_backend(owner->native);IUnknown_AddRef(backend);*out=backend;return S_OK;
+}
+
+void pw_d3d9_service_program_query(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref ref,const struct pw_d3d9_program_query_request *q,struct pw_d3d9_program_query_reply *r)
+{
+    memset(r,0,sizeof(*r));r->operation=q->operation;r->kind=q->kind;r->size=q->capacity;r->hresult=D3DERR_INVALIDCALL;
+    const struct pw_d3d9_object_slot *slot=lookup(objects,ref);
+    if(q->kind<7||q->kind>9||!slot||slot->kind!=q->kind||!pw_d3d9_object_queue(objects,ref))return;
+    struct program_owner *owner=(void *)slot->context;pw_d3d9_native_program_query(owner->native,q,r);
+    if(!pw_d3d9_object_complete(objects,ref)){r->hresult=E_FAIL;r->total=r->offset=r->count=0;}
 }

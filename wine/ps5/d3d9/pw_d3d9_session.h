@@ -17,6 +17,8 @@ HRESULT pw_d3d9_session_getter(struct pw_d3d9_session *,struct pw_d3d9_object_re
 #endif
 #ifdef PW_D3D9_ENABLE_PROGRAM
 #include "../pw_d3d9_program_wire.h"
+#include "../pw_d3d9_program_query.h"
+HRESULT pw_d3d9_session_program_query(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_program_query_request *,struct pw_d3d9_program_query_reply *);
 HRESULT pw_d3d9_session_program(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_program_request *,struct pw_d3d9_program_reply *);
 #endif
 /* Local PE32 ownership only: no member pointer or Windows handle is wire data.

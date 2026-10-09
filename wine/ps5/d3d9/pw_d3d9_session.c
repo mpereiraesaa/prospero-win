@@ -365,6 +365,17 @@ HRESULT pw_d3d9_session_getter(struct pw_d3d9_session *s,struct pw_d3d9_object_r
 }
 #endif
 #ifdef PW_D3D9_ENABLE_PROGRAM
+HRESULT pw_d3d9_session_program_query(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_program_query_request *request,struct pw_d3d9_program_query_reply *reply)
+{
+    unsigned char in[24],out[PW_D3D9_PROGRAM_CHUNK+32];size_t bytes;struct pw_d3d9_program_query_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_PROGRAM_QUERY_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_program_query_encode(in,sizeof(in),&bytes,request)!=PW_D3D9_PROGRAM_OK)return D3DERR_INVALIDCALL;
+    m.payload_bytes=(uint32_t)bytes;HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_program_query_reply_decode(&decoded,request,out,r.payload_bytes)!=PW_D3D9_PROGRAM_OK||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
 HRESULT pw_d3d9_session_program(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_program_request *request,struct pw_d3d9_program_reply *reply)
 {
     unsigned char in[PW_D3D9_PROGRAM_WIRE_MAX],out[32];size_t bytes;struct pw_d3d9_program_reply decoded;
@@ -613,6 +624,11 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             if(m.device!=objects.device||!pw_d3d9_service_methods(&objects,ref,m.opcode,payload,m.payload_bytes,output,sizeof(output),&bytes,&hr))goto done;
 #endif
 #ifdef PW_D3D9_ENABLE_PROGRAM
+        }else if(m.opcode==PW_D3D9_PROGRAM_QUERY_CALL){
+            struct pw_d3d9_program_query_request request;struct pw_d3d9_program_query_reply reply;
+            if(m.device!=objects.device||pw_d3d9_program_query_decode(&request,payload,m.payload_bytes)!=PW_D3D9_PROGRAM_OK)goto done;
+            pw_d3d9_service_program_query(&objects,ref,&request,&reply);hr=(HRESULT)reply.hresult;
+            if(pw_d3d9_program_query_reply_encode(output,sizeof(output),&bytes,&request,&reply)!=PW_D3D9_PROGRAM_OK)goto done;
         }else if(m.opcode==PW_D3D9_PROGRAM_CALL){
             struct pw_d3d9_program_request request;struct pw_d3d9_program_reply reply;
             if(m.device!=objects.device||pw_d3d9_program_decode(&request,payload,m.payload_bytes)!=PW_D3D9_PROGRAM_OK)goto done;
