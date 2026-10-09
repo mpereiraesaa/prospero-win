@@ -13,7 +13,7 @@
 #include "pw_vk_progress_guard.h"
 WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 struct producer {
- struct producer *next;struct pw_vk_spsc stream;LONG retired,publishing;
+ struct producer *next;struct pw_vk_spsc stream;LONG retired,publishing;DWORD tid;
  unsigned char arena[PW_VK_BATCH_ARENA],wire[PW_VK_BATCH_ARENA];
 };
 static INIT_ONCE once=INIT_ONCE_STATIC_INIT;
@@ -90,7 +90,7 @@ static struct producer *producer(void)
  if(count>=PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA-1||!TlsSetValue(tls,p)){
   LeaveCriticalSection(&registry_gate);heap_free(p);return NULL;
  }
- p->next=registry.streams;registry.streams=p;
+ p->tid=GetCurrentThreadId();p->next=registry.streams;registry.streams=p;
  LeaveCriticalSection(&registry_gate);return p;
 }
 /* Only the drain owner reclaims nodes. Registration holds this short lock, but
@@ -114,10 +114,30 @@ static size_t producers(struct producer **list)
  for(p=registry.streams;p;p=p->next)list[n++]=p;
  LeaveCriticalSection(&registry_gate);return n;
 }
+/* Opt-in, one report per stalled wait. The drain owns read positions, so an
+ * acquired published head remains stable while its ticket is inspected. */
+static void wait_report(const char *stage,struct producer **list,size_t n,uint64_t marker)
+{
+ size_t i;WINE_MESSAGE("PW_VK_STREAM_WAIT version=1 stage=%s tid=%lu expected=%llu marker=%llu producers=%u\n",stage,GetCurrentThreadId(),(UINT64)next_replay,(UINT64)marker,(unsigned)n);
+ for(i=0;i<n;i++){
+  struct producer *p=list[i];uint64_t read=atomic_load_explicit(&p->stream.read,memory_order_relaxed);
+  uint64_t write=atomic_load_explicit(&p->stream.write,memory_order_acquire),head=0;unsigned j;
+  if(write>=read && write-read>=PW_VK_STREAM_HEADER)
+   for(j=0;j<8;j++)head|=(uint64_t)p->arena[(size_t)(read+24+j)&(p->stream.capacity-1)]<<(8*j);
+  WINE_MESSAGE("PW_VK_STREAM_NODE version=1 tid=%lu read=%llu write=%llu head=%llu publishing=%ld retired=%ld\n",p->tid,(UINT64)read,(UINT64)write,(UINT64)head,InterlockedCompareExchange(&p->publishing,0,0),InterlockedCompareExchange(&p->retired,0,0));
+ }
+}
+static void wait_tick(const char *stage,struct producer **list,size_t n,uint64_t marker,unsigned *spins,DWORD *start,BOOL *reported)
+{
+ DWORD now;if(!stats_enabled||*reported||(++*spins&1023))return;
+ now=GetTickCount();if(!*start)*start=now;
+ else if(now-*start>=1000){wait_report(stage,list,n,marker);*reported=TRUE;}
+}
 static void collect(size_t *bytes,size_t *records)
 {
  struct producer *list[PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA];
  uint64_t marker=pw_vk_spsc_marker(&stream_sequence);size_t n=producers(list),i;
+ unsigned spins=0;DWORD start=0;BOOL reported=FALSE;
  *bytes=*records=0;
  while(next_replay<=marker){
   BOOL found=FALSE;
@@ -127,7 +147,8 @@ static void collect(size_t *bytes,size_t *records)
    if(status)fatal();
    *bytes+=used;(*records)++;next_replay++;found=TRUE;break;
   }
-  if(!found)SwitchToThread(); /* A reserved producer has not published yet. */
+  if(!found){wait_tick("collect",list,n,marker,&spins,&start,&reported);SwitchToThread();}
+  else {spins=0;start=0;reported=FALSE;}
  }
  enqueued_total=marker; /* Snapshot counts exactly the accepted prefix. */
 }
@@ -135,7 +156,12 @@ static void quiesce(void)
 {
  struct producer *list[PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA];size_t n,i;
  InterlockedExchange(&quiescing,1);n=producers(list);
- for(i=0;i<n;i++)while(InterlockedCompareExchange(&list[i]->publishing,0,0))SwitchToThread();
+ for(i=0;i<n;i++){
+  unsigned spins=0;DWORD start=0;BOOL reported=FALSE;
+  while(InterlockedCompareExchange(&list[i]->publishing,0,0)){
+   wait_tick("quiesce",list,n,pw_vk_spsc_marker(&stream_sequence),&spins,&start,&reported);SwitchToThread();
+  }
+ }
 }
 void pw_vk_batch_thread_detach(void)
 {

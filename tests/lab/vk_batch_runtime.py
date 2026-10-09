@@ -38,7 +38,7 @@ run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-D__WINESRC__','-DWINE_UNIX_
 env=os.environ.copy();env.update(WINEPREFIX=str(out/'wine-prefix'),WINEDEBUG='-all',WINEDLLOVERRIDES='mscoree,mshtml=')
 env.pop('PW_VK_BATCH_MASK',None)
 for mode in ['core','khr']:run([str(pathlib.Path(a.wine_build)/'loader/wine'),str(owned),mode],env)
-for mode in ['on','old','off','stats','profile-no-stats','profile','append-during-replay','disable-inflight']:
+for mode in ['on','old','off','stats','profile-no-stats','profile','append-during-replay','stall-report','disable-inflight']:
  result=run([str(pathlib.Path(a.wine_build)/'loader/wine'),str(exe),mode],env)
  if mode=='profile':
   lines=[line for line in result.stderr.splitlines() if line.startswith('PW_VK_FALLBACK')]
