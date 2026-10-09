@@ -83,6 +83,12 @@ static int replay(void *context,const struct pw_vk_stream_record *r)
   if(!generated_record(ctx,r,&params))return 1;
   memcpy(&code,r->payload,4);
  }
+ if(traced){
+  VkCommandBuffer handle=r->opcode==PW_VK_BATCH_GENERATED_OPCODE?pw_vk_replay_command_buffer(code,params):
+   r->opcode==PW_VK_UPDATE_TEMPLATE?NULL:(VkCommandBuffer)UlongToPtr(pw_vk_wire_u32(r->payload));
+  struct wine_cmd_buffer *cb=handle?wine_cmd_buffer_from_handle(handle):NULL;
+  ctx->trace_cb=(uintptr_t)cb;ctx->trace_pool=cb?(uintptr_t)cb->pool:0;
+ }
  if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=dispatch_begin job=%u record=%u cb=%p pool=%p opcode=%u code=%u bytes=%u\n",ctx->trace_job,ctx->trace_records,(void *)ctx->trace_cb,(void *)ctx->trace_pool,r->opcode,code,r->payload_bytes);
  result=r->opcode==PW_VK_BATCH_GENERATED_OPCODE?pw_vk_batch_dispatch_native(code,params)!=STATUS_SUCCESS:!pw_wine_vk_replay(r->opcode,r->payload,r->payload_bytes);
  if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=dispatch_end job=%u record=%u cb=%p pool=%p opcode=%u code=%u result=%d\n",ctx->trace_job,ctx->trace_records,(void *)ctx->trace_cb,(void *)ctx->trace_pool,r->opcode,code,result);

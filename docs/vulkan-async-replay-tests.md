@@ -185,3 +185,10 @@ Local receipts: `/tmp/prospero-replay-epochs-async-r6/receipt.json` and
 check or ordered-epoch dependency makes the blocked core fixture fail. These
 changes require fresh staged PE/SDK checks and owner-approved console comparison;
 the previously rejected one-worker package stays immutable and is not retried.
+
+The expanded trace now identifies each record's actual buffer/pool within a
+multi-lane group; descriptor updates report zero for both. The trace-only
+follow-up is covered by the actual-adapter host/ASan lab and explicit mixed
+record assertions in `/tmp/prospero-replay-epochs-async-r8/receipt.json`. The PE
+lab and full all/sanitize receipts precede this diagnostic-only change; the SDK
+candidate compiles the final source, with the exact stage delta recorded.

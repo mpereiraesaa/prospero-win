@@ -76,6 +76,9 @@ for name, extra in [('host', []), ('sanitize', ['-fsanitize=address,undefined', 
     epoch = execute([str(output / name), 'epoch-workload'])
     assert 'jobs=1 admission_global_waits=0' in epoch.stdout, epoch.stdout
     execute([str(output / name), 'epoch-overlap'])
+epoch_trace = execute([str(output / 'host'), 'epoch-workload'], trace=True)
+assert len(re.findall(r'event=dispatch_begin .* cb=\(nil\) pool=\(nil\) opcode=6 ', epoch_trace.stderr)) == 16, epoch_trace.stderr
+assert len(re.findall(r'event=dispatch_begin .* cb=0x[0-9a-f]+ pool=0x[0-9a-f]+ opcode=7 ', epoch_trace.stderr)) == 16, epoch_trace.stderr
 traced = execute([str(output / 'host')], trace=True)
 for event in ('initialize_begin', 'initialize_end', 'create_begin', 'create_end',
               'worker_enter', 'enqueue_begin', 'enqueue_end', 'job_begin', 'job_end',
