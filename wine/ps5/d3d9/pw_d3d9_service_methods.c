@@ -1,3 +1,6 @@
+#ifdef PW_D3D9_ENABLE_TEXTURE
+#include "pw_d3d9_service_texture.h"
+#endif
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_d3d9_service_methods.h"
 #ifdef PW_D3D9_ENABLE_PROGRAM
@@ -12,6 +15,9 @@ static HRESULT acquire(void *context,uint32_t id,uint32_t generation,uint32_t ki
 {
 #ifdef PW_D3D9_ENABLE_PROGRAM
  if(kind>=7&&kind<=9)return pw_d3d9_service_program_acquire(context,(struct pw_d3d9_object_ref){id,generation},kind,device,out);
+#endif
+#ifdef PW_D3D9_ENABLE_TEXTURE
+ if(kind==5||kind==6)return pw_d3d9_service_texture_acquire(context,(struct pw_d3d9_object_ref){id,generation},kind,device,out);
 #endif
  return pw_d3d9_service_resource_acquire(context,(struct pw_d3d9_object_ref){id,generation},kind,device,out);
 }

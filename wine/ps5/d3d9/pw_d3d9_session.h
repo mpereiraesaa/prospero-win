@@ -8,6 +8,9 @@
 #ifdef PW_D3D9_ENABLE_RESOURCE
 #include "../pw_d3d9_resource_wire.h"
 #endif
+#ifdef PW_D3D9_ENABLE_TEXTURE
+#include "../pw_d3d9_texture_wire.h"
+#endif
 struct pw_d3d9_session;
 #ifdef PW_D3D9_ENABLE_METHODS
 #include "../pw_d3d9_command_wire.h"
@@ -51,6 +54,10 @@ HRESULT pw_d3d9_session_device(struct pw_d3d9_session *,struct pw_d3d9_object_re
 #ifdef PW_D3D9_ENABLE_RESOURCE
 HRESULT pw_d3d9_session_resource(struct pw_d3d9_session *,struct pw_d3d9_object_ref,
  const struct pw_d3d9_resource_request *,struct pw_d3d9_resource_reply *);
+#endif
+#ifdef PW_D3D9_ENABLE_TEXTURE
+HRESULT pw_d3d9_session_texture(struct pw_d3d9_session *,struct pw_d3d9_object_ref,
+ const struct pw_d3d9_texture_request *,struct pw_d3d9_texture_reply *);
 #endif
 HRESULT pw_d3d9_session_release(struct pw_d3d9_session *,struct pw_d3d9_object_ref);
 /* Cancellation wakes both endpoints; close still joins and frees ownership. */

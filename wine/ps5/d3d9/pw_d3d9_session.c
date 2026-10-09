@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
+#ifdef PW_D3D9_ENABLE_TEXTURE
+#include "pw_d3d9_service_texture.h"
+#endif
 #include "pw_d3d9_session.h"
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
 #include "pw_d3d9_service_stateblock.h"
@@ -346,6 +349,21 @@ HRESULT pw_d3d9_session_resource(struct pw_d3d9_session *s,struct pw_d3d9_object
     *reply=decoded;return hr;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_TEXTURE
+HRESULT pw_d3d9_session_texture(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,
+ const struct pw_d3d9_texture_request *request,struct pw_d3d9_texture_reply *reply)
+{
+    unsigned char in[PW_D3D9_TEXTURE_MAX_WIRE],out[PW_D3D9_TEXTURE_MAX_WIRE];size_t bytes;
+    struct pw_d3d9_texture_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_TEXTURE_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_texture_request_encode(in,sizeof(in),&bytes,request)!=PW_D3D9_RESOURCE_OK)return D3DERR_INVALIDCALL;
+    m.payload_bytes=(uint32_t)bytes;HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_texture_reply_decode(&decoded,out,r.payload_bytes)!=PW_D3D9_RESOURCE_OK||decoded.operation!=request->operation||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
+#endif
 #ifdef PW_D3D9_ENABLE_METHODS
 HRESULT pw_d3d9_session_command(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_command *request)
 {
@@ -463,6 +481,9 @@ static int destroy_objects(struct pw_d3d9_objects *objects)
             if(objects->slots[n].kind==1)IDirect3D9_Release((IDirect3D9 *)context);
 #ifdef PW_D3D9_ENABLE_RESOURCE
             else if(objects->slots[n].kind==PW_D3D9_KIND_VERTEX_BUFFER||objects->slots[n].kind==PW_D3D9_KIND_INDEX_BUFFER){if(FAILED(pw_d3d9_service_resource_destroy(objects,context)))okay=0;}
+#endif
+#ifdef PW_D3D9_ENABLE_TEXTURE
+            else if(objects->slots[n].kind==5||objects->slots[n].kind==6){if(FAILED(pw_d3d9_service_texture_destroy(objects,context)))okay=0;}
 #endif
 #ifdef PW_D3D9_ENABLE_PROGRAM
             else if(objects->slots[n].kind>=7&&objects->slots[n].kind<=9){if(FAILED(pw_d3d9_service_program_destroy(objects,context)))okay=0;}
@@ -643,6 +664,13 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             if(m.device!=objects.device||pw_d3d9_resource_request_decode(&request,payload,m.payload_bytes)!=PW_D3D9_RESOURCE_OK)goto done;
             pw_d3d9_service_resource_call(&objects,ref,&request,&reply);hr=(HRESULT)reply.hresult;
             if(pw_d3d9_resource_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_RESOURCE_OK)goto done;
+#endif
+#ifdef PW_D3D9_ENABLE_TEXTURE
+        }else if(m.opcode==PW_D3D9_TEXTURE_CALL){
+            struct pw_d3d9_texture_request request;struct pw_d3d9_texture_reply reply;
+            if(m.device!=objects.device||pw_d3d9_texture_request_decode(&request,payload,m.payload_bytes)!=PW_D3D9_RESOURCE_OK)goto done;
+            pw_d3d9_service_texture_call(&objects,ref,&request,&reply);hr=(HRESULT)reply.hresult;
+            if(pw_d3d9_texture_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_RESOURCE_OK)goto done;
 #endif
 #ifdef PW_D3D9_ENABLE_METHODS
         }else if(m.opcode==PW_D3D9_COMMAND_CALL||m.opcode==PW_D3D9_GETTER_CALL){
