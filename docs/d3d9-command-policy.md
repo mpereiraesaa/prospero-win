@@ -87,3 +87,16 @@ so no local constant-value shadow is claimed. Large software-mode payloads over
 the4096-byte transport capacity remain an explicit unsupported frontend limit;
 this change must not allocate out of bounds, split a logical call without
 serialization, or invent successful execution for those uploads.
+
+Expanded admission is policy revision2 and requires the additional HELLO feature
+16384 on both peers, alongside command batching. An old first-wave-only peer
+must not accept an expanded-policy pair. This foundation exports the required
+feature; production negotiation and enablement remain the integration caller's
+responsibility.
+
+Retained host proof for this extension passed620 setter/Transform comparisons
+and132 constant boundary comparisons per native process, across hardware, mixed
+and software creation modes. Live and state-block recording paths both run.
+The native receipt freezes91 inputs and9 successful commands; frontend staged
+copy has a separate90-input,8-command normal/sanitized/PE32/PE64 proof. No
+queued-session or console acceptance is claimed by these family proofs.

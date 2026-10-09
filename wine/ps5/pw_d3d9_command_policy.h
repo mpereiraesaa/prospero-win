@@ -2,6 +2,10 @@
 #ifndef PW_D3D9_COMMAND_POLICY_H
 #define PW_D3D9_COMMAND_POLICY_H
 #include "pw_d3d9_command_wire.h"
+/* Expanded constants/Transform admission requires this additional HELLO bit.
+ * Both peers must advertise it; first-wave batch admission alone is insufficient. */
+#define PW_D3D9_COMMAND_POLICY_VERSION 2u
+#define PW_D3D9_COMMAND_POLICY_FEATURE 16384u
 /* Pinned DXVK5fde742b immediate-S_OK subset, for already owned command data.
  * Zero means synchronous fallback, not an API error. Does not authorize queue
  * admission: session health, ordering, device pins and negotiated policy still

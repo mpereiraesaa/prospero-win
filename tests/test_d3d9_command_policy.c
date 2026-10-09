@@ -17,6 +17,8 @@ static void check(struct pw_d3d9_command *c, int expected)
 }
 int main(void)
 {
+    _Static_assert(PW_D3D9_COMMAND_POLICY_VERSION == 2u, "policy revision");
+    _Static_assert(PW_D3D9_COMMAND_POLICY_FEATURE == 16384u, "HELLO policy feature");
     struct pw_d3d9_command c = {0};
     const unsigned copy_methods[] = {47,49,75}, sizes[] = {24,68,16};
     const unsigned indices[] = {0,1,6,7,255,256,0x7fffffff,0xffffffff};
