@@ -8,7 +8,7 @@ def edit(name,fn):
  p=d/name;s=p.read_text();p.write_text(fn(s))
 def once(s,old,new):
  assert s.count(old)==1,(old,s.count(old));return s.replace(old,new)
-for name in ['pw_vk_wire','pw_vk_template_cache','pw_vk_command_stream']:
+for name in ['pw_vk_wire','pw_vk_template_cache','pw_vk_command_stream','pw_vk_spsc']:
  for ext in ['c','h']:shutil.copyfile(repo/'wine/ps5'/f'{name}.{ext}',d/f'{name}.{ext}')
 for p in (repo/'wine/ps5/vulkan').glob('*.[ch]'):shutil.copyfile(p,d/p.name)
 edit('vulkan_loader.h',lambda s:once(s,'#define UNIX_CALL(code, params) WINE_UNIX_CALL(unix_ ## code, params)', '#include "pw_vk_batch.h"\n#ifdef _WIN64\n#define UNIX_CALL(code, params) WINE_UNIX_CALL(unix_ ## code, params)\n#else\n#define UNIX_CALL(code, params) pw_vk_batch_call(unix_ ## code, params)\n#endif'))
@@ -29,7 +29,7 @@ edit('loader.c',lambda s:once(s,'    for (i = 0; i < allocate_info->commandBuffe
 
 edit('vulkan.c',lambda s:once(s,'    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);', '    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    if (!strcmp(name, PW_VK_BATCH_NAME)) return PW_VK_BATCH_CAPABILITY;\n    if (!strcmp(name, PW_VK_BATCH_LEGACY_NAME)) return PW_VK_BATCH_LEGACY_CAPABILITY;\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);'))
 subprocess.run([sys.executable,str(repo/'tools/stage_vk_replay_lifecycle.py'),'--source',a.source],check=True)
-names=['pw_vk_wire','pw_vk_template_cache','pw_vk_command_stream']
+names=['pw_vk_wire','pw_vk_template_cache','pw_vk_command_stream','pw_vk_spsc']
 sources=['pw_vk_batch_pe.c','pw_vk_batch_unix.c','pw_vk_retire.c']
 names+=['pw_vk_codec','pw_vk_generated']
 subprocess.run([sys.executable,str(repo/'tools/generate_vk_codecs.py'),'--source',a.source,'--output',str(d)],check=True)

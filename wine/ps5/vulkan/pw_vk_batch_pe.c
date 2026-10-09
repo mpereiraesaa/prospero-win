@@ -5,21 +5,29 @@
 #include "pw_vk_retire.h"
 #include "pw_vk_codec.h"
 #include "pw_vk_command_stream.h"
+#include "pw_vk_spsc.h"
 #include "pw_vk_template_cache.h"
 #ifndef _WIN64
 #include "pw_vk_disable_guard.h"
 #include "pw_vk_function_names.h"
 #include "pw_vk_progress_guard.h"
 WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
-struct producer { struct pw_vk_stream stream; LONG retired; unsigned char arena[PW_VK_BATCH_ARENA]; };
+struct producer {
+ struct producer *next;struct pw_vk_spsc stream;LONG retired,publishing;
+ unsigned char arena[PW_VK_BATCH_ARENA],wire[PW_VK_BATCH_ARENA];
+};
 static INIT_ONCE once=INIT_ONCE_STATIC_INIT;
-static CRITICAL_SECTION gate;
+static CRITICAL_SECTION gate,registry_gate,metadata_gate;
 static DWORD tls=TLS_OUT_OF_INDEXES;
-static struct pw_vk_stream_registry registry;
+static struct { struct producer *streams; } registry;
+static struct pw_vk_spsc_sequence stream_sequence;
+static uint64_t next_replay=1;
+static LONG quiescing;
 static struct pw_vk_template_cache templates;
 static struct pw_vk_retirement retirement;
-static unsigned char *scratch,*encoded_wire;
-static BOOL enabled,negotiated,stats_enabled;
+static unsigned char *scratch;
+static BOOL enabled,stats_enabled;
+static _Atomic int negotiated;
 /* Only the existing gated fallback path owns these arrays. */
 static BOOL fallback_profile;
 static UINT64 fallback_counts[unix_count],fallback_reported[unix_count];
@@ -62,11 +70,10 @@ static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
  enabled=GetEnvironmentVariableA("PW_VK_BATCH",env,sizeof(env))==1&&env[0]=='1'&&!pw_vk_stream_environment_unsafe();
  if(!read_opcode_mask())enabled=FALSE; /* Invalid explicit masks fail closed. */
  if(!enabled)return TRUE;
- InitializeCriticalSection(&gate);tls=TlsAlloc();
- pw_vk_stream_registry_init(&registry);
+ InitializeCriticalSection(&gate);InitializeCriticalSection(&registry_gate);InitializeCriticalSection(&metadata_gate);tls=TlsAlloc();
+ pw_vk_spsc_sequence_init(&stream_sequence);
  scratch=heap_alloc(PW_VK_BATCH_SCRATCH);
- encoded_wire=heap_alloc(PW_VK_BATCH_ARENA);
- enabled=tls!=TLS_OUT_OF_INDEXES&&scratch&&encoded_wire;
+ enabled=tls!=TLS_OUT_OF_INDEXES&&scratch;
  /* Diagnostics are independently opt-in; FPS confirmation leaves them off. */
  return TRUE;
 }
@@ -74,19 +81,61 @@ static void enter(void){EnterCriticalSection(&gate);if(depth&&owner==GetCurrentT
 static void leave(void){depth=0;owner=0;LeaveCriticalSection(&gate);}
 static struct producer *producer(void)
 {
- struct producer *p=TlsGetValue(tls);
- struct pw_vk_stream *s;unsigned count=0;
+ struct producer *p=TlsGetValue(tls),*s;unsigned count=0;
  if(p)return p;
- for(s=registry.streams;s;s=s->next)if(++count>=PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA)return NULL;
  if(!(p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p))))return NULL;
- if(pw_vk_stream_register(&registry,&p->stream,p->arena,sizeof(p->arena))!=PW_VK_STREAM_OK){heap_free(p);return NULL;}
- if(!TlsSetValue(tls,p)){pw_vk_stream_unregister(&registry,&p->stream);heap_free(p);return NULL;}
- return p;
+ if(pw_vk_spsc_init(&p->stream,p->arena,sizeof(p->arena))){heap_free(p);return NULL;}
+ EnterCriticalSection(&registry_gate);
+ for(s=registry.streams;s;s=s->next)count++;
+ if(count>=PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA-1||!TlsSetValue(tls,p)){
+  LeaveCriticalSection(&registry_gate);heap_free(p);return NULL;
+ }
+ p->next=registry.streams;registry.streams=p;
+ LeaveCriticalSection(&registry_gate);return p;
 }
+/* Only the drain owner reclaims nodes. Registration holds this short lock, but
+ * neither ordinary append nor driver replay does. */
 static void reclaim(void)
 {
- struct pw_vk_stream *s=registry.streams,*next;
- while(s){struct producer *p=(struct producer *)s;next=s->next;if(InterlockedCompareExchange(&p->retired,0,0)&&!s->used){if(pw_vk_stream_unregister(&registry,s)!=PW_VK_STREAM_OK)fatal();heap_free(p);}s=next;}
+ struct producer **link,*p;
+ EnterCriticalSection(&registry_gate);
+ for(link=&registry.streams;(p=*link);){
+  if(InterlockedCompareExchange(&p->retired,0,0)&&
+     atomic_load_explicit(&p->stream.read,memory_order_relaxed)==atomic_load_explicit(&p->stream.write,memory_order_acquire)){
+   *link=p->next;heap_free(p);
+  }else link=&p->next;
+ }
+ LeaveCriticalSection(&registry_gate);
+}
+static size_t producers(struct producer **list)
+{
+ struct producer *p;size_t n=0;
+ EnterCriticalSection(&registry_gate);
+ for(p=registry.streams;p;p=p->next)list[n++]=p;
+ LeaveCriticalSection(&registry_gate);return n;
+}
+static void collect(size_t *bytes,size_t *records)
+{
+ struct producer *list[PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA];
+ uint64_t marker=pw_vk_spsc_marker(&stream_sequence);size_t n=producers(list),i;
+ *bytes=*records=0;
+ while(next_replay<=marker){
+  BOOL found=FALSE;
+  for(i=0;i<n;i++){
+   size_t used;int status=pw_vk_spsc_take(&list[i]->stream,next_replay,scratch+*bytes,PW_VK_BATCH_SCRATCH-*bytes,&used);
+   if(status==PW_VK_STREAM_PENDING)continue;
+   if(status)fatal();
+   *bytes+=used;(*records)++;next_replay++;found=TRUE;break;
+  }
+  if(!found)SwitchToThread(); /* A reserved producer has not published yet. */
+ }
+ enqueued_total=marker; /* Snapshot counts exactly the accepted prefix. */
+}
+static void quiesce(void)
+{
+ struct producer *list[PW_VK_BATCH_SCRATCH/PW_VK_BATCH_ARENA];size_t n,i;
+ InterlockedExchange(&quiescing,1);n=producers(list);
+ for(i=0;i<n;i++)while(InterlockedCompareExchange(&list[i]->publishing,0,0))SwitchToThread();
 }
 void pw_vk_batch_thread_detach(void)
 {
@@ -97,7 +146,7 @@ static NTSTATUS raw_call(unsigned int code,void *args){if(stats_enabled)Interloc
 static NTSTATUS flush_call(unsigned int code,void *args)
 {
  size_t bytes=0,records=0;struct pw_vk_batch_params p;NTSTATUS status;
- if(pw_vk_stream_collect(&registry,scratch,PW_VK_BATCH_SCRATCH,&bytes,&records)!=PW_VK_STREAM_OK)fatal();
+ collect(&bytes,&records);
  if(!bytes){status=code==unix_count?STATUS_SUCCESS:raw_call(code,args);pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return status;}
  p.version=PW_VK_BATCH_VERSION;p.batch=(UINT_PTR)scratch;p.bytes=bytes;p.code=code;p.args=(UINT_PTR)args;p.status=STATUS_SUCCESS;
  status=raw_call(unix_pw_vk_batch,&p);if(status)fatal();
@@ -109,11 +158,11 @@ static NTSTATUS flush_call(unsigned int code,void *args)
  * completes. A concurrent flush may already have completed before this hook. */
 void pw_vk_batch_retire_free(void *object)
 {
- struct pw_vk_stream *stream;BOOL pending=FALSE;
+ BOOL pending;
  if(!object)return;
  if(!enabled||InterlockedCompareExchange(&sticky_disabled,0,0)){free(object);return;}
  enter();
- for(stream=registry.streams;stream;stream=stream->next)if(stream->used){pending=TRUE;break;}
+ pending=next_replay<=pw_vk_spsc_marker(&stream_sequence);
  if(!pending)free(object);
  else if(!pw_vk_retirement_add(&retirement,object,heap_alloc)){
   /* Node allocation failure preserves lifetime by completing replay first. */
@@ -121,7 +170,7 @@ void pw_vk_batch_retire_free(void *object)
  }
  leave();
 }
-static void template_created(unsigned int code,void *args)
+static void template_created_locked(unsigned int code,void *args)
 {
  const VkDescriptorUpdateTemplateCreateInfo *info;VkDescriptorUpdateTemplate handle;VkDevice device;VkResult result;
  struct pw_vk_template_entry *entries;size_t i;
@@ -135,11 +184,20 @@ static void template_created(unsigned int code,void *args)
  for(i=0;i<info->descriptorUpdateEntryCount;i++){entries[i].type=info->pDescriptorUpdateEntries[i].descriptorType;entries[i].count=info->pDescriptorUpdateEntries[i].descriptorCount;entries[i].offset=info->pDescriptorUpdateEntries[i].offset;entries[i].stride=info->pDescriptorUpdateEntries[i].stride;}
  pw_vk_template_register(&templates,&allocator,(UINT_PTR)device,handle,1,info->pNext!=NULL,info->flags,info->templateType,entries,info->descriptorUpdateEntryCount);heap_free(entries);
 }
-static void retire_template(unsigned int code,void *args)
+static void retire_template_locked(unsigned int code,void *args)
 {
  if(code==unix_vkDestroyDescriptorUpdateTemplate){struct vkDestroyDescriptorUpdateTemplate_params *p=args;pw_vk_template_remove(&templates,&allocator,(UINT_PTR)p->device,p->descriptorUpdateTemplate);}
  else if(code==unix_vkDestroyDescriptorUpdateTemplateKHR){struct vkDestroyDescriptorUpdateTemplateKHR_params *p=args;pw_vk_template_remove(&templates,&allocator,(UINT_PTR)p->device,p->descriptorUpdateTemplate);}
  else if(code==unix_vkDestroyDevice){struct vkDestroyDevice_params *p=args;pw_vk_template_remove_device(&templates,&allocator,(UINT_PTR)p->device);}
+}
+static void template_created(unsigned code,void *args)
+{
+ EnterCriticalSection(&metadata_gate);template_created_locked(code,args);LeaveCriticalSection(&metadata_gate);
+}
+static void retire_template(unsigned code,void *args)
+{
+ if(code!=unix_vkDestroyDescriptorUpdateTemplate&&code!=unix_vkDestroyDescriptorUpdateTemplateKHR&&code!=unix_vkDestroyDevice)return;
+ EnterCriticalSection(&metadata_gate);retire_template_locked(code,args);LeaveCriticalSection(&metadata_gate);
 }
 static VkDevice template_device(unsigned code,const void *args)
 {
@@ -157,7 +215,7 @@ static VkDevice template_device(unsigned code,const void *args)
 }
 static int template_snapshot(void *device,uint64_t handle,const void *data,void *wire,size_t capacity,size_t *written)
 {
- return pw_vk_template_snapshot(&templates,(UINT_PTR)device,0,handle,data,1,wire,capacity,written);
+ int result;EnterCriticalSection(&metadata_gate);result=pw_vk_template_snapshot(&templates,(UINT_PTR)device,0,handle,data,1,wire,capacity,written);LeaveCriticalSection(&metadata_gate);return result;
 }
 static uint32_t call_opcode(unsigned int code)
 {
@@ -183,7 +241,7 @@ static int encode(unsigned int code,void *args,unsigned char *wire,size_t *writt
  case unix_vkCmdBindIndexBuffer:{const struct vkCmdBindIndexBuffer_params *p=args;op=PW_VK_BIND_INDEX;encoded=pw_vk_wire_index(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->buffer,p->offset,0,p->indexType,0,&n);break;}
  case unix_vkCmdBindDescriptorSets:{const struct vkCmdBindDescriptorSets_params *p=args;op=PW_VK_BIND_DESCRIPTORS;encoded=pw_vk_wire_descriptors(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->pipelineBindPoint,p->layout,p->firstSet,p->descriptorSetCount,(const uint64_t *)p->pDescriptorSets,p->dynamicOffsetCount,p->pDynamicOffsets,&n);break;}
  case unix_vkCmdBindVertexBuffers2:{const struct vkCmdBindVertexBuffers2_params *p=args;op=PW_VK_BIND_VERTEX2;encoded=pw_vk_wire_vertex2(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->firstBinding,p->bindingCount,(const uint64_t *)p->pBuffers,p->pOffsets,p->pSizes,p->pStrides,&n);break;}
- case unix_vkUpdateDescriptorSetWithTemplate:{const struct vkUpdateDescriptorSetWithTemplate_params *p=args;op=PW_VK_UPDATE_TEMPLATE;encoded=pw_vk_template_snapshot(&templates,(uint32_t)(uintptr_t)p->device,p->descriptorSet,p->descriptorUpdateTemplate,p->pData,1,wire,4096,&n);break;}
+ case unix_vkUpdateDescriptorSetWithTemplate:{const struct vkUpdateDescriptorSetWithTemplate_params *p=args;op=PW_VK_UPDATE_TEMPLATE;EnterCriticalSection(&metadata_gate);encoded=pw_vk_template_snapshot(&templates,(uint32_t)(uintptr_t)p->device,p->descriptorSet,p->descriptorUpdateTemplate,p->pData,1,wire,4096,&n);LeaveCriticalSection(&metadata_gate);break;}
  case unix_vkCmdPushConstants:{const struct vkCmdPushConstants_params *p=args;op=PW_VK_PUSH_CONSTANTS;encoded=pw_vk_wire_push_constants(wire,4096,(uint32_t)(uintptr_t)p->commandBuffer,p->layout,p->stageFlags,p->offset,p->size,p->pValues,&n);break;}
  default:break;
  }
@@ -227,23 +285,33 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
  /* Init and availability calls precede capability negotiation; old Unix never
   * receives the new table index. Disabled64 builds retain original macro. */
  if(!enabled||InterlockedCompareExchange(&sticky_disabled,0,0)){status=raw_call(code,args);snapshot(code,args);return status;}
- enter();wire=encoded_wire;
+ /* The replay gate is not part of the normal producer path. */
+ if(negotiated&&!pw_vk_stream_call_unsafe(code,args)&&!pw_vk_batch_allocator(code,args)&&(p=producer())){
+  InterlockedExchange(&p->publishing,1);
+  if(!InterlockedCompareExchange(&quiescing,0,0)){
+   wire=p->wire;bytes=0;opcode=0;
+   if(!encode(code,args,wire,&bytes,&opcode)&&opcode_mask==0x7f&&
+      pw_vk_generated_encode_templates(code,args,wire+4,PW_VK_BATCH_ARENA-PW_VK_STREAM_HEADER-4,&bytes,template_snapshot,template_device(code,args))){
+    memcpy(wire,&code,4);bytes+=4;opcode=PW_VK_BATCH_GENERATED_OPCODE;
+   }
+   appended=bytes?pw_vk_spsc_append(&stream_sequence,&p->stream,opcode,wire,bytes):PW_VK_STREAM_INVALID;
+   if(appended==PW_VK_STREAM_OK){
+    retire_template(code,args);InterlockedExchange(&p->publishing,0);return STATUS_SUCCESS;
+   }
+   InterlockedExchange(&p->publishing,0);
+   if(appended==PW_VK_STREAM_FULL){
+    /* Release publisher state before waiting for a drain/disable owner. */
+    enter();full_total++;flush_call(unix_count,NULL);leave();
+    return pw_vk_batch_call(code,args);
+   }
+   if(appended!=PW_VK_STREAM_INVALID)fatal();
+  }else InterlockedExchange(&p->publishing,0);
+ }
+ enter();
  if(InterlockedCompareExchange(&sticky_disabled,0,0)){leave();status=raw_call(code,args);snapshot(code,args);return status;}
  if(pw_vk_stream_call_unsafe(code,args)||pw_vk_batch_allocator(code,args)){
-  if(negotiated)flush_call(unix_count,NULL);
-  /* Publish only after all deferred work completes. Driver callbacks now
-   * recurse through raw dispatch with no gate or pending suffix. */
+  quiesce();if(negotiated)flush_call(unix_count,NULL);
   InterlockedExchange(&sticky_disabled,1);leave();status=raw_call(code,args);snapshot(code,args);return status;
- }
- bytes=0;opcode=0;
- if(negotiated&&!encode(code,args,wire,&bytes,&opcode)&&opcode_mask==0x7f&&
-    pw_vk_generated_encode_templates(code,args,wire+4,PW_VK_BATCH_ARENA-PW_VK_STREAM_HEADER-4,&bytes,template_snapshot,template_device(code,args))){
-  memcpy(wire,&code,4);bytes+=4;opcode=PW_VK_BATCH_GENERATED_OPCODE;
- }
- if(negotiated&&bytes&&(p=producer())){
-  appended=pw_vk_stream_append(&registry,&p->stream,opcode,wire,bytes);
-  if(appended==PW_VK_STREAM_FULL){full_total++;flush_call(unix_count,NULL);appended=pw_vk_stream_append(&registry,&p->stream,opcode,wire,bytes);}
-  if(appended==PW_VK_STREAM_OK){enqueued_total++;retire_template(code,args);leave();return STATUS_SUCCESS;}
  }
  fallback_total++;
  if(fallback_profile&&code<unix_count)fallback_counts[code]++;

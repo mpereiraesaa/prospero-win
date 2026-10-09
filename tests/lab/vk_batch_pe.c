@@ -16,6 +16,8 @@ static NTSTATUS mock_call(unsigned int,void *);
 #include "pw_vk_batch_pe.c"
 static unsigned ordinary,batches,replayed,draw_raw,sequence[4096],used;
 static BOOL support=TRUE;
+static HANDLE replay_entered,replay_release;
+static LONG hold_replay;
 static int effect(void *unused,const struct pw_vk_stream_record *r){(void)unused;assert(pw_vk_wire_validate(r->opcode,r->payload,r->payload_bytes));assert(r->opcode==PW_VK_DRAW_INDEXED);assert(used<4096);sequence[used++]=pw_vk_wire_u32(r->payload+4);replayed++;return 0;}
 static NTSTATUS original(unsigned int code,void *args)
 {
@@ -28,11 +30,13 @@ static NTSTATUS original(unsigned int code,void *args)
 }
 static NTSTATUS mock_call(unsigned int code,void *args)
 {
- if(code==unix_pw_vk_batch){struct pw_vk_batch_params *p=args;size_t done;batches++;assert(support);assert(p->version==PW_VK_BATCH_VERSION);assert(pw_vk_stream_replay((void *)(uintptr_t)p->batch,p->bytes,effect,NULL,&done)==PW_VK_STREAM_OK);p->status=p->code==unix_count?STATUS_SUCCESS:original(p->code,(void *)(uintptr_t)p->args);return STATUS_SUCCESS;}
+ if(code==unix_pw_vk_batch){struct pw_vk_batch_params *p=args;size_t done;if(InterlockedCompareExchange(&hold_replay,0,0)){SetEvent(replay_entered);assert(WaitForSingleObject(replay_release,2000)==WAIT_OBJECT_0);}batches++;assert(support);assert(p->version==PW_VK_BATCH_VERSION);assert(pw_vk_stream_replay((void *)(uintptr_t)p->batch,p->bytes,effect,NULL,&done)==PW_VK_STREAM_OK);p->status=p->code==unix_count?STATUS_SUCCESS:original(p->code,(void *)(uintptr_t)p->args);return STATUS_SUCCESS;}
  return original(code,args);
 }
 static void draw_index(unsigned n){struct vkCmdDrawIndexed_params p={(VkCommandBuffer)(uintptr_t)9,n,1,0,-7,0};assert(pw_vk_batch_call(unix_vkCmdDrawIndexed,&p)==STATUS_SUCCESS);memset(&p,0xee,sizeof(p));}
 static DWORD WINAPI worker(void *unused){(void)unused;draw_index(11);draw_index(12);pw_vk_batch_thread_detach();return 0;}
+static DWORD WINAPI flush_worker(void *unused){struct vkResetCommandBuffer_params p={0};(void)unused;assert(!pw_vk_batch_call(unix_vkResetCommandBuffer,&p));pw_vk_batch_thread_detach();return 0;}
+static DWORD WINAPI disable_worker(void *unused){struct vkCreateDebugUtilsMessengerEXT_params p={0};(void)unused;assert(!pw_vk_batch_call(unix_vkCreateDebugUtilsMessengerEXT,&p));return 0;}
 int main(int argc,char **argv)
 {
  VkInstance handle;VkInstanceCreateInfo info={0};struct vkCreateInstance_params create={0};HANDLE thread;struct vkResetCommandBuffer_params destroy={0};unsigned prior;
@@ -40,6 +44,36 @@ int main(int argc,char **argv)
  create.pCreateInfo=&info;create.pInstance=&handle;assert(pw_vk_batch_call(unix_vkCreateInstance,&create)==0);
  if(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats")||!support){draw_index(1);assert(draw_raw==1&&batches==0);if(!strcmp(argv[1],"stats")){struct vkQueuePresentKHR_params q={0};assert(pw_vk_batch_call(unix_vkQueuePresentKHR,&q)==0);assert(crossings_total==3&&present==1);}else assert(crossings_total==0);puts("PASS original path and old-Unix capability without new table access");return 0;}
  assert(negotiated&&enabled);
+ if(!strcmp(argv[1],"disable-inflight")){
+  struct producer *p;struct vkCmdDrawIndexed_params draw={(VkCommandBuffer)(uintptr_t)9,32,1,0,0,0};
+  size_t bytes=0;uint32_t opcode=0;DWORD start;
+  draw_index(31);p=producer();assert(p);InterlockedExchange(&p->publishing,1);
+  thread=CreateThread(NULL,0,disable_worker,NULL,0,NULL);assert(thread);start=GetTickCount();
+  while(!InterlockedCompareExchange(&quiescing,0,0)){assert(GetTickCount()-start<5000);Sleep(0);}
+  assert(WaitForSingleObject(thread,0)==WAIT_TIMEOUT&&!sticky_disabled&&!replayed);
+  /* Model the producer paused after entering publication, before copying. */
+  assert(encode(unix_vkCmdDrawIndexed,&draw,p->wire,&bytes,&opcode));
+  assert(!pw_vk_spsc_append(&stream_sequence,&p->stream,opcode,p->wire,bytes));
+  InterlockedExchange(&p->publishing,0);
+  assert(WaitForSingleObject(thread,5000)==WAIT_OBJECT_0);CloseHandle(thread);
+  assert(sticky_disabled&&replayed==2&&sequence[0]==31&&sequence[1]==32);
+  draw_index(33);assert(draw_raw==1&&!depth);
+  puts("PASS disable waits for in-flight publisher before drain and callback reentry");return 0;
+ }
+ if(!strcmp(argv[1],"append-during-replay")){
+  replay_entered=CreateEventA(NULL,TRUE,FALSE,NULL);replay_release=CreateEventA(NULL,TRUE,FALSE,NULL);assert(replay_entered&&replay_release);
+  draw_index(21);InterlockedExchange(&hold_replay,1);
+  thread=CreateThread(NULL,0,flush_worker,NULL,0,NULL);assert(thread);
+  assert(WaitForSingleObject(replay_entered,5000)==WAIT_OBJECT_0);
+  draw_index(22); /* Must return while another thread owns the replay gate. */
+  assert(!replayed);InterlockedExchange(&hold_replay,0);SetEvent(replay_release);
+  assert(WaitForSingleObject(thread,5000)==WAIT_OBJECT_0);CloseHandle(thread);
+  assert(replayed==1&&sequence[0]==21);
+  assert(!pw_vk_batch_call(unix_vkResetCommandBuffer,&destroy));
+  assert(replayed==2&&sequence[1]==22&&enqueued_total==2);
+  CloseHandle(replay_entered);CloseHandle(replay_release);
+  puts("PASS append during foreign replay, prefix boundary and subsequent drain");return 0;
+ }
  if(!strcmp(argv[1],"profile")){
   /* Narrow diagnostic scope intentionally measures unbatched fallback. */
   opcode_mask=95;
@@ -65,7 +99,7 @@ int main(int argc,char **argv)
  assert(!fallback_profile);thread=CreateThread(NULL,0,worker,NULL,0,NULL);assert(thread);assert(WaitForSingleObject(thread,5000)==WAIT_OBJECT_0);CloseHandle(thread);assert(replayed==0);
  /* A producer's owned arena survives actual Win32 thread exit. Main's synchronous reset
   * drains both records before the original lifetime operation. */
- assert(pw_vk_batch_call(unix_vkResetCommandBuffer,&destroy)==0);assert(batches==1&&replayed==2&&sequence[0]==11&&sequence[1]==12);assert(registry.streams==NULL);
+ assert(pw_vk_batch_call(unix_vkResetCommandBuffer,&destroy)==0);assert(batches==1&&replayed==2&&sequence[0]==11&&sequence[1]==12);assert(registry.streams==TlsGetValue(tls)&&!registry.streams->next);
  draw_index(13);prior=ordinary;
  {struct vkCreateDebugUtilsMessengerEXT_params callback={0};assert(pw_vk_batch_call(unix_vkCreateDebugUtilsMessengerEXT,&callback)==0);}
  assert(sticky_disabled&&replayed==3&&sequence[2]==13&&ordinary==prior+2);
