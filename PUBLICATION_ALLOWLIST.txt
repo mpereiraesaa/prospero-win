@@ -954,3 +954,7 @@ tests/lab/wine_ime_domain.py
 tests/lab/d3d9_draw_client.c
 tests/lab/d3d9_draw_client.py
 docs/d3d9-session-observers.md
+tests/lab/d3d9_transform_client.c
+tests/lab/d3d9_transform_client.py
+tests/lab/d3d9_transform_device.c
+docs/d3d9-transform-transport.md

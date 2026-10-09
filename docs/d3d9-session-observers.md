@@ -51,19 +51,20 @@ The frozen combined source 1e49a4d6 successfully compiled the complete PE32 prox
 and PE64 service with diagnostics disabled and mask 260095. Both binaries and
 all 154 build inputs were independently reverified.
 
-The retained final-260095-r8 host proof passed at fixture commit 9aa3d56d,
+The retained final-260095-r9 host proof passed at fixture commit 3d1dfa03,
 with shipping source unchanged from 1e49a4d6. All 13 commands exited zero;
 190 source inputs and five artifacts were independently reverified. For each
 of three seeds, direct native DXVK, proxy async-off, and proxy async-on produced
 identical transcripts of Transform answers, operation HRESULTs, and pixel
 readbacks. Controlled stages after Reset rendered red with both user-pointer
 and buffer-backed DrawPrimitive/DrawIndexedPrimitive paths in all modes.
-The controlled interval reduced command RPCs from 56 to 14 and recorded 42
-batched commands. Random-state black readbacks also matched native behavior;
+The controlled interval reduced command RPCs from 56 to 12 and recorded 44
+batched commands: 42 setters and two draws. A successful empty Begin/End pair
+reestablishes known LIVE recording before the measured draw interval. Random-state black readbacks also matched native behavior;
 they were not treated as a substitute for the controlled red-image checks.
 
 Receipt SHA256:
-`51492a1734804675b07091a2e0935d9d47895f4a558df471160f89cfe66a6c93`.
+`93ba36426cd8ef2b9ee7bb5877d8be78970f5568222cffa8681a85e75be2e4d1`.
 The host adapter replaces PS5 window association only. This proof establishes
 host compatibility for the tested workloads, not a console result or a game
 performance claim.
