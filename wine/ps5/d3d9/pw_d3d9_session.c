@@ -48,7 +48,7 @@ static void cancel_ipc(struct ipc *i)
 }
 static void hello_payload(unsigned char bytes[32],DWORD epoch)
 {
-    uint32_t fields[]={1,epoch,RING_BYTES,BACKEND_CRC,BACKEND_BYTES,FACTORY_METHODS,0,0};
+    uint32_t fields[]={1,epoch,RING_BYTES,BACKEND_CRC,BACKEND_BYTES,FACTORY_METHODS,1,0};
     for(unsigned n=0;n<8;n++)put32(bytes+n*4,fields[n]);
 }
 static int receive_wait(struct ipc *i,struct pw_d3d9_message *m,unsigned char *scratch,size_t bytes,HANDLE peer)
@@ -57,7 +57,13 @@ static int receive_wait(struct ipc *i,struct pw_d3d9_message *m,unsigned char *s
     for(;;){
         int status=pw_d3d9_channel_receive(&i->channel,m,scratch,bytes);
         if(status!=PW_D3D9_EMPTY)return status;
-        DWORD wait=WaitForMultipleObjects(peer?3:2,waits,FALSE,peer?30000:INFINITE);
+        DWORD wait;
+#ifdef _WIN64
+        wait=MsgWaitForMultipleObjects(2,waits,FALSE,INFINITE,QS_ALLINPUT);
+        if(wait==WAIT_OBJECT_0+2){MSG message;while(PeekMessageW(&message,NULL,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}continue;}
+#else
+        wait=WaitForMultipleObjects(peer?3:2,waits,FALSE,peer?30000:INFINITE);
+#endif
         if(wait!=WAIT_OBJECT_0){cancel_ipc(i);return PW_D3D9_CLOSED;}
     }
 }
@@ -93,7 +99,7 @@ static DWORD WINAPI broker_main(void *parameter)
 static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,const void *payload,
                         unsigned char *output,size_t capacity,struct pw_d3d9_message *reply)
 {
-    HRESULT result=E_FAIL;unsigned char scratch[PW_D3D9_FACTORY_MAX_REPLY+64+7];
+    HRESULT result=E_FAIL;unsigned char scratch[RING_BYTES];
     memset(reply,0,sizeof(*reply));
     EnterCriticalSection(&s->lock);
     if(send_wake(&s->ipc,m,payload)!=PW_D3D9_OK)goto done;
@@ -180,6 +186,22 @@ HRESULT pw_d3d9_session_factory(struct pw_d3d9_session *s,struct pw_d3d9_object_
     *reply=decoded;
     return hr;
 }
+HRESULT pw_d3d9_session_device(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,
+                              const struct pw_d3d9_device_request *request,struct pw_d3d9_device_reply *reply)
+{
+    unsigned char in[PW_D3D9_DEVICE_MAX_REQUEST],out[PW_D3D9_DEVICE_MAX_REPLY];size_t bytes;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_DEVICE_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
+    if(!s||!request||!reply)return E_POINTER;
+    int encoded=pw_d3d9_device_request_encode(in,sizeof(in),&bytes,request);
+    if(encoded==PW_D3D9_DEVICE_UNSUPPORTED)return E_NOTIMPL;
+    if(encoded!=PW_D3D9_DEVICE_OK)return E_INVALIDARG;
+    m.payload_bytes=(uint32_t)bytes;
+    HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
+    if(!r.payload_bytes&&FAILED(hr))return hr;
+    struct pw_d3d9_device_reply decoded;
+    if(pw_d3d9_device_reply_decode(&decoded,out,r.payload_bytes)!=PW_D3D9_DEVICE_OK || decoded.operation!=request->operation || decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
 HRESULT pw_d3d9_session_release(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref)
 {
     struct pw_d3d9_message m={.opcode=PW_D3D9_RELEASE,.device=1,.object=ref.id,.generation=ref.generation},r;
@@ -217,15 +239,18 @@ static HMODULE load_backend(const WCHAR *path)
  done:
     CloseHandle(file);return module;
 }
-static void destroy_objects(struct pw_d3d9_objects *objects)
+static int destroy_objects(struct pw_d3d9_objects *objects)
 {
+    int okay=1;
     for(uint32_t n=0;n<objects->capacity;n++){
         struct pw_d3d9_object_ref ref={n+1,objects->slots[n].generation};uintptr_t context;
         if(pw_d3d9_object_take_destroy(objects,ref,&context)){
-            IDirect3D9_Release((IDirect3D9 *)context);
+            if(objects->slots[n].kind==1)IDirect3D9_Release((IDirect3D9 *)context);
+            else if(!pw_d3d9_native_device_destroy((void *)context))okay=0;
             pw_d3d9_object_finish_destroy(objects,ref);
         }
     }
+    return okay;
 }
 static HRESULT create_factory(struct pw_d3d9_objects *objects,IDirect3D9 *(WINAPI *factory)(UINT),
                               UINT sdk,struct pw_d3d9_object_ref *ref)
@@ -286,7 +311,7 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
     struct ipc ipc={0};struct descriptor desc;WCHAR object_name[96];DWORD error=1,pid=GetCurrentProcessId();
     HMODULE backend=NULL;IDirect3D9 *(WINAPI *factory)(UINT)=NULL;
     struct pw_d3d9_object_slot slots[32];struct pw_d3d9_objects objects;BOOL objects_ready=FALSE;
-    unsigned char scratch[PW_D3D9_FACTORY_MAX_REPLY+64+7],output[PW_D3D9_FACTORY_MAX_REPLY],hello[32];
+    unsigned char scratch[RING_BYTES],output[PW_D3D9_FACTORY_MAX_REPLY],hello[32];
     if(*(volatile LONG *)((char *)NtCurrentTeb()+0x180c))return 2;
     name(object_name,L"BOOT",pid,0);ipc.descriptor_mapping=OpenFileMappingW(FILE_MAP_READ,FALSE,object_name);
     if(!ipc.descriptor_mapping)goto done;
@@ -320,7 +345,8 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             memcpy(output,hello,32);bytes=32;
         }else if(m.opcode==PW_D3D9_STOP){
             if(m.device||m.object||m.payload_bytes)goto done;
-            pw_d3d9_objects_cancel(&objects);destroy_objects(&objects);
+            pw_d3d9_objects_cancel(&objects);
+            if(!destroy_objects(&objects)||!pw_d3d9_native_device_shutdown())goto done;
             FreeLibrary(backend);backend=NULL;stop=TRUE;
         }else if(m.opcode==PW_D3D9_CREATE9){
             if(m.device!=1||m.object||m.payload_bytes!=4)goto done;
@@ -328,7 +354,8 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             if(SUCCEEDED(hr)){put32(output,ref.id);put32(output+4,ref.generation);bytes=8;}
         }else if(m.opcode==PW_D3D9_RELEASE){
             if(m.device!=1||!m.object||m.payload_bytes)goto done;
-            hr=pw_d3d9_object_release(&objects,ref)?S_OK:D3DERR_INVALIDCALL;destroy_objects(&objects);
+            hr=pw_d3d9_object_release(&objects,ref)?S_OK:D3DERR_INVALIDCALL;
+            if(!destroy_objects(&objects))goto done;
         }else if(m.opcode==PW_D3D9_FACTORY_CALL){
             struct pw_d3d9_factory_request request;struct pw_d3d9_factory_reply reply={0};
             if(pw_d3d9_factory_request_decode(&request,payload,m.payload_bytes)!=PW_D3D9_FACTORY_OK)goto done;
@@ -344,6 +371,28 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             if(slot && slot->kind==1){
                 if(pw_d3d9_factory_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_FACTORY_OK)goto done;
             }
+        }else if(m.opcode==PW_D3D9_DEVICE_CALL){
+            struct pw_d3d9_device_request request;struct pw_d3d9_device_reply reply;
+            struct pw_d3d9_native_device *created=NULL;
+            if(pw_d3d9_device_request_decode(&request,payload,m.payload_bytes)!=PW_D3D9_DEVICE_OK)goto done;
+            const struct pw_d3d9_object_slot *slot=pw_d3d9_object_lookup(&objects,m.device,desc.epoch,ref);
+            unsigned kind=request.operation==PW_D3D9_DEVICE_CREATE?1:2;
+            hr=D3DERR_INVALIDCALL;
+            if(slot&&slot->kind==kind&&pw_d3d9_object_queue(&objects,ref)){
+                pw_d3d9_native_device_call(kind==1?(void *)slot->context:NULL,kind==2?(void *)slot->context:NULL,&request,&reply,&created);
+                if(!pw_d3d9_object_complete(&objects,ref))goto done;
+                if(created){
+                    struct pw_d3d9_object_ref device_ref;
+                    uintptr_t identity=pw_d3d9_native_device_identity(created);
+                    if(!identity||!pw_d3d9_object_reserve(&objects,&device_ref)){
+                        pw_d3d9_native_device_destroy(created);reply.hresult=E_OUTOFMEMORY;
+                    }else if(!pw_d3d9_object_commit(&objects,device_ref,identity,(uintptr_t)created,2)){
+                        pw_d3d9_object_abort(&objects,device_ref);pw_d3d9_native_device_destroy(created);reply.hresult=E_FAIL;
+                    }else reply.object=device_ref;
+                }
+                hr=(HRESULT)reply.hresult;
+                if(pw_d3d9_device_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_DEVICE_OK)goto done;
+            }
         }else goto done;
         m.sequence=0;m.result=hr;m.payload_bytes=(uint32_t)bytes;
         if(send_wake(&ipc,&m,output)!=PW_D3D9_OK)goto done;
@@ -353,6 +402,7 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  done:
     if(error)cancel_ipc(&ipc);
     if(objects_ready){pw_d3d9_objects_cancel(&objects);destroy_objects(&objects);}
+    if(!pw_d3d9_native_device_shutdown())error=3;
     if(backend)FreeLibrary(backend);
     close_ipc(&ipc);return error;
 }
