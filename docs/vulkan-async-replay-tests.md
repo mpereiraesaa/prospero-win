@@ -217,3 +217,27 @@ command and staged source hash. Console performance and actual two-worker
 overlap remain unverified; merging the replay performance stack is held pending
 new console evidence. This package includes ordered epochs, fixed 1 MiB stacks,
 optional bounded pool fanout, empty-admission elision and present cadence stats.
+
+### Console stage 1: stable, performance acceptance failed
+
+Mailbox `645ce1bf` (2026-10-09 09:14:03 UTC) reports that candidate `c5ddad6`
+with two workers and pool fanout reached gameplay without replay errors. The
+owner skipped the 300-second matched pair because dips were worse. In the same
+100–160-second moving window versus the earlier threads-zero package, sampled
+mean FPS was 50.1 versus 54.6 and the 5%-low was 41.7 versus 49.7. These are
+historical-baseline samples, not a matched same-package cadence comparison.
+
+The new package recorded 2,463 CPU queue-return intervals in that window:
+51 over 25 ms, seven over 33 ms, six over 50 ms, maximum 245 ms and p99 26.1 ms.
+The old baseline lacks these interval counters. End-of-run replay totals were
+251,153 jobs and 189,399 completion waits, zero replay errors and zero capacity
+waits. Both workers executed jobs and peak active was two. Raw pool telemetry
+shows twelve successful growth events to two physical slots and no degradation.
+Those facts establish activation and some worker overlap; they do not establish
+useful overlap with the saturated command-submission thread or improved pacing.
+
+The test restored the original runtime and profile state. The performance gate
+has not passed, and the runtime/performance PR stack remains draft and unmerged.
+Do not repeat this candidate merely to obtain a longer regression run. Capture:
+`/home/manuel/personal/ing_pereira/engineering/homebrew_ps5/projects/logging_server/runs/20261009T091007679Z_PPSA99995_prospero-win-wine64_0x1df71d3a315.log`.
+The immutable package, source and manifest hashes above remain unchanged.
