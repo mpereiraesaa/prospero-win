@@ -18,7 +18,7 @@ out.mkdir(parents=True, exist_ok=False)
 files = ['tests/lab/d3d9_private_data.c', 'wine/ps5/d3d9/pw_d3d9_private_data.c',
          'wine/ps5/d3d9/pw_d3d9_private_data.h']
 receipt = {'status': 'running', 'sources': {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in files},
-           'commands': [], 'console_accessed': False, 'scope': 'Real PE32/PE64 local metadata and controlled IUnknown reentrancy; no native backend or wire transport.'}
+           'commands': [], 'console_accessed': False, 'scope': ('Real PE32/PE64 local metadata and controlled IUnknown reentrancy; ' + ('actual DXVK VB/IB/texture/surface edge-semantics comparison' if args.backend64 else 'no native backend execution') + '; no wire transport or console access.')}
 def run(command, name, env=None):
     result = subprocess.run(list(map(str, command)), env=env, text=True, capture_output=True, timeout=120)
     (out / (name + '.log')).write_text(result.stdout + result.stderr)
