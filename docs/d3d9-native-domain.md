@@ -78,7 +78,7 @@ memory policy and low-address usage measurement are required for that claim.
 The native import closure included kernelbase, user32, gdi32, setupapi, and
 winevulkan; the factory enumerated the host NVIDIA adapter. This establishes
 factory creation and teardown only. Device creation, guest/service window
-association, rendering, console startup, and performance remain unproven.
+association, rendering, and performance remain unproven.
 
 Console checks must use the designated operator with an immutable package,
 matching ntdll PRX/PE and wow64 DLLs, the PE32 fixture, PE64 service, and pinned
@@ -91,6 +91,31 @@ port's reserved native region starting at 64 GiB. The fixture now requests
 `VirtualAlloc2` with a 4 GiB lower bound and no fixed base, then verifies the
 actual returned address and data. It also requires an inverted address range
 to fail with `ERROR_INVALID_PARAMETER`, so ignored constraints cannot pass.
-This preserves the high-address requirement
-while allowing the platform allocator to choose available storage. Console
-thread/TLS/exception and DXVK factory acceptance remain pending a rerun.
+This preserves the high-address requirement while allowing the platform
+allocator to choose available storage.
+
+## Console proof
+
+The corrected probe passed on 2026-10-09 with native CPU and a 120 Hz profile.
+Independent saved-log review found 281 native records and 845 DXVK records,
+with no sequence gaps and explicit `session_end reason=wine-exit` in both:
+
+| Probe | Successful iterations | Result flags | Expected exceptions |
+| --- | --- | --- | --- |
+| Native service/child | 10 of 10 | 31 | 20 |
+| PE64 DXVK factory | 10 of 10 | 63 | 20 |
+
+Native allocations were `0x1000360000` through `0x10006b0000`. Unlike the host
+run, the console's ordinary DXVK factory objects were also above 4 GiB:
+`0x1000110c70` through `0x10005f55e0`. This is evidence for those observed
+objects, not a claim about all backend allocations or total memory pressure.
+No D3D device or game was run. The service and child each handled the fixture's
+expected exception in PE64 context (`cs=0043`).
+
+Log SHA-256: native
+`12c7f28eefe2de7238e7759ceeacd1b4aac4efd3c3bb82f2837cf578590ebc92`;
+DXVK `b7f10fcf2c74563fa167caf31bd26311c483a1ab123dffdeeedde282b39cb19a`.
+The operator restored the original runtime, removed temporary probe files and
+profiles, restored the normal title executable, and confirmed no title running.
+The runtime code was unchanged between the failed fixed-address probe and this
+pass; only the synthetic allocation test and deployment-root paths changed.
