@@ -10,7 +10,7 @@ static void put32(unsigned char *p,uint32_t n)
 static void put64(unsigned char *p,uint64_t n)
 {put32(p,(uint32_t)n);put32(p+4,(uint32_t)(n>>32));}
 static int valid_op(uint32_t op)
-{return op>=PW_D3D9_TEXTURE_CREATE&&op<=PW_D3D9_TEXTURE_STRETCH;}
+{return op>=PW_D3D9_TEXTURE_CREATE&&op<=PW_D3D9_TEXTURE_RT_DATA;}
 static int chunk(uint64_t gen,uint32_t off,uint32_t count)
 {return gen&&count&&count<=PW_D3D9_RESOURCE_CHUNK&&off<=UINT32_MAX-count;}
 int pw_d3d9_texture_layout_valid(int32_t pitch,uint32_t rows,uint32_t row_bytes,uint32_t length)
@@ -20,7 +20,7 @@ int pw_d3d9_texture_layout_valid(int32_t pitch,uint32_t rows,uint32_t row_bytes,
 }
 #define O(f) offsetof(struct pw_d3d9_texture_request,f)
 struct schema {unsigned n;size_t fields[15];};
-static const struct schema schema[16]={
+static const struct schema schema[18]={
  [PW_D3D9_TEXTURE_CREATE]={6,{O(width),O(height),O(levels),O(usage),O(format),O(pool)}},
  [PW_D3D9_TEXTURE_CREATE_SURFACE]={4,{O(width),O(height),O(format),O(pool)}},
  [PW_D3D9_TEXTURE_DESC]={1,{O(level)}},[PW_D3D9_TEXTURE_SURFACE_LEVEL]={1,{O(level)}},
@@ -30,7 +30,9 @@ static const struct schema schema[16]={
  [PW_D3D9_TEXTURE_UPDATE_SURFACE]={12,{O(source.id),O(source.generation),O(destination.id),O(destination.generation),O(has_rect),O(left),O(top),O(right),O(bottom),O(has_point),O(x),O(y)}},
  [PW_D3D9_TEXTURE_CREATE_RT]={6,{O(width),O(height),O(format),O(multisample_type),O(multisample_quality),O(lockable)}},
  [PW_D3D9_TEXTURE_CREATE_DEPTH]={6,{O(width),O(height),O(format),O(multisample_type),O(multisample_quality),O(discard)}},
- [PW_D3D9_TEXTURE_STRETCH]={15,{O(source.id),O(source.generation),O(destination.id),O(destination.generation),O(has_rect),O(left),O(top),O(right),O(bottom),O(has_destination_rect),O(destination_left),O(destination_top),O(destination_right),O(destination_bottom),O(filter)}}
+ [PW_D3D9_TEXTURE_STRETCH]={15,{O(source.id),O(source.generation),O(destination.id),O(destination.generation),O(has_rect),O(left),O(top),O(right),O(bottom),O(has_destination_rect),O(destination_left),O(destination_top),O(destination_right),O(destination_bottom),O(filter)}},
+ [PW_D3D9_TEXTURE_COLOR_FILL]={6,{O(has_rect),O(left),O(top),O(right),O(bottom),O(color)}},
+ [PW_D3D9_TEXTURE_RT_DATA]={4,{O(source.id),O(source.generation),O(destination.id),O(destination.generation)}}
 };
 #undef O
 static int request_size(const struct pw_d3d9_texture_request *q,size_t *n)
@@ -43,11 +45,11 @@ static int request_size(const struct pw_d3d9_texture_request *q,size_t *n)
  if(q->operation==PW_D3D9_TEXTURE_UNLOCK||q->operation==PW_D3D9_TEXTURE_CANCEL_LOCK){
   *n=8;return !!q->lock_generation;
  }
- if(q->operation==PW_D3D9_TEXTURE_LOCK||q->operation==PW_D3D9_TEXTURE_DIRTY||q->operation==PW_D3D9_TEXTURE_UPDATE_SURFACE||q->operation==PW_D3D9_TEXTURE_STRETCH){
+ if(q->operation==PW_D3D9_TEXTURE_LOCK||q->operation==PW_D3D9_TEXTURE_DIRTY||q->operation==PW_D3D9_TEXTURE_UPDATE_SURFACE||q->operation==PW_D3D9_TEXTURE_STRETCH||q->operation==PW_D3D9_TEXTURE_COLOR_FILL){
   if(q->has_rect>1||(!q->has_rect&&(q->left||q->top||q->right||q->bottom)))return 0;
  }
  if(q->operation==PW_D3D9_TEXTURE_UPDATE_SURFACE&&(q->has_point>1||(!q->has_point&&(q->x||q->y))))return 0;
- if((q->operation==PW_D3D9_TEXTURE_UPDATE||q->operation==PW_D3D9_TEXTURE_UPDATE_SURFACE||q->operation==PW_D3D9_TEXTURE_STRETCH)&&(!q->source.id||!q->source.generation||!q->destination.id||!q->destination.generation))return 0;
+ if((q->operation==PW_D3D9_TEXTURE_UPDATE||q->operation==PW_D3D9_TEXTURE_UPDATE_SURFACE||q->operation==PW_D3D9_TEXTURE_STRETCH||q->operation==PW_D3D9_TEXTURE_RT_DATA)&&(!q->source.id||!q->source.generation||!q->destination.id||!q->destination.generation))return 0;
  if(q->operation==PW_D3D9_TEXTURE_STRETCH&&(q->has_destination_rect>1||(!q->has_destination_rect&&(q->destination_left||q->destination_top||q->destination_right||q->destination_bottom))))return 0;
  *n=4*schema[q->operation].n;return 1;
 }

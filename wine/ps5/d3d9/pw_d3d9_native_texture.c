@@ -191,6 +191,8 @@ void pw_d3d9_native_texture_call(struct pw_d3d9_native_texture *r,const struct p
   if(!r->locked_surface||q->lock_generation!=r->generation)break;
   if(q->operation==PW_D3D9_TEXTURE_UNLOCK&&!r->readonly&&r->written!=r->length)break;
   hr=unlock(r);break;
+ case PW_D3D9_TEXTURE_COLOR_FILL:
+  if(r->kind==PW_D3D9_KIND_SURFACE){RECT rect={q->left,q->top,q->right,q->bottom};hr=IDirect3DDevice9_ColorFill(r->device,r->object.surface,q->has_rect?&rect:NULL,q->color);}break;
  case PW_D3D9_TEXTURE_DIRTY:
   if(r->kind==PW_D3D9_KIND_TEXTURE_2D){RECT rect={q->left,q->top,q->right,q->bottom};hr=IDirect3DTexture9_AddDirtyRect(r->object.texture,q->has_rect?&rect:NULL);}break;
  default:hr=E_NOTIMPL;break;
@@ -207,6 +209,8 @@ void pw_d3d9_native_texture_copy(void *device,struct pw_d3d9_native_texture *sou
   RECT rect={q->left,q->top,q->right,q->bottom};POINT point={q->x,q->y};
   hr=IDirect3DDevice9_UpdateSurface((IDirect3DDevice9 *)device,source->object.surface,q->has_rect?&rect:NULL,destination->object.surface,q->has_point?&point:NULL);
  }
+ else if(q->operation==PW_D3D9_TEXTURE_RT_DATA&&source->kind==PW_D3D9_KIND_SURFACE&&destination->kind==PW_D3D9_KIND_SURFACE)
+  hr=IDirect3DDevice9_GetRenderTargetData((IDirect3DDevice9 *)device,source->object.surface,destination->object.surface);
  else if(q->operation==PW_D3D9_TEXTURE_STRETCH&&source->kind==PW_D3D9_KIND_SURFACE&&destination->kind==PW_D3D9_KIND_SURFACE){
   RECT source_rect={q->left,q->top,q->right,q->bottom};
   RECT destination_rect={q->destination_left,q->destination_top,q->destination_right,q->destination_bottom};

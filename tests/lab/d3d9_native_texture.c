@@ -160,6 +160,32 @@ static void surface_ops(IDirect3DDevice9 *device)
  pw_d3d9_native_texture_destroy(mips);pw_d3d9_native_texture_destroy(depth);pw_d3d9_native_texture_destroy(rt[0]);pw_d3d9_native_texture_destroy(rt[1]);
  puts("PW_NATIVE_SURFACE_OPS pass=1");
 }
+static void surface_readback(IDirect3DDevice9 *device)
+{
+ struct pw_d3d9_native_texture *rt=NULL,*system=NULL,*unused=NULL;
+ struct pw_d3d9_texture_request q={.operation=PW_D3D9_TEXTURE_CREATE_RT,.width=16,.height=16,.format=D3DFMT_A8R8G8B8};
+ struct pw_d3d9_texture_reply reply;
+ pw_d3d9_native_texture_create(device,&q,&reply,&rt);assert(reply.hresult==S_OK&&rt);
+ system=create(device,D3DFMT_A8R8G8B8,16,16,D3DPOOL_SYSTEMMEM,1);
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_COLOR_FILL,.color=0xff010203};
+ reply=call(rt,&q,&unused);assert(reply.hresult==S_OK);
+ q.has_rect=1;q.left=2;q.top=3;q.right=7;q.bottom=8;q.color=0xfffedcba;
+ reply=call(rt,&q,&unused);assert(reply.hresult==S_OK);
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_RT_DATA,.source={1,1},.destination={2,1}};
+ struct pw_d3d9_texture_request decoded;unsigned char wire[PW_D3D9_TEXTURE_MAX_WIRE];size_t n;
+ assert(!pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));assert(!pw_d3d9_texture_request_decode(&decoded,wire,n));
+ pw_d3d9_native_texture_copy(device,rt,system,&decoded,&reply);assert(reply.hresult==S_OK);
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_LOCK,.flags=D3DLOCK_READONLY};reply=call(system,&q,&unused);assert(reply.hresult==S_OK);
+ uint64_t generation=reply.lock_generation;unsigned stride=(unsigned)reply.pitch;
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_READ,.lock_generation=generation,.count=reply.length};reply=call(system,&q,&unused);assert(reply.hresult==S_OK);
+ DWORD pixel;memcpy(&pixel,reply.data,sizeof(pixel));assert(pixel==0xff010203);
+ memcpy(&pixel,reply.data+3*stride+2*4,sizeof(pixel));assert(pixel==0xfffedcba);
+ finish(system,generation,0);
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_COLOR_FILL,.has_rect=1,.left=-1,.right=999,.bottom=999,.color=0};RECT invalid={-1,0,999,999};
+ HRESULT direct=IDirect3DDevice9_ColorFill(device,pw_d3d9_native_texture_backend(rt),&invalid,0);reply=call(rt,&q,&unused);assert(reply.hresult==(uint32_t)direct);
+ pw_d3d9_native_texture_destroy(rt);pw_d3d9_native_texture_destroy(system);
+ puts("PW_NATIVE_SURFACE_READBACK pass=1");
+}
 static void negative_pitch(void)
 {
  unsigned char native[32],copy[28];memset(native,0xcc,sizeof(native));
@@ -183,7 +209,7 @@ int wmain(int argc,WCHAR **argv)
  pp.Windowed=TRUE;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;pp.BackBufferFormat=D3DFMT_X8R8G8B8;pp.BackBufferWidth=64;pp.BackBufferHeight=64;pp.hDeviceWindow=window;pp.EnableAutoDepthStencil=TRUE;pp.AutoDepthStencilFormat=D3DFMT_D16;
  assert(IDirect3D9_CreateDevice(d3d,0,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING,&pp,&device)==S_OK&&device);
  texture(device,D3DFMT_A8R8G8B8,67,41);texture(device,D3DFMT_DXT1,256,128);texture(device,D3DFMT_DXT3,256,128);texture(device,D3DFMT_DXT5,256,128);
- copies(device,0);copies(device,1);capacity(device);adopt_existing(device);surface_ops(device);
+ copies(device,0);copies(device,1);capacity(device);adopt_existing(device);surface_ops(device);surface_readback(device);
  IDirect3DDevice9_Release(device);IDirect3D9_Release(d3d);DestroyWindow(window);UnregisterClassW(cls.lpszClassName,cls.hInstance);FreeLibrary(module);
  puts("PW_NATIVE_TEXTURE PASS");return 0;
 }

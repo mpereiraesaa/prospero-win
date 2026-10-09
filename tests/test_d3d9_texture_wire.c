@@ -10,7 +10,7 @@ static void roundtrip(unsigned op)
  unsigned char wire[PW_D3D9_TEXTURE_MAX_WIRE],copy[sizeof(wire)];size_t n,i,k;
  q.operation=op;q.width=128;q.height=64;q.levels=8;q.format=21;q.pool=1;q.usage=0x200;
  q.level=3;q.flags=0x3010;q.has_rect=1;q.left=4;q.top=8;q.right=20;q.bottom=40;
- q.multisample_type=4;q.multisample_quality=7;q.lockable=2;q.discard=0xffffffffu;q.filter=2;q.has_destination_rect=1;q.destination_left=-1;q.destination_top=2;q.destination_right=30;q.destination_bottom=40;
+ q.multisample_type=4;q.multisample_quality=7;q.lockable=2;q.discard=0xffffffffu;q.filter=2;q.color=0xffa56789;q.has_destination_rect=1;q.destination_left=-1;q.destination_top=2;q.destination_right=30;q.destination_bottom=40;
  q.has_point=1;q.x=-3;q.y=99;q.source=(struct pw_d3d9_object_ref){1,2};q.destination=(struct pw_d3d9_object_ref){3,4};
  q.lock_generation=UINT64_C(0x1234567887654321);q.offset=77;q.count=4096;
  for(i=0;i<q.count;i++)q.data[i]=(unsigned char)i;
@@ -41,7 +41,7 @@ int main(void)
 {
  struct pw_d3d9_texture_request q={.operation=PW_D3D9_TEXTURE_LOCK,.has_rect=2};
  unsigned char wire[PW_D3D9_TEXTURE_MAX_WIRE];size_t n;unsigned op;
- for(op=1;op<=15;op++)roundtrip(op);
+ for(op=1;op<=17;op++)roundtrip(op);
  assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));q.has_rect=0;q.left=1;
  assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));
  q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_UPDATE};assert(pw_d3d9_texture_request_encode(wire,sizeof(wire),&n,&q));

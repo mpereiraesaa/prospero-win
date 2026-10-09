@@ -55,3 +55,11 @@ correct adopted texture proxies. Wire encoders/decoders reject the old layout.
 The native fixture creates render/depth surfaces, verifies a scaled subrectangle
 copy through changed pixels and untouched outside pixels, compares a full-surface
 copy's HRESULT directly, and queries a genuine six-level texture chain.
+
+
+ColorFill (operation 16) targets a typed surface context with optional rectangle
+and exact native D3DCOLOR bits. GetRenderTargetData (17) resolves two same-device
+surface contexts and invokes the real backend. Neither operation uploads guest
+addresses. The fixture fills a render target and a subrectangle, reads it back to
+a system-memory surface, then verifies both colors through the copied lock path.
+An invalid ColorFill rectangle also compares its HRESULT with a direct call.
