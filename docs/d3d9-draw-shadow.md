@@ -58,3 +58,32 @@ it. The original two real draws and changed-pixel readback remain and now compar
 shadow eligibility against the actual draw HRESULT. All three creation modes
 passed the retained native proof above; this extension does not test queued
 sessions.
+
+## Caller-owned stateblock evidence hook
+
+With `PW_D3D9_ENABLE_STATE_EVIDENCE`, each local stateblock shell embeds an
+extensible evidence aggregate. The required observed-call callback receives
+that storage directly, eliminating a separate session ID registry. Create/End
+allocate it before RPC; Capture/Apply pin the shell throughout the call; Begin
+passes NULL. The callback must decode and validate typed replies, then update
+device and block evidence under the same session gate before unlocking. It may
+not retain the pointer. Disabled builds retain the original callback path.
+
+Evidence disappears only with actual local shell cleanup, including deferred
+cleanup. A balancing remote RELEASE is not a metadata lifetime event. Canonical
+cache hits preserve the existing owner. After full typed validation, the observer
+commits preallocated output into the cache while still holding the original
+session gate. Commit takes the cache lock, pins and invalidates an existing alias,
+or installs the new shell. No RPC, COM call or allocation runs in commit. The
+caller publishes the committed result and balances extra remote references only
+after unlocking. A later observer failure rolls back the committed ownership.
+This also closes the gap where an earlier reply had not yet published its shell.
+No runtime builder enables this hook in the foundation change.
+
+The controlled hook fixture passed PE32 and PE64 with the hook disabled and
+enabled: eight successful compile/execution commands and 93 frozen source/header
+inputs. It covers alias publication before the first caller returns, invalidation
+under the original gate, rollback after a later observer failure, failed End
+recording preservation, and malformed/non-S_OK reply rejection. Earlier fixture
+compile failures were retained separately. This is a controlled callback proof;
+production session observers and queued draws remain separate integration work.
