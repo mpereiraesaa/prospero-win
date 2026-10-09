@@ -773,6 +773,11 @@ tests/test_d3d9_query_wire.c
 docs/d3d9-query-wire.md
 wine/ps5/d3d9/pw_d3d9_query_proxy.c
 wine/ps5/d3d9/pw_d3d9_query_proxy.h
+wine/ps5/d3d9/pw_d3d9_gamma_proxy.c
+wine/ps5/d3d9/pw_d3d9_gamma_proxy.h
+tests/lab/d3d9_gamma_proxy.c
+tests/lab/d3d9_gamma_proxy.py
+docs/d3d9-gamma-proxy.md
 tests/lab/d3d9_query_proxy.c
 tests/lab/d3d9_query_proxy.py
 docs/d3d9-query-proxy.md
