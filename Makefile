@@ -180,6 +180,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_wow64native_scaffold.py
 	python3 tests/test_vk_command_stream.py
 	python3 tests/test_vk_wire.py
+	python3 -B tests/test_vk_replay_dispatch.py
 	python3 tests/test_vk_generated_stage.py
 	python3 tests/test_vk_retire.py
 	python3 tests/test_vk_codecs.py
