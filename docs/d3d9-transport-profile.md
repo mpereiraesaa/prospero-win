@@ -13,3 +13,9 @@ Timing uses QPC wall time in microseconds. `serial_wait_wall_us` covers lock acq
 Missing or backwards clocks yield zero duration and `clock_valid=0` for that interval. Counters saturate with sticky `saturated=1`; saturated data is not quantitatively valid. Snapshot state uses a short local lock; formatted logging happens after the transaction lock is released. Logging itself can perturb scheduling and is excluded from sampled intervals.
 
 The portable accumulator test covers accumulation, absent/reversed clocks and saturation. `tests/lab/d3d9_transport_profile.c` includes the shipping session: controlled PE32 client/channel responder covers successful and failed Present, local callback rejection, exact sequence, mixed objects and disabled zero-clock behavior; PE64 exercises the same snapshot/format code. Its controlled responder makes no native D3D or console acceptance claim.
+
+## Combined API and transport boundaries
+
+With API observation compiled, each published Present emits its API snapshot after releasing the session lock, using the identical epoch/request sequence/object/generation. Backend failures are included; unpublished/nested rejects have no immediate API snapshot. Their external entry counts remain in the next process-wide snapshot. Client teardown flushes API histograms after broker join and before IPC destruction, outside transaction locks. API process scope differs from transport session scope; do not infer per-device API totals from correlation.
+
+`tests/lab/d3d9_profile_transport.py --recovery PATH --output NEW_PATH` builds the actual paired DLLs and runs three existing D3DX smoke cycles, substituting only the previously tested ordinary-host native HWND adapter. It requires terminal success, exact client/service/API Present correlation, matching request/reply counts and byte totals, valid clocks, and final API flushes. This proves real native-service metric routing, not console throughput or CPU time.

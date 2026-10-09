@@ -14,6 +14,9 @@
 #include "pw_d3d9_service_texture.h"
 #endif
 #include "pw_d3d9_session.h"
+#ifdef PW_D3D9_ENABLE_API_OBSERVE
+#include "pw_d3d9_api_observe.h"
+#endif
 #include "pw_d3d9_failure_diag.h"
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
 #include "pw_d3d9_service_stateblock.h"
@@ -31,6 +34,7 @@
 #include "../pw_d3d9_transport_stats.h"
 #include <d3d9.h>
 #include <stdio.h>
+#include <errno.h>
 #include <string.h>
 
 #define SESSION_MAGIC 0x39535750u
@@ -108,12 +112,13 @@ static BOOL CALLBACK profile_init(INIT_ONCE *once,void *parameter,void **context
     return TRUE;
 }
 static int profile_enabled(void)
-{InitOnceExecuteOnce(&profile_once,profile_init,NULL,NULL);return profile_on;}
+{DWORD error=GetLastError();int saved=errno;InitOnceExecuteOnce(&profile_once,profile_init,NULL,NULL);
+ SetLastError(error);errno=saved;return profile_on;}
 static uint64_t profile_now(void)
 {
-    LARGE_INTEGER t;
-    if(!profile_frequency||!QueryPerformanceCounter(&t)||t.QuadPart<=0)return 0;
-    return pw_d3d9_stats_ticks_us((uint64_t)t.QuadPart,profile_frequency);
+    DWORD error=GetLastError();int saved=errno;LARGE_INTEGER t;uint64_t result=0;
+    if(profile_frequency&&QueryPerformanceCounter(&t)&&t.QuadPart>0)result=pw_d3d9_stats_ticks_us((uint64_t)t.QuadPart,profile_frequency);
+    SetLastError(error);errno=saved;return result;
 }
 struct profile_record {
     struct pw_d3d9_transport_stats total,delta;
@@ -141,6 +146,7 @@ static void profile_capture(struct ipc *i,const struct pw_d3d9_transport_stats *
 static void profile_emit(const struct profile_record *r)
 {
     if(!r->emit)return;
+    DWORD error=GetLastError();int saved=errno;
     const struct pw_d3d9_transport_stats *d=&r->delta,*t=&r->total;
     char line[4096];
     int used=snprintf(line,sizeof(line),"PW_D3D9_PROFILE transport role=%s pid=%lu tid=%lu domain=%s scope=session_interval epoch=%u frame=%llu seq=%llu object=%u generation=%u hr=%08x reply_valid=%d final=%d startup=%d clock_valid=%d saturated=%llu attempts=%llu sync_published=%llu replies=%llu failures=%llu rejected_present=%llu async_queued=0 request_bytes=%llu reply_bytes=%llu serial_wait_wall_us=%llu guest_wait_wall_us=%llu roundtrip_wall_us=%llu service_dispatch_wall_us=%llu total_attempts=%llu total_sync_published=%llu total_replies=%llu",
@@ -156,6 +162,7 @@ static void profile_emit(const struct profile_record *r)
     for(unsigned n=0;n<PW_D3D9_STATS_OPS&&used>0&&(size_t)used<sizeof(line)-64;n++)
         if(d->opcode[n])used+=snprintf(line+used,sizeof(line)-(size_t)used," op%u=%llu",n,(unsigned long long)d->opcode[n]);
     if(used>0)fprintf(stderr,"%s\n",line);
+    SetLastError(error);errno=saved;
 }
 static int profile_present(const struct pw_d3d9_message *m,const void *payload)
 {
@@ -372,12 +379,19 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
     if(prof)profile_capture(&s->ipc,&sample,m,sample.published?sequence:0,result,present&&sample.published,(int)sample.replies,0,&record);
     if(locked){s->active_thread=0;LeaveCriticalSection(&s->lock);SetEvent(s->serial_event);}
     if(prof)profile_emit(&record);
+#ifdef PW_D3D9_ENABLE_API_OBSERVE
+    if(prof&&present&&sample.published)
+        pw_d3d9_api_profile_present(s->ipc.channel.epoch,sequence,m->object,m->generation,result);
+#endif
     if(cleanup){restore_quit();drain_deferred(s);}return result;
 }
 static void destroy_session(struct pw_d3d9_session *s)
 {
     if(s->broker){client_wait(1,&s->broker,INFINITE);CloseHandle(s->broker);}
     if(s->serial_event)CloseHandle(s->serial_event);
+#ifdef PW_D3D9_ENABLE_API_OBSERVE
+    pw_d3d9_api_profile_flush(s->ipc.channel.epoch);
+#endif
     restore_quit();close_ipc(&s->ipc);DeleteCriticalSection(&s->lock);HeapFree(GetProcessHeap(),0,s);
     InterlockedExchange(&session_claim,0);
 }

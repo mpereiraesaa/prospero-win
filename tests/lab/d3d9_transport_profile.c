@@ -26,12 +26,13 @@ static DWORD WINAPI responder(void *arg)
 int main(int argc,char **argv)
 {
  int enabled=argc==2&&!strcmp(argv[1],"on");SetEnvironmentVariableA("PW_D3D9_PROFILE",enabled?"1":"0");
- assert(profile_enabled()==enabled);unsigned initial_clocks=clock_calls;
+ SetLastError(0x12345678);errno=EDOM;assert(profile_enabled()==enabled);assert(GetLastError()==0x12345678&&errno==EDOM);unsigned initial_clocks=clock_calls;
+ if(enabled){(void)profile_now();assert(GetLastError()==0x12345678&&errno==EDOM);}
  struct ipc i={0};i.channel.epoch=9;
  struct pw_d3d9_transport_stats sample={.attempts=1,.published=1,.replies=1};sample.opcode[19]=1;
  struct pw_d3d9_message m={.object=2,.generation=3};struct profile_record r;
  profile_capture(&i,&sample,&m,5,E_FAIL,1,1,0,&r);
- if(enabled){assert(r.emit&&r.frame==1&&r.sequence==5&&r.status==(uint32_t)E_FAIL&&r.delta.attempts==1);profile_emit(&r);}
+ if(enabled){assert(r.emit&&r.frame==1&&r.sequence==5&&r.status==(uint32_t)E_FAIL&&r.delta.attempts==1);SetLastError(0x12345678);errno=EDOM;profile_emit(&r);assert(GetLastError()==0x12345678&&errno==EDOM);}
  else assert(!r.emit);
  m.object=4;profile_capture(&i,&sample,&m,6,S_OK,1,1,0,&r);
  if(enabled)assert(r.frame==2&&r.object==4&&r.delta.attempts==1&&r.total.attempts==2);
