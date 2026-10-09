@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
+#ifdef PW_D3D9_ENABLE_QUERY
+#include "pw_d3d9_service_query.h"
+#endif
 #ifdef PW_D3D9_ENABLE_UP
 #include "pw_d3d9_service_up.h"
 #endif
@@ -62,6 +65,9 @@ static uint32_t compiled_features(void)
 #endif
 #ifdef PW_D3D9_ENABLE_UP
     mask|=128u;
+#endif
+#ifdef PW_D3D9_ENABLE_QUERY
+    mask|=256u;
 #endif
     return mask;
 }
@@ -445,6 +451,21 @@ HRESULT pw_d3d9_session_program(struct pw_d3d9_session *s,struct pw_d3d9_object_
     *reply=decoded;return hr;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_QUERY
+HRESULT pw_d3d9_session_query(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_query_request *request,struct pw_d3d9_query_reply *reply)
+{
+    unsigned char in[PW_D3D9_QUERY_WIRE_MAX],out[PW_D3D9_QUERY_WIRE_MAX];size_t bytes;struct pw_d3d9_query_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_QUERY_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_query_request_encode(in,sizeof(in),&bytes,request))return D3DERR_INVALIDCALL;
+    m.payload_bytes=(uint32_t)bytes;HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_query_reply_decode(&decoded,request,out,r.payload_bytes)||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    /* Failed backend polls may still modify output bytes; publish the validated
+     * reply for every backend HRESULT, including S_FALSE and failures. */
+    *reply=decoded;return hr;
+}
+#endif
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
 HRESULT pw_d3d9_session_stateblock(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_stateblock_request *request,struct pw_d3d9_stateblock_reply *reply)
 {
@@ -546,6 +567,9 @@ static int destroy_objects(struct pw_d3d9_objects *objects)
 #endif
 #ifdef PW_D3D9_ENABLE_PROGRAM
             else if(objects->slots[n].kind>=7&&objects->slots[n].kind<=9){if(FAILED(pw_d3d9_service_program_destroy(objects,context)))okay=0;}
+#endif
+#ifdef PW_D3D9_ENABLE_QUERY
+            else if(objects->slots[n].kind==PW_D3D9_KIND_QUERY){if(FAILED(pw_d3d9_service_query_destroy(objects,context)))okay=0;}
 #endif
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
             else if(objects->slots[n].kind==10){if(FAILED(pw_d3d9_service_stateblock_destroy(objects,context)))okay=0;}
@@ -767,6 +791,13 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             if(m.device!=objects.device||pw_d3d9_object_getter_decode(&request,payload,m.payload_bytes)!=PW_D3D9_OBJECT_GETTER_OK)goto done;
             pw_d3d9_service_object_getter(&objects,ref,&request,&reply);hr=(HRESULT)reply.hresult;
             if(pw_d3d9_object_getter_reply_encode(output,sizeof(output),&bytes,&request,&reply)!=PW_D3D9_OBJECT_GETTER_OK)goto done;
+#endif
+#ifdef PW_D3D9_ENABLE_QUERY
+        }else if(m.opcode==PW_D3D9_QUERY_CALL){
+            struct pw_d3d9_query_request request;struct pw_d3d9_query_reply reply;
+            if(m.device!=objects.device||pw_d3d9_query_request_decode(&request,payload,m.payload_bytes))goto done;
+            pw_d3d9_service_query_call(&objects,ref,&request,&reply);hr=(HRESULT)reply.hresult;
+            if(pw_d3d9_query_reply_encode(output,sizeof(output),&bytes,&request,&reply))goto done;
 #endif
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
         }else if(m.opcode==PW_D3D9_STATEBLOCK_CALL){

@@ -13,6 +13,9 @@
 #ifdef PW_D3D9_ENABLE_TEXTURE
 #include "pw_d3d9_texture_proxy.h"
 #endif
+#ifdef PW_D3D9_ENABLE_QUERY
+#include "pw_d3d9_query_proxy.h"
+#endif
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
 #include "pw_d3d9_stateblock_client.h"
 #endif
@@ -212,11 +215,11 @@ static HRESULT WINAPI present(IDirect3DDevice9 *iface,const RECT *source,const R
     }
     addref(iface);HRESULT hr=pw_d3d9_session_device(d->session,d->remote,&q,&r);release(iface);return hr;
 }
-#if defined(PW_D3D9_ENABLE_METHODS)||defined(PW_D3D9_ENABLE_RESOURCE)||defined(PW_D3D9_ENABLE_PROGRAM)||defined(PW_D3D9_ENABLE_TEXTURE)||defined(PW_D3D9_ENABLE_STATEBLOCK)
+#if defined(PW_D3D9_ENABLE_METHODS)||defined(PW_D3D9_ENABLE_RESOURCE)||defined(PW_D3D9_ENABLE_PROGRAM)||defined(PW_D3D9_ENABLE_TEXTURE)||defined(PW_D3D9_ENABLE_STATEBLOCK)||defined(PW_D3D9_ENABLE_QUERY)
 static void fail_device(IDirect3DDevice9 *iface,HRESULT hr)
 {(void)hr;struct device_proxy *d=device(iface);InterlockedExchange(&d->failed,1);pw_d3d9_session_cancel(d->session);}
 #endif
-#if defined(PW_D3D9_ENABLE_RESOURCE)||defined(PW_D3D9_ENABLE_PROGRAM)||defined(PW_D3D9_ENABLE_TEXTURE)||defined(PW_D3D9_ENABLE_STATEBLOCK)
+#if defined(PW_D3D9_ENABLE_RESOURCE)||defined(PW_D3D9_ENABLE_PROGRAM)||defined(PW_D3D9_ENABLE_TEXTURE)||defined(PW_D3D9_ENABLE_STATEBLOCK)||defined(PW_D3D9_ENABLE_QUERY)
 static HRESULT release_object(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref ref)
 {addref(iface);HRESULT hr=pw_d3d9_session_release(device(iface)->session,ref);release(iface);return hr;}
 static HRESULT defer_object(IDirect3DDevice9 *iface,struct pw_d3d9_deferred *cleanup)
@@ -242,6 +245,14 @@ static HRESULT texture_call(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref re
         hr=E_FAIL;fail_device(iface,hr);
     }else if(decoded.operation==q->operation)*r=decoded;
     release(iface);return hr;
+}
+#endif
+#ifdef PW_D3D9_ENABLE_QUERY
+static HRESULT query_call(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref ref,const struct pw_d3d9_query_request *q,struct pw_d3d9_query_reply *r)
+{
+    struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
+    if(!ref.id&&!ref.generation)ref=d->remote;
+    addref(iface);HRESULT hr=pw_d3d9_session_query(d->session,ref,q,r);release(iface);return hr;
 }
 #endif
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
@@ -356,6 +367,9 @@ static BOOL CALLBACK init_vtable(INIT_ONCE *once,void *parameter,void **context)
 #endif
 #ifdef PW_D3D9_ENABLE_TEXTURE
     const struct pw_d3d9_texture_proxy_ops textures={texture_call,release_object,defer_object,fail_device};pw_d3d9_texture_proxy_install(&vtable,&textures);
+#endif
+#ifdef PW_D3D9_ENABLE_QUERY
+    const struct pw_d3d9_query_proxy_ops queries={query_call,release_object,defer_object,fail_device};pw_d3d9_query_proxy_install(&vtable,&queries);
 #endif
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
     const struct pw_d3d9_stateblock_client_ops blocks={stateblock_call,release_object,defer_object,fail_device};pw_d3d9_stateblock_client_install(&vtable,&blocks);
