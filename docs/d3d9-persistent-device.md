@@ -53,8 +53,12 @@ D3DERR_NOTAVAILABLE, no device ID, preserved failed-call parameters and clean
 session/association cleanup in all three cycles. The isolated host PS5-driver
 runtime lacks a usable VK_KHR_display surface, so only this negative mode is
 expected there. Receipt `/tmp/prospero-d3d9-device-unavailable-r2/receipt.json`
-records this limited host proof. No positive console device result is claimed
-by this document yet.
+records this limited host proof. Claude then ran the exact r2 artifacts on the combined token/window console
+runtime (result4f1bfc04): three CREATE/RESET/PRESENT cycles all returned zero,
+status0/unavailable0, clean Wine exit and zero access violations or ignored
+callback exceptions. The accepted runtime was restored afterward. This proves
+the worker-driven synthetic device path; owner-thread COM proxy calls remain
+a separate requirement.
 
 The unchanged factory-only runner also passed all three sessions,1200 calls
 and cancellation recovery after this extension; receipt
