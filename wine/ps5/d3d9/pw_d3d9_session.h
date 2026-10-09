@@ -8,6 +8,13 @@
 #ifdef PW_D3D9_ENABLE_RESOURCE
 #include "../pw_d3d9_resource_wire.h"
 #endif
+struct pw_d3d9_session;
+#ifdef PW_D3D9_ENABLE_METHODS
+#include "../pw_d3d9_command_wire.h"
+#include "../pw_d3d9_getter_wire.h"
+HRESULT pw_d3d9_session_command(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_command *);
+HRESULT pw_d3d9_session_getter(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_getter_request *,struct pw_d3d9_getter_reply *);
+#endif
 /* Local PE32 ownership only: no member pointer or Windows handle is wire data.
  * Calls are serialized internally. Close requires all API callers to finish;
  * it cancels/joins before releasing mappings, including on startup failure. */
