@@ -482,7 +482,11 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
     locked=cleanup=1;
     s->active_thread=GetCurrentThreadId();
 #ifdef PW_D3D9_ENABLE_BATCH
-    result=batch_flush_locked(s);if(FAILED(result))goto done;
+    int timed_flush=prof&&s->batch.count;
+    if(timed_flush)sample.roundtrip_wall_us=pw_d3d9_stats_elapsed(begin,profile_now(),&sample.clock_invalid);
+    result=batch_flush_locked(s);
+    if(timed_flush)begin=profile_now(); /* batch sample owns the excluded flush interval */
+    if(FAILED(result))goto done;
     if(m->opcode==PW_D3D9_STOP&&pw_d3d9_channel_stop(&s->ipc.channel)!=PW_D3D9_OK){result=E_FAIL;goto done;}
     result=E_FAIL;
 #endif
@@ -508,7 +512,7 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
  done:
     if(FAILED(result))fprintf(stderr,"PW_D3D9 transaction opcode=%u phase=%s hr=%08lx reply_bytes=%u\n",m->opcode,phase,(DWORD)result,reply->payload_bytes);
  metric_done:
-    if(prof){sample.rejected_present=present&&!sample.published;sample.failures=FAILED(result);sample.roundtrip_wall_us=pw_d3d9_stats_elapsed(begin,profile_now(),&sample.clock_invalid);}
+    if(prof){sample.rejected_present=present&&!sample.published;sample.failures=FAILED(result);sample.roundtrip_wall_us=pw_d3d9_stats_sum(sample.roundtrip_wall_us,pw_d3d9_stats_elapsed(begin,profile_now(),&sample.clock_invalid),&sample.saturated);}
     if(prof)profile_capture(&s->ipc,&sample,m,sample.published?sequence:0,result,present&&sample.published,(int)sample.replies,0,&record);
     if(locked){
         s->active_thread=0;LeaveCriticalSection(&s->lock);

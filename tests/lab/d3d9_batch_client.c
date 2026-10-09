@@ -3,12 +3,17 @@
 #include <windows.h>
 #include <assert.h>
 static ULONGLONG ticks=1;
+static int timed_clock;static LONGLONG clock_ticks;
+static BOOL WINAPI test_counter(LARGE_INTEGER *value)
+{if(!timed_clock)return QueryPerformanceCounter(value);clock_ticks+=100;value->QuadPart=clock_ticks;return TRUE;}
+#define QueryPerformanceCounter test_counter
 static ULONGLONG WINAPI test_ticks(void){return ticks;}
 #define GetTickCount64 test_ticks
 #define PW_D3D9_ENABLE_METHODS
 #define PW_D3D9_ENABLE_BATCH
 #include "../../wine/ps5/d3d9/pw_d3d9_session.c"
 #undef GetTickCount64
+#undef QueryPerformanceCounter
 struct fixture {struct pw_d3d9_session session;HANDLE thread;LONG requests,batches,commands;UINT values[1024];int fail;};
 static DWORD WINAPI peer(void *arg)
 {
@@ -67,7 +72,11 @@ int main(void)
  SetEnvironmentVariableA("PW_D3D9_ASYNC","1");
  begin(&f,0);struct pw_d3d9_command q={.method=57,.args={7,11}};assert(pw_d3d9_session_command(&f.session,(struct pw_d3d9_object_ref){7,1},&q)==S_OK);q.args[1]=99;
  assert(f.requests==1&&f.session.batch.count==1);callback_enter();assert(enqueue(&f,7,88)==RPC_E_CANTCALLOUT_ININPUTSYNCCALL);callback_leave();
+ uint64_t previous=f.session.ipc.stats.roundtrip_wall_us,saved_frequency=profile_frequency;
+ profile_frequency=1000000;clock_ticks=0;timed_clock=1;
  assert(sync_call(&f,PW_D3D9_GETTER_CALL)==S_OK&&f.commands==1&&f.values[0]==11);
+ timed_clock=0;profile_frequency=saved_frequency;
+ assert(f.session.ipc.stats.roundtrip_wall_us-previous==800); /* 300 batch + 500 outer, each interval once */
  assert(enqueue(&f,7,22)==S_OK&&enqueue(&f,8,33)==S_OK);assert(sync_call(&f,PW_D3D9_RELEASE)==S_OK&&f.values[1]==22&&f.values[2]==33);
  LONG before=f.batches;for(unsigned n=0;n<260;n++)assert(enqueue(&f,7,n)==S_OK);assert(sync_call(&f,PW_D3D9_GETTER_CALL)==S_OK&&f.batches-before==3);
  assert(enqueue(&f,7,44)==S_OK);ticks+=2;assert(enqueue(&f,7,55)==S_OK);assert(sync_call(&f,PW_D3D9_GETTER_CALL)==S_OK);
