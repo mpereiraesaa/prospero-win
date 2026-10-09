@@ -20,14 +20,18 @@ static int is_owner(IDirect3DDevice9 *parent,struct pw_d3d9_object_ref ref)
 static IDirect3DTexture9Vtbl texture_vtable;
 static IDirect3DSurface9Vtbl surface_vtable;
 static struct proxy *impl(void *iface){return iface;}
+static int can_pin_locked(const struct proxy *p,ULONG count)
+{return !p->closed&&!p->frozen&&p->refs<=~(ULONG)0-count;}
+static ULONG pin_locked(struct proxy *p)
+{
+ if(!can_pin_locked(p,1))return 0;
+ if(!p->refs&&!p->parent_pin){IDirect3DDevice9_AddRef(p->parent);p->parent_pin=1;}
+ return ++p->refs;
+}
 static ULONG addref(void *iface)
 {
- struct proxy *p=impl(iface);ULONG n=0;AcquireSRWLockExclusive(&cache_lock);
- if(!p->closed&&!p->frozen&&p->refs!=~(ULONG)0){
-  if(!p->refs&&!p->parent_pin){IDirect3DDevice9_AddRef(p->parent);p->parent_pin=1;}
-  n=++p->refs;
- }
- ReleaseSRWLockExclusive(&cache_lock);return n;
+ struct proxy *p=impl(iface);ULONG n;AcquireSRWLockExclusive(&cache_lock);
+ n=pin_locked(p);ReleaseSRWLockExclusive(&cache_lock);return n;
 }
 static void free_local(struct proxy *p)
 {
@@ -89,7 +93,7 @@ static HRESULT adopt(struct proxy *p,uint32_t levels,void **out)
   if(SUCCEEDED(hr)){ops.fail(p->parent,E_FAIL);hr=E_FAIL;}finish(p);return hr;
  }
  p->levels=levels;AcquireSRWLockExclusive(&cache_lock);
- for(struct proxy *it=cache;it;it=it->next)if(it->parent==p->parent && it->kind==p->kind && it->client.object.id==p->client.object.id && it->client.object.generation==p->client.object.generation){found=it;if(found->frozen||found->closed){found=NULL;hr=D3DERR_INVALIDCALL;break;}if(!found->refs&&!found->parent_pin){IDirect3DDevice9_AddRef(p->parent);found->parent_pin=1;}found->refs++;break;}
+ for(struct proxy *it=cache;it;it=it->next)if(it->parent==p->parent && it->kind==p->kind && it->client.object.id==p->client.object.id && it->client.object.generation==p->client.object.generation){found=it;if(!pin_locked(found)){found=NULL;hr=D3DERR_INVALIDCALL;}break;}
  if(!found&&SUCCEEDED(hr)){p->owner=is_owner(p->parent,p->client.object);p->next=cache;cache=p;}
  ReleaseSRWLockExclusive(&cache_lock);
  if(FAILED(hr)){finish(p);return hr;}if(found){*out=&found->iface;finish(p);}else *out=&p->iface;
@@ -255,7 +259,7 @@ static HRESULT copy_resources(IDirect3DDevice9 *device,IUnknown *source,IUnknown
  struct proxy *src=NULL,*dst=NULL;struct pw_d3d9_texture_reply r={0};HRESULT hr;
  AcquireSRWLockExclusive(&cache_lock);
  for(struct proxy *p=cache;p;p=p->next)if(p->parent==device && p->kind==kind){if(&p->iface==source)src=p;if(&p->iface==destination)dst=p;}
- if(src && dst){src->refs++;dst->refs++;q->source=src->client.object;q->destination=dst->client.object;}
+ if(src&&dst&&can_pin_locked(src,src==dst?2:1)&&can_pin_locked(dst,1)){pin_locked(src);pin_locked(dst);q->source=src->client.object;q->destination=dst->client.object;}else src=dst=NULL;
  ReleaseSRWLockExclusive(&cache_lock);
  if(!src || !dst)return D3DERR_INVALIDCALL;
  hr=ops.texture(device,(struct pw_d3d9_object_ref){0},q,&r);
@@ -272,7 +276,7 @@ static HRESULT WINAPI color_fill(IDirect3DDevice9 *d,IDirect3DSurface9 *surface,
 {
  struct proxy *found=NULL;struct pw_d3d9_texture_request q={0};struct pw_d3d9_texture_reply reply={0};HRESULT hr;
  AcquireSRWLockExclusive(&cache_lock);
- for(struct proxy *p=cache;p;p=p->next)if(&p->iface==(IUnknown *)surface && p->parent==d && p->kind==PW_D3D9_KIND_SURFACE){found=p;p->refs++;break;}
+ for(struct proxy *p=cache;p;p=p->next)if(&p->iface==(IUnknown *)surface && p->parent==d && p->kind==PW_D3D9_KIND_SURFACE){if(pin_locked(p))found=p;break;}
  ReleaseSRWLockExclusive(&cache_lock);if(!found)return D3DERR_INVALIDCALL;
  q.operation=PW_D3D9_TEXTURE_COLOR_FILL;q.color=color;rect(&q,r);hr=invoke(found,&q,&reply);release(found);return hr;
 }
