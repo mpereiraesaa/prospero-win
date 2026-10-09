@@ -554,3 +554,6 @@ wine/ps5/pw_vk_radv_profile.h
 wine/ps5/pw_vk_radv_profile_list.h
 wine/ps5/pw_vk_radv_profile_wrap.c
 wine/ps5/pw_vk_radv_profile_wrap.h
+docs/cs-thread-profile.md
+tests/test_native_profile_frames.py
+tools/native_profile_frames.py
