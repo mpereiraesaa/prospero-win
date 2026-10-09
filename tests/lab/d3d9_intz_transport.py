@@ -35,7 +35,7 @@ control_run=run([a.wine_build.resolve()/'loader/wine',out/'control.exe',win(a.ba
 assert control_run.stdout.count('PW_INTZ_CONTROL status=0')==3
 x=run([a.wine_build.resolve()/'loader/wine',out/'client.exe',win(out/'service.dll'),win(a.backend64)],'transport',env)
 assert x.stdout.count('created=1 depth_used=1 restored=1 status=0')==3
-assert x.stdout.count('PW_INTZ_CONTROL status=0')==3
+assert 'PW_INTZ_CONTROL' not in x.stdout
 assert frozen=={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in sources}
 r.update(status='pass',sources=frozen,artifacts={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [out/'client.exe',out/'service.dll',out/'control.exe',a.backend64]})
 (out/'receipt.json').write_text(json.dumps(r,indent=2)+'\n');print(r['status']+' '+str(out/'receipt.json'))
