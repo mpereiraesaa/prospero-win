@@ -25,14 +25,6 @@ void pw_d3d9_transform_invalidate(struct pw_d3d9_transform_shadow *s)
 {
     if (s) memset(s->live.known, 0, sizeof(s->live.known));
 }
-/* The recording domain is no longer known: serve nothing until a successful
- * Begin or End establishes it again. */
-static void uncertain(struct pw_d3d9_transform_shadow *s)
-{
-    s->recording = PW_D3D9_TRANSFORM_RECORDING_UNKNOWN;
-    s->pending_unknown = 1;
-    memset(s->live.known, 0, sizeof(s->live.known));
-}
 static void forget_pending(struct pw_d3d9_transform_shadow *s)
 {
     memset(s->pending.captured, 0, sizeof(s->pending.captured));
@@ -68,22 +60,21 @@ void pw_d3d9_transform_multiply(struct pw_d3d9_transform_shadow *s, uint32_t sta
 int pw_d3d9_transform_lookup(const struct pw_d3d9_transform_shadow *s, uint32_t state, void *matrix)
 {
     int slot = pw_d3d9_transform_slot(state);
-    if (!s || !matrix || slot < 0 || s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN ||
-        !test_bit(s->live.known, (unsigned)slot)) return 0;
+    if (!s || !matrix || slot < 0 || !test_bit(s->live.known, (unsigned)slot)) return 0;
     memcpy(matrix, s->live.value[slot], 64);
     return 1;
 }
 void pw_d3d9_transform_observe(struct pw_d3d9_transform_shadow *s, uint32_t state, const void *matrix, uint32_t hr)
 {
     int slot = pw_d3d9_transform_slot(state);
-    if (!s || !matrix || hr || slot < 0 || s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN) return;
+    if (!s || !matrix || hr || slot < 0) return;
     memcpy(s->live.value[slot], matrix, 64);
     put_bit(s->live.known, (unsigned)slot, 1);
 }
 void pw_d3d9_transform_begin(struct pw_d3d9_transform_shadow *s, uint32_t hr)
 {
     if (!s) return;
-    if (hr) { uncertain(s); return; }
+    if (hr) { s->recording = PW_D3D9_TRANSFORM_RECORDING_UNKNOWN; s->pending_unknown = 1; return; }
     s->recording = PW_D3D9_TRANSFORM_RECORDING;
     forget_pending(s);
 }
@@ -101,7 +92,7 @@ void pw_d3d9_transform_block_free(struct pw_d3d9_transform_block *b)
 void pw_d3d9_transform_end(struct pw_d3d9_transform_shadow *s, struct pw_d3d9_transform_block *b, uint32_t hr)
 {
     if (!s) return;
-    if (hr) { uncertain(s); return; }
+    if (hr) { s->recording = PW_D3D9_TRANSFORM_RECORDING_UNKNOWN; s->pending_unknown = 1; return; }
     if (b) {
         b->known = s->recording == PW_D3D9_TRANSFORM_RECORDING && !s->pending_unknown && b->set;
         if (b->known) memcpy(b->set, &s->pending, sizeof(s->pending));
@@ -112,11 +103,9 @@ void pw_d3d9_transform_end(struct pw_d3d9_transform_shadow *s, struct pw_d3d9_tr
 void pw_d3d9_transform_create(struct pw_d3d9_transform_shadow *s, struct pw_d3d9_transform_block *b, uint32_t type, uint32_t hr)
 {
     if (!s || hr) return;
-    if (b) b->known = 0;
-    /* The backend refuses creation while recording; success elsewhere means the
-     * model lost track, so it does not prove anything. */
-    if (s->recording != PW_D3D9_TRANSFORM_LIVE) { uncertain(s); return; }
+    s->recording = PW_D3D9_TRANSFORM_LIVE; /* the backend refuses creation while recording */
     if (!b) return;
+    b->known = 0;
     if (type == 1 && b->set) {             /* D3DSBT_ALL captures every transform */
         memcpy(b->set->value, s->live.value, sizeof(b->set->value));
         memcpy(b->set->known, s->live.known, sizeof(b->set->known));
@@ -132,8 +121,8 @@ void pw_d3d9_transform_capture(struct pw_d3d9_transform_shadow *s, struct pw_d3d
 {
     if (!s) return;
     /* The backend refuses Capture only while recording, before any effect. */
-    if (hr == REFUSED) { if (s->recording == PW_D3D9_TRANSFORM_LIVE) uncertain(s); return; }
-    if (!hr && s->recording != PW_D3D9_TRANSFORM_LIVE) uncertain(s); /* only Begin/End re-establish it */
+    if (hr == REFUSED) { if (s->recording == PW_D3D9_TRANSFORM_LIVE) s->recording = PW_D3D9_TRANSFORM_RECORDING_UNKNOWN; return; }
+    if (!hr) s->recording = PW_D3D9_TRANSFORM_LIVE;
     if (!b || !b->known || !b->set) return;
     for (unsigned n = 0; n < PW_D3D9_TRANSFORM_SLOTS; n++) {
         if (!test_bit(b->set->captured, n)) continue;
@@ -146,9 +135,9 @@ void pw_d3d9_transform_capture(struct pw_d3d9_transform_shadow *s, struct pw_d3d
 void pw_d3d9_transform_apply(struct pw_d3d9_transform_shadow *s, const struct pw_d3d9_transform_block *b, uint32_t hr)
 {
     if (!s) return;
-    if (hr == REFUSED) { if (s->recording == PW_D3D9_TRANSFORM_LIVE) uncertain(s); return; }
-    if (!hr && s->recording != PW_D3D9_TRANSFORM_LIVE) { uncertain(s); return; }
-    if (hr || !b || !b->known) { pw_d3d9_transform_invalidate(s); return; }
+    if (hr == REFUSED) { if (s->recording == PW_D3D9_TRANSFORM_LIVE) s->recording = PW_D3D9_TRANSFORM_RECORDING_UNKNOWN; return; }
+    if (hr || !b || !b->known) { pw_d3d9_transform_invalidate(s); if (!hr) s->recording = PW_D3D9_TRANSFORM_LIVE; return; }
+    s->recording = PW_D3D9_TRANSFORM_LIVE;
     if (!b->set) return;
     for (unsigned n = 0; n < PW_D3D9_TRANSFORM_SLOTS; n++) {
         if (!test_bit(b->set->captured, n)) continue;

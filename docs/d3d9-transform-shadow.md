@@ -32,14 +32,9 @@ instead of repeating the float product locally. A setter for a state without a
 slot makes every slot unknown.
 
 Recording follows `BeginStateBlock` and `EndStateBlock` outcomes. When either
-outcome is not `S_OK`, the recording state is unknown: the backend may have
-ended recording even though End reported a failure (for example when
-publishing the new block ran out of memory). While it is unknown, every live
-slot is forgotten, nothing is answered or learned, and the block being
-recorded is unknown. Only a successful `BeginStateBlock` or `EndStateBlock`
-establishes the state again; a successful `Capture`, `Apply` or
-`CreateStateBlock` does not. A refused `Capture` or `Apply` while the shadow
-believed recording was off makes the state unknown too.
+outcome is not `S_OK`, the recording state is unknown: setters then forget
+their live slot and the block being recorded is unknown. A successful
+`Capture`, `Apply` or `CreateStateBlock` proves recording is off.
 
 Each state block shell owns its evidence. Its snapshot storage is allocated
 before the Create or End call, outside any lock; if that fails, the block is
