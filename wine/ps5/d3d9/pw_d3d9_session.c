@@ -371,6 +371,32 @@ static void drain_deferred(struct pw_d3d9_session *s)
         AcquireSRWLockExclusive(&s->deferred_lock);
     }
 }
+static DWORD serial_enter(struct pw_d3d9_session *s)
+{
+    while(!TryEnterCriticalSection(&s->lock)){
+        DWORD wait;
+#ifdef PW_D3D9_SESSION_TEST_CALLBACK
+        extern int pw_d3d9_session_test_serial_failure(void);
+        if(pw_d3d9_session_test_serial_failure()){client_pump();wait=WAIT_FAILED;}
+        else
+#endif
+        {
+            /* Count before the final retry so a release that saw no waiters
+             * left the lock free for this TryEnterCriticalSection. */
+            InterlockedIncrement(&s->serial_waiters);
+            if(TryEnterCriticalSection(&s->lock)){InterlockedDecrement(&s->serial_waiters);break;}
+            wait=client_wait(1,&s->serial_event,30000);
+            InterlockedDecrement(&s->serial_waiters);
+        }
+        if(wait!=WAIT_OBJECT_0)return wait;
+    }
+    return WAIT_OBJECT_0;
+}
+static void serial_leave(struct pw_d3d9_session *s)
+{
+    LeaveCriticalSection(&s->lock);
+    if(InterlockedCompareExchange(&s->serial_waiters,0,0))SetEvent(s->serial_event);
+}
 #ifdef PW_D3D9_ENABLE_BATCH
 /* Caller owns s->lock and active_thread; callbacks cannot enter this stream.
  * The live remote guest reference cannot retire before ordered RELEASE, which
@@ -394,7 +420,8 @@ static HRESULT batch_flush_locked(struct pw_d3d9_session *s)
     int sent=send_wake(&s->ipc,&m,input);
     if(prof&&s->ipc.channel.next_send!=sequence){sample.published=sample.batch_flushes=1;sample.batch_commands=s->batch.count;sample.request_bytes=64u+bytes;}
     if(sent!=PW_D3D9_OK)goto done;
-    client_pump();uint64_t waiting=prof?profile_now():0;
+    if(client_input_pending())client_pump();
+    uint64_t waiting=prof?profile_now():0;
     int received=receive_wait(&s->ipc,&reply,scratch,sizeof(scratch),s->broker);
     if(prof){sample.guest_wait_wall_us=pw_d3d9_stats_elapsed(waiting,profile_now(),&sample.clock_invalid);
         if(received==PW_D3D9_OK){sample.replies=1;sample.reply_bytes=64u+reply.payload_bytes;}}
@@ -416,9 +443,7 @@ static HRESULT batch_enqueue(struct pw_d3d9_session *s,struct pw_d3d9_object_ref
     HRESULT hr=S_OK;int cleanup=0;
     if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
     if(!ref.id||!ref.generation)return D3DERR_INVALIDCALL;
-    while(!TryEnterCriticalSection(&s->lock)){
-        if(client_wait(1,&s->serial_event,30000)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
-    }
+    if(serial_enter(s)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
     if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
     s->active_thread=GetCurrentThreadId();cleanup=1;
     if(FAILED(s->batch_failure)){hr=s->batch_failure;goto done;}
@@ -446,7 +471,7 @@ static HRESULT batch_enqueue(struct pw_d3d9_session *s,struct pw_d3d9_object_ref
  failed:
     s->batch_failure=hr;cancel_ipc(&s->ipc);
  done:
-    s->active_thread=0;LeaveCriticalSection(&s->lock);SetEvent(s->serial_event);
+    s->active_thread=0;serial_leave(s);
     if(cleanup){restore_quit();drain_deferred(s);}return hr;
 }
 #endif
@@ -460,23 +485,7 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
     if(prof){memset(&sample,0,sizeof(sample));sample.attempts=1;if(m->opcode<PW_D3D9_STATS_OPS)sample.opcode[m->opcode]=1;}
     memset(reply,0,sizeof(*reply));
     if(callback_depth()){result=RPC_E_CANTCALLOUT_ININPUTSYNCCALL;goto metric_done;}
-    while(!TryEnterCriticalSection(&s->lock)){
-        DWORD wait;
-#ifdef PW_D3D9_SESSION_TEST_CALLBACK
-        extern int pw_d3d9_session_test_serial_failure(void);
-        if(pw_d3d9_session_test_serial_failure()){client_pump();wait=WAIT_FAILED;}
-        else
-#endif
-        {
-            /* Count before the final retry so a release that saw no waiters
-             * left the lock free for this TryEnterCriticalSection. */
-            InterlockedIncrement(&s->serial_waiters);
-            if(TryEnterCriticalSection(&s->lock)){InterlockedDecrement(&s->serial_waiters);break;}
-            wait=client_wait(1,&s->serial_event,30000);
-            InterlockedDecrement(&s->serial_waiters);
-        }
-        if(wait!=WAIT_OBJECT_0){cleanup=1;if(prof)sample.serial_wait_wall_us=pw_d3d9_stats_elapsed(serial_begin,profile_now(),&sample.clock_invalid);goto metric_done;}
-    }
+    if(serial_enter(s)!=WAIT_OBJECT_0){cleanup=1;if(prof)sample.serial_wait_wall_us=pw_d3d9_stats_elapsed(serial_begin,profile_now(),&sample.clock_invalid);goto metric_done;}
     if(prof)sample.serial_wait_wall_us=pw_d3d9_stats_elapsed(serial_begin,profile_now(),&sample.clock_invalid);
     if(s->active_thread){LeaveCriticalSection(&s->lock);result=RPC_E_CANTCALLOUT_ININPUTSYNCCALL;goto metric_done;}
     locked=cleanup=1;

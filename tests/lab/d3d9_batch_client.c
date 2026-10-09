@@ -64,7 +64,7 @@ static void end(struct fixture *f)
  struct pw_d3d9_session *s=&f->session;assert(WaitForSingleObject(f->thread,1000)==WAIT_OBJECT_0);CloseHandle(f->thread);
  CloseHandle(s->ipc.opened);CloseHandle(s->ipc.request);CloseHandle(s->ipc.reply);CloseHandle(s->ipc.cancel);CloseHandle(s->serial_event);HeapFree(GetProcessHeap(),0,s->ipc.memory);DeleteCriticalSection(&s->lock);
 }
-static DWORD WINAPI producer(void *arg){struct fixture *f=arg;for(unsigned n=0;n<32;n++)assert(enqueue(f,7,n)==S_OK);return 0;}
+static DWORD WINAPI producer(void *arg){struct fixture *f=arg;for(unsigned n=0;n<32;n++){assert(enqueue(f,7,n)==S_OK);if(!(n&7))assert(sync_call(f,PW_D3D9_GETTER_CALL)==S_OK);}return 0;}
 int main(void)
 {
  SetEnvironmentVariableA("PW_D3D9_PROFILE","1");assert(InitOnceExecuteOnce(&tls_once,init_tls,NULL,NULL));struct fixture f;
