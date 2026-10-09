@@ -14,6 +14,7 @@
 #include "pw_d3d9_service_texture.h"
 #endif
 #include "pw_d3d9_session.h"
+#include "pw_d3d9_failure_wait.h"
 #ifdef PW_D3D9_ENABLE_DRAW_BATCH
 #include "pw_d3d9_native_draw_state.h"
 #include "pw_d3d9_transform_observer.h"
@@ -1600,6 +1601,15 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             profile_pending=0;profile_emit(&record);}
         if(reply_sent!=PW_D3D9_OK)goto done;
         result[0]++;
+#ifdef PW_D3D9_ENABLE_BATCH
+        if(batches.failed_result){
+            /* Keep the exact prefix failure readable. A later request already
+             * in the ring must never trigger cancellation ahead of this ACK. */
+            phase="failure_ack_wait";
+            pw_d3d9_failure_wait(ipc.cancel);
+            goto done;
+        }
+#endif
         if(stop){if(pw_d3d9_channel_stopped(&ipc.channel)!=PW_D3D9_OK)goto done;error=0;break;}
     }
  done:
