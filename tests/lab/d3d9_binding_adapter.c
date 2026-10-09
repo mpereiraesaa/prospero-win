@@ -6,7 +6,7 @@
 static HRESULT result;
 static IUnknown *expected_local;
 static unsigned expected_word,binding_calls;
-static HRESULT bind(IDirect3DDevice9 *d,struct pw_d3d9_command *c,IUnknown *local,uint32_t kind,uint32_t word)
+static HRESULT binding_callback(IDirect3DDevice9 *d,struct pw_d3d9_command *c,IUnknown *local,uint32_t kind,uint32_t word)
 {
  assert(d==owner&&local==expected_local&&kind==expected_kind&&word==expected_word);
  assert(c->method==method&&!c->data_bytes&&!c->args[word]&&!c->args[word+1]);
@@ -18,7 +18,7 @@ int main(void)
  assert(!baseline_main());mode=0;device_refs=1;
  IDirect3DDevice9Vtbl table={0};IDirect3DDevice9 device={&table};owner=&device;
  struct pw_d3d9_device_methods_ops callbacks={command,getter,fail,resolve};pw_d3d9_device_methods_install(&table,&callbacks);
- pw_d3d9_device_methods_binding_install(bind);
+ pw_d3d9_device_methods_binding_install(binding_callback);
  const unsigned methods[]={65,87,92,100,104,107},kinds[]={5,7,8,3,4,9},words[]={1,0,0,1,0,0};
  const HRESULT results[]={S_OK,D3DERR_INVALIDCALL,RPC_E_CANTCALLOUT_ININPUTSYNCCALL,E_FAIL};
  unsigned before=resolves,commands=calls;
