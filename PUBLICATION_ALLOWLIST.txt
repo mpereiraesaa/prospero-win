@@ -516,3 +516,10 @@ docs/d3d9-bridge-design.md
 tools/stage_vk_replay_lifecycle.py
 tests/lab/vk_replay_lifecycle.py
 docs/vulkan-replay-lifecycle.md
+
+tools/generate_vk_replay_dispatch.py
+tests/test_vk_replay_dispatch.py
+docs/vulkan-replay-dispatch.md
+tools/stage_vk_replay_barriers.py
+tests/lab/vk_replay_barriers.py
+docs/vulkan-replay-barriers.md
