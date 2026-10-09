@@ -553,3 +553,9 @@ wine/ps5/pw_d3d9_bridge_wire.c
 tests/test_d3d9_bridge_wire.c
 tests/lab/d3d9_bridge_wire.c
 docs/d3d9-bridge-transport.md
+
+wine/ps5/d3d9/pw_d3d9_session.h
+wine/ps5/d3d9/pw_d3d9_session.c
+tests/lab/d3d9_persistent_session.c
+tests/lab/d3d9_persistent_session.py
+docs/d3d9-persistent-session.md
