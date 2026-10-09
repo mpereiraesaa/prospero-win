@@ -17,7 +17,8 @@ static LRESULT CALLBACK counting_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp)
 /* Loads this domain's IME (ImeInquire registers "Wine IME"), then checks the
  * class resolved for this domain's imm32 instance. Bit 0: IME loaded; bit 1:
  * class procedure lies inside this domain's imm32; bit 2: a "Wine IME" window
- * was created with this instance, its procedure is ours, and it was destroyed. */
+ * was created with this instance, its procedure is ours, and it was destroyed;
+ * bit 3: CreateWindowExW returned a window (its procedure replaces *proc_out). */
 static uint64_t probe(int create,uint64_t *proc_out,uint64_t *module_out)
 {
     HMODULE imm=LoadLibraryW(L"imm32.dll");WNDCLASSEXW wc={.cbSize=sizeof(wc)};uint64_t flags=0;
@@ -29,6 +30,7 @@ static uint64_t probe(int create,uint64_t *proc_out,uint64_t *module_out)
         HWND hwnd=CreateWindowExW(WS_EX_TOOLWINDOW,L"Wine IME",NULL,WS_POPUP,0,0,1,1,NULL,NULL,imm,NULL);
         if(hwnd){
             WNDPROC proc=(WNDPROC)GetWindowLongPtrW(hwnd,GWLP_WNDPROC);
+            flags|=8;*proc_out=(uintptr_t)proc;
             if(CHECK_PROC(proc,imm)){
                 original=proc;SetWindowLongPtrW(hwnd,GWLP_WNDPROC,(LONG_PTR)counting_proc);
                 SendMessageW(hwnd,WM_NULL,0,0);
@@ -44,10 +46,13 @@ static uint64_t probe(int create,uint64_t *proc_out,uint64_t *module_out)
 static int native_teb(void) { return *(volatile LONG *)((char *)NtCurrentTeb() + 0x180c) == 0; }
 __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
 {
-    WCHAR mode[16]={0};
+    /* The broker zeroes results and the WoW64 guest environment block is not
+     * the native one, so the guest names the mode with an event. */
+    HANDLE create=OpenEventW(SYNCHRONIZE,FALSE,L"Local\\PW_WINE_IME_CREATE"),force=OpenEventW(SYNCHRONIZE,FALSE,L"Local\\PW_WINE_IME_FORCE");
     if(!native_teb())return 10;
-    GetEnvironmentVariableW(L"PW_WINE_IME_MODE",mode,16);
-    result[3]=probe(!lstrcmpW(mode,L"force")?2:!lstrcmpW(mode,L"create"),&result[4],&result[5]);
+    result[3]=probe(force?2:create?1:0,&result[4],&result[5]);
+    if(create)CloseHandle(create);
+    if(force)CloseHandle(force);
     return 0;
 }
 #else
@@ -59,16 +64,18 @@ int main(int argc,char **argv)
     query_fn query=(query_fn)GetProcAddress(GetModuleHandleA("ntdll.dll"),"NtQueryInformationProcess");
     uint64_t guest_proc=0,guest_module=0,guest=0,after=0,after_proc=0,after_module=0;
     if(argc!=3||!query)return 1;
-    SetEnvironmentVariableA("PW_WINE_IME_MODE",argv[2]);
     guest=probe(0,&guest_proc,&guest_module);
     MultiByteToWideChar(CP_UTF8,0,argv[1],-1,req.path,260);
+    HANDLE mode=!strcmp(argv[2],"force")?CreateEventW(NULL,TRUE,FALSE,L"Local\\PW_WINE_IME_FORCE"):
+                !strcmp(argv[2],"create")?CreateEventW(NULL,TRUE,FALSE,L"Local\\PW_WINE_IME_CREATE"):NULL;
     LONG status=query(GetCurrentProcess(),0x50570001,&req,sizeof(req),&size);
+    if(mode)CloseHandle(mode);
     /* The guest's own class still resolves to the guest procedure afterwards. */
     after=probe(1,&after_proc,&after_module);
     printf("PW_WINE_IME mode=%s status=%08lx guest=%llu guest_proc=%llx guest_imm32=%llx native=%llu native_proc=%llx native_imm32=%llx guest_after=%llu\n",
            argv[2],status,(unsigned long long)guest,(unsigned long long)guest_proc,(unsigned long long)guest_module,
            (unsigned long long)req.result[3],(unsigned long long)req.result[4],(unsigned long long)req.result[5],(unsigned long long)after);
     fflush(stdout);
-    return status||guest!=3||after!=7||req.result[3]!=(strcmp(argv[2],"classinfo")?7u:3u);
+    return status||guest!=3||after!=15||req.result[3]!=(strcmp(argv[2],"classinfo")?15u:3u);
 }
 #endif

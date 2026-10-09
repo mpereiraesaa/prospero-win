@@ -40,9 +40,10 @@ for bits, target, extra in [('i686', 'client.exe', []),
     assert build.returncode == 0, build.stderr
     receipt['artifacts'][target] = digest(out / target)
 env = os.environ.copy()
-env.update(WINEPREFIX=str(args.prefix.resolve()), WINEDEBUG='-all',
+env.update(WINEPREFIX=str(args.prefix.resolve()), WINEDEBUG='-all,+seh',
            WINEDLLOVERRIDES='mscoree,mshtml=;winedbg.exe=d')
 service = 'Z:' + str(out / 'service.dll').replace('/', chr(92))
+fault = re.compile(r'code=c0000005 \(EXCEPTION_ACCESS_VIOLATION\) flags=\w+ addr=([0-9A-Fa-f]+)')
 row = re.compile(r'PW_WINE_IME mode=(\w+) status=0+ guest=(\d+) guest_proc=([0-9a-f]+) '
                  r'guest_imm32=([0-9a-f]+) native=(\d+) native_proc=([0-9a-f]+) '
                  r'native_imm32=([0-9a-f]+) guest_after=(\d+)')
@@ -60,16 +61,21 @@ if args.baseline_wine:
     native_proc, guest_imm32 = int(fields[5], 16), int(fields[3], 16)
     assert guest_imm32 <= native_proc < guest_imm32 + 0x1000000, fields
     receipt['baseline'] = {'native_flags': 1, 'native_proc': fields[5], 'guest_imm32': fields[3]}
-    # Creating the window from the native thread then runs guest code in 64-bit mode.
+    # Creating the window from the native thread then runs guest imm32 code in
+    # 64-bit mode. Host Wine ignores the fault inside the user callback; the
+    # console could not dispatch it because the stack pointer was truncated.
     crash = run([args.baseline_wine.resolve() / 'loader/wine', out / 'client.exe', service,
                  'force'], 'baseline-force', env)
-    assert crash.returncode != 0 and not parse(crash), crash.returncode
+    faults = [int(x, 16) for x in fault.findall(crash.stdout + crash.stderr)]
+    assert crash.returncode != 0 and any(guest_imm32 <= x < guest_imm32 + 0x1000000 for x in faults), faults
     receipt['baseline']['force_exit'] = crash.returncode
+    receipt['baseline']['force_fault'] = ['%x' % x for x in faults]
 for mode in ('classinfo', 'create', 'force'):
     result = run([args.wine_build.resolve() / 'loader/wine', out / 'client.exe', service, mode],
                  mode, env)
     fields = parse(result)
     assert result.returncode == 0 and fields, (mode, result.returncode, result.stdout)
+    assert not fault.search(result.stdout + result.stderr), mode
     receipt[mode] = dict(zip(('mode', 'guest', 'guest_proc', 'guest_imm32', 'native',
                               'native_proc', 'native_imm32', 'guest_after'), fields))
 receipt['scope'] = ('guest imm32 registers first; native service thread resolves and creates '
