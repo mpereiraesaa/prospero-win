@@ -33,11 +33,21 @@ static void registry_proof(IDirect3DDevice9 *device)
  q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_SURFACE_LEVEL};
  pw_d3d9_service_texture_call(&objects,texture,&q,&r);assert(r.hresult==S_OK&&r.object.id);surface=r.object;
  assert(slots[parent.id-1].queued_refs==2);
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_CONTAINER,.value=PW_D3D9_CONTAINER_TEXTURE_2D};
+ pw_d3d9_service_texture_call(&objects,surface,&q,&r);assert(r.hresult==S_OK&&r.container_kind==5&&r.object.id==texture.id&&r.levels==1);
+ assert(pw_d3d9_object_release(&objects,r.object));
+ q.value=PW_D3D9_CONTAINER_DEVICE;pw_d3d9_service_texture_call(&objects,surface,&q,&r);assert(r.hresult==(uint32_t)E_NOINTERFACE&&!r.object.id);
+
+ struct pw_d3d9_texture_request create_surface={.operation=PW_D3D9_TEXTURE_CREATE_SURFACE,.width=8,.height=8,.format=D3DFMT_A8R8G8B8,.pool=D3DPOOL_SYSTEMMEM};
+ pw_d3d9_service_texture_call(&objects,parent,&create_surface,&r);assert(r.hresult==S_OK);struct pw_d3d9_object_ref offscreen=r.object;
  assert(pw_d3d9_object_release(&objects,parent));uintptr_t context;assert(!pw_d3d9_object_take_destroy(&objects,parent,&context));
  q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_LOCK,.flags=D3DLOCK_READONLY};
  pw_d3d9_service_texture_call(&objects,surface,&q,&r);assert(r.hresult==S_OK&&r.length>=16384);
  q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_READ,.lock_generation=r.lock_generation,.count=4096};
  pw_d3d9_service_texture_call(&objects,surface,&q,&r);assert(r.hresult==S_OK&&r.count==4096);
+ q=(struct pw_d3d9_texture_request){.operation=PW_D3D9_TEXTURE_CONTAINER,.value=PW_D3D9_CONTAINER_DEVICE};
+ pw_d3d9_service_texture_call(&objects,offscreen,&q,&r);assert(r.hresult==S_OK&&r.container_kind==2&&r.object.id==parent.id);
+ assert(pw_d3d9_object_release(&objects,r.object));retire(&objects,offscreen);
  retire(&objects,texture);assert(!pw_d3d9_object_take_destroy(&objects,parent,&context));
  retire(&objects,surface);
  assert(pw_d3d9_object_take_destroy(&objects,parent,&context)&&context==(uintptr_t)device);assert(pw_d3d9_object_finish_destroy(&objects,parent));

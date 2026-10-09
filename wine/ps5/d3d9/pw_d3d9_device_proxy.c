@@ -232,7 +232,13 @@ static HRESULT texture_call(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref re
 {
     struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
     if(!ref.id&&!ref.generation)ref=d->remote;
-    addref(iface);HRESULT hr=pw_d3d9_session_texture(d->session,ref,q,r);release(iface);return hr;
+    struct pw_d3d9_texture_reply decoded={0};
+    addref(iface);HRESULT hr=pw_d3d9_session_texture(d->session,ref,q,&decoded);
+    if(SUCCEEDED(hr)&&q->operation==PW_D3D9_TEXTURE_CONTAINER&&decoded.container_kind==PW_D3D9_KIND_DEVICE&&
+       (decoded.object.id!=d->remote.id||decoded.object.generation!=d->remote.generation)){
+        hr=E_FAIL;fail_device(iface,hr);
+    }else if(decoded.operation==q->operation)*r=decoded;
+    release(iface);return hr;
 }
 #endif
 #ifdef PW_D3D9_ENABLE_STATEBLOCK

@@ -73,6 +73,22 @@ void pw_d3d9_service_texture_call(struct pw_d3d9_objects *objects,struct pw_d3d9
             }
             if(!pw_d3d9_object_complete(objects,q->source))r->hresult=E_FAIL;
         }
+    }else if(q->operation==PW_D3D9_TEXTURE_CONTAINER){
+        struct texture_owner *owner=(void *)slot->context;void *owned=NULL;
+        pw_d3d9_native_texture_container(owner->native,q,r,&owned);
+        if(owned){
+            HRESULT hr=E_NOINTERFACE;
+            if(r->container_kind==PW_D3D9_KIND_DEVICE){
+                const struct pw_d3d9_object_slot *parent=lookup(objects,owner->parent);
+                if(parent&&parent->kind==PW_D3D9_KIND_DEVICE&&pw_d3d9_native_device_backend((void *)parent->context)==owned&&pw_d3d9_object_addref(objects,owner->parent,1)){
+                    r->object=owner->parent;hr=S_OK;
+                }
+                IUnknown_Release((IUnknown *)owned);
+            }else if(r->container_kind==PW_D3D9_KIND_TEXTURE_2D)
+                hr=pw_d3d9_service_texture_adopt(objects,owner->parent,r->container_kind,owned,&r->object);
+            else IUnknown_Release((IUnknown *)owned);
+            if(FAILED(hr)){r->hresult=hr;r->object=(struct pw_d3d9_object_ref){0};r->container_kind=r->levels=0;}
+        }
     }else{
         struct texture_owner *owner=(void *)slot->context;
         pw_d3d9_native_texture_call(owner->native,q,r,&native);
