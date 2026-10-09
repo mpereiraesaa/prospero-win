@@ -38,7 +38,7 @@ static void test_graphics_env(void)
             assert(count <= PW_GAME_GRAPHICS_ENV_MAX);
             /* Fixed6, desktop/override/XInput3, graphics, runtime, clock and CPU. */
             assert(6 + 3 + count + pw_game_cpu_env(&p, cpu) + pw_game_runtime_env(&p.runtime, runtime) +
-                   PW_GAME_CLOCK_ENV_MAX <= PW_WINE_START_MAX_ENV);
+                   PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX <= PW_WINE_START_MAX_ENV);
             if (graphics == PW_APP_GRAPHICS_ZINK) {
                 assert(count == (size_t)(1 + fps));
                 assert(!strcmp(env[0].name, "GALLIUM_DRIVER") && !strcmp(env[0].value, "zink"));
@@ -452,20 +452,30 @@ static void test_debug_env(void)
     /* A value may itself hold '=': only the first one splits. */
     assert(parse(APP "[debug]\nenv = DXVK_CONFIG=d3d9.maxFrameRate=60\n", &p) == PW_OK);
     assert(!strcmp(p.debug_env[0].name, "DXVK_CONFIG") && !strcmp(p.debug_env[0].value, "d3d9.maxFrameRate=60"));
+    /* The bridge retains both profiler and timing diagnostics with its paths. */
+    assert(parse(APP "[debug]\nenv = PW_D3D9_SERVICE64=Z:/win/service.dll\n"
+                 "env = PW_D3D9_BACKEND64=Z:/win/backend.dll\nenv = DXVK_CONFIG_FILE=C:/Games/GTASA/dxvk.conf\n"
+                 "env = PW_VK_BATCH_STATS=1\nenv = PW_NATIVE_PROFILE=1\n", &p) == PW_OK);
+    assert(pw_game_debug_env(&p, env) == 5);
+    assert(!strcmp(env[0].name, "PW_D3D9_SERVICE64") && !strcmp(env[0].value, "Z:/win/service.dll"));
+    assert(!strcmp(env[1].name, "PW_D3D9_BACKEND64") && !strcmp(env[1].value, "Z:/win/backend.dll"));
+    assert(!strcmp(env[2].name, "DXVK_CONFIG_FILE") && !strcmp(env[2].value, "C:/Games/GTASA/dxvk.conf"));
+    assert(!strcmp(env[3].name, "PW_VK_BATCH_STATS") && !strcmp(env[3].value, "1"));
+    assert(!strcmp(env[4].name, "PW_NATIVE_PROFILE") && !strcmp(env[4].value, "1"));
     /* The HUD variables only when show_fps does not set them already. */
     assert(parse(APP "[debug]\nenv = DXVK_HUD=fps,gpuload\n", &p) == PW_ERR_UNSUPPORTED);
     assert(parse(APP "[display]\nshow_fps = false\n[debug]\nenv = DXVK_HUD=fps,gpuload\n", &p) == PW_OK);
     assert(!strcmp(p.debug_env[0].value, "fps,gpuload"));
     assert(parse(APP "[debug]\nenv = GALLIUM_HUD=fps\n[display]\nshow_fps = true\n", &p) == PW_ERR_UNSUPPORTED);
     /* Refused: names the title sets, other families, bad names and values,
-     * duplicates, a fifth line, empty or oversized parts. */
+     * duplicates, a sixth line, empty or oversized parts. */
     const char *refused[] = {
         "env = PW_VK_BATCH=0\n", "env = PW_INPUT_SHARED_FAST=1\n", "env = PW_QPC_TSC_HZ=1\n",
         "env = PW_QPC_TSC_VALIDATED=1\n", "env = GALLIUM_DRIVER=llvmpipe\n", "env = WINEDEBUG=+all\n",
         "env = WINE_PS5_WOW64_CPU=wowprospero.dll\n", "env = LD_PRELOAD=/x\n", "env = SDL_X=1\n",
         "env = pw_native_profile=1\n", "env = PW_X Y=1\n", "env = PW_X=a b\n", "env = PW_X=$HOME\n",
         "env = PW_X=\n", "env = =1\n", "env = PW_X\n", "env = PW_X=1\nenv = PW_X=2\n",
-        "env = PW_A=1\nenv = PW_B=1\nenv = PW_C=1\nenv = PW_D=1\nenv = PW_E=1\n",
+        "env = PW_A=1\nenv = PW_B=1\nenv = PW_C=1\nenv = PW_D=1\nenv = PW_E=1\nenv = PW_F=1\n",
         "env = PW_" "0123456789012345678901234567890123456789012345=1\n",
         "env = PW_X=" "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456\n",
     };
@@ -475,7 +485,9 @@ static void test_debug_env(void)
         assert(parse(text, &p) != PW_OK);
     }
     /* The title's environment has room for every profile variable at once. */
-    assert(PW_GAME_DEBUG_ENV_MAX == 4);
+    assert(PW_GAME_DEBUG_ENV_MAX == 5);
+    assert(6 + 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX +
+           PW_GAME_CPU_ENV_MAX + PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX == PW_WINE_START_MAX_ENV);
 }
 
 int main(void)

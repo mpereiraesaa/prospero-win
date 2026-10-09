@@ -916,7 +916,7 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     (letters, digits and `_ + - , = .`), and the log names it
     (`PW_WINE64 winedebug=`). Change it and push the profile again.
   - `[debug] env = NAME=VALUE` adds one variable to Wine's environment for
-    that game, up to four lines, for diagnostics such as
+    that game, up to five lines, for diagnostics such as
     `env = PW_NATIVE_PROFILE=1` or `env = PW_VK_BATCH_STATS=1`. Names start
     with `PW_`, `DXVK_`, `MESA_`, `GALLIUM_`, `RADV_` or `VK_`; values take
     letters, digits and `_ + - , . = : /`. A name the title sets itself is
@@ -924,6 +924,9 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     `PW_QPC_TSC_*`, `GALLIUM_DRIVER`, and `DXVK_HUD` or `GALLIUM_HUD` while
     `show_fps` is on (set `show_fps = false` to choose the HUD). The log
     names them (`PW_WINE64 debug_env=`).
+    Five entries allow the bridge service/backend paths, `DXVK_CONFIG_FILE`,
+    `PW_VK_BATCH_STATS` and `PW_NATIVE_PROFILE` in the same profile. This
+    requires a title rebuilt with the five-entry parser; older titles accept four.
   - `[runtime]` sets runtime behavior for that game only:
     - `thread_scheduling = true` sets `WINE_PS5_SCHED=1` (Wine patch 0882):
       the game's threads take turns on the CPUs, and threads the game raises

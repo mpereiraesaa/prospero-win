@@ -30,7 +30,7 @@
  *   winedebug = +seh,+virtual   ; Wine's debug channels for this game (default:
  *                               ; the title's, err+all,+loaddll,+process)
  *   env = PW_NATIVE_PROFILE=1   ; one more variable for Wine's environment,
- *                               ; up to 4 env lines: names start with PW_,
+ *                               ; up to 5 env lines: names start with PW_,
  *                               ; DXVK_, MESA_, GALLIUM_, RADV_ or VK_, and
  *                               ; may not be one the title sets itself
  *                               ; (PW_VK_BATCH, PW_INPUT_SHARED_FAST,
@@ -71,7 +71,7 @@ enum {
     PW_GAME_DESKTOP_MAX_W = 3840, PW_GAME_DESKTOP_MAX_H = 2160,
     PW_GAME_MOUSE_SPEED_DEFAULT = 1200, PW_GAME_MOUSE_SPEED_MAX = 20000,
     PW_GAME_WINEDEBUG_CAPACITY = 128,
-    PW_GAME_DEBUG_ENV_MAX = 4, PW_GAME_DEBUG_ENV_NAME = 48, PW_GAME_DEBUG_ENV_VALUE = 96,
+    PW_GAME_DEBUG_ENV_MAX = 5, PW_GAME_DEBUG_ENV_NAME = 48, PW_GAME_DEBUG_ENV_VALUE = 96,
 };
 
 typedef enum PwGameScaling { PW_GAME_SCALING_FIT = 0, PW_GAME_SCALING_INTEGER,
