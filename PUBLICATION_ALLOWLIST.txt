@@ -826,3 +826,7 @@ tests/lab/d3d9_intz_transport.c
 tests/lab/d3d9_intz_transport.py
 tests/lab/d3d9_intz_transport_device.c
 docs/d3d9-intz-transport.md
+tests/lab/d3d9_up_transport.c
+tests/lab/d3d9_up_transport.py
+tests/lab/d3d9_up_transport_device.c
+docs/d3d9-up-transport.md
