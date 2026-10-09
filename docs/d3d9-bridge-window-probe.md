@@ -92,3 +92,12 @@ procedure; expected counters are `guest_builtins=3 native_builtins=2`. This
 exercises Wine's builtin procedure table separately from custom WNDPROCs.
 Failed runner receipts now preserve the exact source and compiled binary
 hashes. The earlier immutable console package is not changed by this fixture.
+
+The expanded UI-only fixture reproduced the builtin-table defect on host: the
+first native-service notification led to a guest execute fault in
+`SetWindowTextW` on the retained `STATIC` control. After the separate builtin
+procedure table fix, the expanded UI-only and full DXVK fixtures each passed
+three host cycles with builtin counters 3/2. Every full-cycle CreateDevice,
+Reset and Present returned zero. These receipts use the final callback/builtin
+runtime without the later session-token changes. Console confirmation of the
+expanded fixture remains pending.
