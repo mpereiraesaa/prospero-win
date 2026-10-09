@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#ifndef PW_D3D9_NATIVE_TEXTURE_H
+#define PW_D3D9_NATIVE_TEXTURE_H
+#include "../pw_d3d9_texture_wire.h"
+#include "pw_d3d9_kinds.h"
+struct pw_d3d9_native_texture;
+void pw_d3d9_native_texture_create(void *,const struct pw_d3d9_texture_request *,struct pw_d3d9_texture_reply *,struct pw_d3d9_native_texture **);
+/* SURFACE_LEVEL returns a new owned context. Registry deduplicates its canonical
+ * IUnknown identity, balances extra backend refs, and assigns the reply ID. */
+void pw_d3d9_native_texture_call(struct pw_d3d9_native_texture *,const struct pw_d3d9_texture_request *,struct pw_d3d9_texture_reply *,struct pw_d3d9_native_texture **);
+void pw_d3d9_native_texture_copy(void *,struct pw_d3d9_native_texture *,struct pw_d3d9_native_texture *,const struct pw_d3d9_texture_request *,struct pw_d3d9_texture_reply *);
+uintptr_t pw_d3d9_native_texture_identity(struct pw_d3d9_native_texture *);
+void *pw_d3d9_native_texture_backend(struct pw_d3d9_native_texture *);
+uint32_t pw_d3d9_native_texture_kind(struct pw_d3d9_native_texture *);
+uint32_t pw_d3d9_native_texture_destroy(struct pw_d3d9_native_texture *);
+#endif
