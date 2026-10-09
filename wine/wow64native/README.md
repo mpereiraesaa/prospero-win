@@ -138,3 +138,23 @@ time includes any time the thread was descheduled while in guest code.
 Compare profile-off/on runs before attributing FPS changes; these counters
 are not per-opcode attribution. No WRFSBASE fast path is enabled by these
 diagnostics.
+
+The same switch also reports per frame. RADV's `libvulkan.prx` counts
+presents and, on each thread's first entry into the driver after a present,
+calls a frame hook with the present count and the TSC
+(`pw_vk_radv_profile_set_frame_hook`, wine/ps5/pw_vk_radv_profile.h). The
+Unix side looks that setter up by name at each report until the driver is
+loaded, installs its hook (logging `PW_NATIVE_PROFILE frame_hook=installed`),
+and the hook then writes, per thread and frame:
+
+    PW_NATIVE_PROFILE version=3 frame=1234 frames=1 tid=004c tsc=… tsc_hz=…
+      wall=… unix=… syscall=… other=… fs=… unix_calls=… syscall_calls=…
+
+(one line): the ticks since the thread's previous frame line, by bucket, with
+the guest share as the remainder of `wall`. `frame` is the present count the
+thread has just noticed and `frames` how many presents passed since its
+previous line, 1 when the thread entered the driver every frame. The hook runs
+inside a Unix call, so the stay that made it is still open: its ticks land in
+the next frame's line, an error of at most one call. Threads that never enter
+the driver, and 64-bit games, get no frame lines. `tools/native_profile_frames.py`
+joins these with the driver's own per-frame lines; see docs/cs-thread-profile.md.

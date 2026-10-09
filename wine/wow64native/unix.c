@@ -16,12 +16,22 @@ WINE_DEFAULT_DEBUG_CHANNEL(wow);
 #include <dlfcn.h>
 #endif
 
+/* libvulkan.prx (wine/ps5/pw_vk_radv_profile.c) counts presents and, on
+ * each thread's first entry into RADV after a present, calls the frame hook
+ * with the present count and the TSC. The hook is installed by name once
+ * that module is loaded; until then every report retries the lookup. */
+#define PW_NATIVE_FRAME_HOOK_SETTER "pw_vk_radv_profile_set_frame_hook"
+typedef void (*pw_native_frame_hook)(unsigned long long frame, unsigned long long tsc);
+
 static __thread struct pw_native_thread_state thread_state;
 static __thread int thread_initialized;
 static int process_ready;
 static int profile_enabled;
 static unsigned long long profile_tsc_hz;
 static __thread struct pw_native_profile thread_profile;
+/* The counters at this thread's last frame mark, for the per-frame report. */
+static __thread struct { unsigned long long frame, tsc; struct pw_native_profile counters; int primed; } frame_mark;
+static int frame_hook_installed;
 
 static unsigned long long read_tsc(void)
 {
@@ -80,6 +90,33 @@ static void report_cpu_clock(unsigned int tid)
 }
 static unsigned long long clock_next_tsc;
 
+/* The per-frame report (version 3), from the frame hook: this thread's
+ * host-side time since its previous mark, by bucket, for the frames it has
+ * just seen end. It runs inside a Unix call, so host FS is active and the
+ * thread's own counters are current up to the switch that entered RADV;
+ * the stay in progress lands in the next frame's line. Threads that never
+ * enter RADV get no frame lines. */
+static void profile_frame(unsigned long long frame, unsigned long long tsc)
+{
+    const struct pw_native_profile *p = &thread_profile;
+    if (!thread_initialized || !thread_state.profile) return;
+    if (frame_mark.primed && frame > frame_mark.frame && tsc > frame_mark.tsc)
+    {
+        const struct pw_native_profile *was = &frame_mark.counters;
+        WINE_MESSAGE("PW_NATIVE_PROFILE version=3 frame=%llu frames=%llu tid=%04x tsc=%llu tsc_hz=%llu wall=%llu "
+                     "unix=%llu syscall=%llu other=%llu fs=%llu unix_calls=%llu syscall_calls=%llu\n",
+                     frame, frame - frame_mark.frame, thread_state.tid, tsc, profile_tsc_hz, tsc - frame_mark.tsc,
+                     p->unix_host_ticks - was->unix_host_ticks, p->syscall_host_ticks - was->syscall_host_ticks,
+                     p->other_host_ticks - was->other_host_ticks,
+                     (p->host_sysarch_ticks + p->guest_sysarch_ticks) - (was->host_sysarch_ticks + was->guest_sysarch_ticks),
+                     p->unix_calls - was->unix_calls, p->syscall_calls - was->syscall_calls);
+    }
+    frame_mark.frame = frame;
+    frame_mark.tsc = tsc;
+    frame_mark.counters = *p;
+    frame_mark.primed = 1;
+}
+
 /* Cumulative per-thread counters; tools/native_profile_split.py turns two
  * consecutive reports of a thread into an interval's split. tid is the
  * Windows thread id, as in Wine's log prefixes. */
@@ -102,6 +139,20 @@ static void profile_report(void *arg)
         __atomic_store_n(&clock_next_tsc, p->last_tsc + 60 * profile_tsc_hz, __ATOMIC_RELAXED);
         report_cpu_clock(state->tid);
     }
+#ifndef __PROSPERO__
+    (void)profile_frame;    /* only the console has a module to hook */
+#else
+    if (!__atomic_load_n(&frame_hook_installed, __ATOMIC_ACQUIRE))
+    {
+        void (*set_hook)(pw_native_frame_hook) = dlsym(RTLD_DEFAULT, PW_NATIVE_FRAME_HOOK_SETTER);
+        if (set_hook)
+        {
+            set_hook(profile_frame);
+            __atomic_store_n(&frame_hook_installed, 1, __ATOMIC_RELEASE);
+            WINE_MESSAGE("PW_NATIVE_PROFILE frame_hook=installed tid=%04x\n", state->tid);
+        }
+    }
+#endif
 }
 
 static NTSTATUS capture_host_fs(unsigned long long *base)
@@ -180,6 +231,7 @@ static NTSTATUS thread_init(void *args)
     status = capture_host_fs(&thread_state.host_fs);
     if (status) return status;
     thread_profile = (struct pw_native_profile){0};
+    frame_mark.primed = 0;
     if (profile_enabled)
     {
         thread_profile.report_proc = (unsigned long long)profile_report;
@@ -209,6 +261,7 @@ static NTSTATUS thread_term(void *args)
 {
     profile_report(&thread_state);
     thread_profile = (struct pw_native_profile){0};
+    frame_mark.primed = 0;
     thread_state = (struct pw_native_thread_state){0};
     thread_initialized = 0;
     return STATUS_SUCCESS;
