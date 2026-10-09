@@ -51,3 +51,11 @@ HRESULT pw_d3d9_service_stateblock_destroy(struct pw_d3d9_objects *objects,uintp
     struct block_owner *owner=(void *)context;IDirect3DStateBlock9_Release(owner->native);
     HRESULT hr=pw_d3d9_object_complete(objects,owner->parent)?S_OK:E_FAIL;HeapFree(GetProcessHeap(),0,owner);return hr;
 }
+
+int pw_d3d9_service_stateblock_reply(void *output,size_t capacity,size_t *bytes,const struct pw_d3d9_stateblock_request *q,const struct pw_d3d9_stateblock_reply *r)
+{
+    if(!bytes||capacity<16)return PW_D3D9_SB_INVALID;
+    int status=pw_d3d9_stateblock_reply_encode(output,16,q,r);
+    if(status==PW_D3D9_SB_OK)*bytes=16;
+    return status;
+}

@@ -12,6 +12,14 @@ struct pw_d3d9_native_device;
 void *pw_d3d9_native_device_backend(struct pw_d3d9_native_device *device){return device;}
 static void registry_proof(IDirect3DDevice9 *device)
 {
+ unsigned char scratch[8192];size_t bytes=99;
+ struct pw_d3d9_stateblock_request encode_request={.method=PW_D3D9_SB_BEGIN};
+ struct pw_d3d9_stateblock_reply encode_reply={.hresult=S_OK},decoded;
+ memset(scratch,0xa5,sizeof(scratch));
+ assert(pw_d3d9_service_stateblock_reply(scratch,15,&bytes,&encode_request,&encode_reply)==PW_D3D9_SB_INVALID&&bytes==99&&scratch[0]==0xa5);
+ assert(pw_d3d9_service_stateblock_reply(scratch,sizeof(scratch),&bytes,&encode_request,&encode_reply)==PW_D3D9_SB_OK&&bytes==16&&scratch[16]==0xa5);
+ assert(pw_d3d9_stateblock_reply_decode(&decoded,&encode_request,scratch,bytes)==PW_D3D9_SB_OK&&decoded.hresult==S_OK);
+
  struct pw_d3d9_object_slot slots[4];struct pw_d3d9_objects objects;struct pw_d3d9_object_ref parent;
  assert(pw_d3d9_objects_init(&objects,slots,4,1,17));assert(pw_d3d9_object_reserve(&objects,&parent));
  assert(pw_d3d9_object_commit(&objects,parent,(uintptr_t)device,(uintptr_t)device,PW_D3D9_KIND_DEVICE));
@@ -26,7 +34,7 @@ static void registry_proof(IDirect3DDevice9 *device)
  pw_d3d9_objects_cancel(&objects);assert(pw_d3d9_object_take_destroy(&objects,block,&context));assert(pw_d3d9_service_stateblock_destroy(&objects,context)==S_OK);assert(pw_d3d9_object_finish_destroy(&objects,block));
  assert(pw_d3d9_object_take_destroy(&objects,parent,&context));assert(pw_d3d9_object_finish_destroy(&objects,parent));
  pw_d3d9_service_stateblock_call(&objects,block,&q,&r);assert(r.hresult==(uint32_t)D3DERR_INVALIDCALL);
- puts("PW_SERVICE_STATEBLOCK created=1 restored=1 parent_retained=1 stale=1 status=0");
+ puts("PW_SERVICE_STATEBLOCK scratch8192=1 created=1 restored=1 parent_retained=1 stale=1 status=0");
 }
 int wmain(int argc,WCHAR **argv)
 {
