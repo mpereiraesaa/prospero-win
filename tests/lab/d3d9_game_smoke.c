@@ -12,6 +12,34 @@ static const char effect_source[]=
  "float4 tint; float4 pixel() : COLOR { return tint; }"
  "technique T { pass P { ZEnable=false; CullMode=1; AlphaBlendEnable=false; "
  "PixelShader=compile ps_2_0 pixel(); } }\n";
+/* Model the medium mod's float trace chain and integer ping-pong targets. */
+static int mod_targets(IDirect3DDevice9 *d)
+{
+ IDirect3DTexture9 *trace=NULL,*autogen=NULL;IDirect3DSurface9 *levels[3]={0},*ping[2]={0},*copy=NULL;
+ CHECK(IDirect3DDevice9_CreateTexture(d,480,270,3,D3DUSAGE_RENDERTARGET,D3DFMT_A16B16G16R16F,D3DPOOL_DEFAULT,&trace,NULL));
+ REQUIRE(IDirect3DTexture9_GetLevelCount(trace)==3);
+ for(UINT i=0;i<3;i++){
+  D3DSURFACE_DESC desc;CHECK(IDirect3DTexture9_GetLevelDesc(trace,i,&desc));
+  REQUIRE(desc.Format==D3DFMT_A16B16G16R16F&&desc.Width==(480u>>i)&&desc.Height==(270u>>i));
+  CHECK(IDirect3DTexture9_GetSurfaceLevel(trace,i,&levels[i]));
+ }
+ CHECK(IDirect3DDevice9_ColorFill(d,levels[0],NULL,0xff00ff00));
+ CHECK(IDirect3DDevice9_StretchRect(d,levels[0],NULL,levels[1],NULL,D3DTEXF_LINEAR));
+ CHECK(IDirect3DDevice9_StretchRect(d,levels[1],NULL,levels[2],NULL,D3DTEXF_LINEAR));
+ for(UINT i=0;i<2;i++)CHECK(IDirect3DDevice9_CreateRenderTarget(d,240,135,D3DFMT_A8R8G8B8,D3DMULTISAMPLE_NONE,0,FALSE,&ping[i],NULL));
+ CHECK(IDirect3DDevice9_StretchRect(d,levels[1],NULL,ping[0],NULL,D3DTEXF_LINEAR));
+ CHECK(IDirect3DDevice9_StretchRect(d,ping[0],NULL,ping[1],NULL,D3DTEXF_NONE));
+ CHECK(IDirect3DDevice9_CreateOffscreenPlainSurface(d,240,135,D3DFMT_A8R8G8B8,D3DPOOL_SYSTEMMEM,&copy,NULL));
+ CHECK(IDirect3DDevice9_GetRenderTargetData(d,ping[1],copy));D3DLOCKED_RECT lock;DWORD pixel;
+ CHECK(IDirect3DSurface9_LockRect(copy,&lock,NULL,D3DLOCK_READONLY));memcpy(&pixel,(char *)lock.pBits+67*lock.Pitch+120*4,4);CHECK(IDirect3DSurface9_UnlockRect(copy));REQUIRE(pixel==0xff00ff00);
+ CHECK(IDirect3DDevice9_CreateTexture(d,64,64,0,D3DUSAGE_RENDERTARGET|D3DUSAGE_AUTOGENMIPMAP,D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&autogen,NULL));
+ CHECK(IDirect3DTexture9_SetAutoGenFilterType(autogen,D3DTEXF_LINEAR));REQUIRE(IDirect3DTexture9_GetAutoGenFilterType(autogen)==D3DTEXF_LINEAR);
+ IDirect3DTexture9_GenerateMipSubLevels(autogen);
+ IDirect3DTexture9_Release(autogen);IDirect3DSurface9_Release(copy);
+ for(UINT i=0;i<2;i++)IDirect3DSurface9_Release(ping[i]);
+ for(UINT i=0;i<3;i++)IDirect3DSurface9_Release(levels[i]);
+ IDirect3DTexture9_Release(trace);return 0;
+}
 int wmain(int argc,WCHAR **argv)
 {
  REQUIRE(argc>=6&&argc<=8);int fullscreen=0,source_effect=0;
@@ -34,6 +62,7 @@ int wmain(int argc,WCHAR **argv)
   fprintf(stderr,"PW_GAME_SMOKE stage=reset cycle=%u\n",cycle);
   CHECK(IDirect3DDevice9_Reset(device,&pp));
   fprintf(stderr,"PW_GAME_SMOKE stage=targets cycle=%u\n",cycle);
+  REQUIRE(mod_targets(device)==0);
   IDirect3DSurface9 *original=NULL,*depth=NULL,*target=NULL,*readback=NULL;
   CHECK(IDirect3DDevice9_GetRenderTarget(device,0,&original));CHECK(IDirect3DDevice9_GetDepthStencilSurface(device,&depth));
   CHECK(IDirect3DDevice9_CreateRenderTarget(device,64,64,D3DFMT_A8R8G8B8,D3DMULTISAMPLE_NONE,0,FALSE,&target,NULL));
@@ -42,6 +71,9 @@ int wmain(int argc,WCHAR **argv)
   fprintf(stderr,"PW_GAME_SMOKE stage=texture cycle=%u\n",cycle);
   IDirect3DTexture9 *texture=NULL,*bound_texture=NULL;CHECK(create_texture(device,bitmap,&texture));REQUIRE(texture);
   CHECK(IDirect3DDevice9_SetTexture(device,0,(IDirect3DBaseTexture9 *)texture));CHECK(IDirect3DDevice9_GetTexture(device,0,(IDirect3DBaseTexture9 **)&bound_texture));REQUIRE(bound_texture==texture);IDirect3DTexture9_Release(bound_texture);
+  char dds_path[MAX_PATH];REQUIRE(strlen(bitmap)+4<sizeof(dds_path));strcpy(dds_path,bitmap);strcat(dds_path,".dds");
+  IDirect3DTexture9 *dds=NULL;CHECK(create_texture(device,dds_path,&dds));REQUIRE(dds&&IDirect3DTexture9_GetLevelCount(dds)==4);
+  D3DSURFACE_DESC dds_desc;CHECK(IDirect3DTexture9_GetLevelDesc(dds,0,&dds_desc));REQUIRE(dds_desc.Width==8&&dds_desc.Height==8&&dds_desc.Format==D3DFMT_DXT1);IDirect3DTexture9_Release(dds);
   fprintf(stderr,"PW_GAME_SMOKE stage=mesh cycle=%u\n",cycle);
   ID3DXMesh *sphere=NULL;CHECK(create_sphere(device,1.0f,8,8,&sphere,NULL));REQUIRE(sphere&&sphere->lpVtbl->GetNumFaces(sphere)>0);sphere->lpVtbl->Release(sphere);
   fprintf(stderr,"PW_GAME_SMOKE stage=buffers cycle=%u\n",cycle);
@@ -83,7 +115,10 @@ int wmain(int argc,WCHAR **argv)
   CHECK(IDirect3DDevice9_SetPixelShader(device,NULL));if(pixel_shader)IDirect3DPixelShader9_Release(pixel_shader);
   effect->lpVtbl->Release(effect);IDirect3DTexture9_Release(texture);IDirect3DVertexBuffer9_Release(vb);IDirect3DIndexBuffer9_Release(ib);
   IDirect3DSurface9_Release(readback);IDirect3DSurface9_Release(target);IDirect3DSurface9_Release(depth);IDirect3DSurface9_Release(original);
-  CHECK(IDirect3DDevice9_Present(device,NULL,NULL,NULL,NULL));REQUIRE(IDirect3DDevice9_Release(device)==0);REQUIRE(IDirect3D9_Release(factory)==0);
+  CHECK(IDirect3DDevice9_Present(device,NULL,NULL,NULL,NULL));
+  CHECK(IDirect3DDevice9_Reset(device,&pp));REQUIRE(mod_targets(device)==0);
+  REQUIRE(IDirect3DDevice9_Release(device)==0);REQUIRE(IDirect3D9_Release(factory)==0);
+  printf("PW_MOD_TARGETS cycle=%u float16=1 mips=3 downsample=1 pingpong=1 dds=1 recreated=1 status=0\n",cycle);
   printf("PW_GAME_SMOKE cycle=%u effect=1 mesh=1 texture=1 restored=1 pixel=%08lx present=1 status=0\n",cycle,center);fflush(stdout);
  }
  DestroyWindow(window);UnregisterClassW(cls.lpszClassName,cls.hInstance);FreeLibrary(d3dx);FreeLibrary(dll);return 0;

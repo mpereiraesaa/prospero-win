@@ -37,3 +37,19 @@ reached a vkd3d compiler unreachable loop; that diagnostic was terminated and
 recorded as failed. The compiled FX fixture proves runtime COM and stateblock
 behavior, not source compiler support. Actual Proper Shaders shader creation
 and visible output must still be established on the console game run.
+
+
+The medium-mod follow-up also requires a 480x270 A16B16G16R16F three-level trace
+texture, linear downsample through both mip levels, float-to-A8R8G8B8 conversion,
+two 240x135 integer ping-pong targets, and exact green-pixel copied readback.
+It loads a generated three-mip DXT1 DDS through real D3DX file loading and calls
+actual auto-mip filter/generation methods. All default-pool targets are released
+before a second Reset and recreated afterward in each cycle. This models the
+reported buffer families; it is not execution of Proper Shaders algorithms or
+its proprietary assets. The generated texture.bmp.dds must accompany the BMP.
+
+
+Claude's existing game-artifact audit confirmed that Proper Shaders reads compiled
+resources/shaders/*.cso and WidescreenFix embeds compiled FX bytecode. The optional
+ASCII source compiler failure is therefore separate from these reported game
+paths. Actual execution of the mods through the bridge remains a console gate.

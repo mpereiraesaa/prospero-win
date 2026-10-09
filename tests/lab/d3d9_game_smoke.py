@@ -57,6 +57,12 @@ try:
     bitmap = struct.pack("<2sIHHI", b"BM", 54 + len(pixels), 0, 0, 54)
     bitmap += struct.pack("<IiiHHIIiiII", 40, 2, 2, 1, 24, 0, len(pixels), 0, 0, 0, 0) + pixels
     (out / "texture.bmp").write_bytes(bitmap)
+    # DDS DXT1, 8x8/4x4/2x2 green mip chain. Data is generated locally.
+    header = [124, 0x00021007, 8, 8, 32, 0, 3] + [0] * 11
+    header += [32, 4, int.from_bytes(b"DXT1", "little"), 0, 0, 0, 0, 0]
+    header += [0x00401008, 0, 0, 0, 0]
+    dds = b"DDS " + struct.pack("<31I", *header) + struct.pack("<HHI", 0x07e0, 0, 0) * 6
+    (out / "texture.bmp.dds").write_bytes(dds)
     args.prefix.resolve().mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env.update(WINEPREFIX=str(args.prefix.resolve()), WINEDEBUG=env.get("WINEDEBUG", "-all"),
@@ -72,6 +78,9 @@ try:
     output = run(command, "smoke", env)
     rows = re.findall(r"PW_GAME_SMOKE cycle=(\d) effect=1 mesh=1 texture=1 restored=1 pixel=([0-9a-f]+) present=1 status=0", output)
     assert rows == [(str(i), "ffff0000") for i in range(3)], rows
+    mod_rows = re.findall(r"PW_MOD_TARGETS cycle=(\d) float16=1 mips=3 downsample=1 pingpong=1 dds=1 recreated=1 status=0", output)
+    assert mod_rows == [str(i) for i in range(3)], mod_rows
+    receipt["mod_cycles"] = mod_rows
     receipt["cycles"] = rows
     receipt["status"] = "pass"
     receipt["scope"] = "Three real DLL/D3DX effect, mesh, texture, indexed draw, pixel readback, state restoration, Reset/Present and clean-exit cycles; not a GTA SA game result."
