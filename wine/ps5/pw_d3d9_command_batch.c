@@ -41,7 +41,7 @@ int pw_d3d9_batch_append(struct pw_d3d9_command_batch *b, const struct pw_d3d9_c
 /* Validate the entire immutable record area before exposing any command. */
 static int scan(const unsigned char *p, uint32_t used, uint32_t count, uint32_t *offsets)
 {
-    uint32_t offset = 0; struct pw_d3d9_command command;
+    uint32_t offset = 0;
     if (used > PW_D3D9_BATCH_STORAGE || (used & 7)) return 0;
     for (uint32_t n = 0; n < count; ++n) {
         if (offset > used || used - offset < 8) return 0;
@@ -50,7 +50,7 @@ static int scan(const unsigned char *p, uint32_t used, uint32_t count, uint32_t 
             return 0;
         uint32_t record = (bytes + 15) & ~7u;
         if (record > used - offset ||
-            pw_d3d9_command_decode(&command, p + offset + 8, bytes) != PW_D3D9_COMMAND_OK)
+            pw_d3d9_command_validate(p + offset + 8, bytes) != PW_D3D9_COMMAND_OK)
             return 0;
         for (uint32_t i = 8 + bytes; i < record; ++i) if (p[offset + i]) return 0;
         offsets[n] = offset; offset += record;

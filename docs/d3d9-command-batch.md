@@ -39,3 +39,32 @@ malformed later records, padding/reserved fields, count/byte backpressure,
 sequence exhaustion, unchanged outputs on errors, and every failure position
 for counts1..128. It does not prove queued runtime ordering, method eligibility,
 object lifetime, console acceptance or performance.
+
+## Validation-only structural scans
+
+Structural scans use `pw_d3d9_command_validate` to check the same wire rules and
+status precedence as the public decoder without constructing a 4,136-byte
+command. The shared header parser stores ten 32-bit fields plus a schema pointer
+(48 bytes with an eight-byte pointer/alignment). BOOL payloads retain canonical
+0/1 validation; all other payload shapes retain their existing opaque-bit rules.
+The public decoder still copies payload into its own temporary, validates that
+copy, zeroes unused output fields and leaves the complete output untouched on
+failure. Overlapping input/output remains supported. Validation alone does not
+own caller memory or authorize subsequent execution.
+
+All three batch structural scans remain, including copying the shared input into
+owned storage before scanning. Policy, resource pins, declaration preflight,
+ordered failure prefixes and replies are unchanged. A successful binding batch
+previously materialized each command six times, seven with draw preflight; this
+change replaces three of those materializations with validation-only scans.
+At source level, each removed pass initialized and copied a 4,136-byte object:
+24,816 bytes of logical destination extent per command, or 3,176,448 bytes for
+128 commands. These are code-derived extents, not measured memory traffic or CPU
+time; compiler optimizations and cache behavior can reduce physical work.
+
+Focused tests compare both new entry points against the frozen previous decoder
+for every method, every truncation, byte mutations, maximum vector/BOOL payloads,
+status precedence and aliasing. Batch tests retain reserved/padding rejection,
+owned-snapshot checks and failure-atomic outputs, and reject noncanonical BOOL
+payloads in a suffix before exposing any prefix. No production pair is rebuilt
+or deployed by this optimization's host checks.

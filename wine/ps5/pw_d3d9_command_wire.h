@@ -74,6 +74,9 @@ const struct pw_d3d9_command_schema *pw_d3d9_command_schema(uint32_t);
  * unsupported until vertex-declaration-dependent copy ranges are modeled. */
 int pw_d3d9_command_data_bytes(uint32_t, const uint32_t [PW_D3D9_COMMAND_WORDS], size_t *);
 int pw_d3d9_command_encode(void *, size_t, size_t *, const struct pw_d3d9_command *);
+/* Same wire validation/status as decode with a valid output pointer, without
+ * materializing a command. Does not own input or authorize later execution. */
+int pw_d3d9_command_validate(const void *, size_t);
 int pw_d3d9_command_decode(struct pw_d3d9_command *, const void *, size_t);
 int pw_d3d9_command_reply_encode(void *, size_t, size_t *, uint32_t method, uint32_t hresult);
 int pw_d3d9_command_reply_decode(uint32_t *method, uint32_t *hresult, const void *, size_t);

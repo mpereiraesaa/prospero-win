@@ -55,13 +55,20 @@ int pw_d3d9_command_data_bytes(uint32_t method, const uint32_t args[PW_D3D9_COMM
     *bytes = (size_t)n;
     return PW_D3D9_COMMAND_OK;
 }
-static int valid_data(const struct pw_d3d9_command_schema *s, const struct pw_d3d9_command *c)
+static int valid_payload(const struct pw_d3d9_command_schema *s,
+                         const unsigned char *data, size_t bytes, int wire)
 {
-    unsigned i;
     if (s->shape == PW_D3D9_DATA_BOOL)
-        for (i = 0; i < c->data_bytes / 4; ++i) if (c->data.words[i] > 1) return 0;
+        for (size_t i = 0; i < bytes; i += 4) {
+            uint32_t value;
+            if (wire) value = get32(data + i);
+            else memcpy(&value, data + i, sizeof(value));
+            if (value > 1) return 0;
+        }
     return 1;
 }
+static int valid_data(const struct pw_d3d9_command_schema *s, const struct pw_d3d9_command *c)
+{ return valid_payload(s, c->data.bytes, c->data_bytes, 0); }
 int pw_d3d9_command_encode(void *wire, size_t capacity, size_t *written, const struct pw_d3d9_command *c)
 {
     unsigned char tmp[PW_D3D9_COMMAND_MAX] = {0};
@@ -87,28 +94,55 @@ int pw_d3d9_command_encode(void *wire, size_t capacity, size_t *written, const s
     memcpy(wire, tmp, total);
     return PW_D3D9_COMMAND_OK;
 }
+/* Only metadata is needed by structural batch scans. Keep the public decoder's
+ * error precedence, including unsupported methods/counts, in this shared parser. */
+struct command_header {
+    uint32_t method, data_bytes, args[PW_D3D9_COMMAND_WORDS];
+    const struct pw_d3d9_command_schema *schema;
+};
+static int parse_header(struct command_header *h, const void *wire, size_t length)
+{
+    const unsigned char *p = wire;
+    size_t bytes;
+    int result;
+    if (!wire || length < 16 || length > PW_D3D9_COMMAND_MAX || get32(p) != PW_D3D9_COMMAND_VERSION)
+        return PW_D3D9_COMMAND_INVALID;
+    memset(h, 0, sizeof(*h));
+    h->method = get32(p + 4); h->data_bytes = get32(p + 12);
+    h->schema = pw_d3d9_command_schema(h->method);
+    if (!h->schema) return PW_D3D9_COMMAND_UNSUPPORTED;
+    if (get32(p + 8) != h->schema->words || h->data_bytes > PW_D3D9_COMMAND_DATA ||
+        length != 16 + 4 * h->schema->words + h->data_bytes) return PW_D3D9_COMMAND_INVALID;
+    for (unsigned i = 0; i < h->schema->words; ++i) h->args[i] = get32(p + 16 + 4 * i);
+    result = pw_d3d9_command_data_bytes(h->method, h->args, &bytes);
+    if (result) return result;
+    return bytes == h->data_bytes ? PW_D3D9_COMMAND_OK : PW_D3D9_COMMAND_INVALID;
+}
+int pw_d3d9_command_validate(const void *wire, size_t length)
+{
+    struct command_header h;
+    int result = parse_header(&h, wire, length);
+    if (result) return result;
+    const unsigned char *payload = (const unsigned char *)wire + 16 + 4 * h.schema->words;
+    return valid_payload(h.schema, payload, h.data_bytes, 1) ? PW_D3D9_COMMAND_OK : PW_D3D9_COMMAND_INVALID;
+}
 int pw_d3d9_command_decode(struct pw_d3d9_command *out, const void *wire, size_t length)
 {
+    struct command_header h;
     struct pw_d3d9_command c = {0};
     const unsigned char *p = wire;
-    const struct pw_d3d9_command_schema *s;
-    size_t bytes;
-    unsigned i;
     int result;
-    if (!out || !wire || length < 16 || length > PW_D3D9_COMMAND_MAX || get32(p) != PW_D3D9_COMMAND_VERSION)
-        return PW_D3D9_COMMAND_INVALID;
-    c.method = get32(p + 4); c.data_bytes = get32(p + 12);
-    s = pw_d3d9_command_schema(c.method);
-    if (!s) return PW_D3D9_COMMAND_UNSUPPORTED;
-    if (get32(p + 8) != s->words || c.data_bytes > PW_D3D9_COMMAND_DATA ||
-        length != 16 + 4 * s->words + c.data_bytes) return PW_D3D9_COMMAND_INVALID;
-    for (i = 0; i < s->words; ++i) c.args[i] = get32(p + 16 + 4 * i);
-    result = pw_d3d9_command_data_bytes(c.method, c.args, &bytes);
+    if (!out) return PW_D3D9_COMMAND_INVALID;
+    result = parse_header(&h, wire, length);
     if (result) return result;
-    if (bytes != c.data_bytes) return PW_D3D9_COMMAND_INVALID;
-    if (s->shape == PW_D3D9_DATA_PALETTE) memcpy(c.data.bytes, p + 16 + 4 * s->words, bytes);
-    else for (i = 0; i < bytes / 4; ++i) c.data.words[i] = get32(p + 16 + 4 * s->words + 4 * i);
-    if (!valid_data(s, &c)) return PW_D3D9_COMMAND_INVALID;
+    c.method = h.method; c.data_bytes = h.data_bytes;
+    memcpy(c.args, h.args, sizeof(c.args));
+    p += 16 + 4 * h.schema->words;
+    if (h.schema->shape == PW_D3D9_DATA_PALETTE) memcpy(c.data.bytes, p, h.data_bytes);
+    else for (unsigned i = 0; i < h.data_bytes / 4; ++i) c.data.words[i] = get32(p + 4 * i);
+    /* Validate the owned payload, not the source a second time. This also keeps
+     * overlapping input/output and unchanged output on failure intact. */
+    if (!valid_data(h.schema, &c)) return PW_D3D9_COMMAND_INVALID;
     *out = c;
     return PW_D3D9_COMMAND_OK;
 }

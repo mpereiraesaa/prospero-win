@@ -54,6 +54,25 @@ int main(void)
     q.data.words[0] = 1; assert(!pw_d3d9_batch_append(&b, &q));
     assert(!pw_d3d9_batch_encode(wire, sizeof(wire), &size, &b));
     assert(!(size & 7)); wire[size - 1] = 1; rejected(wire, size);
+    /* Invalid canonical BOOL data in a suffix is rejected by every structural
+     * scan before exposing a prefix; encode leaves output/length untouched. */
+    wire[size - 1] = 0;
+    put32(wire + PW_D3D9_BATCH_HEADER + 8 + 24, 2); rejected(wire, size);
+    assert(!pw_d3d9_batch_init(&b, 11));
+    q = (struct pw_d3d9_command){.method = 57, .args = {7, 1}};
+    assert(!pw_d3d9_batch_append(&b, &q));
+    q = (struct pw_d3d9_command){.method = 98, .args = {0, 1}, .data_bytes = 4};
+    assert(!pw_d3d9_batch_append(&b, &q));
+    assert(!pw_d3d9_batch_encode(wire, sizeof(wire), &size, &b));
+    put32(wire + PW_D3D9_BATCH_HEADER + b.offsets[1] + 8 + 24, 2); rejected(wire, size);
+    put32(b.records + b.offsets[1] + 8 + 24, 2);
+    memset(mutated, 0x9b, sizeof(mutated)); memcpy(sentinel, mutated, sizeof(mutated)); written = 73;
+    assert(pw_d3d9_batch_encode(mutated, sizeof(mutated), &written, &b) == PW_D3D9_BATCH_INVALID);
+    assert(written == 73 && !memcmp(mutated, sentinel, sizeof(mutated)));
+    struct pw_d3d9_command command_before;
+    memset(&command, 0xa7, sizeof(command)); command_before = command;
+    assert(pw_d3d9_batch_command(&command, &b, 1) == PW_D3D9_BATCH_INVALID);
+    assert(!memcmp(&command, &command_before, sizeof(command)));
     /* Full builders and sequence exhaustion remain unchanged. */
     assert(!pw_d3d9_batch_init(&b, 17)); q = (struct pw_d3d9_command){.method = 57, .args = {7, 1}};
     for (unsigned i = 0; i < PW_D3D9_BATCH_LIMIT; ++i) assert(!pw_d3d9_batch_append(&b, &q));
