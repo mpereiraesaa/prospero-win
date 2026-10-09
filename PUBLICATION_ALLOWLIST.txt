@@ -936,3 +936,6 @@ docs/d3d9-program-tickets.md
 tests/lab/d3d9_buffer_tickets.c
 tests/lab/d3d9_buffer_tickets.py
 docs/d3d9-buffer-tickets.md
+wine/patches/0911-imm32-domain-local-ime-ui-class.patch
+tests/lab/wine_ime_domain.c
+tests/lab/wine_ime_domain.py
