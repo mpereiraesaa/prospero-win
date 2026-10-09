@@ -5,6 +5,7 @@
 #include <stdint.h>
 #define PW_VK_REPLAY_WORKER_STACK (1024u * 1024u)
 #define PW_VK_REPLAY_MAX_WORKERS 8
+#define PW_VK_REPLAY_MAX_GROUP_LANES 256
 struct pw_vk_replay;
 struct pw_vk_replay_lane;
 /* Runs only on a host pthread. It must not call guest code or re-enter this
@@ -28,6 +29,11 @@ struct pw_vk_replay *pw_vk_replay_create(unsigned workers,size_t byte_limit,pw_v
  * Caller serializes lane creation/drop with its own object lifecycle. */
 struct pw_vk_replay_lane *pw_vk_replay_lane_create(struct pw_vk_replay *,uint64_t pool,void *context);
 int pw_vk_replay_enqueue(struct pw_vk_replay_lane *,const void *,size_t,uint64_t *ticket);
+/* One owned chunk may cover several lanes. Ordered chunks exclude all earlier
+ * and later jobs while executing; lane/pool waits also consume prior ordered
+ * chunks, including descriptor-only chunks with zero lanes. */
+int pw_vk_replay_enqueue_group(struct pw_vk_replay *,struct pw_vk_replay_lane *const *,
+                              unsigned lanes,unsigned ordered,const void *,size_t);
 uint64_t pw_vk_replay_marker(struct pw_vk_replay_lane *);
 int pw_vk_replay_wait(struct pw_vk_replay_lane *,uint64_t ticket);
 /* Pool/global barriers require caller to stop new submissions in that scope. */

@@ -149,7 +149,7 @@ static void backpressure(void)
  struct timespec start,now;pthread_t producer;
  init(&f);struct context c={&f,1,0,0,0};
  /* At most two 96-byte payload jobs fit on both 32/64-bit hosts, including headers. */
- s=pw_vk_replay_create(2,288,execute);assert(s);lane=pw_vk_replay_lane_create(s,1,&c);assert(lane);
+ s=pw_vk_replay_create(2,320,execute);assert(s);lane=pw_vk_replay_lane_create(s,1,&c);assert(lane);
  append(lane,1,0);entered(&c,1);append(lane,2,0);
  struct admission a={lane,0};assert(!pthread_create(&producer,NULL,admit,&a));
  assert(!clock_gettime(CLOCK_MONOTONIC,&start));
@@ -159,7 +159,7 @@ static void backpressure(void)
  }while(!stats.capacity_waits);
  assert(stats.submitted==2);release(&c);assert(!pthread_join(producer,NULL));assert(a.ticket==3);
  assert(!pw_vk_replay_wait_all(s));pw_vk_replay_get_stats(s,&stats);
- assert(stats.completed==3 && !stats.owned_bytes && stats.peak_owned_bytes<=288);
+ assert(stats.completed==3 && !stats.owned_bytes && stats.peak_owned_bytes<=320);
  assert(!pw_vk_replay_lane_drop(lane));pw_vk_replay_destroy(s);finish(&f);
 }
 static void errors(void)
@@ -185,6 +185,69 @@ static void errors(void)
  assert(!pw_vk_replay_lane_create(s,2,&ca));assert(pw_vk_replay_lane_drop(a)==PW_VK_REPLAY_FAILED);
  pw_vk_replay_get_stats(s,&stats);assert(stats.callback_error==17 && stats.completed==1);
  pw_vk_replay_destroy(s);finish(&f);
+}
+struct epoch_fixture {
+ pthread_mutex_t mutex;pthread_cond_t cond;
+ unsigned entered[4],released[4],done[4],wait_started,wait_done;
+ struct pw_vk_replay_lane *wait_lane;
+};
+static struct epoch_fixture *epochs;
+static int epoch_execute(void *context,const void *data,size_t bytes)
+{
+ unsigned id;struct epoch_fixture *f=epochs;(void)context;
+ assert(bytes==sizeof(id));memcpy(&id,data,bytes);assert(id<4);
+ pthread_mutex_lock(&f->mutex);
+ if(id==1)assert(f->done[0]);
+ if(id==2)assert(f->done[1]);
+ f->entered[id]=1;pthread_cond_broadcast(&f->cond);
+ while(!f->released[id])pthread_cond_wait(&f->cond,&f->mutex);
+ f->done[id]=1;pthread_cond_broadcast(&f->cond);pthread_mutex_unlock(&f->mutex);return 0;
+}
+static void epoch_enter(unsigned id)
+{
+ struct timespec deadline;clock_gettime(CLOCK_REALTIME,&deadline);deadline.tv_sec+=5;
+ pthread_mutex_lock(&epochs->mutex);
+ while(!epochs->entered[id])assert(!pthread_cond_timedwait(&epochs->cond,&epochs->mutex,&deadline));
+ pthread_mutex_unlock(&epochs->mutex);
+}
+static void epoch_release(unsigned id)
+{
+ pthread_mutex_lock(&epochs->mutex);epochs->released[id]=1;pthread_cond_broadcast(&epochs->cond);pthread_mutex_unlock(&epochs->mutex);
+}
+static void *epoch_waiter(void *unused)
+{
+ struct epoch_fixture *f=epochs;(void)unused;
+ pthread_mutex_lock(&f->mutex);f->wait_started=1;pthread_cond_broadcast(&f->cond);pthread_mutex_unlock(&f->mutex);
+ assert(!pw_vk_replay_wait(f->wait_lane,pw_vk_replay_marker(f->wait_lane)));
+ pthread_mutex_lock(&f->mutex);assert(f->done[3]);f->wait_done=1;pthread_cond_broadcast(&f->cond);pthread_mutex_unlock(&f->mutex);return NULL;
+}
+static void grouped_epochs(unsigned ordered)
+{
+ struct epoch_fixture f={.mutex=PTHREAD_MUTEX_INITIALIZER,.cond=PTHREAD_COND_INITIALIZER};
+ struct pw_vk_replay *s;struct pw_vk_replay_lane *a,*b,*c,*lanes[2];unsigned id;uint64_t ticket;pthread_t waiter;
+ epochs=&f;s=pw_vk_replay_create(2,4096,epoch_execute);assert(s);
+ a=pw_vk_replay_lane_create(s,1,NULL);b=pw_vk_replay_lane_create(s,2,NULL);c=pw_vk_replay_lane_create(s,3,NULL);assert(a&&b&&c);
+ id=0;assert(!pw_vk_replay_enqueue(a,&id,sizeof(id),&ticket));epoch_enter(0);
+ lanes[0]=a;lanes[1]=b;id=1;assert(!pw_vk_replay_enqueue_group(s,lanes,2,ordered,&id,sizeof(id)));
+ id=2;assert(!pw_vk_replay_enqueue(ordered?c:b,&id,sizeof(id),&ticket));
+ {struct timespec deadline;clock_gettime(CLOCK_REALTIME,&deadline);deadline.tv_nsec+=20000000;if(deadline.tv_nsec>=1000000000){deadline.tv_nsec-=1000000000;++deadline.tv_sec;}
+  pthread_mutex_lock(&f.mutex);while(!f.entered[1] && !f.entered[2]){int status=pthread_cond_timedwait(&f.cond,&f.mutex,&deadline);if(status==ETIMEDOUT)break;assert(!status);}assert(!f.entered[1] && !f.entered[2]);pthread_mutex_unlock(&f.mutex);}
+ epoch_release(0);epoch_enter(1);assert(pw_vk_replay_marker(a)==2 && pw_vk_replay_marker(b)==(ordered?1:2));
+ pthread_mutex_lock(&f.mutex);assert(!f.entered[2]);pthread_mutex_unlock(&f.mutex);
+ epoch_release(1);epoch_enter(2);epoch_release(2);assert(!pw_vk_replay_wait_all(s));
+ /* A descriptor-only epoch must be observed even by an already-complete lane. */
+ id=3;assert(!pw_vk_replay_enqueue_group(s,NULL,0,1,&id,sizeof(id)));epoch_enter(3);
+ struct pw_vk_replay_stats before,after;struct timespec start,now;
+ pw_vk_replay_get_stats(s,&before);clock_gettime(CLOCK_MONOTONIC,&start);
+ f.wait_lane=b;assert(!pthread_create(&waiter,NULL,epoch_waiter,NULL));
+ pthread_mutex_lock(&f.mutex);while(!f.wait_started)pthread_cond_wait(&f.cond,&f.mutex);assert(!f.wait_done);pthread_mutex_unlock(&f.mutex);
+ do{pw_vk_replay_get_stats(s,&after);clock_gettime(CLOCK_MONOTONIC,&now);assert(now.tv_sec-start.tv_sec<5);sched_yield();}while(after.completion_waits==before.completion_waits);
+ epoch_release(3);assert(!pthread_join(waiter,NULL));assert(f.wait_done);
+ lanes[1]=a;assert(pw_vk_replay_enqueue_group(s,lanes,2,0,&id,sizeof(id))==PW_VK_REPLAY_INVALID);
+ assert(pw_vk_replay_enqueue_group(s,NULL,0,0,&id,sizeof(id))==PW_VK_REPLAY_INVALID);
+ assert(pw_vk_replay_enqueue_group(s,lanes,PW_VK_REPLAY_MAX_GROUP_LANES+1,1,&id,sizeof(id))==PW_VK_REPLAY_INVALID);
+ assert(!pw_vk_replay_lane_drop(a));assert(!pw_vk_replay_lane_drop(b));assert(!pw_vk_replay_lane_drop(c));pw_vk_replay_destroy(s);
+ pthread_cond_destroy(&f.cond);pthread_mutex_destroy(&f.mutex);epochs=NULL;
 }
 static unsigned occurrences(const char *text,const char *needle)
 {
@@ -225,5 +288,5 @@ static void startup_trace(void)
 }
 int main(void)
 {
- startup_trace();parallel_and_ordered();backpressure();errors();assert(worker_attrs && !live_attrs);puts("Vulkan replay scheduler: independent overlap, pool exclusion, owned order, scoped waits and failure passed");return 0;
+ startup_trace();parallel_and_ordered();grouped_epochs(1);grouped_epochs(0);backpressure();errors();assert(worker_attrs && !live_attrs);puts("Vulkan replay scheduler: independent overlap, pool exclusion, owned order, scoped waits and failure passed");return 0;
 }

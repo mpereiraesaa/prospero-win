@@ -16,13 +16,15 @@ struct pw_vk_replay_lane {
  void *context;
  uint64_t issued,done;
 };
+struct binding {struct pw_vk_replay_lane *lane;uint64_t ticket;};
 struct job {
  struct job *next;
- struct pw_vk_replay_lane *lane;
- uint64_t ticket;
  size_t bytes,charge;
- unsigned char data[];
+ uint64_t epoch;
+ unsigned count,ordered;
+ struct binding bindings[];
 };
+
 struct worker {
  pthread_t thread;
  struct pw_vk_replay *owner;
@@ -37,12 +39,23 @@ struct pw_vk_replay {
  struct job *head,*tail;
  pw_vk_replay_fn execute;
  size_t limit;
- unsigned started,stopping,trace,trace_jobs;
+ unsigned started,stopping,trace,trace_jobs,ordered_active;
+ uint64_t ordered_issued,ordered_done;
  struct pw_vk_replay_stats stats;
 };
 static int failed(struct pw_vk_replay *s)
 {
  return s->stopping || s->stats.callback_error;
+}
+/* A blocked multi-domain group reserves its place in every domain. A later
+ * group must not pass it merely because one of those domains is idle. */
+static int earlier_conflict(struct pw_vk_replay *s,const struct job *candidate)
+{
+ const struct job *prior;unsigned i,j;
+ for(prior=s->head;prior!=candidate;prior=prior->next)
+  for(i=0;i<prior->count;i++)for(j=0;j<candidate->count;j++)
+   if(prior->bindings[i].lane->domain==candidate->bindings[j].lane->domain)return 1;
+ return 0;
 }
 static void *worker_main(void *arg)
 {
@@ -50,31 +63,41 @@ static void *worker_main(void *arg)
  if(s->trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=worker_enter worker=%u\n",w->index);
  pthread_mutex_lock(&s->mutex);
  for(;;){
-  struct job *job,*previous=NULL;int result;unsigned traced;
+  struct job *job=NULL,*previous=NULL;int result;unsigned traced,i;
   if(failed(s))break;
-  /* Earliest ready pool wins. Skipping a busy pool allows an unrelated pool
-   * to progress; its own first job can never be overtaken. */
-  for(job=s->head;job && job->lane->domain->busy;job=job->next)previous=job;
+  if(!s->ordered_active)for(job=s->head;job;previous=job,job=job->next){
+   /* Never pass an ordered epoch. It may start only at the queue head
+    * after every earlier active job has completed. */
+   if(job->ordered){if(previous || s->stats.active)job=NULL;break;}
+   for(i=0;i<job->count;i++)if(job->bindings[i].lane->domain->busy)break;
+   if(i==job->count && !earlier_conflict(s,job))break;
+  }
   if(!job){pthread_cond_wait(&s->changed,&s->mutex);continue;}
   if(previous)previous->next=job->next;else s->head=job->next;
   if(s->tail==job)s->tail=previous;
-  job->lane->domain->busy=1;
+  for(i=0;i<job->count;i++)job->bindings[i].lane->domain->busy=1;
+  s->ordered_active=job->ordered;
   if(++s->stats.active>s->stats.peak_active)s->stats.peak_active=s->stats.active;
   traced=s->trace && s->trace_jobs<8;
   if(traced)++s->trace_jobs;
   pthread_mutex_unlock(&s->mutex);
-  if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=job_begin worker=%u ticket=%llu bytes=%zu pool=%llu\n",w->index,(unsigned long long)job->ticket,job->bytes,(unsigned long long)job->lane->domain->key);
-  result=s->execute(job->lane->context,job->data,job->bytes);
-  if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=job_end worker=%u ticket=%llu result=%d\n",w->index,(unsigned long long)job->ticket,result);
+  if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=job_begin worker=%u ticket=%llu bytes=%zu pool=%llu lanes=%u ordered=%u\n",w->index,(unsigned long long)(job->count?job->bindings[0].ticket:job->epoch),job->bytes,(unsigned long long)(job->count?job->bindings[0].lane->domain->key:0),job->count,job->ordered);
+  result=s->execute(job->count?job->bindings[0].lane->context:NULL,job->bindings+job->count,job->bytes);
+  if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=job_end worker=%u ticket=%llu result=%d\n",w->index,(unsigned long long)(job->count?job->bindings[0].ticket:job->epoch),result);
   pthread_mutex_lock(&s->mutex);
   if(result && !s->stats.callback_error)s->stats.callback_error=result;
-  job->lane->done=job->ticket;job->lane->domain->busy=0;
+  for(i=0;i<job->count;i++){
+   job->bindings[i].lane->done=job->bindings[i].ticket;
+   job->bindings[i].lane->domain->busy=0;
+  }
+  if(job->ordered){s->ordered_done=job->epoch;s->ordered_active=0;}
   --s->stats.active;++s->stats.completed;++s->stats.worker_jobs[w->index];
   s->stats.owned_bytes-=job->charge;free(job);
   pthread_cond_broadcast(&s->changed);
  }
  pthread_mutex_unlock(&s->mutex);return NULL;
 }
+
 struct pw_vk_replay *pw_vk_replay_create(unsigned workers,size_t limit,pw_vk_replay_fn execute)
 {
  struct pw_vk_replay *s=NULL;unsigned i;pthread_attr_t attr;int status,destroy_status;
@@ -125,29 +148,51 @@ struct pw_vk_replay_lane *pw_vk_replay_lane_create(struct pw_vk_replay *s,uint64
  lane->next=s->lanes;s->lanes=lane;
  pthread_mutex_unlock(&s->mutex);return lane;
 }
-int pw_vk_replay_enqueue(struct pw_vk_replay_lane *lane,const void *data,size_t bytes,uint64_t *ticket)
+static int enqueue_group(struct pw_vk_replay *s,struct pw_vk_replay_lane *const *lanes,
+                         unsigned count,unsigned ordered,const void *data,size_t bytes,uint64_t *ticket)
 {
- struct pw_vk_replay *s;struct job *job;size_t charge;int status=PW_VK_REPLAY_OK;
- if(!lane || !ticket || (bytes && !data) || bytes>SIZE_MAX-sizeof(*job))return PW_VK_REPLAY_INVALID;
- s=lane->owner;charge=sizeof(*job)+bytes;
+ struct job *job;size_t charge;unsigned i,j;int status=PW_VK_REPLAY_OK;
+ if(!s || count>PW_VK_REPLAY_MAX_GROUP_LANES || (count && !lanes) || (!count && !ordered) || ordered>1 ||
+    (bytes && !data) || bytes>SIZE_MAX-sizeof(*job)-count*sizeof(struct binding))return PW_VK_REPLAY_INVALID;
+ for(i=0;i<count;i++){
+  if(!lanes[i] || lanes[i]->owner!=s)return PW_VK_REPLAY_INVALID;
+  for(j=0;j<i;j++)if(lanes[j]==lanes[i])return PW_VK_REPLAY_INVALID;
+ }
+ charge=sizeof(*job)+count*sizeof(struct binding)+bytes;
  if(charge>s->limit)return PW_VK_REPLAY_INVALID;
  pthread_mutex_lock(&s->mutex);
  while(!failed(s) && charge>s->limit-s->stats.owned_bytes){
   ++s->stats.capacity_waits;pthread_cond_wait(&s->changed,&s->mutex);
  }
  if(failed(s))status=PW_VK_REPLAY_FAILED;
- else if(lane->issued==UINT64_MAX || s->stats.submitted==UINT64_MAX)status=PW_VK_REPLAY_EXHAUSTED;
- else if(!(job=malloc(charge)))status=PW_VK_REPLAY_MEMORY;
- else{
-  job->lane=lane;job->ticket=++lane->issued;job->bytes=bytes;job->charge=charge;job->next=NULL;
-  if(bytes)memcpy(job->data,data,bytes);
-  if(s->tail)s->tail->next=job;else s->head=job;s->tail=job;
-  s->stats.owned_bytes+=charge;
-  if(s->stats.owned_bytes>s->stats.peak_owned_bytes)s->stats.peak_owned_bytes=s->stats.owned_bytes;
-  ++s->stats.submitted;*ticket=job->ticket;pthread_cond_broadcast(&s->changed);
+ else if(s->stats.submitted==UINT64_MAX || (ordered && s->ordered_issued==UINT64_MAX))status=PW_VK_REPLAY_EXHAUSTED;
+ for(i=0;!status && i<count;i++)if(lanes[i]->issued==UINT64_MAX)status=PW_VK_REPLAY_EXHAUSTED;
+ if(!status){
+  if(!(job=malloc(charge)))status=PW_VK_REPLAY_MEMORY;
+  else{
+   job->bytes=bytes;job->charge=charge;job->count=count;job->ordered=ordered;job->next=NULL;
+   job->epoch=ordered?++s->ordered_issued:0;
+   for(i=0;i<count;i++){job->bindings[i].lane=lanes[i];job->bindings[i].ticket=++lanes[i]->issued;}
+   if(bytes)memcpy(job->bindings+count,data,bytes);
+   if(s->tail)s->tail->next=job;else s->head=job;s->tail=job;
+   s->stats.owned_bytes+=charge;
+   if(s->stats.owned_bytes>s->stats.peak_owned_bytes)s->stats.peak_owned_bytes=s->stats.owned_bytes;
+   ++s->stats.submitted;if(ticket)*ticket=job->bindings[0].ticket;pthread_cond_broadcast(&s->changed);
+  }
  }
  pthread_mutex_unlock(&s->mutex);return status;
 }
+int pw_vk_replay_enqueue(struct pw_vk_replay_lane *lane,const void *data,size_t bytes,uint64_t *ticket)
+{
+ if(!lane || !ticket)return PW_VK_REPLAY_INVALID;
+ return enqueue_group(lane->owner,&lane,1,0,data,bytes,ticket);
+}
+int pw_vk_replay_enqueue_group(struct pw_vk_replay *s,struct pw_vk_replay_lane *const *lanes,
+                              unsigned count,unsigned ordered,const void *data,size_t bytes)
+{
+ return enqueue_group(s,lanes,count,ordered,data,bytes,NULL);
+}
+
 uint64_t pw_vk_replay_marker(struct pw_vk_replay_lane *lane)
 {
  uint64_t marker;struct pw_vk_replay *s=lane->owner;
@@ -155,22 +200,23 @@ uint64_t pw_vk_replay_marker(struct pw_vk_replay_lane *lane)
 }
 int pw_vk_replay_wait(struct pw_vk_replay_lane *lane,uint64_t ticket)
 {
- struct pw_vk_replay *s;int status;
+ struct pw_vk_replay *s;int status;uint64_t epoch;
  if(!lane)return PW_VK_REPLAY_INVALID;
  s=lane->owner;
  pthread_mutex_lock(&s->mutex);
  if(ticket>lane->issued){pthread_mutex_unlock(&s->mutex);return PW_VK_REPLAY_INVALID;}
- while(!failed(s) && lane->done<ticket){++s->stats.completion_waits;pthread_cond_wait(&s->changed,&s->mutex);}
+ epoch=s->ordered_issued;
+ while(!failed(s) && (lane->done<ticket || s->ordered_done<epoch)){++s->stats.completion_waits;pthread_cond_wait(&s->changed,&s->mutex);}
  status=failed(s)?PW_VK_REPLAY_FAILED:PW_VK_REPLAY_OK;
  pthread_mutex_unlock(&s->mutex);return status;
 }
 static int wait_scope(struct pw_vk_replay *s,uint64_t pool)
 {
- int pending,status;struct pw_vk_replay_lane *lane;
+ int pending,status;struct pw_vk_replay_lane *lane;uint64_t epoch;
  if(!s)return PW_VK_REPLAY_INVALID;
- pthread_mutex_lock(&s->mutex);
+ pthread_mutex_lock(&s->mutex);epoch=s->ordered_issued;
  do{
-  pending=0;
+  pending=s->ordered_done<epoch || (!pool && s->stats.completed!=s->stats.submitted);
   for(lane=s->lanes;lane;lane=lane->next)
    if((!pool || lane->domain->key==pool) && lane->issued!=lane->done){pending=1;break;}
   if(pending && !failed(s)){++s->stats.completion_waits;pthread_cond_wait(&s->changed,&s->mutex);}

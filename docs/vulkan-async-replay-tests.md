@@ -84,3 +84,22 @@ partial-create failures. Trace records retain the observed default size and
 report the configured size and setup results. The candidate requires separate
 one-worker and then two-worker console validation; previous trace packages stay
 immutable.
+
+
+## Owned groups and ordered epochs
+
+The replay core can own one chunk covering up to 256 distinct command-buffer
+lanes. Each lane receives a completion marker for that chunk. Pure groups reserve
+all their pool domains and may overlap disjoint groups. Ordered epochs cannot
+pass earlier queued or active jobs, exclude other jobs while running, and prevent
+later jobs from passing them. Every lane/pool consumer also observes the latest
+ordered epoch, including descriptor-only epochs with no command-buffer lane.
+Global completion includes such epochs. This permits descriptor updates and
+recording to share a larger owned chunk without weakening update ordering.
+The core fixture blocks preceding, ordered and following jobs and checks group
+markers, descriptor-only consumer dependencies, duplicate lanes and bounds.
+
+A pure group blocked on one pool also reserves its position in every other pool
+it touches: later overlapping groups cannot pass it. The fixture repeats the
+blocked preceding/group/following sequence without an ordered epoch to check
+this multi-pool dependency and monotonic lane completion.
