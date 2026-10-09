@@ -3,6 +3,7 @@
 #include "pw_d3d9_buffer_proxy.h"
 #include "pw_d3d9_buffer_client.h"
 #include "pw_d3d9_kinds.h"
+#include "pw_d3d9_private_data.h"
 #include <string.h>
 struct buffer {
  union { IDirect3DVertexBuffer9 vb; IDirect3DIndexBuffer9 ib; } iface;
@@ -14,6 +15,7 @@ struct buffer {
  LONG busy;
  struct pw_d3d9_buffer_client client;
  struct pw_d3d9_deferred cleanup;
+ struct pw_d3d9_private_data private_data;
 };
 static SRWLOCK cache_lock=SRWLOCK_INIT;
 static struct buffer *cache;
@@ -30,6 +32,7 @@ static void client_fail(void *context,uint32_t hr)
 static void free_local(struct buffer *p)
 {
  IDirect3DDevice9 *parent=p->parent;
+ pw_d3d9_private_dispose(&p->private_data);
  /* Remote Release destroys the native context and unlocks any live map. */
  p->client.generation=0;
  if(p->client.data)pw_d3d9_buffer_client_cancel(&p->client);
@@ -98,18 +101,23 @@ static DWORD hint(struct buffer *p,uint32_t operation,DWORD priority)
  if(FAILED(hr))ops.fail(p->parent,hr);else result=r.priority;
  end(p);return result;
 }
-/* Private data remains unsupported until local COM metadata is implemented. */
+static HRESULT set_private(struct buffer *p,REFGUID key,const void *data,DWORD length,DWORD flags)
+{addref(p);HRESULT hr=pw_d3d9_private_set(&p->private_data,key,data,length,flags);release(p);return hr;}
+static HRESULT get_private(struct buffer *p,REFGUID key,void *data,DWORD *length)
+{addref(p);HRESULT hr=pw_d3d9_private_get(&p->private_data,key,data,length);release(p);return hr;}
+static HRESULT free_private(struct buffer *p,REFGUID key)
+{addref(p);HRESULT hr=pw_d3d9_private_free(&p->private_data,key);release(p);return hr;}
 #define METHODS(tag,iface) \
 static HRESULT WINAPI tag##_query(iface *p,REFIID id,void **o){return query((struct buffer *)p,id,o);} \
 static ULONG WINAPI tag##_addref(iface *p){return addref((struct buffer *)p);} \
 static ULONG WINAPI tag##_release(iface *p){return release((struct buffer *)p);} \
 static HRESULT WINAPI tag##_device(iface *p,IDirect3DDevice9 **o){return device((struct buffer *)p,o);} \
-static HRESULT WINAPI tag##_set_private(iface *p,REFGUID g,const void *d,DWORD n,DWORD f){(void)p;(void)g;(void)d;(void)n;(void)f;return D3DERR_NOTAVAILABLE;} \
-static HRESULT WINAPI tag##_get_private(iface *p,REFGUID g,void *d,DWORD *n){(void)p;(void)g;(void)d;(void)n;return D3DERR_NOTAVAILABLE;} \
-static HRESULT WINAPI tag##_free_private(iface *p,REFGUID g){(void)p;(void)g;return D3DERR_NOTAVAILABLE;} \
 static DWORD WINAPI tag##_set_priority(iface *p,DWORD n){return hint((struct buffer *)p,PW_D3D9_RESOURCE_SET_PRIORITY,n);} \
 static DWORD WINAPI tag##_get_priority(iface *p){return hint((struct buffer *)p,PW_D3D9_RESOURCE_GET_PRIORITY,0);} \
 static void WINAPI tag##_preload(iface *p){(void)hint((struct buffer *)p,PW_D3D9_RESOURCE_PRELOAD,0);} \
+static HRESULT WINAPI tag##_set_private(iface *p,REFGUID g,const void *d,DWORD n,DWORD f){return set_private((struct buffer *)p,g,d,n,f);} \
+static HRESULT WINAPI tag##_get_private(iface *p,REFGUID g,void *d,DWORD *n){return get_private((struct buffer *)p,g,d,n);} \
+static HRESULT WINAPI tag##_free_private(iface *p,REFGUID g){return free_private((struct buffer *)p,g);} \
 static D3DRESOURCETYPE WINAPI tag##_type(iface *p){return ((struct buffer *)p)->kind==PW_D3D9_KIND_VERTEX_BUFFER?D3DRTYPE_VERTEXBUFFER:D3DRTYPE_INDEXBUFFER;} \
 static HRESULT WINAPI tag##_lock(iface *p,UINT o,UINT n,void **d,DWORD f){return lock_buffer((struct buffer *)p,o,n,d,f);} \
 static HRESULT WINAPI tag##_unlock(iface *p){return unlock_buffer((struct buffer *)p);}

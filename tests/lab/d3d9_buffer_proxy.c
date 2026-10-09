@@ -68,6 +68,13 @@ int main(void)
  CHECK(IDirect3DVertexBuffer9_SetPriority(vb,0xffffffffu)==0);
  CHECK(IDirect3DVertexBuffer9_GetPriority(vb)==0xffffffffu);
  IDirect3DVertexBuffer9_PreLoad(vb);CHECK(preloads==1&&!failed);
+ DWORD metadata=0x12345678,size=sizeof(metadata),value=0;
+ CHECK(SUCCEEDED(IDirect3DVertexBuffer9_SetPrivateData(vb,&IID_IDirect3DResource9,&metadata,size,0)));
+ metadata=0;CHECK(SUCCEEDED(IDirect3DVertexBuffer9_GetPrivateData(vb,&IID_IDirect3DResource9,&value,&size))&&value==0x12345678);
+ CHECK(SUCCEEDED(IDirect3DVertexBuffer9_SetPrivateData(vb,&IID_IUnknown,&parent,sizeof(void *),D3DSPD_IUNKNOWN))&&parent_refs==3);
+ IUnknown *private_parent=NULL;size=sizeof(private_parent);
+ CHECK(SUCCEEDED(IDirect3DVertexBuffer9_GetPrivateData(vb,&IID_IUnknown,&private_parent,&size))&&private_parent==(IUnknown *)&parent&&parent_refs==4);
+ IUnknown_Release(private_parent);CHECK(SUCCEEDED(IDirect3DVertexBuffer9_FreePrivateData(vb,&IID_IUnknown))&&parent_refs==2);
  D3DVERTEXBUFFER_DESC vd;CHECK(SUCCEEDED(IDirect3DVertexBuffer9_GetDesc(vb,&vd))&&vd.Size==12000&&vd.FVF==D3DFVF_XYZ);
  CHECK(SUCCEEDED(IDirect3DVertexBuffer9_Lock(vb,0,0,&out,0))&&(uintptr_t)out<=UINT32_MAX);
  memset(out,0x5a,12000);CHECK(SUCCEEDED(IDirect3DVertexBuffer9_Unlock(vb))&&bytes[11999]==0x5a);
@@ -76,6 +83,8 @@ int main(void)
  CHECK(SUCCEEDED(IDirect3DDevice9_CreateIndexBuffer(&parent,8192,0,D3DFMT_INDEX16,D3DPOOL_MANAGED,&ib,NULL)));
  CHECK(IDirect3DIndexBuffer9_SetPriority(ib,0x12345678)==0&&IDirect3DIndexBuffer9_GetPriority(ib)==0x12345678);
  IDirect3DIndexBuffer9_PreLoad(ib);CHECK(preloads==2&&!failed);
+ CHECK(SUCCEEDED(IDirect3DIndexBuffer9_SetPrivateData(ib,&IID_IUnknown,&parent,sizeof(void *),D3DSPD_IUNKNOWN))&&parent_refs==4);
+ CHECK(SUCCEEDED(IDirect3DIndexBuffer9_FreePrivateData(ib,&IID_IUnknown))&&parent_refs==3);
  D3DINDEXBUFFER_DESC id;CHECK(SUCCEEDED(IDirect3DIndexBuffer9_GetDesc(ib,&id))&&id.Format==D3DFMT_INDEX16&&id.Type==D3DRTYPE_INDEXBUFFER);
  CHECK(SUCCEEDED(IDirect3DIndexBuffer9_Lock(ib,0,8192,&out,0)));
  blocked=1;CHECK(IDirect3DIndexBuffer9_Release(ib)==0&&pending&&parent_refs==3);
