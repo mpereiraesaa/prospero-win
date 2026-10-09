@@ -578,6 +578,11 @@ wine/ps5/pw_d3d9_program_query.h
 wine/ps5/pw_d3d9_program_query.c
 tests/test_d3d9_program_query.c
 docs/d3d9-program-query.md
+wine/ps5/d3d9/pw_d3d9_native_program_query.h
+wine/ps5/d3d9/pw_d3d9_native_program_query.c
+tests/lab/d3d9_native_program_query.c
+tests/lab/d3d9_native_program_query.py
+docs/d3d9-native-program-query.md
 wine/ps5/d3d9/pw_d3d9_native_program.h
 wine/ps5/d3d9/pw_d3d9_native_program.c
 tests/lab/d3d9_native_program.c
