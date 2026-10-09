@@ -5,12 +5,20 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include <stdio.h>
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+#include "pw_d3d9_window_driver.h"
+typedef ULONG_PTR (WINAPI *driver_call_fn)(ULONG_PTR,ULONG_PTR,ULONG);
+static driver_call_fn driver_call;
+#endif
 
 #define NOTICE (WM_APP + 0x31)
 struct window_state {
  uint32_t magic,epoch,window_id,generation;
  volatile LONG guest_calls,native_calls,guest_keys,error,guest_exceptions,native_exceptions,native_child_calls,guest_nulls,guest_builtins,native_builtins;
  uint32_t width,height,create_hr,reset_hr,present_hr;
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ volatile LONG driver_guest_ids,driver_attaches,driver_mirrors,driver_detaches,driver_rejects;
+#endif
 };
 static struct window_state *state;
 static HANDLE acknowledge;
@@ -59,6 +67,22 @@ static DWORD WINAPI native_window_child(void *unused)
  SendMessageW(window,WM_NULL,0,0);InterlockedIncrement(&state->native_child_calls);
  RaiseException(0xe0425750,0,0,NULL);DestroyWindow(window);return 0;
 }
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+static int driver_apply(HWND window,struct pw_d3d9_window_driver_request *q)
+{
+ BOOL applied;
+ q->operation=PW_D3D9_WINDOW_QUERY_STATE;
+ if(driver_call((ULONG_PTR)q,sizeof(*q),PW_D3D9_WINDOW_DRIVER_CALL))return 0;
+ q->operation=PW_D3D9_WINDOW_BEGIN;q->sequence++;
+ if(driver_call((ULONG_PTR)q,sizeof(*q),PW_D3D9_WINDOW_DRIVER_CALL))return 0;
+ applied=SetWindowPos(window,NULL,q->state.x,q->state.y,q->state.width,q->state.height,
+   SWP_NOACTIVATE|SWP_NOZORDER|((q->state.flags&PW_D3D9_WINDOW_VISIBLE)?SWP_SHOWWINDOW:SWP_HIDEWINDOW));
+ q->hresult=applied?0:0x80004005u;q->operation=PW_D3D9_WINDOW_ACK;
+ if(driver_call((ULONG_PTR)q,sizeof(*q),PW_D3D9_WINDOW_DRIVER_CALL))return 0;
+ if(q->state.width!=state->width || q->state.height!=state->height)return 0;
+ InterlockedIncrement(&state->driver_mirrors);return 1;
+}
+#endif
 static int notify_guest(HWND guest,unsigned phase)
 {
  DWORD start=GetTickCount();MSG message;
@@ -74,6 +98,9 @@ static int notify_guest(HWND guest,unsigned phase)
 __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
 {
  WCHAR session[48],path[260],mode[4];HANDLE mapping=NULL,child=NULL;void *handler=NULL;DWORD child_code;BOOL device_test=TRUE;HWND guest=NULL,window=NULL;
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ struct pw_d3d9_window_driver_request association={0};BOOL attached=FALSE;
+#endif
  WNDCLASSW cls={0};HMODULE backend=NULL;IDirect3D9 *d3d=NULL;IDirect3DDevice9 *device=NULL;
  IDirect3D9 *(WINAPI *factory)(UINT);LONG (WINAPI *register_callbacks)(void **);void *bogus_table[1]={NULL};D3DPRESENT_PARAMETERS pp={0};DWORD error=0;
  register_callbacks=(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"__wine_register_wow64_callbacks");
@@ -83,7 +110,7 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  names(session);mapping=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,mapping_name);
  if(!mapping)return 11;
  state=MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(*state));
- if(!state || state->magic!=0x57575042 || !state->epoch || state->window_id!=1 || !state->generation){error=12;goto done;}
+ if(!state || state->magic!=0x57575042 || !state->epoch || !state->window_id || !state->generation){error=12;goto done;}
  acknowledge=OpenEventW(SYNCHRONIZE,FALSE,event_name);guest=FindWindowW(guest_name,guest_name);
  if(!acknowledge || !guest){error=13;goto done;}
  cls.lpfnWndProc=service_proc;cls.hInstance=GetModuleHandleW(NULL);cls.lpszClassName=service_name;
@@ -92,7 +119,24 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  if(!window){error=15;goto done;}
  {HWND builtin=builtin_create(window);if(!builtin_roundtrip(builtin)){error=32;goto done;}
  DestroyWindow(builtin);InterlockedIncrement(&state->native_builtins);}
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ driver_call=(driver_call_fn)GetProcAddress(GetModuleHandleW(L"win32u.dll"),"NtUserCallTwoParam");
+ if(!driver_call){error=33;goto done;}
+ {struct pw_d3d9_guest_window_request invalid={.version=1,.size=sizeof(invalid),.operation=PW_D3D9_GUEST_REGISTER};
+ if(driver_call((ULONG_PTR)window,(ULONG_PTR)&invalid,PW_D3D9_GUEST_WINDOW_CALL)!=PW_D3D9_WINDOW_INVALID){error=34;goto done;}
+ InterlockedIncrement(&state->driver_rejects);}
+ association.version=PW_D3D9_WINDOW_DRIVER_VERSION;association.size=sizeof(association);
+ association.operation=PW_D3D9_WINDOW_ATTACH;
+ association.guest=(struct pw_d3d9_window_id){state->epoch,state->window_id,state->generation+1};
+ association.service=(uintptr_t)window;
+ if(driver_call((ULONG_PTR)&association,sizeof(association),PW_D3D9_WINDOW_DRIVER_CALL)!=PW_D3D9_WINDOW_STALE){error=35;goto done;}
+ InterlockedIncrement(&state->driver_rejects);association.guest.generation=state->generation;
+ if(driver_call((ULONG_PTR)&association,sizeof(association),PW_D3D9_WINDOW_DRIVER_CALL)){error=36;goto done;}
+ attached=TRUE;InterlockedIncrement(&state->driver_attaches);
+ if(!driver_apply(window,&association)){error=37;goto done;}
+#else
  ShowWindow(window,SW_SHOWNOACTIVATE);
+#endif
  result[0]=(uintptr_t)NtCurrentTeb();result[1]=(uintptr_t)service_proc;
  handler=AddVectoredExceptionHandler(1,native_exception);if(!handler){error=27;goto done;}
  child=CreateThread(NULL,0,native_window_child,NULL,0,NULL);if(!child){error=28;goto done;}
@@ -111,7 +155,11 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  result[4]=state->create_hr;if(FAILED((HRESULT)state->create_hr)){error=19;goto done;}
  }
  if(!notify_guest(guest,2)){error=20;goto done;}
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ if(!driver_apply(window,&association)){error=38;goto done;}
+#else
  if(!SetWindowPos(window,NULL,360,20,state->width,state->height,SWP_NOACTIVATE|SWP_NOZORDER)){error=21;goto done;}
+#endif
  /* Explicit mirror delivered only to this native window's native procedure. */
  SendMessageW(window,WM_ACTIVATEAPP,FALSE,0);SendMessageW(window,WM_ACTIVATEAPP,TRUE,0);
  if(device_test){
@@ -127,9 +175,18 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  if(!notify_guest(guest,3)){error=25;goto done;}
  done:
  checkpoint("cleanup");
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ if(attached){association.operation=PW_D3D9_WINDOW_CLOSE;
+ if(driver_call((ULONG_PTR)&association,sizeof(association),PW_D3D9_WINDOW_DRIVER_CALL))error=39;}
+#endif
  if(device)IDirect3DDevice9_Release(device);
  if(d3d)IDirect3D9_Release(d3d);
  if(window)DestroyWindow(window);
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ if(attached){association.operation=PW_D3D9_WINDOW_DETACH;
+ if(driver_call((ULONG_PTR)&association,sizeof(association),PW_D3D9_WINDOW_DRIVER_CALL))error=40;
+ else InterlockedIncrement(&state->driver_detaches);}
+#endif
  if(cls.lpszClassName)UnregisterClassW(service_name,cls.hInstance);
  if(backend)FreeLibrary(backend);
  if(handler)RemoveVectoredExceptionHandler(handler);
@@ -185,6 +242,9 @@ static DWORD WINAPI broker(void *unused)
 }
 int main(int argc,char **argv)
 {
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ struct pw_d3d9_guest_window_request registration={0};
+#endif
  WCHAR session[48];HANDLE mapping,thread;HWND window;WNDCLASSW cls={0};MSG message;DWORD code=1,start;void *handler;
  if(argc!=2)return 1;
  guest_thread=GetCurrentThreadId();
@@ -203,7 +263,22 @@ int main(int argc,char **argv)
  state->guest_calls=state->native_calls=state->guest_keys=state->error=0;
  state->guest_exceptions=state->native_exceptions=state->native_child_calls=state->guest_nulls=state->guest_builtins=state->native_builtins=0;
  state->generation=iteration+1;
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ state->driver_guest_ids=state->driver_attaches=state->driver_mirrors=state->driver_detaches=state->driver_rejects=0;
+ driver_call=(driver_call_fn)GetProcAddress(GetModuleHandleW(L"win32u.dll"),"NtUserCallTwoParam");
+ if(!driver_call)return 13;
+ registration=(struct pw_d3d9_guest_window_request){.version=1,.size=sizeof(registration),.operation=PW_D3D9_GUEST_REGISTER};
+ if(driver_call((ULONG_PTR)window,(ULONG_PTR)&registration,PW_D3D9_GUEST_WINDOW_CALL))return 14;
+ state->epoch=registration.id.epoch;state->window_id=registration.id.id;state->generation=registration.id.generation;
+ InterlockedIncrement(&state->driver_guest_ids);
+ {struct pw_d3d9_window_driver_request invalid={.version=PW_D3D9_WINDOW_DRIVER_VERSION,.size=sizeof(invalid),.operation=PW_D3D9_WINDOW_ATTACH};
+ if(driver_call((ULONG_PTR)&invalid,sizeof(invalid),PW_D3D9_WINDOW_DRIVER_CALL)!=PW_D3D9_WINDOW_INVALID)return 15;
+ InterlockedIncrement(&state->driver_rejects);}
+#endif
  state->width=320;state->height=240;state->create_hr=state->reset_hr=state->present_hr=0xdeadbeef;
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ if(!SetWindowPos(window,NULL,20,20,state->width,state->height,SWP_NOACTIVATE|SWP_NOZORDER))return 16;
+#endif
  guest_builtin=builtin_create(window);if(!builtin_roundtrip(guest_builtin))return 12;
  InterlockedIncrement(&state->guest_builtins);
  SendMessageW(window,WM_NULL,0,0);RaiseException(0xe0425751,0,0,NULL);start=GetTickCount();
@@ -216,6 +291,13 @@ int main(int argc,char **argv)
  }
  if(WaitForSingleObject(thread,0)!=WAIT_OBJECT_0)return 8;
  GetExitCodeThread(thread,&code);CloseHandle(thread);
+#ifdef PW_BRIDGE_DRIVER_ASSOCIATION
+ registration.operation=PW_D3D9_GUEST_UNREGISTER;
+ if(driver_call((ULONG_PTR)window,(ULONG_PTR)&registration,PW_D3D9_GUEST_WINDOW_CALL))InterlockedExchange(&state->error,85);
+ else InterlockedIncrement(&state->driver_guest_ids);
+ printf("PW_BRIDGE_WINDOW_IDS iteration=%u guest=%ld attach=%ld mirror=%ld detach=%ld rejects=%ld\n",iteration,state->driver_guest_ids,state->driver_attaches,state->driver_mirrors,state->driver_detaches,state->driver_rejects);fflush(stdout);
+ if(state->driver_guest_ids!=2 || state->driver_attaches!=1 || state->driver_mirrors!=2 || state->driver_detaches!=1 || state->driver_rejects!=3)InterlockedExchange(&state->error,86);
+#endif
  {HWND after=builtin_create(window);
  if(!builtin_roundtrip(guest_builtin) || !builtin_roundtrip(after))InterlockedExchange(&state->error,84);
  if(after)DestroyWindow(after);

@@ -101,3 +101,18 @@ three host cycles with builtin counters 3/2. Every full-cycle CreateDevice,
 Reset and Present returned zero. These receipts use the final callback/builtin
 runtime without the later session-token changes. Console confirmation of the
 expanded fixture remains pending.
+
+## Opaque driver association mode
+
+`--driver-association --ui-only` compiles the fixture against the private
+window-driver API and requires the actual PS5 Wine driver. The guest registers
+its own window and passes only an epoch/ID/generation. The native service
+attaches its own window, queries real guest geometry, mirrors and acknowledges
+two sizes, then closes and detaches after destroying its HWND. Guest and native
+wrong-domain requests and stale IDs must fail. Each cycle unregisters the guest.
+
+The isolated host PS5-driver run passed three complete cycles, including the
+existing builtin-window, callback and exception checks. This proves the local
+driver API and teardown; UI-only mode does not exercise Vulkan display-plane
+leases or console hardware input. It does not establish a successful D3D9
+device on a host without `VK_KHR_display`.

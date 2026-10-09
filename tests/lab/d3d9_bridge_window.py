@@ -13,6 +13,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--wine-build', type=Path, required=True)
 parser.add_argument('--prefix', type=Path, required=True)
 parser.add_argument('--backend64', type=Path, required=True)
+parser.add_argument('--driver-association', action='store_true', help='Require real PS5 driver guest IDs and native association APIs')
 parser.add_argument('--ui-only', action='store_true', help='Explicitly skip device calls to isolate callback routing')
 parser.add_argument('--output', type=Path, required=True)
 args = parser.parse_args()
@@ -34,7 +35,7 @@ def run(command, name, environment=None):
     return result.stdout
 for compiler, target, extra in [('i686', 'client.exe', []), ('x86_64', 'service.dll', ['-shared', '-static-libgcc'])]:
     run([compiler + '-w64-mingw32-gcc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-array-bounds',
-         *extra, source, '-luser32', '-o', output / target], 'compile-' + compiler)
+         *extra, *(['-DPW_BRIDGE_DRIVER_ASSOCIATION', '-I', str(source.parents[2] / 'wine/ps5')] if args.driver_association else []), source, '-luser32', '-o', output / target], 'compile-' + compiler)
     receipt['sha256'][str(output / target)] = hashlib.sha256((output / target).read_bytes()).hexdigest()
 environment = os.environ.copy()
 environment.update(WINEPREFIX=str(args.prefix.resolve()), WINEDEBUG=os.environ.get('PW_WINDOW_WINEDEBUG', '-all'), WINEDLLOVERRIDES='mscoree,mshtml=;d3d9=n',
@@ -45,10 +46,17 @@ rows = re.findall(r'PW_BRIDGE_WINDOW iteration=(\d+) status=00000000 error=0 .*c
 assert [row[0] for row in rows] == ['0', '1', '2'], rows
 assert all(value == ('deadbeef' if args.ui_only else '00000000') for row in rows for value in row[1:]), rows
 assert len(re.findall(r'guest_builtins=3 native_builtins=2', stdout)) == 3, stdout
+if args.driver_association:
+    assert len(re.findall(r'PW_BRIDGE_WINDOW_IDS iteration=[0-2] guest=2 attach=1 mirror=2 detach=1 rejects=3', stdout)) == 3, stdout
+receipt['driver_association_enabled'] = args.driver_association
 receipt['status'] = 'pass'
 receipt['device_calls_enabled'] = not args.ui_only
 receipt['sha256'] = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in
                      [source, output / 'client.exe', output / 'service.dll', args.backend64.resolve()]}
-receipt['scope'] = ('Architecture-local WNDPROCs, scalar guest callbacks before/during/after, native child UI, guest/native exceptions and repeated teardown; ' + ('device calls explicitly skipped' if args.ui_only else 'real DXVK CreateDevice/Reset/Present') + '; no PS5 plane association or hardware input proof.')
+if args.driver_association:
+    for header in ['pw_d3d9_window.h', 'pw_d3d9_window_driver.h']:
+        path = source.parents[2] / 'wine/ps5' / header
+        receipt['sha256'][str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+receipt['scope'] = ('Architecture-local WNDPROCs, scalar guest callbacks before/during/after, native child UI, guest/native exceptions and repeated teardown; ' + ('device calls explicitly skipped' if args.ui_only else 'real DXVK CreateDevice/Reset/Present') + ('; actual PS5-driver opaque guest registration, native association, checked geometry and teardown' if args.driver_association else '') + '; no Vulkan display-plane lease or hardware input proof.')
 (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
 print('PASS ' + str(output / 'receipt.json'))
