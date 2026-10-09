@@ -43,6 +43,17 @@ static int is_client_surface_window(struct client_surface *c,HWND hwnd)
  assert(!pthread_mutex_trylock(&screen_lock));pthread_mutex_unlock(&screen_lock);
  return c->hwnd==hwnd;
 }
+typedef struct {int32_t left,top,right,bottom;} RECT;
+#define COORDS_SCREEN 0
+#define no_dpi 0
+#define GWL_STYLE (-16)
+#define WS_VISIBLE 0x10000000u
+static RECT guest_rect={20,20,340,260};
+static int get_client_rect_rel(HWND hwnd,int relative,RECT *rect,int dpi)
+{(void)relative;(void)dpi;if(hwnd!=(HWND)100)return 0;*rect=guest_rect;return 1;}
+static unsigned NtUserGetWindowLongW(HWND hwnd,int index)
+{(void)hwnd;(void)index;return WS_VISIBLE;}
+static HWND NtUserGetForegroundWindow(void){return (HWND)100;}
 #include "../wine/ps5/pw_d3d9_window_driver.c"
 static void domain(DWORD tid,uint64_t token,int guest){current_tid=tid;current_token=token;teb.WowTebOffset=guest?0x2000:0;}
 static void created(unsigned slot,uintptr_t hwnd,DWORD tid,uint64_t token,int guest)
@@ -81,6 +92,9 @@ int main(void)
  domain(2,10,0);assert(ps5_bridge_window_call(&q,sizeof(q))==PW_D3D9_WINDOW_BUSY);
  ps5_bridge_surface_destroyed(7,8);
  assert(!ps5_bridge_window_call(&q,sizeof(q)));first=q.id;epoch=q.id.epoch;
+ assert(q.state.x==20 && q.state.y==20 && q.state.width==320 && q.state.height==240 && q.state.flags==3);
+ guest_rect.right=660;guest_rect.bottom=500;q.operation=PW_D3D9_WINDOW_QUERY_STATE;
+ assert(!ps5_bridge_window_call(&q,sizeof(q)) && q.state.width==640 && q.state.height==480);
  domain(1,0,1);registration.operation=PW_D3D9_GUEST_UNREGISTER;
  assert(ps5_bridge_guest_window_call((HWND)100,&registration)==PW_D3D9_WINDOW_BUSY);
  domain(2,10,0);

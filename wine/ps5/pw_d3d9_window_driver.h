@@ -14,7 +14,7 @@
  * All operations must run on the service window owner thread. */
 enum pw_d3d9_window_driver_op {
  PW_D3D9_WINDOW_ATTACH=1, PW_D3D9_WINDOW_BEGIN, PW_D3D9_WINDOW_ACK,
- PW_D3D9_WINDOW_CLOSE, PW_D3D9_WINDOW_DETACH
+ PW_D3D9_WINDOW_CLOSE, PW_D3D9_WINDOW_DETACH, PW_D3D9_WINDOW_QUERY_STATE
 };
 /* Guest owner-thread local call: NtUserCallTwoParam(hwnd,&request,GUEST_CALL).
  * Fixed-width payload is identical in PE32 and PE64. IDs are retired on

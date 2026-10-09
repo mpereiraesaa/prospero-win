@@ -125,6 +125,22 @@ struct bridge_surface
 static struct bridge_surface bridge_surfaces[PW_D3D9_WINDOW_LEASES];
 #endif
 
+/* Native service sees guest geometry without receiving a guest HWND. */
+static BOOL bridge_guest_state( HWND hwnd, struct pw_d3d9_window_state *state )
+{
+    RECT rect;
+    int64_t width, height;
+    if (!get_client_rect_rel( hwnd, COORDS_SCREEN, &rect, no_dpi )) return FALSE;
+    width = (int64_t)rect.right - rect.left;
+    height = (int64_t)rect.bottom - rect.top;
+    if (width < 0 || height < 0 || width > INT32_MAX || height > INT32_MAX) return FALSE;
+    state->x = rect.left; state->y = rect.top;
+    state->width = width; state->height = height;
+    state->flags = (NtUserGetWindowLongW( hwnd, GWL_STYLE ) & WS_VISIBLE) ? PW_D3D9_WINDOW_VISIBLE : 0;
+    if (NtUserGetForegroundWindow() == hwnd) state->flags |= PW_D3D9_WINDOW_FOCUSED;
+    return TRUE;
+}
+
 ULONG_PTR ps5_bridge_window_call( void *ptr, ULONG_PTR size )
 {
     struct pw_d3d9_window_driver_request q;
@@ -148,16 +164,19 @@ ULONG_PTR ps5_bridge_window_call( void *ptr, ULONG_PTR size )
     if (!guest_hwnd) return PW_D3D9_WINDOW_STALE;
     guest_tid = get_window_thread( guest_hwnd, &guest_pid );
     service_tid = get_window_thread( (HWND)(UINT_PTR)q.service, &service_pid );
-    if ((q.operation == PW_D3D9_WINDOW_ATTACH || q.operation == PW_D3D9_WINDOW_BEGIN) &&
+    if ((q.operation == PW_D3D9_WINDOW_ATTACH || q.operation == PW_D3D9_WINDOW_BEGIN || q.operation == PW_D3D9_WINDOW_QUERY_STATE) &&
         (!guest_tid || !service_tid || guest_pid != GetCurrentProcessId() ||
          service_pid != GetCurrentProcessId() || service_tid != GetCurrentThreadId())) return result;
+
+    if ((q.operation == PW_D3D9_WINDOW_ATTACH || q.operation == PW_D3D9_WINDOW_QUERY_STATE) &&
+        !bridge_guest_state( guest_hwnd, &q.state )) return result;
 
     pthread_mutex_lock( &screen_lock );
     guest = bridge_guest_owner( q.guest );
     service = bridge_owner( (HWND)(UINT_PTR)q.service );
     if (!guest || guest->hwnd != guest_hwnd || !service || !guest->guest || guest->token || service->guest ||
         service->token != token || service->tid != GetCurrentThreadId()) goto done;
-    if ((q.operation == PW_D3D9_WINDOW_ATTACH || q.operation == PW_D3D9_WINDOW_BEGIN) &&
+    if ((q.operation == PW_D3D9_WINDOW_ATTACH || q.operation == PW_D3D9_WINDOW_BEGIN || q.operation == PW_D3D9_WINDOW_QUERY_STATE) &&
         (guest->destroyed || service->destroyed || guest->tid != guest_tid || service->tid != service_tid)) goto done;
     if (q.operation == PW_D3D9_WINDOW_ATTACH)
     {
@@ -180,6 +199,7 @@ ULONG_PTR ps5_bridge_window_call( void *ptr, ULONG_PTR size )
             e.guest != (UINT_PTR)guest_hwnd || e.service != q.service) { result = PW_D3D9_WINDOW_STALE; goto done; }
         switch (q.operation)
         {
+        case PW_D3D9_WINDOW_QUERY_STATE: result = PW_D3D9_WINDOW_OK; break;
         case PW_D3D9_WINDOW_BEGIN: result = pw_d3d9_window_begin( &bridge_windows, q.id, q.sequence, &q.state ); break;
         case PW_D3D9_WINDOW_ACK: result = pw_d3d9_window_ack( &bridge_windows, q.id, q.sequence, q.hresult ); break;
         case PW_D3D9_WINDOW_CLOSE: result = pw_d3d9_window_close( &bridge_windows, q.id ); break;

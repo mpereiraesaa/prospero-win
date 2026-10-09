@@ -151,3 +151,12 @@ Wine owners outside the lock, then validates the same identity again before
 changing an association. Only the guest-registration and association IDs may be
 serialized. All-zero IDs are reserved for null/inherit in typed message fields
 where that operation permits it; REGISTER and ATTACH require real identities.
+
+ATTACH returns a checked guest client rectangle in physical screen coordinates,
+with visibility and foreground flags, in `request.state`. Native QUERY_STATE
+(operation 6) refreshes that snapshot before Reset/Present; it has the same token,
+ID and owner checks. This permits zero-width/height presentation parameters to
+use the real guest dimensions without transporting an HWND or guessing a size.
+Queries run outside the driver lock, followed by identity validation. The service
+still applies the returned state between BEGIN and ACK and supplies the actual
+UI operation result. Fullscreen policy remains an explicit service decision.
