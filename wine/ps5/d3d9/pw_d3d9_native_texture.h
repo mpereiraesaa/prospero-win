@@ -20,4 +20,10 @@ uintptr_t pw_d3d9_native_texture_identity(struct pw_d3d9_native_texture *);
 void *pw_d3d9_native_texture_backend(struct pw_d3d9_native_texture *);
 uint32_t pw_d3d9_native_texture_kind(struct pw_d3d9_native_texture *);
 uint32_t pw_d3d9_native_texture_destroy(struct pw_d3d9_native_texture *);
+/* Serialized implicit-owner Reset transaction. Park only while an independently
+ * proven native default owner exists. Restore only if Reset preserved that owner;
+ * abandon after its destruction, without touching the retained weak address. */
+int pw_d3d9_native_texture_can_park(struct pw_d3d9_native_texture *);
+uint32_t pw_d3d9_native_texture_park(struct pw_d3d9_native_texture *);
+void pw_d3d9_native_texture_unpark(struct pw_d3d9_native_texture *,int restore);
 #endif

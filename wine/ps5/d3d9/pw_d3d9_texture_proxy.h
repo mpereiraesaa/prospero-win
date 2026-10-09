@@ -20,4 +20,16 @@ void pw_d3d9_texture_proxy_install(IDirect3DDevice9Vtbl *,const struct pw_d3d9_t
 HRESULT pw_d3d9_texture_proxy_wrap(IDirect3DDevice9 *,uint32_t kind,struct pw_d3d9_object_ref,uint32_t levels,void **);
 /* Address-only cache lookup: never dereferences a foreign COM pointer. */
 HRESULT pw_d3d9_texture_proxy_resolve(IDirect3DDevice9 *,IUnknown *,uint32_t kind,struct pw_d3d9_object_ref *);
+/* Device lifecycle integration. Install is called before public device exposure
+ * and after successful Reset. Prepare freezes public-zero owned shells without
+ * waiting; AddRef/QI/resolve cannot resurrect those shells until finish. */
+HRESULT pw_d3d9_texture_proxy_owners_install(IDirect3DDevice9 *,const struct pw_d3d9_object_ref *,UINT);
+HRESULT pw_d3d9_texture_proxy_owners_prepare_reset(IDirect3DDevice9 *,struct pw_d3d9_object_ref *,UINT,UINT *);
+/* keep_old restores identity after early rejected Reset; otherwise remote zero
+ * shell references were consumed by service, so no Release is sent for them. */
+void pw_d3d9_texture_proxy_owners_finish_reset(IDirect3DDevice9 *,BOOL keep_old);
+HRESULT pw_d3d9_texture_proxy_owners_dispose(IDirect3DDevice9 *);
+/* On final decrement, closes owner admission and retains one internal teardown
+ * sentinel while returning zero. Final cleanup frees the device directly. */
+ULONG pw_d3d9_texture_proxy_parent_release(IDirect3DDevice9 *,LONG *);
 #endif

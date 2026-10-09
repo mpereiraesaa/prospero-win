@@ -5,7 +5,7 @@
 #include "pw_d3d9_session.h"
 #include <d3d9.h>
 #include <string.h>
-struct texture_owner { struct pw_d3d9_native_texture *native; struct pw_d3d9_object_ref parent; };
+struct texture_owner { struct pw_d3d9_native_texture *native; struct pw_d3d9_object_ref parent; unsigned implicit,prepared,zero,parked; };
 static const struct pw_d3d9_object_slot *lookup(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref ref)
 {return pw_d3d9_object_lookup(objects,objects->device,objects->epoch,ref);}
 static HRESULT publish(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref parent,
@@ -20,7 +20,7 @@ static HRESULT publish(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref
     }
     struct texture_owner *owner=HeapAlloc(GetProcessHeap(),0,sizeof(*owner));
     if(!owner){pw_d3d9_native_texture_destroy(native);return E_OUTOFMEMORY;}
-    *owner=(struct texture_owner){native,parent};
+    *owner=(struct texture_owner){.native=native,.parent=parent};
     struct pw_d3d9_object_ref ref={0};HRESULT hr=E_OUTOFMEMORY;
     if(identity&&pw_d3d9_object_queue(objects,parent)){
         if(pw_d3d9_object_reserve(objects,&ref)){
@@ -111,5 +111,126 @@ HRESULT pw_d3d9_service_texture_acquire(struct pw_d3d9_objects *objects,struct p
     if((kind!=PW_D3D9_KIND_TEXTURE_2D&&kind!=PW_D3D9_KIND_SURFACE)||!slot||slot->kind!=kind)return D3DERR_INVALIDCALL;
     struct texture_owner *owner=(void *)slot->context;const struct pw_d3d9_object_slot *parent=lookup(objects,owner->parent);
     if(!parent||parent->kind!=PW_D3D9_KIND_DEVICE||pw_d3d9_native_device_backend((void *)parent->context)!=native_device)return D3DERR_INVALIDCALL;
-    IUnknown *backend=pw_d3d9_native_texture_backend(owner->native);IUnknown_AddRef(backend);*out=backend;return S_OK;
+    IUnknown *backend=pw_d3d9_native_texture_backend(owner->native);if(!backend)return D3DERR_INVALIDCALL;IUnknown_AddRef(backend);*out=backend;return S_OK;
+}
+
+static struct texture_owner *implicit_owner(struct pw_d3d9_objects *objects,UINT index,struct pw_d3d9_object_ref parent)
+{
+ struct pw_d3d9_object_slot *slot=&objects->slots[index];
+ if(slot->state!=PW_D3D9_LIVE||slot->kind!=PW_D3D9_KIND_SURFACE)return NULL;
+ struct texture_owner *owner=(void *)slot->context;
+ return owner->implicit&&owner->parent.id==parent.id&&owner->parent.generation==parent.generation?owner:NULL;
+}
+static HRESULT destroy_retired(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref ref)
+{
+ uintptr_t context;
+ if(!pw_d3d9_object_take_destroy(objects,ref,&context))return E_FAIL;
+ HRESULT hr=pw_d3d9_service_texture_destroy(objects,context);
+ if(!pw_d3d9_object_finish_destroy(objects,ref))return E_FAIL;
+ return hr;
+}
+HRESULT pw_d3d9_service_texture_owners_list(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref parent,
+ struct pw_d3d9_object_ref *out,UINT capacity,UINT *count)
+{
+ if(!count||(!out&&capacity))return E_POINTER;
+ *count=0;
+ for(UINT i=0;i<objects->capacity;i++)if(implicit_owner(objects,i,parent)){
+  if(*count>=capacity)return E_OUTOFMEMORY;
+  out[(*count)++]=(struct pw_d3d9_object_ref){i+1,objects->slots[i].generation};
+ }
+ return S_OK;
+}
+HRESULT pw_d3d9_service_texture_owners_capture(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref parent,
+ UINT backbuffers,BOOL auto_depth)
+{
+ const struct pw_d3d9_object_slot *device=lookup(objects,parent);
+ if(!device||device->kind!=PW_D3D9_KIND_DEVICE||backbuffers>PW_D3D9_SURFACE_OWNER_MAX||
+    (auto_depth&&backbuffers==PW_D3D9_SURFACE_OWNER_MAX))return D3DERR_INVALIDCALL;
+ for(UINT i=0;i<objects->capacity;i++)if(implicit_owner(objects,i,parent))return D3DERR_INVALIDCALL;
+ IDirect3DDevice9 *backend=pw_d3d9_native_device_backend((void *)device->context);
+ HRESULT hr=S_OK;
+ for(UINT i=0;i<backbuffers+(auto_depth?1u:0u);i++){
+  IDirect3DSurface9 *surface=NULL;struct pw_d3d9_object_ref ref={0};
+  hr=i<backbuffers?IDirect3DDevice9_GetBackBuffer(backend,0,i,D3DBACKBUFFER_TYPE_MONO,&surface):
+                   IDirect3DDevice9_GetDepthStencilSurface(backend,&surface);
+  if(FAILED(hr)||!surface){if(surface)IDirect3DSurface9_Release(surface);if(SUCCEEDED(hr))hr=E_FAIL;break;}
+  hr=pw_d3d9_service_texture_adopt(objects,parent,PW_D3D9_KIND_SURFACE,surface,&ref);
+  if(FAILED(hr))break;
+  struct texture_owner *owner=owned_texture(objects,ref,parent);
+  if(!owner||!pw_d3d9_object_owner_hold(objects,ref)){pw_d3d9_object_release(objects,ref);hr=E_FAIL;break;}
+  owner->implicit=1;
+  if(!pw_d3d9_object_release(objects,ref)){hr=E_FAIL;break;}
+ }
+ if(FAILED(hr)){HRESULT cleanup=pw_d3d9_service_texture_owners_drain(objects,parent);if(FAILED(cleanup))return cleanup;}
+ return hr;
+}
+HRESULT pw_d3d9_service_texture_owners_prepare(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref parent,
+ const struct pw_d3d9_object_ref *zero,UINT count)
+{
+ if(count>PW_D3D9_SURFACE_OWNER_MAX||(!zero&&count))return D3DERR_INVALIDCALL;
+ for(UINT i=0;i<objects->capacity;i++){
+  struct texture_owner *owner=implicit_owner(objects,i,parent);
+  if(owner&&(owner->prepared||owner->parked))return D3DERR_INVALIDCALL;
+ }
+ for(UINT i=0;i<count;i++){
+  const struct pw_d3d9_object_slot *slot=lookup(objects,zero[i]);
+  struct texture_owner *owner=slot&&zero[i].id?implicit_owner(objects,zero[i].id-1,parent):NULL;
+  if(!owner||slot->guest_refs>1||slot->queued_refs||!pw_d3d9_native_texture_can_park(owner->native))return D3DERR_INVALIDCALL;
+  for(UINT j=0;j<i;j++)if(zero[i].id==zero[j].id)return D3DERR_INVALIDCALL;
+ }
+ for(UINT i=0;i<objects->capacity;i++){
+  struct texture_owner *owner=implicit_owner(objects,i,parent);if(!owner)continue;
+  if(!objects->slots[i].guest_refs&&(objects->slots[i].queued_refs||!pw_d3d9_native_texture_can_park(owner->native)))return D3DERR_INVALIDCALL;
+ }
+ for(UINT i=0;i<objects->capacity;i++){
+  struct texture_owner *owner=implicit_owner(objects,i,parent);if(!owner)continue;
+  owner->prepared=1;owner->zero=!objects->slots[i].guest_refs;
+  for(UINT j=0;j<count;j++)if(zero[j].id==i+1)owner->zero=1;
+ }
+ return S_OK;
+}
+HRESULT pw_d3d9_service_texture_owners_begin_reset(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref parent)
+{
+ for(UINT i=0;i<objects->capacity;i++){
+  struct texture_owner *owner=implicit_owner(objects,i,parent);if(!owner)continue;
+  if(!owner->prepared||owner->parked||(owner->zero&&!pw_d3d9_native_texture_can_park(owner->native)))return D3DERR_INVALIDCALL;
+ }
+ for(UINT i=0;i<objects->capacity;i++){
+  struct texture_owner *owner=implicit_owner(objects,i,parent);if(!owner||!owner->zero)continue;
+  HRESULT hr=pw_d3d9_native_texture_park(owner->native);if(FAILED(hr))return hr;
+  owner->parked=1;
+ }
+ return S_OK;
+}
+HRESULT pw_d3d9_service_texture_owners_finish_reset(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref parent,BOOL restore)
+{
+ HRESULT result=S_OK;
+ for(UINT i=0;i<objects->capacity;i++){
+  struct texture_owner *owner=implicit_owner(objects,i,parent);if(!owner)continue;
+  if(!owner->prepared)return E_FAIL;
+  struct pw_d3d9_object_ref ref={i+1,objects->slots[i].generation};
+  if(owner->parked)pw_d3d9_native_texture_unpark(owner->native,restore);
+  owner->parked=0;
+  if(restore){owner->prepared=owner->zero=0;continue;}
+  unsigned zero=owner->zero;owner->implicit=owner->prepared=owner->zero=0;
+  if(zero&&objects->slots[i].guest_refs&&!pw_d3d9_object_release(objects,ref))result=E_FAIL;
+  if(!pw_d3d9_object_owner_drop(objects,ref))result=E_FAIL;
+  if(!objects->slots[i].guest_refs){HRESULT hr=destroy_retired(objects,ref);if(FAILED(hr))result=hr;}
+ }
+ return result;
+}
+HRESULT pw_d3d9_service_texture_owners_drain(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref parent)
+{
+ for(UINT i=0;i<objects->capacity;i++){
+  struct texture_owner *owner=implicit_owner(objects,i,parent);
+  if(owner&&(objects->slots[i].guest_refs||objects->slots[i].queued_refs||owner->parked||owner->prepared))return D3DERR_INVALIDCALL;
+ }
+ HRESULT result=S_OK;
+ for(UINT i=0;i<objects->capacity;i++){
+  struct texture_owner *owner=implicit_owner(objects,i,parent);if(!owner)continue;
+  struct pw_d3d9_object_ref ref={i+1,objects->slots[i].generation};owner->implicit=0;
+  if(!pw_d3d9_object_owner_drop(objects,ref))return E_FAIL;
+  HRESULT hr=destroy_retired(objects,ref);if(FAILED(hr))result=hr;
+ }
+ return result;
 }

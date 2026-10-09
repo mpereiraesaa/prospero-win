@@ -7,7 +7,7 @@
 #define ACTIVE_LOCKS 128u
 struct pw_d3d9_native_texture {
  union {IDirect3DTexture9 *texture;IDirect3DSurface9 *surface;IUnknown *unknown;} object;
- IDirect3DDevice9 *device;uint32_t kind;
+ IDirect3DDevice9 *device;uint32_t kind,parked;
  IDirect3DSurface9 *locked_surface;
  unsigned char *mapping;int32_t pitch;
  uint64_t generation;uint32_t rows,row_bytes,length,written,readonly,slot;
@@ -67,18 +67,18 @@ uint32_t pw_d3d9_native_texture_destroy(struct pw_d3d9_native_texture *r)
 {
  HRESULT hr=S_OK;if(!r)return hr;
  if(r->locked_surface)hr=unlock(r);
- if(r->object.unknown)IUnknown_Release(r->object.unknown);
+ if(r->object.unknown&&!r->parked)IUnknown_Release(r->object.unknown);
  if(r->device)IDirect3DDevice9_Release(r->device);
  HeapFree(GetProcessHeap(),0,r);return hr;
 }
 uintptr_t pw_d3d9_native_texture_identity(struct pw_d3d9_native_texture *r)
 {
  IUnknown *identity=NULL;uintptr_t value;
- if(!r||FAILED(IUnknown_QueryInterface(r->object.unknown,&IID_IUnknown,(void **)&identity))||!identity)return 0;
+ if(!r||r->parked||!r->object.unknown||FAILED(IUnknown_QueryInterface(r->object.unknown,&IID_IUnknown,(void **)&identity))||!identity)return 0;
  value=(uintptr_t)identity;IUnknown_Release(identity);return value;
 }
 void *pw_d3d9_native_texture_backend(struct pw_d3d9_native_texture *r)
-{return r?r->object.unknown:NULL;}
+{return r&&!r->parked?r->object.unknown:NULL;}
 uint32_t pw_d3d9_native_texture_kind(struct pw_d3d9_native_texture *r)
 {return r?r->kind:0;}
 uint32_t pw_d3d9_native_texture_adopt(void *device,uint32_t kind,void *owned,struct pw_d3d9_native_texture **out)
@@ -165,7 +165,7 @@ static void transfer(struct pw_d3d9_native_texture *r,uint32_t offset,unsigned c
 void pw_d3d9_native_texture_call(struct pw_d3d9_native_texture *r,const struct pw_d3d9_texture_request *q,struct pw_d3d9_texture_reply *reply,struct pw_d3d9_native_texture **out)
 {
  HRESULT hr=D3DERR_INVALIDCALL;D3DSURFACE_DESC d;struct pw_d3d9_native_texture *child;
- memset(reply,0,sizeof(*reply));reply->operation=q->operation;reply->hresult=hr;*out=NULL;if(!r)return;
+ memset(reply,0,sizeof(*reply));reply->operation=q->operation;reply->hresult=hr;*out=NULL;if(!r||r->parked||!r->object.unknown)return;
  switch(q->operation){
  case PW_D3D9_TEXTURE_GET_PRIORITY:
   reply->value=r->kind==PW_D3D9_KIND_TEXTURE_2D?IDirect3DTexture9_GetPriority(r->object.texture):IDirect3DSurface9_GetPriority(r->object.surface);hr=S_OK;break;
@@ -227,7 +227,7 @@ void pw_d3d9_native_texture_container(struct pw_d3d9_native_texture *r,const str
   &IID_IDirect3DBaseTexture9,&IID_IDirect3DTexture9,&IID_IDirect3DSwapChain9};
  IUnknown *raw=NULL;IDirect3DDevice9 *device=NULL,*actual=NULL;IDirect3DTexture9 *texture=NULL;HRESULT hr=D3DERR_INVALIDCALL,container_hr;
  memset(reply,0,sizeof(*reply));reply->operation=q->operation;if(owned)*owned=NULL;
- if(!owned||!r||r->kind!=PW_D3D9_KIND_SURFACE||q->operation!=PW_D3D9_TEXTURE_CONTAINER||q->value<1||q->value>PW_D3D9_CONTAINER_SWAPCHAIN)goto done;
+ if(!owned||!r||r->parked||!r->object.unknown||r->kind!=PW_D3D9_KIND_SURFACE||q->operation!=PW_D3D9_TEXTURE_CONTAINER||q->value<1||q->value>PW_D3D9_CONTAINER_SWAPCHAIN)goto done;
  hr=IDirect3DSurface9_GetContainer(r->object.surface,interfaces[q->value],(void **)&raw);
  if(FAILED(hr))goto done;
  if(!raw){hr=E_FAIL;goto done;}
@@ -259,7 +259,7 @@ void pw_d3d9_native_texture_container(struct pw_d3d9_native_texture *r,const str
 void pw_d3d9_native_texture_copy(void *device,struct pw_d3d9_native_texture *source,struct pw_d3d9_native_texture *destination,const struct pw_d3d9_texture_request *q,struct pw_d3d9_texture_reply *reply)
 {
  HRESULT hr=D3DERR_INVALIDCALL;memset(reply,0,sizeof(*reply));reply->operation=q->operation;reply->hresult=hr;
- if(!device||!source||!destination||source->device!=device||destination->device!=device)return;
+ if(!device||!source||!destination||source->parked||destination->parked||!source->object.unknown||!destination->object.unknown||source->device!=device||destination->device!=device)return;
  if(q->operation==PW_D3D9_TEXTURE_UPDATE&&source->kind==PW_D3D9_KIND_TEXTURE_2D&&destination->kind==PW_D3D9_KIND_TEXTURE_2D)
   hr=IDirect3DDevice9_UpdateTexture((IDirect3DDevice9 *)device,(IDirect3DBaseTexture9 *)source->object.texture,(IDirect3DBaseTexture9 *)destination->object.texture);
  else if(q->operation==PW_D3D9_TEXTURE_UPDATE_SURFACE&&source->kind==PW_D3D9_KIND_SURFACE&&destination->kind==PW_D3D9_KIND_SURFACE){
@@ -275,4 +275,18 @@ void pw_d3d9_native_texture_copy(void *device,struct pw_d3d9_native_texture *sou
  }
  pw_d3d9_texture_failure(stderr,q,(uint32_t)hr);
  reply->hresult=(uint32_t)hr;
+}
+
+int pw_d3d9_native_texture_can_park(struct pw_d3d9_native_texture *r)
+{return r&&r->kind==PW_D3D9_KIND_SURFACE&&r->object.unknown&&!r->parked&&!r->locked_surface;}
+uint32_t pw_d3d9_native_texture_park(struct pw_d3d9_native_texture *r)
+{
+ if(!pw_d3d9_native_texture_can_park(r))return D3DERR_INVALIDCALL;
+ r->parked=1;IUnknown_Release(r->object.unknown);return S_OK;
+}
+void pw_d3d9_native_texture_unpark(struct pw_d3d9_native_texture *r,int restore)
+{
+ if(!r||!r->parked)return;
+ if(restore)IUnknown_AddRef(r->object.unknown);else r->object.unknown=NULL;
+ r->parked=0;
 }
