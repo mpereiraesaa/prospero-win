@@ -28,6 +28,8 @@ HRESULT pw_d3d9_texture_proxy_owners_prepare_reset(IDirect3DDevice9 *,struct pw_
 /* keep_old restores identity after early rejected Reset; otherwise remote zero
  * shell references were consumed by service, so no Release is sent for them. */
 void pw_d3d9_texture_proxy_owners_finish_reset(IDirect3DDevice9 *,BOOL keep_old);
+/* Final cleanup only after outer RPC admission unwinds, with parent sentinel.
+ * Failure requires session cancellation before the device is freed. */
 HRESULT pw_d3d9_texture_proxy_owners_dispose(IDirect3DDevice9 *);
 /* On final decrement, closes owner admission and retains one internal teardown
  * sentinel while returning zero. Final cleanup frees the device directly. */
