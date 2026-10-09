@@ -559,6 +559,10 @@ wine/ps5/pw_d3d9_up_wire.c
 tests/test_d3d9_up_wire.c
 docs/d3d9-up-wire.md
 wine/ps5/d3d9/pw_d3d9_up_client.h
+tests/lab/d3d9_up_transport.c
+tests/lab/d3d9_up_transport.py
+tests/lab/d3d9_up_transport_device.c
+docs/d3d9-up-transport.md
 wine/ps5/d3d9/pw_d3d9_up_client.c
 tests/lab/d3d9_up_client.c
 tests/lab/d3d9_up_client.py
@@ -826,7 +830,3 @@ tests/lab/d3d9_intz_transport.c
 tests/lab/d3d9_intz_transport.py
 tests/lab/d3d9_intz_transport_device.c
 docs/d3d9-intz-transport.md
-tests/lab/d3d9_up_transport.c
-tests/lab/d3d9_up_transport.py
-tests/lab/d3d9_up_transport_device.c
-docs/d3d9-up-transport.md
