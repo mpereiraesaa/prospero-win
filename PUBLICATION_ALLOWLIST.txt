@@ -582,3 +582,7 @@ wine/patches/0906-win32u-native-bridge-window-association.patch
 tests/test_d3d9_window_driver.c
 
 wine/patches/0907-win32u-bridge-opaque-guest-window-ids.patch
+wine/ps5/pw_d3d9_resource_wire.h
+wine/ps5/pw_d3d9_resource_wire.c
+tests/test_d3d9_resource_wire.c
+docs/d3d9-resource-wire.md
