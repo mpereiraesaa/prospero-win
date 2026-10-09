@@ -30,20 +30,20 @@ After native retirement/session cancellation owns backend unlocking, local clean
 zeros the lock generation and frees staging without an extra RPC. Failed enqueue
 retains ownership and marks the session failed. No RPC/COM occurs under cache lock.
 
-Shared handles, GetContainer and GetDC are explicitly unsupported. Priority,
-PreLoad, LOD and autogen methods are explicit failures until paired native hint
-operations are integrated. Private data uses the shared local COM-aware helper.
+Shared handles, GetContainer and GetDC are explicitly unsupported. Priority, PreLoad, LOD and autogen methods call native operations18–25;
+value-return methods preserve the actual DWORD and mark failed calls sticky.
+RT lockable and depth discard flags preserve the exact native BOOL bits. Private data uses the shared local COM-aware helper.
 
 ## Focused proof
 
 `tests/lab/d3d9_texture_proxy.py` builds and runs actual PE32/PE64 controlled-callback
 fixtures. The PE32 run exercises positive/negative pitch allocations, partial write
 and READONLY copies, wrong-mip rejection, canonical wrapping, private data,
-foreign-pointer rejection, all nine device adapters, and deferred final release
+foreign-pointer rejection, all nine device adapters, native hint mapping and exact BOOL bits, and deferred final release
 while mapped. The PE64 run verifies typed ABI and rejects staging when its allocator
 returns an address above the permitted 32-bit range.
 
-Receipt: `/tmp/prospero-d3d9-texture-proxy-r3/receipt.json`.
+Receipt: `/tmp/prospero-d3d9-texture-proxy-r4/receipt.json`.
 This proves frontend ABI and ownership with codec round trips. Native helper
 execution and production session integration have separate receipts. No console
 or gameplay claim is made.

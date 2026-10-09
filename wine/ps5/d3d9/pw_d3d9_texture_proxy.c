@@ -122,6 +122,13 @@ static HRESULT unlock_rect(void *iface,UINT level)
  addref(iface);if(InterlockedCompareExchange(&p->busy,1,0)){release(iface);return D3DERR_INVALIDCALL;}
  hr=p->client.generation && level!=p->lock_level?D3DERR_INVALIDCALL:(HRESULT)pw_d3d9_texture_client_unlock(&p->client);InterlockedExchange(&p->busy,0);release(iface);return hr;
 }
+static HRESULT hint(void *iface,uint32_t operation,uint32_t value,uint32_t *out,int sticky)
+{
+ struct proxy *p=impl(iface);struct pw_d3d9_texture_request q={0};struct pw_d3d9_texture_reply r={0};HRESULT hr;
+ addref(iface);q.operation=operation;q.value=value;hr=invoke(p,&q,&r);
+ if(SUCCEEDED(hr)){if(out)*out=r.value;}else if(sticky)ops.fail(p->parent,hr);
+ release(iface);return hr;
+}
 #define COMMON(tag,type) \
 static HRESULT WINAPI tag##_query(type *s,REFIID i,void **o){return query(s,i,o);} \
 static ULONG WINAPI tag##_addref(type *s){return addref(s);} \
@@ -130,18 +137,18 @@ static HRESULT WINAPI tag##_device(type *s,IDirect3DDevice9 **o){return get_devi
 static HRESULT WINAPI tag##_setprivate(type *s,REFGUID g,const void *d,DWORD n,DWORD f){HRESULT hr;addref(s);hr=pw_d3d9_private_set(&impl(s)->private_data,g,d,n,f);release(s);return hr;} \
 static HRESULT WINAPI tag##_getprivate(type *s,REFGUID g,void *d,DWORD *n){HRESULT hr;addref(s);hr=pw_d3d9_private_get(&impl(s)->private_data,g,d,n);release(s);return hr;} \
 static HRESULT WINAPI tag##_freeprivate(type *s,REFGUID g){HRESULT hr;addref(s);hr=pw_d3d9_private_free(&impl(s)->private_data,g);release(s);return hr;} \
-static DWORD WINAPI tag##_setpriority(type *s,DWORD n){(void)n;unsupported(s);return 0;} \
-static DWORD WINAPI tag##_priority(type *s){unsupported(s);return 0;} \
-static void WINAPI tag##_preload(type *s){unsupported(s);} \
+static DWORD WINAPI tag##_setpriority(type *s,DWORD n){uint32_t value=0;hint(s,PW_D3D9_TEXTURE_SET_PRIORITY,n,&value,1);return value;} \
+static DWORD WINAPI tag##_priority(type *s){uint32_t value=0;hint(s,PW_D3D9_TEXTURE_GET_PRIORITY,0,&value,1);return value;} \
+static void WINAPI tag##_preload(type *s){hint(s,PW_D3D9_TEXTURE_PRELOAD,0,NULL,1);} \
 static D3DRESOURCETYPE WINAPI tag##_type(type *s){return impl(s)->kind==PW_D3D9_KIND_TEXTURE_2D?D3DRTYPE_TEXTURE:D3DRTYPE_SURFACE;}
 COMMON(texture,IDirect3DTexture9)
 COMMON(surface,IDirect3DSurface9)
-static DWORD WINAPI texture_setlod(IDirect3DTexture9 *s,DWORD n){(void)n;unsupported(s);return 0;}
-static DWORD WINAPI texture_lod(IDirect3DTexture9 *s){unsupported(s);return 0;}
+static DWORD WINAPI texture_setlod(IDirect3DTexture9 *s,DWORD n){uint32_t value=0;hint(s,PW_D3D9_TEXTURE_SET_LOD,n,&value,1);return value;}
+static DWORD WINAPI texture_lod(IDirect3DTexture9 *s){uint32_t value=0;hint(s,PW_D3D9_TEXTURE_GET_LOD,0,&value,1);return value;}
 static DWORD WINAPI texture_levels(IDirect3DTexture9 *s){return impl(s)->levels;}
-static HRESULT WINAPI texture_setfilter(IDirect3DTexture9 *s,D3DTEXTUREFILTERTYPE f){(void)f;return unsupported(s);}
-static D3DTEXTUREFILTERTYPE WINAPI texture_filter(IDirect3DTexture9 *s){unsupported(s);return D3DTEXF_NONE;}
-static void WINAPI texture_generate(IDirect3DTexture9 *s){unsupported(s);}
+static HRESULT WINAPI texture_setfilter(IDirect3DTexture9 *s,D3DTEXTUREFILTERTYPE f){return hint(s,PW_D3D9_TEXTURE_SET_AUTOGEN_FILTER,(uint32_t)f,NULL,0);}
+static D3DTEXTUREFILTERTYPE WINAPI texture_filter(IDirect3DTexture9 *s){uint32_t value=0;hint(s,PW_D3D9_TEXTURE_GET_AUTOGEN_FILTER,0,&value,1);return value;}
+static void WINAPI texture_generate(IDirect3DTexture9 *s){hint(s,PW_D3D9_TEXTURE_GENERATE_MIPS,0,NULL,1);}
 static HRESULT WINAPI texture_desc(IDirect3DTexture9 *s,UINT l,D3DSURFACE_DESC *d){return get_desc(s,l,d);}
 static HRESULT WINAPI surface_desc(IDirect3DSurface9 *s,D3DSURFACE_DESC *d){return get_desc(s,0,d);}
 static HRESULT WINAPI texture_lock(IDirect3DTexture9 *s,UINT l,D3DLOCKED_RECT *d,const RECT *r,DWORD f){return lock_rect(s,l,d,r,f);}
@@ -181,9 +188,9 @@ static HRESULT WINAPI create_texture(IDirect3DDevice9 *d,UINT w,UINT h,UINT leve
 static HRESULT WINAPI create_surface(IDirect3DDevice9 *d,UINT w,UINT h,D3DFORMAT format,D3DPOOL pool,IDirect3DSurface9 **out,HANDLE *shared)
 {struct pw_d3d9_texture_request q={0};q.operation=PW_D3D9_TEXTURE_CREATE_SURFACE;q.width=w;q.height=h;q.format=format;q.pool=pool;return create_resource(d,PW_D3D9_KIND_SURFACE,&q,(void **)out,shared);}
 static HRESULT WINAPI create_rt(IDirect3DDevice9 *d,UINT w,UINT h,D3DFORMAT format,D3DMULTISAMPLE_TYPE sample,DWORD quality,BOOL lockable,IDirect3DSurface9 **out,HANDLE *shared)
-{struct pw_d3d9_texture_request q={0};q.operation=PW_D3D9_TEXTURE_CREATE_RT;q.width=w;q.height=h;q.format=format;q.multisample_type=sample;q.multisample_quality=quality;q.lockable=!!lockable;return create_resource(d,PW_D3D9_KIND_SURFACE,&q,(void **)out,shared);}
+{struct pw_d3d9_texture_request q={0};q.operation=PW_D3D9_TEXTURE_CREATE_RT;q.width=w;q.height=h;q.format=format;q.multisample_type=sample;q.multisample_quality=quality;q.lockable=(uint32_t)lockable;return create_resource(d,PW_D3D9_KIND_SURFACE,&q,(void **)out,shared);}
 static HRESULT WINAPI create_depth(IDirect3DDevice9 *d,UINT w,UINT h,D3DFORMAT format,D3DMULTISAMPLE_TYPE sample,DWORD quality,BOOL discard,IDirect3DSurface9 **out,HANDLE *shared)
-{struct pw_d3d9_texture_request q={0};q.operation=PW_D3D9_TEXTURE_CREATE_DEPTH;q.width=w;q.height=h;q.format=format;q.multisample_type=sample;q.multisample_quality=quality;q.discard=!!discard;return create_resource(d,PW_D3D9_KIND_SURFACE,&q,(void **)out,shared);}
+{struct pw_d3d9_texture_request q={0};q.operation=PW_D3D9_TEXTURE_CREATE_DEPTH;q.width=w;q.height=h;q.format=format;q.multisample_type=sample;q.multisample_quality=quality;q.discard=(uint32_t)discard;return create_resource(d,PW_D3D9_KIND_SURFACE,&q,(void **)out,shared);}
 /* Resolve and pin both objects atomically before crossing into a callback. */
 static HRESULT copy_resources(IDirect3DDevice9 *device,IUnknown *source,IUnknown *destination,uint32_t kind,struct pw_d3d9_texture_request *q)
 {

@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-static IDirect3DDevice9 parent;static LONG parent_refs=1;static unsigned refs[16],active[16],calls,writes,failures;static int blocked,negative,fail_operation;static uint64_t generation;
+static IDirect3DDevice9 parent;static LONG parent_refs=1;static unsigned refs[16],active[16],calls,writes,failures,priority[16],lod,filter=2,preloads,mips;static int blocked,negative,fail_operation;static uint64_t generation;
 static unsigned char contents[24];static struct pw_d3d9_deferred *pending;
 static ULONG WINAPI parent_addref(IDirect3DDevice9 *d){assert(d==&parent);return InterlockedIncrement(&parent_refs);}
 static ULONG WINAPI parent_release(IDirect3DDevice9 *d){assert(d==&parent);return InterlockedDecrement(&parent_refs);}
@@ -19,8 +19,8 @@ static HRESULT exchange(IDirect3DDevice9 *d,struct pw_d3d9_object_ref ref,const 
  switch(q->operation){
  case PW_D3D9_TEXTURE_CREATE:id=7;goto created;
  case PW_D3D9_TEXTURE_CREATE_SURFACE:id=9;goto created;
- case PW_D3D9_TEXTURE_CREATE_RT:assert(q->lockable==1);id=10;goto created;
- case PW_D3D9_TEXTURE_CREATE_DEPTH:assert(q->discard==1);id=11;goto created;
+ case PW_D3D9_TEXTURE_CREATE_RT:assert(q->lockable==0xffffffffu);id=10;goto created;
+ case PW_D3D9_TEXTURE_CREATE_DEPTH:assert(q->discard==0xffffffffu);id=11;goto created;
  case PW_D3D9_TEXTURE_SURFACE_LEVEL:assert(ref.id==7 && q->level==2);id=8;
  created:refs[id]++;r->object=(struct pw_d3d9_object_ref){id,9};r->levels=id==7?6:1;break;
  case PW_D3D9_TEXTURE_DESC:r->levels=id==7?6:1;break;
@@ -28,6 +28,14 @@ static HRESULT exchange(IDirect3DDevice9 *d,struct pw_d3d9_object_ref ref,const 
  case PW_D3D9_TEXTURE_READ:assert(active[id] && q->lock_generation==generation && !q->offset && q->count==24);r->lock_generation=generation;r->count=24;memcpy(r->data,contents,24);break;
  case PW_D3D9_TEXTURE_WRITE:assert(active[id] && q->lock_generation==generation && !q->offset && q->count==24);memcpy(contents,q->data,24);writes++;break;
  case PW_D3D9_TEXTURE_UNLOCK:case PW_D3D9_TEXTURE_CANCEL_LOCK:assert(active[id]);active[id]=0;break;
+ case PW_D3D9_TEXTURE_GET_PRIORITY:r->value=priority[id];break;
+ case PW_D3D9_TEXTURE_SET_PRIORITY:r->value=priority[id];priority[id]=q->value;break;
+ case PW_D3D9_TEXTURE_PRELOAD:preloads++;break;
+ case PW_D3D9_TEXTURE_GET_LOD:assert(id==7);r->value=lod;break;
+ case PW_D3D9_TEXTURE_SET_LOD:assert(id==7);r->value=lod;lod=q->value;break;
+ case PW_D3D9_TEXTURE_GET_AUTOGEN_FILTER:assert(id==7);r->value=filter;break;
+ case PW_D3D9_TEXTURE_SET_AUTOGEN_FILTER:assert(id==7);if(!q->value){r->hresult=D3DERR_INVALIDCALL;return D3DERR_INVALIDCALL;}filter=q->value;break;
+ case PW_D3D9_TEXTURE_GENERATE_MIPS:assert(id==7);mips++;break;
  case PW_D3D9_TEXTURE_DIRTY:assert(id==7 && q->has_rect && q->left==1 && q->top==2 && q->right==3 && q->bottom==4);break;
  case PW_D3D9_TEXTURE_UPDATE:assert(!id && q->source.id==7 && q->destination.id==7);break;
  case PW_D3D9_TEXTURE_UPDATE_SURFACE:assert(!id && q->source.id==8 && q->destination.id==9 && q->has_point && q->x==3 && q->y==4);break;
@@ -61,6 +69,15 @@ int main(void)
  assert(IDirect3DTexture9_GetLevelDesc(t,0,&desc)==S_OK && desc.Width==16 && desc.Height==8);
  assert(IDirect3DTexture9_GetSurfaceLevel(t,2,&s)==S_OK && IDirect3DSurface9_GetType(s)==D3DRTYPE_SURFACE);
  assert(IDirect3DSurface9_GetDesc(s,&desc)==S_OK && desc.Format==D3DFMT_A8R8G8B8);
+ assert(IDirect3DTexture9_SetPriority(t,0xfedcba98)==0 && IDirect3DTexture9_GetPriority(t)==0xfedcba98);
+ assert(IDirect3DSurface9_SetPriority(s,0xabcdef01)==0 && IDirect3DSurface9_GetPriority(s)==0xabcdef01);
+ IDirect3DTexture9_PreLoad(t);IDirect3DSurface9_PreLoad(s);assert(preloads==2);
+ assert(IDirect3DTexture9_SetLOD(t,3)==0 && IDirect3DTexture9_GetLOD(t)==3);
+ assert(IDirect3DTexture9_GetAutoGenFilterType(t)==D3DTEXF_LINEAR);
+ assert(IDirect3DTexture9_SetAutoGenFilterType(t,D3DTEXF_POINT)==S_OK && IDirect3DTexture9_GetAutoGenFilterType(t)==D3DTEXF_POINT);
+ assert(IDirect3DTexture9_SetAutoGenFilterType(t,D3DTEXF_NONE)==D3DERR_INVALIDCALL);
+ IDirect3DTexture9_GenerateMipSubLevels(t);assert(mips==1);
+
  if(sizeof(void *)==4)for(negative=0;negative<2;negative++){
   memset(contents,0x33,sizeof(contents));writes=0;
   assert(IDirect3DTexture9_LockRect(t,2,&lock,NULL,0)==S_OK && lock.Pitch==(negative?-16:16) && (uintptr_t)lock.pBits<=UINT32_MAX);
