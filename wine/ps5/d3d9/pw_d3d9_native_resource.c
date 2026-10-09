@@ -93,6 +93,13 @@ void pw_d3d9_native_resource_call(struct pw_d3d9_native_resource *r,const struct
  if(!r)return;
  switch(q->operation){
  case PW_D3D9_RESOURCE_DESC:hr=describe(r,&reply->desc);break;
+ case PW_D3D9_RESOURCE_GET_PRIORITY:
+  reply->priority=r->kind==PW_D3D9_KIND_VERTEX_BUFFER?IDirect3DVertexBuffer9_GetPriority(r->object.vb):IDirect3DIndexBuffer9_GetPriority(r->object.ib);hr=S_OK;break;
+ case PW_D3D9_RESOURCE_SET_PRIORITY:
+  reply->priority=r->kind==PW_D3D9_KIND_VERTEX_BUFFER?IDirect3DVertexBuffer9_SetPriority(r->object.vb,q->priority):IDirect3DIndexBuffer9_SetPriority(r->object.ib,q->priority);hr=S_OK;break;
+ case PW_D3D9_RESOURCE_PRELOAD:
+  if(r->kind==PW_D3D9_KIND_VERTEX_BUFFER)IDirect3DVertexBuffer9_PreLoad(r->object.vb);else IDirect3DIndexBuffer9_PreLoad(r->object.ib);
+  hr=S_OK;break;
  case PW_D3D9_RESOURCE_LOCK:
   if(r->mapping){hr=E_NOTIMPL;break;}
   if(r->generation==UINT64_MAX){hr=E_FAIL;break;}

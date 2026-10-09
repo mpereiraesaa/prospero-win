@@ -27,6 +27,10 @@ static void buffer(IDirect3DDevice9 *device,int index,D3DPOOL pool)
  assert(pw_d3d9_native_resource_kind(r)==(index?PW_D3D9_KIND_INDEX_BUFFER:PW_D3D9_KIND_VERTEX_BUFFER));
  assert(pw_d3d9_native_resource_identity(r)&&pw_d3d9_native_resource_backend(r));
  q=(struct pw_d3d9_resource_request){.operation=PW_D3D9_RESOURCE_DESC};reply=call(r,&q);assert(reply.hresult==S_OK&&reply.desc.pool==pool);
+ q=(struct pw_d3d9_resource_request){.operation=PW_D3D9_RESOURCE_GET_PRIORITY};reply=call(r,&q);assert(reply.hresult==S_OK&&reply.priority==0);
+ q.operation=PW_D3D9_RESOURCE_SET_PRIORITY;q.priority=0x12345678;reply=call(r,&q);assert(reply.hresult==S_OK&&reply.priority==0);
+ q.operation=PW_D3D9_RESOURCE_GET_PRIORITY;reply=call(r,&q);assert(reply.hresult==S_OK&&reply.priority==(pool==D3DPOOL_MANAGED?0x12345678u:0));
+ q.operation=PW_D3D9_RESOURCE_PRELOAD;reply=call(r,&q);assert(reply.hresult==S_OK);
  q=(struct pw_d3d9_resource_request){.operation=PW_D3D9_RESOURCE_LOCK,.offset=16385};reply=call(r,&q);assert(reply.hresult==(uint32_t)D3DERR_INVALIDCALL);
  q.offset=8;q.flags=D3DLOCK_DISCARD|D3DLOCK_NOOVERWRITE;reply=call(r,&q);assert(reply.hresult==S_OK&&reply.length==16376);
  generation=reply.lock_generation;span=reply.length;

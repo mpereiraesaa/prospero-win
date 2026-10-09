@@ -35,3 +35,8 @@ bytes and 64-bit generations, rejects every truncated length, oversized chunks,
 overflow, zero generations and reserved bits, and verifies failed decoding
 leaves output untouched. Actual backend execution is covered by the subsequent
 native adapter fixture rather than claimed by these codec checks.
+
+Buffer hint operations 9 GetPriority, 10 SetPriority and 11 PreLoad call the
+actual native resource. Priority is an opaque u32; Set returns the previous
+backend value. PreLoad has no output and acknowledges only after the actual
+void backend call. Pool/device semantics are decided by the backend.

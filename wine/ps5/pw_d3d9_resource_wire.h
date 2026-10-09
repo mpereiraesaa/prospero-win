@@ -11,7 +11,8 @@
 enum pw_d3d9_resource_operation {
  PW_D3D9_RESOURCE_CREATE_VB=1, PW_D3D9_RESOURCE_CREATE_IB,
  PW_D3D9_RESOURCE_DESC, PW_D3D9_RESOURCE_LOCK, PW_D3D9_RESOURCE_READ,
- PW_D3D9_RESOURCE_WRITE, PW_D3D9_RESOURCE_UNLOCK, PW_D3D9_RESOURCE_CANCEL_LOCK
+ PW_D3D9_RESOURCE_WRITE, PW_D3D9_RESOURCE_UNLOCK, PW_D3D9_RESOURCE_CANCEL_LOCK,
+ PW_D3D9_RESOURCE_GET_PRIORITY, PW_D3D9_RESOURCE_SET_PRIORITY, PW_D3D9_RESOURCE_PRELOAD
 };
 enum pw_d3d9_resource_result {
  PW_D3D9_RESOURCE_OK, PW_D3D9_RESOURCE_INVALID, PW_D3D9_RESOURCE_SMALL,
@@ -20,7 +21,7 @@ enum pw_d3d9_resource_result {
 /* Local DTOs only. Target object/device identity is in the outer frame.
  * format_fvf is FVF for VB creation and format for IB creation. */
 struct pw_d3d9_resource_request {
- uint32_t operation, length, usage, format_fvf, pool, offset, flags, count;
+ uint32_t operation, length, usage, format_fvf, pool, offset, flags, count, priority;
  uint64_t lock_generation;
  unsigned char data[PW_D3D9_RESOURCE_CHUNK];
 };
@@ -30,7 +31,7 @@ struct pw_d3d9_resource_reply {
  struct pw_d3d9_object_ref object;
  struct pw_d3d9_buffer_desc desc;
  uint64_t lock_generation;
- uint32_t length, offset, count;
+ uint32_t length, offset, count, priority;
  unsigned char data[PW_D3D9_RESOURCE_CHUNK];
 };
 /* Canonical little-endian payloads, exact lengths and zero reserved words.

@@ -10,14 +10,15 @@ static void put32(unsigned char *p,uint32_t n)
 static void put64(unsigned char *p,uint64_t n)
 {put32(p,(uint32_t)n);put32(p+4,(uint32_t)(n>>32));}
 static int valid_op(uint32_t op)
-{return op>=PW_D3D9_RESOURCE_CREATE_VB&&op<=PW_D3D9_RESOURCE_CANCEL_LOCK;}
+{return op>=PW_D3D9_RESOURCE_CREATE_VB&&op<=PW_D3D9_RESOURCE_PRELOAD;}
 static int chunk_valid(uint64_t generation,uint32_t offset,uint32_t count)
 {return generation&&count&&count<=PW_D3D9_RESOURCE_CHUNK&&offset<=UINT32_MAX-count;}
 static int req_size(const struct pw_d3d9_resource_request *q,size_t *n)
 {
  switch(q->operation){
  case PW_D3D9_RESOURCE_CREATE_VB:case PW_D3D9_RESOURCE_CREATE_IB:*n=16;break;
- case PW_D3D9_RESOURCE_DESC:*n=0;break;
+ case PW_D3D9_RESOURCE_DESC:case PW_D3D9_RESOURCE_GET_PRIORITY:case PW_D3D9_RESOURCE_PRELOAD:*n=0;break;
+ case PW_D3D9_RESOURCE_SET_PRIORITY:*n=4;break;
  case PW_D3D9_RESOURCE_LOCK:*n=12;break;
  case PW_D3D9_RESOURCE_READ:case PW_D3D9_RESOURCE_WRITE:
   if(!chunk_valid(q->lock_generation,q->offset,q->count))return 0;
@@ -38,6 +39,7 @@ int pw_d3d9_resource_request_encode(void *wire,size_t cap,size_t *written,const 
  switch(q->operation){
  case PW_D3D9_RESOURCE_CREATE_VB:case PW_D3D9_RESOURCE_CREATE_IB:
   put32(p,q->length);put32(p+4,q->usage);put32(p+8,q->format_fvf);put32(p+12,q->pool);break;
+ case PW_D3D9_RESOURCE_SET_PRIORITY:put32(p,q->priority);break;
  case PW_D3D9_RESOURCE_LOCK:put32(p,q->offset);put32(p+4,q->length);put32(p+8,q->flags);break;
  case PW_D3D9_RESOURCE_READ:case PW_D3D9_RESOURCE_WRITE:
   put64(p,q->lock_generation);put32(p+8,q->offset);put32(p+12,q->count);
@@ -58,7 +60,9 @@ int pw_d3d9_resource_request_decode(struct pw_d3d9_resource_request *out,const v
  case PW_D3D9_RESOURCE_CREATE_VB:case PW_D3D9_RESOURCE_CREATE_IB:
   if(bytes!=32)return PW_D3D9_RESOURCE_INVALID;
   q.length=get32(p);q.usage=get32(p+4);q.format_fvf=get32(p+8);q.pool=get32(p+12);break;
+ case PW_D3D9_RESOURCE_GET_PRIORITY:case PW_D3D9_RESOURCE_PRELOAD:
  case PW_D3D9_RESOURCE_DESC:if(bytes!=16)return PW_D3D9_RESOURCE_INVALID;break;
+ case PW_D3D9_RESOURCE_SET_PRIORITY:if(bytes!=20)return PW_D3D9_RESOURCE_INVALID;q.priority=get32(p);break;
  case PW_D3D9_RESOURCE_LOCK:
   if(bytes!=28)return PW_D3D9_RESOURCE_INVALID;
   q.offset=get32(p);q.length=get32(p+4);q.flags=get32(p+8);break;
@@ -87,6 +91,7 @@ static int reply_size(const struct pw_d3d9_resource_reply *r,size_t *n)
   if(!r->object.id||!r->object.generation)return 0;
   *n=32;break;
  case PW_D3D9_RESOURCE_DESC:*n=24;break;
+ case PW_D3D9_RESOURCE_GET_PRIORITY:case PW_D3D9_RESOURCE_SET_PRIORITY:*n=4;break;
  case PW_D3D9_RESOURCE_LOCK:
   if(!r->lock_generation||!r->length||r->length>PW_D3D9_RESOURCE_MAX_LOCK)return 0;
   *n=12;break;
@@ -109,6 +114,7 @@ int pw_d3d9_resource_reply_encode(void *wire,size_t cap,size_t *written,const st
  case PW_D3D9_RESOURCE_CREATE_VB:case PW_D3D9_RESOURCE_CREATE_IB:
   put32(p,r->object.id);put32(p+4,r->object.generation);desc_put(p+8,&r->desc);break;
  case PW_D3D9_RESOURCE_DESC:desc_put(p,&r->desc);break;
+ case PW_D3D9_RESOURCE_GET_PRIORITY:case PW_D3D9_RESOURCE_SET_PRIORITY:put32(p,r->priority);break;
  case PW_D3D9_RESOURCE_LOCK:put64(p,r->lock_generation);put32(p+8,r->length);break;
  case PW_D3D9_RESOURCE_READ:
   put64(p,r->lock_generation);put32(p+8,r->offset);put32(p+12,r->count);memcpy(p+16,r->data,r->count);break;
@@ -126,6 +132,9 @@ int pw_d3d9_resource_reply_decode(struct pw_d3d9_resource_reply *out,const void 
  case PW_D3D9_RESOURCE_CREATE_VB:case PW_D3D9_RESOURCE_CREATE_IB:
   if(bytes!=48)return PW_D3D9_RESOURCE_INVALID;
   r.object.id=get32(p);r.object.generation=get32(p+4);desc_get(&r.desc,p+8);break;
+ case PW_D3D9_RESOURCE_GET_PRIORITY:case PW_D3D9_RESOURCE_SET_PRIORITY:
+  if(bytes!=20)return PW_D3D9_RESOURCE_INVALID;
+  r.priority=get32(p);break;
  case PW_D3D9_RESOURCE_DESC:
   if(bytes!=40)return PW_D3D9_RESOURCE_INVALID;
   desc_get(&r.desc,p);break;

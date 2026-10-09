@@ -8,7 +8,7 @@ static void request_roundtrip(unsigned op)
  struct pw_d3d9_resource_request q={0},r,old;
  unsigned char wire[PW_D3D9_RESOURCE_MAX_WIRE],copy[sizeof(wire)];size_t n,i;
  q.operation=op;q.length=0x12345678;q.usage=0x87654321;q.format_fvf=101;q.pool=2;
- q.offset=11;q.flags=0x3010;q.count=PW_D3D9_RESOURCE_CHUNK;q.lock_generation=UINT64_C(0x1122334455667788);
+ q.priority=UINT32_MAX;q.offset=11;q.flags=0x3010;q.count=PW_D3D9_RESOURCE_CHUNK;q.lock_generation=UINT64_C(0x1122334455667788);
  for(i=0;i<q.count;i++)q.data[i]=(unsigned char)i;
  assert(!pw_d3d9_resource_request_encode(wire,sizeof(wire),&n,&q));
  assert(wire[0]==1&&wire[4]==op&&wire[12]==0);
@@ -26,7 +26,7 @@ static void reply_roundtrip(unsigned op,uint32_t hr)
  unsigned char wire[PW_D3D9_RESOURCE_MAX_WIRE],copy[sizeof(wire)];
  r.operation=op;r.hresult=hr;r.object=(struct pw_d3d9_object_ref){7,9};
  r.desc=(struct pw_d3d9_buffer_desc){101,6,0x200,1,1000,0x112};r.length=1000;
- r.lock_generation=UINT64_C(0xfedcba9876543210);r.offset=8;r.count=4096;
+ r.priority=0x87654321;r.lock_generation=UINT64_C(0xfedcba9876543210);r.offset=8;r.count=4096;
  for(i=0;i<r.count;i++)r.data[i]=(unsigned char)(i+11);
  assert(!pw_d3d9_resource_reply_encode(wire,sizeof(wire),&n,&r));
  assert(!pw_d3d9_resource_reply_decode(&decoded,wire,n));
@@ -42,7 +42,7 @@ int main(void)
  unsigned op;size_t n;unsigned char wire[PW_D3D9_RESOURCE_MAX_WIRE];
  struct pw_d3d9_resource_request q={.operation=PW_D3D9_RESOURCE_WRITE,.lock_generation=1,.count=1};
  struct pw_d3d9_resource_reply r={.operation=PW_D3D9_RESOURCE_LOCK,.lock_generation=1,.length=1};
- for(op=1;op<=8;op++){request_roundtrip(op);reply_roundtrip(op,0);reply_roundtrip(op,0x8876086a);}
+ for(op=1;op<=PW_D3D9_RESOURCE_PRELOAD;op++){request_roundtrip(op);reply_roundtrip(op,0);reply_roundtrip(op,0x8876086a);}
  q.offset=UINT32_MAX;assert(pw_d3d9_resource_request_encode(wire,sizeof(wire),&n,&q));
  q.offset=0;q.count=4097;assert(pw_d3d9_resource_request_encode(wire,sizeof(wire),&n,&q));
  q.count=0;assert(pw_d3d9_resource_request_encode(wire,sizeof(wire),&n,&q));
