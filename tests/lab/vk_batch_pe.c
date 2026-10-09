@@ -1,6 +1,7 @@
 /* Actual Win32 APIs and real Wine structs; only Unix crossing is mocked. */
 #include <assert.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include "vulkan_loader.h"
 #include "pw_vk_batch.h"
@@ -12,7 +13,10 @@ static NTSTATUS mock_call(unsigned int,void *);
 #undef ERR
 #define ERR(...) fprintf(stderr,__VA_ARGS__)
 #undef WINE_MESSAGE
-#define WINE_MESSAGE(...) fprintf(stderr,__VA_ARGS__)
+static HANDLE wait_reported;
+static void diagnostic(const char *format,...)
+{va_list args;va_start(args,format);vfprintf(stderr,format,args);va_end(args);if(wait_reported&&strstr(format,"PW_VK_STREAM_WAIT"))SetEvent(wait_reported);}
+#define WINE_MESSAGE(...) diagnostic(__VA_ARGS__)
 #include "pw_vk_batch_pe.c"
 static unsigned ordinary,batches,replayed,draw_raw,sequence[4096],used;
 static BOOL support=TRUE;
@@ -40,10 +44,27 @@ static DWORD WINAPI disable_worker(void *unused){struct vkCreateDebugUtilsMessen
 int main(int argc,char **argv)
 {
  VkInstance handle;VkInstanceCreateInfo info={0};struct vkCreateInstance_params create={0};HANDLE thread;struct vkResetCommandBuffer_params destroy={0};unsigned prior;
- assert(argc==2);support=strcmp(argv[1],"old")!=0;SetEnvironmentVariableA("PW_VK_BATCH",(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats"))?"0":"1");SetEnvironmentVariableA("PW_VK_BATCH_STATS",(!strcmp(argv[1],"stats")||!strcmp(argv[1],"profile"))?"1":"0");SetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",(!strcmp(argv[1],"profile")||!strcmp(argv[1],"profile-no-stats"))?"1":"0");
+ assert(argc==2);support=strcmp(argv[1],"old")!=0;SetEnvironmentVariableA("PW_VK_BATCH",(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats"))?"0":"1");SetEnvironmentVariableA("PW_VK_BATCH_STATS",(!strcmp(argv[1],"stats")||!strcmp(argv[1],"profile")||!strcmp(argv[1],"stall-report"))?"1":"0");SetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",(!strcmp(argv[1],"profile")||!strcmp(argv[1],"profile-no-stats"))?"1":"0");
  create.pCreateInfo=&info;create.pInstance=&handle;assert(pw_vk_batch_call(unix_vkCreateInstance,&create)==0);
  if(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats")||!support){draw_index(1);assert(draw_raw==1&&batches==0);if(!strcmp(argv[1],"stats")){struct vkQueuePresentKHR_params q={0};assert(pw_vk_batch_call(unix_vkQueuePresentKHR,&q)==0);assert(crossings_total==3&&present==1);}else assert(crossings_total==0);puts("PASS original path and old-Unix capability without new table access");return 0;}
  assert(negotiated&&enabled);
+ if(!strcmp(argv[1],"stall-report")){
+  struct producer *p=producer();struct pw_vk_spsc_sequence paused_sequence;
+  struct vkCmdDrawIndexed_params draw={(VkCommandBuffer)(uintptr_t)9,31,1,0,0,0};size_t bytes;uint32_t opcode;
+  assert(p);wait_reported=CreateEventA(NULL,TRUE,FALSE,NULL);assert(wait_reported);
+  assert(encode(unix_vkCmdDrawIndexed,&draw,p->wire,&bytes,&opcode));
+  /* Pause exactly between ticket reservation and ring publication. */
+  InterlockedExchange(&p->publishing,1);atomic_store_explicit(&stream_sequence.next,2,memory_order_release);
+  thread=CreateThread(NULL,0,flush_worker,NULL,0,NULL);assert(thread);
+  assert(WaitForSingleObject(wait_reported,5000)==WAIT_OBJECT_0);assert(!replayed);
+  pw_vk_spsc_sequence_init(&paused_sequence);
+  assert(!pw_vk_spsc_append(&paused_sequence,&p->stream,opcode,p->wire,bytes));
+  InterlockedExchange(&p->publishing,0);
+  assert(WaitForSingleObject(thread,5000)==WAIT_OBJECT_0);CloseHandle(thread);
+  assert(replayed==1 && sequence[0]==31 && next_replay==2);
+  CloseHandle(wait_reported);wait_reported=NULL;
+  puts("PASS bounded stalled-reservation diagnostic and resumed exact-prefix replay");return 0;
+ }
  if(!strcmp(argv[1],"disable-inflight")){
   struct producer *p;struct vkCmdDrawIndexed_params draw={(VkCommandBuffer)(uintptr_t)9,32,1,0,0,0};
   size_t bytes=0;uint32_t opcode=0;DWORD start;

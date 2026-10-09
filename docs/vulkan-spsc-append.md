@@ -77,3 +77,18 @@ record must remain pending until a subsequent drain. Existing template ownership
 thread retirement, sticky callback, synchronous status and progress-API fixtures
 remain required. These fixtures do not establish driver correctness or console
 performance; the integration is not yet an accepted runtime change.
+
+## Stalled publication diagnostics
+
+With `PW_VK_BATCH_STATS=1`, a collection or publisher-quiescence wait lasting
+about one second emits one `PW_VK_STREAM_WAIT` report for that stalled prefix
+and a bounded list of producer states. The report includes the expected global
+ticket, drain marker, producer thread IDs, ring read/write counters, published
+head ticket, publishing and retirement flags. It never skips a missing ticket or
+changes replay order. Statistics-off operation does not read the diagnostic clock.
+A PE fixture pauses a producer after reservation, observes the diagnostic, then
+publishes and verifies ordered replay resumes.
+
+The first A1 console candidate completed GTA IV but stalled in GTA SA during
+menu-to-game transition. That candidate is not accepted; the diagnostic is for
+identifying the waiting path. No deadlock fix or performance acceptance is claimed.
