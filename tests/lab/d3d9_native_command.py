@@ -24,28 +24,30 @@ def run(command,label,env=None):
  return r
 native=root/'wine/ps5/d3d9/pw_d3d9_native_command.c';codec=root/'wine/ps5/pw_d3d9_command_wire.c'
 policy=root/'wine/ps5/pw_d3d9_command_policy.c'
+shadow=root/'wine/ps5/pw_d3d9_draw_shadow.c'
 fixture=root/'tests/lab/d3d9_native_command.c';pe=root/'tests/lab/d3d9_native_command_pe.c'
 includes=['-I'+str(root/'wine/ps5'),'-I'+str(root/'wine/ps5/d3d9')]
-inputs=[native,native.with_suffix('.h'),native.parent/'pw_d3d9_kinds.h',codec,policy,fixture,pe,Path(__file__),*sorted((root/'wine/ps5').rglob('*.h'))]
+inputs=[native,native.with_suffix('.h'),native.parent/'pw_d3d9_kinds.h',codec,policy,shadow,fixture,pe,Path(__file__),*sorted((root/'wine/ps5').rglob('*.h'))]
 frozen={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in inputs}
 receipt['sources']=frozen
 flags=['-std=gnu11','-Wall','-Wextra','-Werror']
 for label,extra in [('host',[]),('sanitize',['-fsanitize=address,undefined','-fno-omit-frame-pointer'])]:
- run(['cc',*flags,*extra,'-D_WIN64','-D__WINESRC__','-I'+str(a.wine_build.resolve()/'include'),'-I'+str(a.wine_source.resolve()/'include'),*includes,fixture,native,codec,policy,'-o',out/label],'compile-'+label)
+ run(['cc',*flags,*extra,'-D_WIN64','-D__WINESRC__','-I'+str(a.wine_build.resolve()/'include'),'-I'+str(a.wine_source.resolve()/'include'),*includes,fixture,native,codec,policy,shadow,'-o',out/label],'compile-'+label)
  run([out/label],label)
-run(['i686-w64-mingw32-gcc',*flags,'-O2',*includes,pe,codec,policy,'-o',out/'client.exe'],'compile-client')
-run(['x86_64-w64-mingw32-gcc',*flags,'-O2','-Wno-array-bounds','-shared','-static-libgcc',*includes,pe,native,codec,policy,'-luser32','-o',out/'service.dll'],'compile-service')
+run(['i686-w64-mingw32-gcc',*flags,'-O2',*includes,pe,codec,policy,shadow,'-o',out/'client.exe'],'compile-client')
+run(['x86_64-w64-mingw32-gcc',*flags,'-O2','-Wno-array-bounds','-shared','-static-libgcc',*includes,pe,native,codec,policy,shadow,'-luser32','-o',out/'service.dll'],'compile-service')
 env=os.environ.copy();env.update(WINEPREFIX=str(a.prefix.resolve()),WINEDEBUG='-all',WINEDLLOVERRIDES='mscoree,mshtml=;d3d9=n',DXVK_LOG_PATH=str(out),PW_COMMAND_BACKEND='Z:'+str(a.backend64.resolve()).replace('/','\\'))
 for i in range(3):
  env['PW_COMMAND_SESSION']=uuid.uuid4().hex
  env['PW_COMMAND_BEHAVIOR']=str([0x40,0x80,0x20][i])
  r=run([a.wine_build.resolve()/'loader/wine',out/'client.exe','Z:'+str(out/'service.dll').replace('/','\\')],'pe-'+str(i),env)
  assert len(re.findall('PW_COMMAND_NATIVE index=',r.stdout))==48,r.stdout
+ assert 'PW_DRAW_SHADOW comparisons=204 reset_phases=3 ok=1' in r.stdout,r.stdout
  assert 'PW_COMMAND_POLICY cases=620 live_and_recorded=1 fallback=4 null_rejects=2 ok=1' in r.stdout,r.stdout
  assert re.search(r'PW_CONSTANT_POLICY creation=[0-9a-f]+ comparisons=132 live_and_recorded=1 ok=1',r.stdout),r.stdout
  assert re.search(r'PW_COMMAND_PE status=00000000 create=00000000 present=00000000 commands=48 pins=6 pixel=[0-9a-f]+ zero=6 error=0',r.stdout),r.stdout
 assert frozen=={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in inputs},'source changed during proof'
 receipt.update(status='pass',sources=frozen,policy_comparisons_per_process=620,constant_comparisons_per_process=132,creation_modes=['hardware','mixed','software'],native_methods=40,pe_processes=3,commands_per_process=48,valid_draws_per_process=2,negative_unbound_draws_per_process=2,zero_count_native_comparisons_per_process=6,
  scope='First-wave policy live/recorded direct-vs-native parity and conservative invalid-sampler fallback. Controlled exact HRESULT/field/pin ABI; PE32-owned codec payloads decoded by PE64 helper on real DXVK, valid primitive/indexed draws and changed-pixel readback. No production COM proxy/session wiring or console performance claim.',
- sha256={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [native,native.with_suffix('.h'),codec,policy,fixture,pe,Path(__file__),a.backend64.resolve(),out/'client.exe',out/'service.dll']})
+ sha256={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [native,native.with_suffix('.h'),codec,policy,shadow,fixture,pe,Path(__file__),a.backend64.resolve(),out/'client.exe',out/'service.dll']})
 (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');print('PASS '+str(out/'receipt.json'))

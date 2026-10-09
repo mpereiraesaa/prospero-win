@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include "pw_d3d9_command_wire.h"
 #include "pw_d3d9_command_policy.h"
+#include "pw_d3d9_draw_shadow.h"
 #ifdef _WIN64
 #include "pw_d3d9_native_command.h"
 #endif
@@ -143,6 +144,104 @@ static int policy_proof(IDirect3DDevice9 *device)
  printf("PW_COMMAND_POLICY cases=%u live_and_recorded=1 fallback=4 null_rejects=2 ok=%d\n",count,ok);
  return ok;
 }
+static int draw_zero_compare(IDirect3DDevice9 *device, struct pw_d3d9_draw_shadow *shadow, unsigned *cases)
+{
+ IDirect3DVertexDeclaration9 *decl=NULL;
+ if(IDirect3DDevice9_GetVertexDeclaration(device,&decl)!=S_OK)return 0;
+ int present=decl!=NULL;
+ if(decl)IDirect3DVertexDeclaration9_Release(decl);
+ for(unsigned method=81;method<=82;method++)for(unsigned type=1;type<=6;type++){
+  struct pw_d3d9_command c={.method=method,.args={type}};
+  HRESULT expected=present?S_OK:D3DERR_INVALIDCALL;
+  HRESULT direct=method==81?IDirect3DDevice9_DrawPrimitive(device,type,0,0):
+   IDirect3DDevice9_DrawIndexedPrimitive(device,type,0,0,0,0,0);
+  HRESULT helper=pw_d3d9_native_command_dispatch(device,&c,NULL,NULL);
+  int eligible=pw_d3d9_draw_can_queue(shadow,&c);
+  if(direct!=expected || helper!=expected || (eligible && expected!=S_OK))return 0;
+  if(shadow->active!=PW_D3D9_DECL_UNKNOWN && eligible!=present)return 0;
+  ++*cases;
+ }
+ return 1;
+}
+static int draw_shadow_proof(IDirect3DDevice9 *device,D3DPRESENT_PARAMETERS *params)
+{
+ struct pw_d3d9_draw_shadow shadow;
+ struct pw_d3d9_draw_block block={0},typed[3];
+ IDirect3DStateBlock9 *recorded=NULL,*blocks[3]={NULL,NULL,NULL};
+ IDirect3DSurface9 *held=NULL;IDirect3DVertexDeclaration9 *decl=NULL;
+ HRESULT hr;unsigned cases=0;int ok=0;
+ pw_d3d9_draw_init(&shadow);
+ hr=IDirect3DDevice9_SetVertexDeclaration(device,NULL);pw_d3d9_draw_declaration(&shadow,0,hr);
+ if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ hr=IDirect3DDevice9_SetFVF(device,0);pw_d3d9_draw_fvf(&shadow,0,hr);
+ if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ hr=IDirect3DDevice9_SetFVF(device,D3DFVF_XYZ);pw_d3d9_draw_fvf(&shadow,D3DFVF_XYZ,hr);
+ if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ hr=IDirect3DDevice9_BeginStateBlock(device);pw_d3d9_draw_begin(&shadow,hr);
+ if(hr!=S_OK)goto done;
+ hr=IDirect3DDevice9_SetVertexDeclaration(device,NULL);pw_d3d9_draw_declaration(&shadow,0,hr);
+ if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ hr=IDirect3DDevice9_EndStateBlock(device,&recorded);pw_d3d9_draw_end(&shadow,&block,hr);
+ if(hr!=S_OK)goto done;
+ hr=IDirect3DStateBlock9_Apply(recorded);pw_d3d9_draw_apply(&shadow,&block,hr);
+ if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ hr=IDirect3DStateBlock9_Capture(recorded);pw_d3d9_draw_capture(&shadow,&block,hr);
+ if(hr!=S_OK)goto done;
+ hr=IDirect3DDevice9_SetVertexDeclaration(device,NULL);pw_d3d9_draw_declaration(&shadow,0,hr);
+ if(hr!=S_OK)goto done;
+ hr=IDirect3DStateBlock9_Apply(recorded);pw_d3d9_draw_apply(&shadow,&block,hr);
+ if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ IDirect3DStateBlock9_Release(recorded);recorded=NULL;
+ hr=IDirect3DDevice9_SetVertexDeclaration(device,NULL);pw_d3d9_draw_declaration(&shadow,0,hr);
+ if(hr!=S_OK)goto done;
+ hr=IDirect3DDevice9_BeginStateBlock(device);pw_d3d9_draw_begin(&shadow,hr);
+ if(hr!=S_OK)goto done;
+ hr=IDirect3DDevice9_SetFVF(device,D3DFVF_XYZ);pw_d3d9_draw_fvf(&shadow,D3DFVF_XYZ,hr);
+ if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ hr=IDirect3DDevice9_EndStateBlock(device,&recorded);pw_d3d9_draw_end(&shadow,&block,hr);
+ if(hr!=S_OK)goto done;
+ hr=IDirect3DStateBlock9_Apply(recorded);pw_d3d9_draw_apply(&shadow,&block,hr);
+ if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ IDirect3DStateBlock9_Release(recorded);recorded=NULL;
+ for(unsigned i=0;i<3;i++){
+  hr=IDirect3DDevice9_CreateStateBlock(device,i+1,&blocks[i]);
+  pw_d3d9_draw_create_block(&shadow,&typed[i],i+1,hr);if(hr!=S_OK)goto done;
+ }
+ hr=IDirect3DDevice9_SetVertexDeclaration(device,NULL);pw_d3d9_draw_declaration(&shadow,0,hr);
+ if(hr!=S_OK)goto done;
+ hr=IDirect3DStateBlock9_Apply(blocks[1]);pw_d3d9_draw_apply(&shadow,&typed[1],hr);
+ if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ for(unsigned i=0;i<3;i+=2){
+  hr=IDirect3DStateBlock9_Apply(blocks[i]);pw_d3d9_draw_apply(&shadow,&typed[i],hr);
+  if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ }
+ for(unsigned i=0;i<3;i++){IDirect3DStateBlock9_Release(blocks[i]);blocks[i]=NULL;}
+ /* All Reset outcomes invalidate evidence; actual GetDeclaration can restore it. */
+ for(unsigned phase=0;phase<3;phase++){
+  D3DPRESENT_PARAMETERS pp=*params;
+  if(phase==0)pp.SwapEffect=0;
+  if(phase==1 && IDirect3DDevice9_GetRenderTarget(device,0,&held)!=S_OK)goto done;
+  pw_d3d9_draw_invalidate(&shadow);hr=IDirect3DDevice9_Reset(device,&pp);
+  if((phase<2 && hr!=D3DERR_INVALIDCALL) || (phase==2 && hr!=S_OK))goto done;
+  if(held){IDirect3DSurface9_Release(held);held=NULL;}
+  if(!draw_zero_compare(device,&shadow,&cases))goto done;
+  hr=IDirect3DDevice9_GetVertexDeclaration(device,&decl);
+  pw_d3d9_draw_observe(&shadow,decl!=NULL,hr);
+  if(decl){IDirect3DVertexDeclaration9_Release(decl);decl=NULL;}
+  if(hr!=S_OK || !draw_zero_compare(device,&shadow,&cases))goto done;
+ }
+ ok=1;
+ done:
+ if(shadow.recording){IDirect3DStateBlock9 *cleanup=NULL;if(SUCCEEDED(IDirect3DDevice9_EndStateBlock(device,&cleanup)) && cleanup)IDirect3DStateBlock9_Release(cleanup);}
+ if(decl)IDirect3DVertexDeclaration9_Release(decl);
+ if(held)IDirect3DSurface9_Release(held);
+ if(recorded)IDirect3DStateBlock9_Release(recorded);
+ for(unsigned i=0;i<3;i++)if(blocks[i])IDirect3DStateBlock9_Release(blocks[i]);
+ printf("PW_DRAW_SHADOW comparisons=%u reset_phases=3 ok=%d\n",cases,ok);
+ /* Original unbound negative draw cases must still start with no declaration. */
+ IDirect3DDevice9_SetVertexDeclaration(device,NULL);
+ return ok;
+}
 static LRESULT CALLBACK proc(HWND w,UINT m,WPARAM a,LPARAM b){return DefWindowProcW(w,m,a,b);}
 __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
 {
@@ -169,7 +268,7 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  hr=IDirect3D9_CreateDevice(d3d,0,D3DDEVTYPE_HAL,window,behavior,&pp,&device);
  result[0]=(uint32_t)hr;
  if(FAILED(hr))goto done;
- if(!policy_proof(device) || !constant_policy_proof(device))goto done;
+ if(!policy_proof(device) || !constant_policy_proof(device) || !draw_shadow_proof(device,&pp))goto done;
  if(FAILED(IDirect3DDevice9_GetRenderTarget(device,0,&surface)) || FAILED(IDirect3DDevice9_CreateTexture(device,4,4,1,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&texture,NULL)) ||
  FAILED(IDirect3DDevice9_CreateVertexBuffer(device,sizeof(vertices),0,D3DFVF_XYZRHW|D3DFVF_DIFFUSE,D3DPOOL_MANAGED,&vb,NULL)) ||
  FAILED(IDirect3DDevice9_CreateIndexBuffer(device,sizeof(indices),0,D3DFMT_INDEX16,D3DPOOL_MANAGED,&ib,NULL)))goto done;
@@ -181,7 +280,17 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  IDirect3DDevice9_SetRenderState(device,D3DRS_LIGHTING,FALSE);IDirect3DDevice9_SetTextureStageState(device,0,D3DTSS_COLOROP,D3DTOP_SELECTARG2);IDirect3DDevice9_SetTextureStageState(device,0,D3DTSS_COLORARG2,D3DTA_DIFFUSE);
  for(unsigned i=0;i<s->count;i++){
   if(pw_d3d9_command_decode(&c,s->wire[i],s->length[i]))goto done;
+  int draw_eligible=-1;
+  if(c.method==81 || c.method==82){
+   struct pw_d3d9_draw_shadow evidence;IDirect3DVertexDeclaration9 *decl=NULL;
+   pw_d3d9_draw_init(&evidence);hr=IDirect3DDevice9_GetVertexDeclaration(device,&decl);
+   pw_d3d9_draw_observe(&evidence,decl!=NULL,hr);
+   if(decl)IDirect3DVertexDeclaration9_Release(decl);
+   if(hr!=S_OK)goto done;
+   draw_eligible=pw_d3d9_draw_can_queue(&evidence,&c);
+  }
   hr=pw_d3d9_native_command_dispatch(device,&c,acquire,&objects);s->hr[i]=(uint32_t)hr;
+  if(draw_eligible>=0 && draw_eligible!=(hr==S_OK))goto done;
   printf("PW_COMMAND_NATIVE index=%u method=%u hr=%08lx\n",i,c.method,hr);
   if(i>=40 && FAILED(hr))goto done;
  }

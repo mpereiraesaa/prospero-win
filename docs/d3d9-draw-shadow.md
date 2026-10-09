@@ -47,3 +47,14 @@ in hardware, mixed and software creation modes, plus the existing real primitive
 and indexed draws with changed-pixel readback. Its receipt freezes93 inputs and
 nine successful commands. This supports the evidence model, without claiming
 queued-session integration or console acceptance.
+
+## Native comparison fixture
+
+The native-command fixture adds direct/helper zero-primitive comparisons for all
+six topology enums, with absent/present declarations, recorded null/non-null
+changes, FVF0, Capture and typed ALL/PIXEL/VERTEX Apply. Early-invalid, late-failed
+and successful Reset invalidate evidence; a native declaration getter restores
+it. The original two real draws and changed-pixel readback remain and now compare
+shadow eligibility against the actual draw HRESULT. All three creation modes
+passed the retained native proof above; this extension does not test queued
+sessions.
