@@ -66,3 +66,9 @@ helper name `bind` collided with Winsock. Commit `113870f3` renamed that helper;
 no backend or production implementation changed. Earlier draft expectation for
 captured-null declaration Apply was corrected before any runtime run after
 checking pinned DXVK source; the actual proof verifies retained live identity.
+
+Publication keeps the fixture C and runner identical to the executed source.
+The normalized dependency tree contains later constants-policy and proxy/header
+updates: 98 of the 106 captured inputs match it; the eight differences are listed
+in retained `draw-batch-native-r2/publication-map.json`. The receipt proves the
+frozen source named above, not a fresh run of those later dependency changes.
