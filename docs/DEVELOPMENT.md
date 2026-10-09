@@ -10,7 +10,7 @@ For portable code and documentation:
 
 ```sh
 sudo apt-get update
-sudo apt-get install build-essential clang git python3 python3-yaml gcc-mingw-w64-i686
+sudo apt-get install build-essential clang git python3 python3-yaml gcc-mingw-w64-i686 unzip
 python3 tools/check_setup.py
 make -j2 all
 make -j2 sanitize
