@@ -971,3 +971,7 @@ tests/lab/d3d9_transform_client.c
 tests/lab/d3d9_transform_client.py
 tests/lab/d3d9_transform_device.c
 docs/d3d9-transform-transport.md
+
+# Actual native pipeline transport proof
+tests/lab/d3d9_pipeline_native.py
+docs/d3d9-pipeline-native.md
