@@ -36,7 +36,7 @@ fixture = Path(__file__).with_suffix('.c')
 for source in [fixture, native_device, root / 'wine/ps5/pw_d3d9_window_driver.h', *sources, *[p.with_suffix('.h') for p in sources]]:
     receipt['sources'][str(source.relative_to(root))] = digest(source)
 try:
-    flags = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-array-bounds']
+    flags = ['-DPW_D3D9_ENABLE_DEVICE', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-array-bounds']
     run(['i686-w64-mingw32-gcc', *flags, '-municode', fixture, *sources,
          '-o', out / 'client.exe'], 'build-client')
     run(['x86_64-w64-mingw32-gcc', *flags, '-shared', '-static-libgcc', native_device, *sources,

@@ -1,8 +1,9 @@
 # Persistent native D3D9 device calls
 
 The device adapter extends [persistent sessions](d3d9-persistent-session.md)
-with opcode19 and the [device codec](d3d9-device-wire.md). CREATE targets a
-factory ID; RESET and PRESENT target a device ID. The registry checks interface
+with explicit build flag `PW_D3D9_ENABLE_DEVICE`, opcode19 and the [device codec](d3d9-device-wire.md). CREATE targets a
+factory ID; RESET and PRESENT target a device ID. Factory-only builds retain their original handshake and reject device opcodes.
+The registry checks interface
 kind and generation before a backend call. Returned device pointers and their
 canonical IUnknown identity remain native-local.
 
@@ -51,6 +52,10 @@ An explicit `--expect-unavailable` mode requires real CreateDevice to return
 D3DERR_NOTAVAILABLE, no device ID, preserved failed-call parameters and clean
 session/association cleanup in all three cycles. The isolated host PS5-driver
 runtime lacks a usable VK_KHR_display surface, so only this negative mode is
-expected there. Receipt `/tmp/prospero-d3d9-device-unavailable-r1/receipt.json`
+expected there. Receipt `/tmp/prospero-d3d9-device-unavailable-r2/receipt.json`
 records this limited host proof. No positive console device result is claimed
 by this document yet.
+
+The unchanged factory-only runner also passed all three sessions,1200 calls
+and cancellation recovery after this extension; receipt
+`/tmp/prospero-d3d9-device-factory-regression-r1/receipt.json`.
