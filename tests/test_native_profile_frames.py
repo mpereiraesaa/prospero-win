@@ -102,9 +102,19 @@ def main() -> int:
     assert "CS thread tid=004c" in text and "(1 spanning several frames, left out)" in text
     assert "guest" in text and "+20.00" in text          # the guest bucket grows by 20 ms in spikes
     assert "vkCmdDraw" in text and "vkCreateGraphicsPipelines" in text and "RADV thread 2" in text
-    assert "events over 200 us: 2 total, 1 in spike frames" in text
-    assert npf.align_dxvk(log) == 3 and npf.align_dxvk(npf.Log()) == 0
-    assert "dxvk::DxvkContext::draw" in text and "DXVK CS thread: 40 frame lines (frame id + 3 = present), 36 normal, 4 spike" in text
+    assert "events over 200 us: 2 total, 1 in spike frames (waits left out: 0)" in text
+    aligned = npf.align_dxvk(log)
+    assert [f["frame"] for f, _ in aligned] == list(range(1, 41)) and npf.align_dxvk(npf.Log()) == []
+    assert "dxvk::DxvkContext::draw" in text and "DXVK CS thread: 40 frame lines, 36 normal, 4 spike" in text
+    pretty = ("const char* dxvk::DxvkCsTypedCmd<T>::profileName() const [with T = dxvk::D3D9DeviceEx::"
+              "UpdatePushConstant<24, 4>(const void*)::<lambda(dxvk::DxvkContext*)>]")
+    assert npf.short_dxvk_name(pretty) == "D3D9DeviceEx::UpdatePushConstant<24, 4>"
+    assert npf.short_dxvk_name("const char* dxvk::DxvkCsDataCmd<T, M>::profileName() const [with T = dxvk::D3D9DeviceEx::"
+                               "Clear(DWORD)::<lambda(uint32_t)>; M = int]") == "D3D9DeviceEx::Clear"
+    assert npf.short_dxvk_name("plain") == "plain"
+    cut = npf.window(log, HZ, 0.3, 0.5)     # presents 19..31 of 16 ms, plus the spikes' extra
+    assert min(cut.presents) > 1 and max(cut.presents) < 40 and all(f["frame"] in cut.presents for f, _ in cut.radv[1])
+    assert npf.window(log, HZ, None, None) is log
     assert "busy ms: normal 12.00  spike 30.00" in text
     assert "worst frames: #10 40.0 ms" in text
     # --tid picks another thread; a thread without RADV lines says so.

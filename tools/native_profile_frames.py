@@ -23,6 +23,9 @@ and the events that fell in spike frames. --csv writes one row per frame.
 
 Usage: native_profile_frames.py LOG [--spike-ms MS] [--normal-ms MS] [--tid HEX]
                                 [--tsc-hz HZ] [--csv FILE] [--top N]
+                                [--from SECONDS] [--to SECONDS]
+    --from/--to keep the presents in that window after the first present,
+    to leave loading and menus out.
 """
 from __future__ import annotations
 
@@ -116,28 +119,66 @@ def parse(lines) -> Log:
     return log
 
 
-def align_dxvk(log: Log) -> int:
-    """The offset from DXVK's frame ids to the driver's present numbers.
+def align_dxvk(log: Log) -> list:
+    """DXVK's frame lines keyed by the driver's present number.
 
     DXVK's CS thread writes frame F when it hands present F to the submit
-    thread, before the driver's present F returns, so DXVK's line comes
-    just before the present line with the same number when both count the
-    same presents. The offset is the median over the lines of (number of
-    the first present returned after the line's TSC) minus (the line's
-    frame id); 0 when nothing can be aligned."""
+    thread, before the driver's present returns, so each line belongs to
+    the first present returned after the line's TSC. DXVK's own frame id
+    is not used: it counts presents the driver never made."""
     if not log.dxvk or not log.presents:
-        return 0
+        return []
     presents = sorted((p["tsc"], frame) for frame, p in log.presents.items() if "tsc" in p)
     if not presents:
-        return 0
-    offsets = []
-    for f, _ in log.dxvk:
+        return []
+    out, index = [], 0
+    for f, c in sorted(log.dxvk, key=lambda item: item[0].get("tsc", 0)):
         if "tsc" not in f:
             continue
-        index = next((i for i, (tsc, _) in enumerate(presents) if tsc >= f["tsc"]), None)
-        if index is not None:
-            offsets.append(presents[index][1] - f["frame"])
-    return int(statistics.median(offsets)) if offsets else 0
+        while index < len(presents) and presents[index][0] < f["tsc"]:
+            index += 1
+        if index < len(presents):
+            out.append(({**f, "frame": presents[index][1]}, c))
+    return out
+
+
+def short_dxvk_name(text: str) -> str:
+    """The function that emitted a command, out of its type's pretty name:
+    'const char* dxvk::DxvkCsTypedCmd<T>::profileName() const [with T =
+    dxvk::D3D9DeviceEx::DrawPrimitive(D3DPRIMITIVETYPE, UINT, UINT)::<lambda(
+    dxvk::DxvkContext*)>]' becomes 'D3D9DeviceEx::DrawPrimitive'."""
+    match = re.search(r"\[with T = (.*)", text)
+    if not match:
+        return text
+    head = match[1].split("::<lambda", 1)[0].split(";", 1)[0]
+    head = re.sub(r"\(.*", "", head)
+    return head[len("dxvk::"):] if head.startswith("dxvk::") else head
+
+
+WAITS = {"vkAcquireNextImageKHR", "vkWaitForFences", "vkWaitSemaphores", "vkWaitForPresentKHR", "vkQueueWaitIdle",
+         "vkDeviceWaitIdle", "vkGetFenceStatus", "vkGetQueryPoolResults"}
+
+
+def window(log: Log, hz: int, start: float | None, end: float | None) -> Log:
+    """The log cut to presents between start and end seconds after the first
+    present (and the per-frame lines of those frames)."""
+    if start is None and end is None or not log.presents:
+        return log
+    origin = min(p["tsc"] for p in log.presents.values() if "tsc" in p)
+
+    def inside(tsc):
+        seconds = (tsc - origin) / hz
+        return (start is None or seconds >= start) and (end is None or seconds <= end)
+
+    cut = Log(tsc_hz=log.tsc_hz, event_us=log.event_us, dxvk_names=log.dxvk_names)
+    cut.presents = {f: p for f, p in log.presents.items() if "tsc" in p and inside(p["tsc"])}
+    for tid, rows in log.native.items():
+        cut.native[tid] = [r for r in rows if r["frame"] in cut.presents]
+    for thread, rows in log.radv.items():
+        cut.radv[thread] = [(f, per) for f, per in rows if f["frame"] in cut.presents]
+    cut.events = [e for e in log.events if e[0]["frame"] in cut.presents]
+    cut.dxvk = [(f, c) for f, c in log.dxvk if "tsc" in f and inside(f["tsc"])]
+    return cut
 
 
 def frame_ms(log: Log, hz: int) -> dict:
@@ -160,15 +201,16 @@ def percentile(values: list, fraction: float) -> float:
 
 
 def cs_tid(log: Log) -> int | None:
-    """The thread with the most Unix calls per frame line."""
-    best, best_rate = None, -1.0
+    """The thread with the most Unix calls over its single-frame lines:
+    the one that records the driver's commands every frame."""
+    best, best_total = None, -1
     for tid, rows in log.native.items():
         single = [r for r in rows if r.get("frames") == 1]
         if len(single) < 10:
             continue
-        rate = sum(r.get("unix_calls", 0) for r in single) / len(single)
-        if rate > best_rate:
-            best, best_rate = tid, rate
+        total = sum(r.get("unix_calls", 0) for r in single)
+        if total > best_total:
+            best, best_total = tid, total
     return best
 
 
@@ -279,16 +321,26 @@ def report(log: Log, spike_ms: float, normal_ms: float, tid: int | None, top: in
                   + ", ".join(busiest), file=out)
 
     if log.events:
-        in_spikes = [e for e in log.events if e[0]["frame"] in spikes]
+        waits = [e for e in log.events if e[1] in WAITS]
+        work = [e for e in log.events if e[1] not in WAITS]
+        in_spikes = [e for e in work if e[0]["frame"] in spikes]
         by_fn: dict = defaultdict(lambda: [0, 0])
-        for f, fn, _ in log.events:
+        for f, fn, _ in work:
             by_fn[fn][0] += 1
             by_fn[fn][1] += f.get("ticks", 0)
-        print(f"\nevents over {log.event_us} us: {len(log.events)} total, {len(in_spikes)} in spike frames", file=out)
+        print(f"\nevents over {log.event_us} us: {len(work)} total, {len(in_spikes)} in spike frames "
+              f"(waits left out: {len(waits)})", file=out)
         for fn, (count, ticks) in sorted(by_fn.items(), key=lambda item: -item[1][1])[:top]:
             print(f"  {fn:<40} {count:>6} calls {ms(ticks, hz):>9.2f} ms total {ms(ticks, hz) / count:>8.3f} ms mean",
                   file=out)
-        slowest = sorted(log.events, key=lambda e: -e[0].get("ticks", 0))[:top]
+        by_wait: dict = defaultdict(lambda: [0, 0])
+        for f, fn, _ in waits:
+            by_wait[fn][0] += 1
+            by_wait[fn][1] += f.get("ticks", 0)
+        for fn, (count, ticks) in sorted(by_wait.items(), key=lambda item: -item[1][1]):
+            print(f"  wait {fn:<35} {count:>6} calls {ms(ticks, hz):>9.2f} ms total {ms(ticks, hz) / count:>8.3f} ms mean",
+                  file=out)
+        slowest = sorted(work, key=lambda e: -e[0].get("ticks", 0))[:top]
         print("slowest events:", file=out)
         for f, fn, detail in slowest:
             tag = "spike" if f["frame"] in spikes else ("normal" if f["frame"] in normal else "other")
@@ -296,16 +348,14 @@ def report(log: Log, spike_ms: float, normal_ms: float, tid: int | None, top: in
                   f"{fn} {ms(f.get('ticks', 0), hz):.3f} ms {detail}", file=out)
 
     if log.dxvk:
-        offset = align_dxvk(log)
-        dxvk = [({**f, "frame": f["frame"] + offset}, c) for f, c in log.dxvk]
+        dxvk = align_dxvk(log)
         dn = [(f, c) for f, c in dxvk if f.get("frames", 1) == 1 and f["frame"] in normal]
         ds = [(f, c) for f, c in dxvk if f.get("frames", 1) == 1 and f["frame"] in spikes]
 
         def mean_field(rows, key):
             return statistics.mean(f.get(key, 0) for f, _ in rows) * 1000 / hz if rows else 0.0
 
-        print(f"\nDXVK CS thread: {len(log.dxvk)} frame lines (frame id + {offset} = present), {len(dn)} normal, "
-              f"{len(ds)} spike", file=out)
+        print(f"\nDXVK CS thread: {len(dxvk)} frame lines, {len(dn)} normal, {len(ds)} spike", file=out)
         for key in ("wall", "busy"):
             print(f"  {key:>6} ms: normal {mean_field(dn, key):.2f}  spike {mean_field(ds, key):.2f}", file=out)
         print(f"  commands per frame: normal {statistics.mean(f.get('cmds', 0) for f, _ in dn) if dn else 0:.0f}  "
@@ -324,7 +374,7 @@ def report(log: Log, spike_ms: float, normal_ms: float, tid: int | None, top: in
         print(f"{'command':<56} {'normal':>8} {'spike':>8} {'delta':>8} {'calls n':>8} {'calls s':>8}", file=out)
         for cmd in sorted(set(cn) | set(cs), key=lambda c: -(cs.get(c, (0, 0))[1]))[:top]:
             a, b = cn.get(cmd, (0, 0)), cs.get(cmd, (0, 0))
-            name = log.dxvk_names.get(cmd, f"command {cmd}")
+            name = short_dxvk_name(log.dxvk_names.get(cmd, f"command {cmd}"))
             print(f"{name[:56]:<56} {a[1]:>8.3f} {b[1]:>8.3f} {b[1] - a[1]:>+8.3f} {a[0]:>8.0f} {b[0]:>8.0f}",
                   file=out)
     return 0
@@ -337,8 +387,7 @@ def write_csv(log: Log, path: str, tid: int | None) -> None:
     native = {r["frame"]: r for r in log.native.get(tid, []) if r.get("frames") == 1} if tid is not None else {}
     thread = radv_thread_for(log, tid) if tid is not None else None
     radv = {f["frame"]: (f, per_fn) for f, per_fn in log.radv.get(thread, []) if f.get("frames") == 1}
-    offset = align_dxvk(log)
-    dxvk = {f["frame"] + offset: f for f, _ in log.dxvk if f.get("frames", 1) == 1}
+    dxvk = {f["frame"]: f for f, _ in align_dxvk(log) if f.get("frames", 1) == 1}
     with open(path, "w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["frame", "length_ms", "wall_ms", "guest_ms", "unix_ms", "syscall_ms", "other_ms", "fs_ms",
@@ -371,11 +420,15 @@ def main(argv=None) -> int:
     parser.add_argument("--tsc-hz", type=int, default=0)
     parser.add_argument("--csv")
     parser.add_argument("--top", type=int, default=15)
+    parser.add_argument("--from", dest="start", type=float, help="seconds after the first present")
+    parser.add_argument("--to", dest="end", type=float)
     args = parser.parse_args(argv)
     with open(args.log, errors="replace") as handle:
         log = parse(handle)
     if args.tsc_hz:
         log.tsc_hz = args.tsc_hz
+    if log.tsc_hz:
+        log = window(log, log.tsc_hz, args.start, args.end)
     status = report(log, args.spike_ms, args.normal_ms, args.tid, args.top)
     if args.csv and log.tsc_hz and log.presents:
         write_csv(log, args.csv, args.tid)
