@@ -9,6 +9,15 @@
  * Calls are serialized internally. Close requires all API callers to finish;
  * it cancels/joins before releasing mappings, including on startup failure. */
 struct pw_d3d9_session;
+/* Intrusive cleanup ownership stays with the caller until function returns.
+ * Callbacks must not close the session; their enclosing COM call retains it. */
+struct pw_d3d9_deferred {
+    struct pw_d3d9_deferred *next;
+    void (*function)(void *);
+    void *context;
+    unsigned queued;
+};
+HRESULT pw_d3d9_session_defer(struct pw_d3d9_session *,struct pw_d3d9_deferred *);
 /* DLL detach only; no sessions or callers may remain. No waits or callbacks. */
 void pw_d3d9_session_process_detach(void);
 HRESULT pw_d3d9_session_open(const WCHAR *service_path,const WCHAR *backend_path,

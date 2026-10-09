@@ -15,8 +15,11 @@ remain ordered and failed nested calls leave output DTOs unchanged.
 Factory proxy bookkeeping locks cover only local lists/reference counts. They
 are released before opening a session, making an RPC, releasing a remote
 object or stopping/joining the service. A temporary local COM reference and
-session operation count preserve lifetime across callbacks. A failed remote
-Release cancels the session, making failure sticky. A new factory request
+session operation count preserve lifetime across callbacks. Final Release during a pumped callback queues owned cleanup without waiting
+on the transaction lock. An intrusive queue drains after the outer reply is
+consumed and the lock released; the proxy and session operation reference stay
+alive until remote Release completes. Genuine remote-release failures cancel
+the session, making failure sticky. A new factory request
 while startup/close is in progress fails with NULL instead of waiting while
 holding a proxy lock.
 
@@ -34,14 +37,14 @@ nested Direct3DCreate9, and checks unchanged failed output. The hook is absent
 from normal builds and does not replace any backend operation.
 
 Host proof requires20 real owner calls,40 callbacks,80 nested rejects and
-preserved WM_QUIT code37. Existing persistent and DLL proxy fixtures are also
+preserved WM_QUIT code37 and20 deferred final releases without cancelling
+the healthy session. Existing persistent and DLL proxy fixtures are also
 run separately to cover1200 concurrent calls, cancellation/reopen, canonical
 identity and final cleanup. This is a client RPC foundation; it does not itself
 prove owner-thread CreateDevice/Reset or complete game compatibility.
 
-Receipts: `/tmp/prospero-d3d9-rpc-ui-r3/receipt.json` and
-`/tmp/prospero-d3d9-rpc-ui-proxy-regression-r2/receipt.json` passed. The
-concurrent session regression passed at
-`/tmp/prospero-d3d9-rpc-ui-session-regression/receipt.json` before replacing
-compiler-emulated TLS with equivalent Win32 TLS slots. Win32 slots avoid an
-extra libgcc DLL dependency and are freed without waiting during proxy detach.
+Receipts: `/tmp/prospero-d3d9-rpc-ui-r5/receipt.json`,
+`/tmp/prospero-d3d9-rpc-ui-proxy-final/receipt.json` and
+`/tmp/prospero-d3d9-rpc-ui-session-final/receipt.json` all passed with the
+final deferred-release implementation. Win32 TLS slots avoid an extra libgcc
+DLL dependency and are freed without waiting during proxy detach.

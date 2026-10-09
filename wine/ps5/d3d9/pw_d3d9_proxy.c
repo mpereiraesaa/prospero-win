@@ -9,6 +9,8 @@ struct proxy {
     ULONG references;
     struct pw_d3d9_object_ref remote;
     struct proxy *next;
+    struct pw_d3d9_session *cleanup_session;
+    struct pw_d3d9_deferred cleanup;
 };
 static SRWLOCK lock=SRWLOCK_INIT;
 static struct pw_d3d9_session *session;
@@ -46,6 +48,12 @@ static HRESULT WINAPI proxy_query(IDirect3D9 *iface,REFIID iid,void **out)
     if(!IsEqualGUID(iid,&IID_IUnknown)&&!IsEqualGUID(iid,&IID_IDirect3D9))return E_NOINTERFACE;
     proxy_addref(iface);*out=iface;return S_OK;
 }
+static void release_remote(void *parameter)
+{
+    struct proxy *p=parameter;struct pw_d3d9_session *owned=p->cleanup_session;
+    if(FAILED(pw_d3d9_session_release(owned,p->remote)))pw_d3d9_session_cancel(owned);
+    HeapFree(GetProcessHeap(),0,p);put_session(owned);
+}
 static ULONG WINAPI proxy_release(IDirect3D9 *iface)
 {
     struct proxy *p=object(iface),**link;struct pw_d3d9_session *owned=NULL;
@@ -57,7 +65,12 @@ static ULONG WINAPI proxy_release(IDirect3D9 *iface)
     }
     ReleaseSRWLockExclusive(&lock);
     if(!refs){
-        if(FAILED(pw_d3d9_session_release(owned,p->remote)))pw_d3d9_session_cancel(owned);
+        HRESULT hr=pw_d3d9_session_release(owned,p->remote);
+        if(hr==RPC_E_CANTCALLOUT_ININPUTSYNCCALL){
+            p->cleanup_session=owned;p->cleanup.function=release_remote;p->cleanup.context=p;
+            if(SUCCEEDED(pw_d3d9_session_defer(owned,&p->cleanup)))return 0;
+        }
+        if(FAILED(hr))pw_d3d9_session_cancel(owned);
         HeapFree(GetProcessHeap(),0,p);put_session(owned);
     }
     return refs;

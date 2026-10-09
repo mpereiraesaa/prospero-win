@@ -143,6 +143,9 @@ struct pw_d3d9_session {
     HANDLE broker,serial_event;
     DWORD active_thread;
     CRITICAL_SECTION lock;
+    SRWLOCK deferred_lock;
+    struct pw_d3d9_deferred *deferred_first,*deferred_last;
+    int draining;
     struct bootstrap bootstrap;
     LONG status;
 };
@@ -156,6 +159,30 @@ static DWORD WINAPI broker_main(void *parameter)
     s->status=query?query(GetCurrentProcess(),0x50570001,&s->bootstrap,sizeof(s->bootstrap),&returned):(LONG)0xc0000002;
     if(!s->status && returned!=sizeof(s->bootstrap))s->status=(LONG)0xc0000004;
     return (DWORD)s->status;
+}
+HRESULT pw_d3d9_session_defer(struct pw_d3d9_session *s,struct pw_d3d9_deferred *item)
+{
+    if(!s||!item||!item->function)return E_INVALIDARG;
+    AcquireSRWLockExclusive(&s->deferred_lock);
+    if(item->queued){ReleaseSRWLockExclusive(&s->deferred_lock);return E_INVALIDARG;}
+    item->queued=1;item->next=NULL;
+    if(s->deferred_last)s->deferred_last->next=item;else s->deferred_first=item;
+    s->deferred_last=item;ReleaseSRWLockExclusive(&s->deferred_lock);return S_OK;
+}
+static void drain_deferred(struct pw_d3d9_session *s)
+{
+    AcquireSRWLockExclusive(&s->deferred_lock);
+    if(s->draining){ReleaseSRWLockExclusive(&s->deferred_lock);return;}
+    s->draining=1;
+    for(;;){
+        struct pw_d3d9_deferred *item=s->deferred_first;
+        if(!item){s->draining=0;ReleaseSRWLockExclusive(&s->deferred_lock);return;}
+        s->deferred_first=item->next;if(!s->deferred_first)s->deferred_last=NULL;
+        item->queued=0;item->next=NULL;
+        ReleaseSRWLockExclusive(&s->deferred_lock);
+        item->function(item->context);
+        AcquireSRWLockExclusive(&s->deferred_lock);
+    }
 }
 static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,const void *payload,
                         unsigned char *output,size_t capacity,struct pw_d3d9_message *reply)
@@ -180,7 +207,7 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
     result=(HRESULT)reply->result;
  done:
     s->active_thread=0;LeaveCriticalSection(&s->lock);SetEvent(s->serial_event);
-    restore_quit();return result;
+    restore_quit();drain_deferred(s);return result;
 }
 static void destroy_session(struct pw_d3d9_session *s)
 {
@@ -204,6 +231,7 @@ HRESULT pw_d3d9_session_open(const WCHAR *service,const WCHAR *backend,struct pw
     s=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*s));
     if(!s){InterlockedExchange(&session_claim,0);return E_OUTOFMEMORY;}
     InitializeCriticalSection(&s->lock);
+    InitializeSRWLock(&s->deferred_lock);
     s->serial_event=CreateEventW(NULL,FALSE,FALSE,NULL);
     if(!s->serial_event)goto fail;
     name(object_name,L"BOOT",pid,0);

@@ -52,10 +52,11 @@ try:
     output = run([args.wine_build.resolve() / 'loader/wine', out / 'client.exe',
                   windows(out / 'service.dll'),
                   windows(backend)], 'proxy', env)
-    assert 'PW_RPC_UI owner_calls=20 callbacks=40 nested_rejected=80 quit=37 status=0' in output
+    assert 'PW_RPC_UI owner_calls=20 callbacks=40 nested_rejected=80 quit=37 deferred=20 status=0' in output
     receipt['owner_calls'] = 20
     receipt['callbacks'] = 40
     receipt['nested_rejected'] = 80
+    receipt['deferred_releases'] = 20
 
 finally:
     (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')

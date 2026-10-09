@@ -6,11 +6,13 @@
 #include <string.h>
 static HWND window;
 static HANDLE notify_start,notify_done,stop_sender;
-static IDirect3D9 *factory;
+static IDirect3D9 *factory,*victim;
+static unsigned deferred_releases;
 static unsigned armed,callbacks,failures;
 void pw_d3d9_session_test_callback(void)
 {
     if(!armed)return;
+    armed=0;
     if(!PostMessageW(window,WM_APP,0,0)||!SetEvent(notify_start)||WaitForSingleObject(notify_done,30000)!=WAIT_OBJECT_0)failures++;
 }
 static DWORD WINAPI sender(void *unused)
@@ -31,7 +33,9 @@ static LRESULT CALLBACK procedure(HWND hwnd,UINT message,WPARAM wparam,LPARAM lp
         if(hr!=RPC_E_CANTCALLOUT_ININPUTSYNCCALL||memcmp(&caps,&before,sizeof(caps)))failures++;
         IDirect3D9 *nested=Direct3DCreate9(D3D_SDK_VERSION);
         if(nested){failures++;IDirect3D9_Release(nested);}
-        IDirect3D9_Release(factory);callbacks++;return 0;
+        IDirect3D9_Release(factory);
+        if(victim){IDirect3D9 *released=victim;victim=NULL;if(IDirect3D9_Release(released))failures++;deferred_releases++;}
+        callbacks++;return 0;
     }
     return DefWindowProcW(hwnd,message,wparam,lparam);
 }
@@ -50,8 +54,9 @@ int wmain(int argc,WCHAR **argv)
     factory=Direct3DCreate9(D3D_SDK_VERSION);CHECK(factory);
     for(unsigned n=0;n<20;n++){
         unsigned before=callbacks;D3DCAPS9 caps;
+        victim=Direct3DCreate9(D3D_SDK_VERSION);CHECK(victim);
         armed=1;HRESULT hr=IDirect3D9_GetDeviceCaps(factory,0,D3DDEVTYPE_HAL,&caps);armed=0;
-        CHECK(hr==S_OK&&caps.MaxTextureWidth&&callbacks==before+2&&!failures);
+        CHECK(hr==S_OK&&caps.MaxTextureWidth&&callbacks==before+2&&!failures&&!victim&&deferred_releases==n+1);
         CHECK(IDirect3D9_GetAdapterCount(factory)>0);
     }
     /* WM_QUIT is retained for the outer application's message loop. */
@@ -61,6 +66,6 @@ int wmain(int argc,WCHAR **argv)
     SetEvent(stop_sender);CHECK(WaitForSingleObject(thread,30000)==WAIT_OBJECT_0);
     CloseHandle(thread);CloseHandle(notify_start);CloseHandle(notify_done);CloseHandle(stop_sender);
     DestroyWindow(window);UnregisterClassW(cls.lpszClassName,cls.hInstance);
-    printf("PW_RPC_UI owner_calls=20 callbacks=%u nested_rejected=%u quit=37 status=%u\n",callbacks,callbacks*2,failures);
+    printf("PW_RPC_UI owner_calls=20 callbacks=%u nested_rejected=%u quit=37 deferred=%u status=%u\n",callbacks,callbacks*2,deferred_releases,failures);
     return failures?1:0;
 }
