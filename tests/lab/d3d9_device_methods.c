@@ -4,7 +4,9 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-static unsigned calls,resolves,failures,mode;static uint32_t method,args[6],expected_bytes;
+static unsigned calls,resolves,failures,mode;static LONG device_refs=1;
+static ULONG WINAPI self_addref(IDirect3DDevice9 *d){(void)d;return ++device_refs;}
+static ULONG WINAPI self_release(IDirect3DDevice9 *d){(void)d;return --device_refs;}static uint32_t method,args[6],expected_bytes;
 static unsigned char payload[4096];static IDirect3DDevice9 *owner;static IUnknown *object=(IUnknown *)(uintptr_t)0x1234;
 static unsigned expected_kind;
 static HRESULT command(IDirect3DDevice9 *device,const struct pw_d3d9_command *c)
@@ -16,13 +18,14 @@ static HRESULT command(IDirect3DDevice9 *device,const struct pw_d3d9_command *c)
 }
 static HRESULT getter(IDirect3DDevice9 *device,const struct pw_d3d9_getter_request *q,struct pw_d3d9_getter_reply *r)
 {
- size_t bytes;assert(device==owner && q->method==method && !memcmp(args,q->args,sizeof(q->args)));
+ size_t bytes;assert(device_refs>=2);assert(device==owner && q->method==method && !memcmp(args,q->args,sizeof(q->args)));
  assert(!pw_d3d9_getter_bytes(q,&bytes));calls++;
  r->method=q->method;r->hresult=0x1234;r->bytes=bytes;memcpy(r->data.bytes,payload,bytes);
  if(mode==1)return D3DERR_INVALIDCALL;
  if(mode==2)r->method++;
  if(mode==3)r->bytes++;
  if(mode==4)r->hresult++;
+ if(mode==5){IDirect3DDevice9_Release(device);assert(device_refs==1);}
  return 0x1234;
 }
 static HRESULT resolve(IDirect3DDevice9 *device,IUnknown *local,uint32_t kind,struct pw_d3d9_object_ref *ref)
@@ -37,7 +40,7 @@ int main(void)
 {
  IDirect3DDevice9Vtbl table={0};IDirect3DDevice9 device={&table};
  struct pw_d3d9_device_methods_ops callbacks={command,getter,fail,resolve};owner=&device;
- pw_d3d9_device_methods_install(&table,&callbacks);
+ table.AddRef=self_addref;table.Release=self_release;pw_d3d9_device_methods_install(&table,&callbacks);
  assert(!table.QueryInterface && !table.Reset && !table.Present && !table.CreateTexture);
  {setup(3);
  assert(IDirect3DDevice9_TestCooperativeLevel(&device)==0x1234);
@@ -509,5 +512,6 @@ int main(void)
  { float values[1024];setup(110);args[0]=2;args[1]=256;assert(IDirect3DDevice9_GetPixelShaderConstantF(&device,2,values,256)==0x1234);assert(!memcmp(values,payload,4096));args[1]=0;assert(IDirect3DDevice9_GetPixelShaderConstantF(&device,2,values,0)==0x1234);assert(IDirect3DDevice9_GetPixelShaderConstantF(&device,2,NULL,0)==D3DERR_INVALIDCALL);assert(IDirect3DDevice9_GetPixelShaderConstantF(&device,2,values,257)==D3DERR_INVALIDCALL);}
  { int values[1024];setup(112);args[0]=2;args[1]=256;assert(IDirect3DDevice9_GetPixelShaderConstantI(&device,2,values,256)==0x1234);assert(!memcmp(values,payload,4096));args[1]=0;assert(IDirect3DDevice9_GetPixelShaderConstantI(&device,2,values,0)==0x1234);assert(IDirect3DDevice9_GetPixelShaderConstantI(&device,2,NULL,0)==D3DERR_INVALIDCALL);assert(IDirect3DDevice9_GetPixelShaderConstantI(&device,2,values,257)==D3DERR_INVALIDCALL);}
  { BOOL values[1024];setup(114);args[0]=2;args[1]=1024;assert(IDirect3DDevice9_GetPixelShaderConstantB(&device,2,values,1024)==0x1234);assert(!memcmp(values,payload,4096));args[1]=0;assert(IDirect3DDevice9_GetPixelShaderConstantB(&device,2,values,0)==0x1234);assert(IDirect3DDevice9_GetPixelShaderConstantB(&device,2,NULL,0)==D3DERR_INVALIDCALL);assert(IDirect3DDevice9_GetPixelShaderConstantB(&device,2,values,1025)==D3DERR_INVALIDCALL);}
+ {DWORD value;setup(58);args[0]=2;mode=5;assert(IDirect3DDevice9_GetRenderState(&device,2,&value)==0x1234 && device_refs==0);}
  printf("PASS typed device methods:40 command+28 getter slots, calls=%u resolve=%u failure=%u\n",calls,resolves,failures);return 0;
 }

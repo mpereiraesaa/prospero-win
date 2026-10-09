@@ -25,11 +25,11 @@ static HRESULT get(IDirect3DDevice9 *device,const struct pw_d3d9_getter_request 
 {
  struct pw_d3d9_getter_reply r;size_t bytes;HRESULT hr;
  if(!out || pw_d3d9_getter_bytes(q,&bytes))return D3DERR_INVALIDCALL;
- memset(&r,0,sizeof(r));hr=ops.getter(device,q,&r);
- if(FAILED(hr))return hr;
- if(r.method!=q->method || r.hresult!=(uint32_t)hr || r.bytes!=bytes){ops.fail(device,E_FAIL);return E_FAIL;}
+ IDirect3DDevice9_AddRef(device);memset(&r,0,sizeof(r));hr=ops.getter(device,q,&r);
+ if(FAILED(hr))goto done;
+ if(r.method!=q->method || r.hresult!=(uint32_t)hr || r.bytes!=bytes){ops.fail(device,E_FAIL);hr=E_FAIL;goto done;}
  if(bytes)memcpy(out,r.data.bytes,bytes);
- return hr;
+ done:IDirect3DDevice9_Release(device);return hr;
 }
 static HRESULT WINAPI method_TestCooperativeLevel(IDirect3DDevice9 *device)
 {

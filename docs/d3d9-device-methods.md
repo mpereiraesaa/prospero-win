@@ -31,6 +31,12 @@ PE32 and PE64 executables. All 68 typed slots are exercised with payload and
 selector checks. Negative coverage includes required pointers, oversized arrays,
 maximum and zero arrays for all six setter/getter pairs, object resolution errors, malformed replies, and unchanged output on failure.
 
-Receipt: `/tmp/prospero-d3d9-device-methods-r3/receipt.json`.
+Receipt: `/tmp/prospero-d3d9-device-methods-lifetime-r1/receipt.json`.
 This proof covers typed COM entry signatures and codec mapping. Production session
 wiring, native backend execution, and console performance are separate checks.
+
+The getter adapter retains the device across the callback, reply validation, and
+output publication. A guest callback may release its last external device ref;
+protocol failure handling still receives a live device. The focused fixture
+exercises this reentrant release and checks final ownership reaches zero only
+after the adapter finishes.
