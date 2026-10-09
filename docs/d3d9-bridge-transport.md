@@ -115,3 +115,7 @@ reply.bin` in Unix64, then `check reply.bin` in PE32. It exchanges actual shared
 wire images, including a wrapped payload, 64-bit ticket `0x1234567800000021`,
 32-bit target/generation values, and a failing HRESULT. It passed on host Wine;
 this is wire compatibility proof, not a running persistent service.
+
+Device calls use opcode19, separate from factory calls17. The device codec
+selects CREATE, RESET or PRESENT; the adapter validates the target interface.
+The transport preserves the opcode in its request/reply correlation ledger.

@@ -33,6 +33,7 @@ static struct pw_d3d9_message call(uint32_t bytes)
 static void roundtrip(struct fixture *f,unsigned value)
 {
     unsigned char payload[35],scratch[128];struct pw_d3d9_message m=call(sizeof(payload)),r;
+    m.opcode=value&1?PW_D3D9_DEVICE_CALL:PW_D3D9_FACTORY_CALL;
     memset(payload,(int)value,sizeof(payload));
     assert(pw_d3d9_channel_send(&f->client,&m,payload)==PW_D3D9_OK);
     memset(payload,0,sizeof(payload));
@@ -43,7 +44,7 @@ static void roundtrip(struct fixture *f,unsigned value)
     assert(pw_d3d9_channel_send(&f->service,&r,scratch+64)==PW_D3D9_OK);
     memset(scratch,0,sizeof(scratch));
     assert(pw_d3d9_channel_receive(&f->client,&r,scratch,sizeof(scratch))==PW_D3D9_OK);
-    assert(r.result==(int32_t)0x8876086c && r.object==12 && r.generation==3);
+    assert(r.result==(int32_t)0x8876086c && r.object==12 && r.generation==3 && r.opcode==m.opcode);
     for(unsigned i=0;i<35;i++)assert(scratch[64+i]==(unsigned char)value);
 }
 static void basic(void)
