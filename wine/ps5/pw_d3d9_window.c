@@ -75,7 +75,9 @@ int pw_d3d9_window_acquire(struct pw_d3d9_windows *r,struct pw_d3d9_window_id id
  if(e->closing)return PW_D3D9_WINDOW_CLOSED;
  if(e->failed)return PW_D3D9_WINDOW_BACKEND;
  if(!e->sequence || e->pending_sequence)return PW_D3D9_WINDOW_BUSY;
- if(!(e->applied.flags&PW_D3D9_WINDOW_VISIBLE) || !e->applied.width || !e->applied.height)return PW_D3D9_WINDOW_HIDDEN;
+ /* A surface is a resource and may precede ShowWindow. Visibility controls
+  * input independently; retain size, ownership and lifetime checks here. */
+ if(!e->applied.width || !e->applied.height)return PW_D3D9_WINDOW_HIDDEN;
  if(r->plane_owner.id && !equal(r->plane_owner,id))return PW_D3D9_WINDOW_BUSY;
  for(i=0;i<PW_D3D9_WINDOW_LEASES;i++)if(!r->leases[i].live && r->leases[i].generation<UINT32_MAX){
   r->leases[i].generation++;r->leases[i].live=1;r->leases[i].owner=id;

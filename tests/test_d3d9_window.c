@@ -45,7 +45,11 @@ int main(void)
  assert(a.id==old.id && a.generation==old.generation+1);
  assert(pw_d3d9_window_get(&r,old,&view)==PW_D3D9_WINDOW_STALE);
  state.flags=0;OK(pw_d3d9_window_begin(&r,a,1,&state));OK(pw_d3d9_window_ack(&r,a,1,0));
- assert(pw_d3d9_window_acquire(&r,a,service,&first)==PW_D3D9_WINDOW_HIDDEN);
+ OK(pw_d3d9_window_acquire(&r,a,service,&first));
+ assert(!pw_d3d9_window_input(&r,service));
+ OK(pw_d3d9_window_get(&r,a,&view));assert(!view.applied.flags && view.leases==1);
+ assert(pw_d3d9_window_acquire(&r,b,UINT64_C(0x200002345),&second)==PW_D3D9_WINDOW_BUSY);
+ OK(pw_d3d9_window_release(&r,first));assert(!r.plane_owner.id);
  state.flags=PW_D3D9_WINDOW_VISIBLE;OK(pw_d3d9_window_begin(&r,a,2,&state));
  assert(pw_d3d9_window_ack(&r,a,2,UINT32_C(0x88760868))==PW_D3D9_WINDOW_BACKEND);
  OK(pw_d3d9_window_get(&r,a,&view));assert(view.backend_result==UINT32_C(0x88760868));

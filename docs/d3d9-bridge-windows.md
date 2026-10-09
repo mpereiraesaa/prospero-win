@@ -67,7 +67,7 @@ the token extension and persistent cleanup discipline are separate dependencies.
 
 `tests/test_d3d9_window.c` checks local handles above 4 GiB, stale epochs and
 generations, duplicate handle rejection, copied mirror state, exact sequence and
-HRESULT handling, hidden/probe rejection, two leases for one pair, exclusion of
+HRESULT handling, hidden surface creation and probe rejection, two leases for one pair, exclusion of
 another pair, lease exhaustion, double/stale release, input ownership, pending
 close, detach, and counter exhaustion. It runs in the normal host/sanitizer suite.
 
@@ -160,3 +160,26 @@ use the real guest dimensions without transporting an HWND or guessing a size.
 Queries run outside the driver lock, followed by identity validation. The service
 still applies the returned state between BEGIN and ACK and supplies the actual
 UI operation result. Fullscreen policy remains an explicit service decision.
+
+## Hidden windows and surface resources
+
+A valid, acknowledged association with nonzero client dimensions may acquire a
+Vulkan surface lease before its guest window is shown. D3D9 may create its
+Presenter during CreateDevice, before the application calls ShowWindow. Requiring
+visibility at surface creation incorrectly rejects that sequence. Acquiring a
+lease does not show either window or change mirrored flags; hidden associations
+still suppress input. Token, generation, service identity, pending mirror, failed
+backend, close, plane ownership and bounded lease checks remain enforced.
+
+The driver reserves the lease before releasing the title display and querying
+Vulkan displays. That display handoff remains necessary for hidden surface
+creation because display enumeration may open the host output. A failed creation
+releases its reservation; successful creation retains it until the actual host
+surface is destroyed. Hide/show transitions never discard live leases.
+
+A controlled fixture including the actual driver adapter rejected the first
+hidden surface before this change. The corrected fixture checks hidden surface
+creation, unchanged visibility, suppressed input, hide/show transitions, failed
+replacement rollback, and destruction before detach. This establishes the API
+policy repair; it does not establish the cause of a game process exit or console
+rendering acceptance.

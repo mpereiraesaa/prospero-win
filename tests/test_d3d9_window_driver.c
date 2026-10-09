@@ -52,7 +52,7 @@ static RECT guest_rect={20,20,340,260};
 static int get_client_rect_rel(HWND hwnd,int relative,RECT *rect,struct ratio dpi)
 {(void)relative;(void)dpi;if(hwnd!=(HWND)100)return 0;*rect=guest_rect;return 1;}
 static unsigned NtUserGetWindowLongW(HWND hwnd,int index)
-{(void)hwnd;(void)index;return WS_VISIBLE;}
+{(void)hwnd;(void)index;return 0;}
 static HWND NtUserGetForegroundWindow(void){return (HWND)100;}
 #include "../wine/ps5/pw_d3d9_window_driver.c"
 static void domain(DWORD tid,uint64_t token,int guest){current_tid=tid;current_token=token;teb.WowTebOffset=guest?0x2000:0;}
@@ -92,7 +92,7 @@ int main(void)
  domain(2,10,0);assert(ps5_bridge_window_call(&q,sizeof(q))==PW_D3D9_WINDOW_BUSY);
  ps5_bridge_surface_destroyed(7,8);
  assert(!ps5_bridge_window_call(&q,sizeof(q)));first=q.id;epoch=q.id.epoch;
- assert(q.state.x==20 && q.state.y==20 && q.state.width==320 && q.state.height==240 && q.state.flags==3);
+ assert(q.state.x==20 && q.state.y==20 && q.state.width==320 && q.state.height==240 && q.state.flags==2);
  guest_rect.right=660;guest_rect.bottom=500;q.operation=PW_D3D9_WINDOW_QUERY_STATE;
  assert(!ps5_bridge_window_call(&q,sizeof(q)) && q.state.width==640 && q.state.height==480);
  domain(1,0,1);registration.operation=PW_D3D9_GUEST_UNREGISTER;
@@ -100,13 +100,24 @@ int main(void)
  domain(2,10,0);
  assert(bridge_service_window((HWND)200));assert(!bridge_input_window((HWND)200));
  assert(bridge_input_window((HWND)333)==(HWND)333);
- q.operation=PW_D3D9_WINDOW_BEGIN;q.sequence=1;q.state=(struct pw_d3d9_window_state){0,0,640,480,1};
+ q.operation=PW_D3D9_WINDOW_BEGIN;q.sequence=1;q.state=(struct pw_d3d9_window_state){0,0,640,480,0};
  assert(!ps5_bridge_window_call(&q,sizeof(q)));assert(!bridge_surface_reserve(&client));
  q.operation=PW_D3D9_WINDOW_ACK;assert(!ps5_bridge_window_call(&q,sizeof(q)));
- assert(bridge_input_window((HWND)200)==(HWND)100);
+ assert(!bridge_input_window((HWND)200)); /* Hidden guest never gains input. */
  s=bridge_surface_reserve(&client);assert(s);bridge_surface_finish(s,11,22,VK_SUCCESS);
+ assert(!bridge_input_window((HWND)200));
+ assert(!(bridge_windows.windows[0].applied.flags&PW_D3D9_WINDOW_VISIBLE));
  replacement=bridge_surface_reserve(&client);assert(replacement);bridge_surface_finish(replacement,11,23,-1);
  assert(bridge_windows.windows[0].leases==1);
+ /* Showing then hiding does not discard an existing surface lease. */
+ q.operation=PW_D3D9_WINDOW_BEGIN;q.sequence=2;q.state.flags=PW_D3D9_WINDOW_VISIBLE;
+ assert(!ps5_bridge_window_call(&q,sizeof(q)));
+ q.operation=PW_D3D9_WINDOW_ACK;assert(!ps5_bridge_window_call(&q,sizeof(q)));
+ assert(bridge_input_window((HWND)200)==(HWND)100);
+ q.operation=PW_D3D9_WINDOW_BEGIN;q.sequence=3;q.state.flags=0;
+ assert(!ps5_bridge_window_call(&q,sizeof(q)));
+ q.operation=PW_D3D9_WINDOW_ACK;assert(!ps5_bridge_window_call(&q,sizeof(q)));
+ assert(!bridge_input_window((HWND)200) && bridge_windows.windows[0].leases==1);
  domain(3,0,1);assert(!bridge_surface_reserve(&client));domain(2,10,0);
  client.hwnd=(HWND)333;assert(!bridge_surface_reserve(&client));client.hwnd=(HWND)200;
  q.operation=PW_D3D9_WINDOW_CLOSE;assert(!ps5_bridge_window_call(&q,sizeof(q)));
