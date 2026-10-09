@@ -888,6 +888,10 @@ tests/lab/d3d9_batch_lifetime.py
 docs/d3d9-batch-runtime.md
 tests/lab/d3d9_binding_client.c
 tests/lab/d3d9_binding_client.py
+tests/lab/d3d9_pipeline_client.c
+tests/lab/d3d9_pipeline_client.py
+tests/lab/d3d9_pipeline_lifetime.c
+docs/d3d9-pipeline-client.md
 tests/lab/d3d9_transform_proxy.c
 tests/lab/d3d9_transform_proxy.py
 docs/d3d9-transform-proxy-proof.md

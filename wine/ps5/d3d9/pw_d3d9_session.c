@@ -37,9 +37,15 @@
 #endif
 #include "../pw_d3d9_bridge_wire.h"
 #include "../pw_d3d9_transport_stats.h"
+#if defined(PW_D3D9_ENABLE_PIPELINE) && (!defined(PW_D3D9_ENABLE_BATCH) || !defined(PW_D3D9_ENABLE_BINDING_TICKETS))
+#error pipeline requires batching, operation holds and binding ticket ownership
+#endif
 #ifdef PW_D3D9_ENABLE_BATCH
 #include "../pw_d3d9_command_batch.h"
 #include "../pw_d3d9_command_policy.h"
+#ifdef PW_D3D9_ENABLE_PIPELINE
+#include "../pw_d3d9_batch_pipeline.h"
+#endif
 #endif
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
 #include "../pw_d3d9_binding_plan.h"
@@ -51,7 +57,12 @@
 #include <assert.h>
 
 #define SESSION_MAGIC 0x39535750u
-#define RING_BYTES 8192u
+#define FRAME_BYTES 8192u
+#ifdef PW_D3D9_ENABLE_PIPELINE
+#define RING_BYTES 65536u
+#else
+#define RING_BYTES FRAME_BYTES
+#endif
 #define BACKEND_BYTES 3919872u
 #define BACKEND_CRC 0x6d86db72u
 #define FACTORY_METHODS 0x00007ff0u /* slots 4 through 14 */
@@ -67,6 +78,9 @@
 static uint32_t compiled_features(void)
 {
     uint32_t mask=0;
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    mask|=262144u;
+#endif
 #ifdef PW_D3D9_ENABLE_DEVICE
     mask|=1u;
 #endif
@@ -177,7 +191,7 @@ static void profile_emit(const struct profile_record *r)
     DWORD error=GetLastError();int saved=errno;
     const struct pw_d3d9_transport_stats *d=&r->delta,*t=&r->total;
     char line[4096];
-    int used=snprintf(line,sizeof(line),"PW_D3D9_PROFILE transport role=%s pid=%lu tid=%lu domain=%s scope=session_interval epoch=%u frame=%llu seq=%llu object=%u generation=%u hr=%08x reply_valid=%d final=%d startup=%d clock_valid=%d saturated=%llu attempts=%llu sync_published=%llu replies=%llu failures=%llu rejected_present=%llu async_queued=%llu batch_flushes=%llu batch_commands=%llu batch_residence_wall_us=%llu request_bytes=%llu reply_bytes=%llu serial_wait_wall_us=%llu guest_wait_wall_us=%llu roundtrip_wall_us=%llu service_dispatch_wall_us=%llu total_attempts=%llu total_sync_published=%llu total_replies=%llu",
+    int used=snprintf(line,sizeof(line),"PW_D3D9_PROFILE transport role=%s pid=%lu tid=%lu domain=%s scope=session_interval epoch=%u frame=%llu seq=%llu object=%u generation=%u hr=%08x reply_valid=%d final=%d startup=%d clock_valid=%d saturated=%llu attempts=%llu sync_published=%llu replies=%llu failures=%llu rejected_present=%llu async_queued=%llu batch_flushes=%llu batch_commands=%llu batch_residence_wall_us=%llu request_bytes=%llu reply_bytes=%llu serial_wait_wall_us=%llu guest_wait_wall_us=%llu roundtrip_wall_us=%llu service_dispatch_wall_us=%llu total_attempts=%llu total_sync_published=%llu total_replies=%llu pipeline_published=%llu pipeline_acked=%llu pipeline_pending_peak=%llu pipeline_wait_wall_us=%llu",
 #ifdef _WIN64
         "service",GetCurrentProcessId(),GetCurrentThreadId(),"native64",
 #else
@@ -187,7 +201,9 @@ static void profile_emit(const struct profile_record *r)
         r->clock_valid,(unsigned long long)t->saturated,(unsigned long long)d->attempts,(unsigned long long)d->published,(unsigned long long)d->replies,(unsigned long long)d->failures,(unsigned long long)d->rejected_present,
         (unsigned long long)d->async_queued,(unsigned long long)d->batch_flushes,(unsigned long long)d->batch_commands,(unsigned long long)d->batch_residence_wall_us,
         (unsigned long long)d->request_bytes,(unsigned long long)d->reply_bytes,(unsigned long long)d->serial_wait_wall_us,(unsigned long long)d->guest_wait_wall_us,(unsigned long long)d->roundtrip_wall_us,(unsigned long long)d->service_dispatch_wall_us,
-        (unsigned long long)t->attempts,(unsigned long long)t->published,(unsigned long long)t->replies);
+        (unsigned long long)t->attempts,(unsigned long long)t->published,(unsigned long long)t->replies,
+        (unsigned long long)d->pipeline_published,(unsigned long long)d->pipeline_acked,
+        (unsigned long long)d->pipeline_pending_peak,(unsigned long long)d->pipeline_wait_wall_us);
     for(unsigned n=0;n<PW_D3D9_STATS_OPS&&used>0&&(size_t)used<sizeof(line)-64;n++)
         if(d->opcode[n])used+=snprintf(line+used,sizeof(line)-(size_t)used," op%u=%llu",n,(unsigned long long)d->opcode[n]);
     if(used>0)fprintf(stderr,"%s\n",line);
@@ -330,6 +346,15 @@ static int send_wake(struct ipc *i,struct pw_d3d9_message *m,const void *payload
 
 #ifndef _WIN64
 struct bootstrap { ULONG version,size;WCHAR path[260];uint64_t result[8]; };
+#ifdef PW_D3D9_ENABLE_PIPELINE
+struct pipeline_tickets {
+    struct pipeline_tickets *next;
+    struct pw_d3d9_session *owner;
+    unsigned count;
+    struct pw_d3d9_queue_ticket items[PW_D3D9_BATCH_LIMIT];
+};
+#define PIPELINE_TICKET_BLOCKS 32
+#endif
 struct pw_d3d9_session {
     struct ipc ipc;
     HANDLE broker,serial_event;
@@ -350,6 +375,11 @@ struct pw_d3d9_session {
     uint64_t batch_next,batch_started_ms;
     HRESULT batch_failure;
     int batch_exhausted,async_enabled;
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    struct pw_d3d9_batch_pipeline pipeline;
+    struct pipeline_tickets *pipeline_tickets[PW_D3D9_PIPELINE_CREDITS];
+    LONG pipeline_blocks;
+#endif
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
     struct pw_d3d9_queue_ticket tickets[PW_D3D9_BATCH_LIMIT];
 #endif
@@ -381,12 +411,30 @@ static void session_operation_drop(struct session_operation *guard)
 #endif
 struct batch_drops {
     size_t count;
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    struct pipeline_tickets *pipeline;
+#endif
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
     struct pw_d3d9_queue_ticket items[PW_D3D9_BATCH_LIMIT+1];
 #endif
 };
+static void batch_drops_init(struct batch_drops *drops)
+{
+    drops->count=0;
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    drops->pipeline=NULL;
+#endif
+}
 static void batch_drop(struct batch_drops *drops)
 {
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    while(drops->pipeline){
+        struct pipeline_tickets *block=drops->pipeline;drops->pipeline=block->next;
+        struct pw_d3d9_session *owner=block->owner;
+        for(unsigned n=0;n<block->count;n++)pw_d3d9_queue_ticket_drop(&block->items[n]);
+        HeapFree(GetProcessHeap(),0,block);InterlockedDecrement(&owner->pipeline_blocks);
+    }
+#endif
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
     for(size_t n=0;n<drops->count;n++)pw_d3d9_queue_ticket_drop(&drops->items[n]);
 #endif
@@ -470,7 +518,8 @@ static void serial_leave(struct pw_d3d9_session *s)
     LeaveCriticalSection(&s->lock);
     if(InterlockedCompareExchange(&s->serial_waiters,0,0))SetEvent(s->serial_event);
 }
-/* Nonblocking cancellation rendezvous. The owner calls this after unlock too:
+/* Cancellation rendezvous. Published pipeline tickets require a broker join
+ * outside admission before retirement. The owner calls this after unlock too:
  * cancellation that loses TryEnter before that unlock cannot strand tickets.
  * Callback/inflight cancellation only marks IPC; it never drops under the gate. */
 static void batch_cancel_drain(struct pw_d3d9_session *s)
@@ -479,7 +528,25 @@ static void batch_cancel_drain(struct pw_d3d9_session *s)
     if(callback_depth()||!s->ipc.channel.memory||!pw_d3d9_channel_error(&s->ipc.channel))return;
     if(!TryEnterCriticalSection(&s->lock))return;
     if(s->active_thread){LeaveCriticalSection(&s->lock);return;}
-    struct batch_drops drops;drops.count=0;
+    struct batch_drops drops;batch_drops_init(&drops);
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    if(s->pipeline.count){
+        /* Resource private tickets can keep the parent alive: join now under
+         * the caller operation hold, not only at final COM destruction. */
+        if(!s->broker||GetThreadId(s->broker)==GetCurrentThreadId()){serial_leave(s);return;}
+        serial_leave(s);
+        if(client_wait(1,&s->broker,INFINITE)!=WAIT_OBJECT_0)return;
+        if(!TryEnterCriticalSection(&s->lock))return;
+        if(s->active_thread){LeaveCriticalSection(&s->lock);return;}
+        pw_d3d9_pipeline_cancel(&s->pipeline,(uint32_t)s->batch_failure);
+        struct pw_d3d9_pipeline_entry retired;
+        while(pw_d3d9_pipeline_abandon(&s->pipeline,1,&retired)==PW_D3D9_PIPELINE_OK){
+            struct pipeline_tickets *block=s->pipeline_tickets[retired.slot];
+            s->pipeline_tickets[retired.slot]=NULL;
+            if(block){block->next=drops.pipeline;drops.pipeline=block;}
+        }
+    }
+#endif
     batch_detach(s,&drops);s->batch.count=s->batch.used=0;
     serial_leave(s);batch_drop(&drops);
 #else
@@ -490,11 +557,11 @@ static void batch_cancel_drain(struct pw_d3d9_session *s)
 /* Caller owns s->lock and active_thread; callbacks cannot enter this stream.
  * The live remote guest reference cannot retire before ordered RELEASE, which
  * passes through this same flush gate. The service pins it during replay. */
-static HRESULT batch_flush_locked(struct pw_d3d9_session *s,struct batch_drops *drops)
+static HRESULT batch_flush_sync_locked(struct pw_d3d9_session *s,struct batch_drops *drops)
 {
     if(FAILED(s->batch_failure))return s->batch_failure;
     if(!s->batch.count)return S_OK;
-    unsigned char input[PW_D3D9_BATCH_MAX],scratch[RING_BYTES];size_t bytes=0;
+    unsigned char input[PW_D3D9_BATCH_MAX],scratch[FRAME_BYTES];size_t bytes=0;
     struct pw_d3d9_message m={.opcode=PW_D3D9_COMMAND_BATCH_CALL,.device=1,
         .object=s->batch_target.id,.generation=s->batch_target.generation},reply={0};
     struct pw_d3d9_batch_reply decoded={0};HRESULT hr=E_FAIL;
@@ -527,6 +594,133 @@ static HRESULT batch_flush_locked(struct pw_d3d9_session *s,struct batch_drops *
     }
     batch_detach(s,drops);s->batch.count=0;s->batch.used=0;return hr;
 }
+#ifdef PW_D3D9_ENABLE_PIPELINE
+/* All ledger and endpoint access is under the original session admission gate.
+ * A completed ACK moves its whole ticket block out before its slot is reused. */
+static HRESULT pipeline_fail(struct pw_d3d9_session *s,HRESULT hr)
+{
+    if(!FAILED(hr))hr=E_FAIL;
+    if(!FAILED(s->batch_failure))s->batch_failure=hr;
+    pw_d3d9_pipeline_cancel(&s->pipeline,(uint32_t)s->batch_failure);
+    cancel_ipc(&s->ipc);return s->batch_failure;
+}
+static HRESULT pipeline_receive(struct pw_d3d9_session *s,struct batch_drops *drops,int wait)
+{
+    if(FAILED(s->batch_failure))return s->batch_failure;
+    if(!s->pipeline.count)return S_FALSE;
+    struct pw_d3d9_message reply={0};unsigned char scratch[FRAME_BYTES];
+    int prof=profile_enabled();uint64_t begin=prof&&wait?profile_now():0;
+    int status=wait?receive_wait(&s->ipc,&reply,scratch,sizeof(scratch),s->broker):
+        pw_d3d9_channel_receive(&s->ipc.channel,&reply,scratch,sizeof(scratch));
+    if(!wait&&status==PW_D3D9_EMPTY)return S_FALSE;
+    struct pw_d3d9_pipeline_entry retired={0};struct pw_d3d9_batch_reply decoded={0};
+    int accepted=status==PW_D3D9_OK?pw_d3d9_pipeline_ack(&s->pipeline,s->ipc.channel.epoch,&reply,
+        scratch+64,reply.payload_bytes,&retired,&decoded):PW_D3D9_PIPELINE_INVALID;
+    if(prof){
+        struct pw_d3d9_transport_stats sample={0};struct profile_record record;
+        sample.replies=status==PW_D3D9_OK;sample.reply_bytes=sample.replies?64u+reply.payload_bytes:0;
+        sample.failures=accepted!=PW_D3D9_PIPELINE_OK;sample.pipeline_acked=!!retired.ticket;
+        if(wait){
+            sample.guest_wait_wall_us=pw_d3d9_stats_elapsed(begin,profile_now(),&sample.clock_invalid);
+            /* Pipeline wall accounting is producer ACK wait, not overlapping
+             * publication-to-ACK latency summed across outstanding batches. */
+            sample.roundtrip_wall_us=sample.guest_wait_wall_us;
+            sample.pipeline_wait_wall_us=sample.guest_wait_wall_us;
+        }
+        profile_capture(&s->ipc,&sample,&reply,0,(HRESULT)decoded.hresult,0,sample.replies,0,&record);
+    }
+    if(retired.ticket){
+        struct pipeline_tickets *block=s->pipeline_tickets[retired.slot];
+        s->pipeline_tickets[retired.slot]=NULL;
+        if(block){block->next=drops->pipeline;drops->pipeline=block;}
+    }
+    if(accepted!=PW_D3D9_PIPELINE_OK)
+        return pipeline_fail(s,retired.ticket?(HRESULT)decoded.hresult:E_FAIL);
+    return S_OK;
+}
+static HRESULT pipeline_harvest(struct pw_d3d9_session *s,struct batch_drops *drops)
+{
+    if(!s->async_enabled)return S_OK;
+    HRESULT hr;
+    do{hr=pipeline_receive(s,drops,0);}while(hr==S_OK);
+    return hr==S_FALSE?S_OK:hr;
+}
+static HRESULT pipeline_publish(struct pw_d3d9_session *s,struct batch_drops *drops)
+{
+    HRESULT hr=pipeline_harvest(s,drops);if(FAILED(hr)||!s->batch.count)return hr;
+    if(!s->pipeline.epoch&&pw_d3d9_pipeline_init(&s->pipeline,s->ipc.channel.epoch,s->batch.first_sequence))
+        return pipeline_fail(s,E_FAIL);
+    unsigned char input[PW_D3D9_BATCH_MAX];size_t bytes;
+    if(pw_d3d9_batch_encode(input,sizeof(input),&bytes,&s->batch))return pipeline_fail(s,E_FAIL);
+    while(s->pipeline.count==PW_D3D9_PIPELINE_CREDITS){hr=pipeline_receive(s,drops,1);if(FAILED(hr))return hr;}
+    struct pw_d3d9_pipeline_entry entry={s->ipc.channel.next_send,s->batch.first_sequence,
+        s->batch_target.id,s->batch_target.generation,s->batch.count,(uint32_t)(64+((bytes+7)&~(size_t)7)),0};
+    uint32_t slot;
+    if(pw_d3d9_pipeline_reserve(&s->pipeline,&entry,&slot))return pipeline_fail(s,E_FAIL);
+    struct pipeline_tickets *block=NULL;unsigned count=0;
+    for(unsigned n=0;n<s->batch.count;n++)count+=!!s->tickets[n].drop;
+    if(count){
+        if(InterlockedIncrement(&s->pipeline_blocks)>PIPELINE_TICKET_BLOCKS){
+            InterlockedDecrement(&s->pipeline_blocks);pw_d3d9_pipeline_abort(&s->pipeline);return pipeline_fail(s,E_OUTOFMEMORY);}
+        block=HeapAlloc(GetProcessHeap(),0,sizeof(*block));
+        if(!block){InterlockedDecrement(&s->pipeline_blocks);pw_d3d9_pipeline_abort(&s->pipeline);return pipeline_fail(s,E_OUTOFMEMORY);}
+        block->next=NULL;block->owner=s;block->count=0;
+    }
+    struct pw_d3d9_message message={.opcode=PW_D3D9_COMMAND_BATCH_CALL,.device=1,
+        .object=entry.object,.generation=entry.generation,.payload_bytes=(uint32_t)bytes};
+    int sent;
+    for(;;){
+        sent=send_wake(&s->ipc,&message,input);
+        if(sent!=PW_D3D9_FULL)break;
+        /* The ring and pending-credit limits are separate. An unpublished
+         * reservation owns no sequence: abort it while harvesting an ACK. */
+        pw_d3d9_pipeline_abort(&s->pipeline);
+        if(!s->pipeline.count){hr=E_FAIL;goto unpublished;}
+        hr=pipeline_receive(s,drops,1);if(FAILED(hr))goto unpublished;
+        if(pw_d3d9_pipeline_reserve(&s->pipeline,&entry,&slot)){hr=E_FAIL;goto unpublished;}
+    }
+    if(s->ipc.channel.next_send!=entry.ticket){
+        /* Publication can succeed even when its subsequent wake fails. */
+        assert(!s->pipeline_tickets[slot]);
+        if(block)for(unsigned n=0;n<s->batch.count;n++)if(s->tickets[n].drop){
+            block->items[block->count++]=s->tickets[n];s->tickets[n]=(struct pw_d3d9_queue_ticket){0};}
+        s->pipeline_tickets[slot]=block;block=NULL;
+        if(pw_d3d9_pipeline_commit(&s->pipeline))return pipeline_fail(s,E_FAIL);
+        if(profile_enabled()){
+            struct pw_d3d9_transport_stats sample={0};struct profile_record record;
+            sample.attempts=sample.published=sample.batch_flushes=sample.pipeline_published=1;
+            sample.pipeline_pending_peak=s->pipeline.count;sample.batch_commands=s->batch.count;
+            uint64_t now=GetTickCount64();
+            if(now>=s->batch_started_ms&&now-s->batch_started_ms<=UINT64_MAX/1000u)
+                sample.batch_residence_wall_us=(now-s->batch_started_ms)*1000u;
+            else sample.clock_invalid=1;
+            sample.opcode[PW_D3D9_COMMAND_BATCH_CALL]=1;sample.request_bytes=64u+bytes;
+            profile_capture(&s->ipc,&sample,&message,0,S_OK,0,0,0,&record);
+        }
+        s->batch.count=s->batch.used=0;
+        return sent==PW_D3D9_OK?S_OK:pipeline_fail(s,E_FAIL);
+    }
+    pw_d3d9_pipeline_abort(&s->pipeline);hr=E_FAIL;
+ unpublished:
+    if(block){HeapFree(GetProcessHeap(),0,block);InterlockedDecrement(&s->pipeline_blocks);}
+    return pipeline_fail(s,hr);
+}
+#endif
+static HRESULT batch_publish_locked(struct pw_d3d9_session *s,struct batch_drops *drops)
+{
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    if(s->async_enabled)return pipeline_publish(s,drops);
+#endif
+    return batch_flush_sync_locked(s,drops);
+}
+static HRESULT batch_flush_locked(struct pw_d3d9_session *s,struct batch_drops *drops)
+{
+    HRESULT hr=batch_publish_locked(s,drops);if(FAILED(hr))return hr;
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    if(s->async_enabled)while(s->pipeline.count){hr=pipeline_receive(s,drops,1);if(FAILED(hr))return hr;}
+#endif
+    return hr;
+}
 static HRESULT batch_enqueue_admitted(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_command *request,
  int inherited,struct batch_drops *drops
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
@@ -544,12 +738,15 @@ static HRESULT batch_enqueue_admitted(struct pw_d3d9_session *s,struct pw_d3d9_o
         s->active_thread=GetCurrentThreadId();
     }
     cleanup=1;
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    hr=pipeline_harvest(s,drops);if(FAILED(hr))goto done;
+#endif
     if(FAILED(s->batch_failure)){hr=s->batch_failure;goto done;}
     if(pw_d3d9_channel_state(&s->ipc.channel)!=PW_D3D9_READY){hr=E_FAIL;goto failed;}
     uint64_t now=GetTickCount64();
     if(s->batch.count&&(s->batch_target.id!=ref.id||s->batch_target.generation!=ref.generation||
         now<s->batch_started_ms||now-s->batch_started_ms>=1)){
-        hr=batch_flush_locked(s,drops);if(FAILED(hr))goto done;
+        hr=batch_publish_locked(s,drops);if(FAILED(hr))goto done;
     }
     if(s->batch_exhausted){hr=E_FAIL;goto failed;}
  retry:
@@ -558,7 +755,7 @@ static HRESULT batch_enqueue_admitted(struct pw_d3d9_session *s,struct pw_d3d9_o
         s->batch_target=ref;s->batch_started_ms=GetTickCount64();
     }
     int appended=pw_d3d9_batch_append(&s->batch,request);
-    if(appended==PW_D3D9_BATCH_FULL){hr=batch_flush_locked(s,drops);if(FAILED(hr))goto done;goto retry;}
+    if(appended==PW_D3D9_BATCH_FULL){hr=batch_publish_locked(s,drops);if(FAILED(hr))goto done;goto retry;}
     if(appended!=PW_D3D9_BATCH_OK){hr=E_FAIL;goto failed;}
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
     if(ticket&&ticket->drop){s->tickets[s->batch.count-1]=*ticket;*ticket=(struct pw_d3d9_queue_ticket){0};}
@@ -581,7 +778,7 @@ static HRESULT batch_enqueue_admitted(struct pw_d3d9_session *s,struct pw_d3d9_o
 }
 static HRESULT batch_enqueue(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_command *request)
 {
-    struct batch_drops drops;drops.count=0;
+    struct batch_drops drops;batch_drops_init(&drops);
     return batch_enqueue_admitted(s,ref,request,0,&drops
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
         ,NULL
@@ -594,7 +791,7 @@ static HRESULT transact_admitted(struct pw_d3d9_session *s,struct pw_d3d9_messag
                         unsigned char *output,size_t capacity,struct pw_d3d9_message *reply,int inherited,struct batch_drops *drops,
                         const struct pw_d3d9_session_observer *observer)
 {
-    HRESULT result=E_FAIL;unsigned char scratch[RING_BYTES];const char *phase="send";
+    HRESULT result=E_FAIL;unsigned char scratch[FRAME_BYTES];const char *phase="send";
     int prof=profile_enabled(),present=prof?profile_present(m,payload):0,locked=0,cleanup=0,output_staged=0;
     uint64_t begin=prof?profile_now():0,serial_begin=begin,sequence=0;
     struct pw_d3d9_transport_stats sample;struct profile_record record;
@@ -610,6 +807,9 @@ static HRESULT transact_admitted(struct pw_d3d9_session *s,struct pw_d3d9_messag
     locked=cleanup=1;
 #ifdef PW_D3D9_ENABLE_BATCH
     int timed_flush=prof&&s->batch.count;
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    timed_flush|=prof&&s->pipeline.count;
+#endif
     if(timed_flush)sample.roundtrip_wall_us=pw_d3d9_stats_elapsed(begin,profile_now(),&sample.clock_invalid);
     result=batch_flush_locked(s,drops);
     if(timed_flush)begin=profile_now(); /* batch sample owns the excluded flush interval */
@@ -668,7 +868,7 @@ static HRESULT transact_admitted(struct pw_d3d9_session *s,struct pw_d3d9_messag
 static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,const void *payload,
  unsigned char *output,size_t capacity,struct pw_d3d9_message *reply)
 {
-    struct batch_drops drops;drops.count=0;
+    struct batch_drops drops;batch_drops_init(&drops);
     return transact_admitted(s,m,payload,output,capacity,reply,0,&drops,NULL);
 }
 static void destroy_session_now(struct pw_d3d9_session *s)
@@ -746,7 +946,7 @@ HRESULT pw_d3d9_session_open(const WCHAR *service,const WCHAR *backend,struct pw
 static HRESULT transact_observed(struct pw_d3d9_session *s,struct pw_d3d9_message *m,const void *payload,
  unsigned char *output,size_t capacity,struct pw_d3d9_message *reply,const struct pw_d3d9_session_observer *observer)
 {
-    struct batch_drops drops;drops.count=0;
+    struct batch_drops drops;batch_drops_init(&drops);
     if(!observer||!observer->completed){memset(reply,0,sizeof(*reply));pw_d3d9_session_cancel(s);return E_FAIL;}
     return transact_admitted(s,m,payload,output,capacity,reply,0,&drops,observer);
 }
@@ -855,7 +1055,7 @@ HRESULT pw_d3d9_session_texture(struct pw_d3d9_session *s,struct pw_d3d9_object_
 HRESULT pw_d3d9_session_command(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_command *request)
 {
     SESSION_OPERATION(s,E_FAIL);
-    unsigned char in[RING_BYTES],out[16];size_t bytes;uint32_t method,hresult;
+    unsigned char in[FRAME_BYTES],out[16];size_t bytes;uint32_t method,hresult;
     struct pw_d3d9_message m={.opcode=PW_D3D9_COMMAND_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
     if(!s||!request)return E_POINTER;
 #ifdef PW_D3D9_ENABLE_BATCH
@@ -878,7 +1078,7 @@ HRESULT pw_d3d9_session_binding(struct pw_d3d9_session *s,struct pw_d3d9_object_
     if(serial_enter(s)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
     if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
     s->active_thread=GetCurrentThreadId();
-    struct batch_drops drops;drops.count=0;
+    struct batch_drops drops;batch_drops_init(&drops);
     struct pw_d3d9_queue_ticket ticket={0};HRESULT hr=E_FAIL;
     if(pw_d3d9_channel_state(&s->ipc.channel)!=PW_D3D9_READY)goto failed;
     hr=acquire(context,request,&ticket);
@@ -887,7 +1087,7 @@ HRESULT pw_d3d9_session_binding(struct pw_d3d9_session *s,struct pw_d3d9_object_
     if(s->async_enabled&&pw_d3d9_binding_plan(request,&plan)==PW_D3D9_BINDING_READY)
         return batch_enqueue_admitted(s,ref,request,1,&drops,&ticket,NULL);
     /* Synchronous fallback keeps the same gate and ticket through the reply. */
-    unsigned char input[RING_BYTES],output[16];size_t bytes;uint32_t method,result;
+    unsigned char input[FRAME_BYTES],output[16];size_t bytes;uint32_t method,result;
     if(pw_d3d9_command_encode(input,sizeof(input),&bytes,request)!=PW_D3D9_COMMAND_OK){hr=D3DERR_INVALIDCALL;goto failed;}
     if(ticket.drop){drops.items[drops.count++]=ticket;ticket=(struct pw_d3d9_queue_ticket){0};}
     struct pw_d3d9_message m={.opcode=PW_D3D9_COMMAND_CALL,.device=1,.object=ref.id,.generation=ref.generation,.payload_bytes=(uint32_t)bytes},r;
@@ -912,7 +1112,7 @@ HRESULT pw_d3d9_session_binding_observed(struct pw_d3d9_session *s,struct pw_d3d
     if(serial_enter(s)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
     if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
     s->active_thread=GetCurrentThreadId();
-    struct batch_drops drops;drops.count=0;
+    struct batch_drops drops;batch_drops_init(&drops);
     struct pw_d3d9_queue_ticket ticket={0};HRESULT hr=E_FAIL;
     if(pw_d3d9_channel_state(&s->ipc.channel)!=PW_D3D9_READY)goto failed;
     hr=acquire(context,request,&ticket);
@@ -921,7 +1121,7 @@ HRESULT pw_d3d9_session_binding_observed(struct pw_d3d9_session *s,struct pw_d3d
     if(s->async_enabled&&pw_d3d9_binding_plan(request,&plan)==PW_D3D9_BINDING_READY)
         return batch_enqueue_admitted(s,ref,request,1,&drops,&ticket,observer);
     /* Synchronous fallback keeps the same gate and ticket through the reply. */
-    unsigned char input[RING_BYTES],output[16];size_t bytes;uint32_t method,result;
+    unsigned char input[FRAME_BYTES],output[16];size_t bytes;uint32_t method,result;
     if(pw_d3d9_command_encode(input,sizeof(input),&bytes,request)!=PW_D3D9_COMMAND_OK){hr=D3DERR_INVALIDCALL;goto failed;}
     if(ticket.drop){drops.items[drops.count++]=ticket;ticket=(struct pw_d3d9_queue_ticket){0};}
     struct pw_d3d9_message m={.opcode=PW_D3D9_COMMAND_CALL,.device=1,.object=ref.id,.generation=ref.generation,.payload_bytes=(uint32_t)bytes},r;
@@ -942,7 +1142,7 @@ HRESULT pw_d3d9_session_command_observed(struct pw_d3d9_session *s,struct pw_d3d
  const struct pw_d3d9_command *request,const struct pw_d3d9_session_observer *observer)
 {
     SESSION_OPERATION(s,E_FAIL);
-    unsigned char input[RING_BYTES],output[16];size_t bytes;uint32_t method,result;
+    unsigned char input[FRAME_BYTES],output[16];size_t bytes;uint32_t method,result;
     if(!s||!request)return E_POINTER;
     if(!observer||!observer->completed||!observer->queued||!observer->eligible){pw_d3d9_session_cancel(s);return E_FAIL;}
     if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
@@ -951,7 +1151,7 @@ HRESULT pw_d3d9_session_command_observed(struct pw_d3d9_session *s,struct pw_d3d
     if(serial_enter(s)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
     if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
     s->active_thread=GetCurrentThreadId();
-    struct batch_drops drops;drops.count=0;
+    struct batch_drops drops;batch_drops_init(&drops);
     /* Read owner evidence only after admission. No local cache or successful
      * acceptance may bypass cancellation, sticky failure or callback guards. */
     if(pw_d3d9_channel_state(&s->ipc.channel)==PW_D3D9_READY&&SUCCEEDED(s->batch_failure)&&s->async_enabled&&
@@ -977,7 +1177,11 @@ HRESULT pw_d3d9_session_getter_observed(struct pw_d3d9_session *s,struct pw_d3d9
     if(pw_d3d9_getter_encode(input,sizeof(input),&bytes,request)!=PW_D3D9_GETTER_OK)return D3DERR_INVALIDCALL;
     if(serial_enter(s)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
     if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
-    s->active_thread=GetCurrentThreadId();struct batch_drops drops;drops.count=0;HRESULT hr=E_FAIL;
+    s->active_thread=GetCurrentThreadId();struct batch_drops drops;batch_drops_init(&drops);HRESULT hr=E_FAIL;
+#ifdef PW_D3D9_ENABLE_PIPELINE
+    hr=pipeline_harvest(s,&drops);if(FAILED(hr))goto local_done;
+    hr=E_FAIL; /* Harvest success is not a validated cached getter answer. */
+#endif
     if(FAILED(s->batch_failure)){hr=s->batch_failure;goto local_done;}
     if(pw_d3d9_channel_state(&s->ipc.channel)!=PW_D3D9_READY)goto local_done;
     /* A known answer observes accepted ordered setters. It may avoid flushing
@@ -1192,7 +1396,7 @@ HRESULT pw_d3d9_session_join(struct pw_d3d9_session *s)
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
     if(s->broker&&GetThreadId(s->broker)==GetCurrentThreadId())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
 #endif
-    DWORD wait=client_wait(1,&s->broker,INFINITE);restore_quit();
+    DWORD wait=client_wait(1,&s->broker,INFINITE);batch_cancel_drain(s);restore_quit();
     return wait==WAIT_OBJECT_0&&!s->status?S_OK:E_FAIL;
 }
 HRESULT pw_d3d9_session_close(struct pw_d3d9_session *s)
@@ -1367,7 +1571,7 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
     uint64_t dispatch_begin=0;struct pw_d3d9_message profile_message={0};
     HMODULE backend=NULL;IDirect3D9 *(WINAPI *factory)(UINT)=NULL;
     struct pw_d3d9_object_slot *slots=NULL;struct pw_d3d9_objects objects;BOOL objects_ready=FALSE;
-    unsigned char scratch[RING_BYTES],output[RING_BYTES],hello[32];
+    unsigned char scratch[FRAME_BYTES],output[FRAME_BYTES],hello[32];
 #ifdef PW_D3D9_ENABLE_BATCH
     struct pw_d3d9_service_batch_state batches;pw_d3d9_service_batch_init(&batches);
 #endif
