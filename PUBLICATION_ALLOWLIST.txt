@@ -700,6 +700,11 @@ wine/ps5/d3d9/pw_d3d9_device_methods.c
 tests/lab/d3d9_device_methods.c
 tests/lab/d3d9_device_methods.py
 docs/d3d9-device-methods.md
+wine/ps5/d3d9/pw_d3d9_device_object_methods.h
+wine/ps5/d3d9/pw_d3d9_device_object_methods.c
+tests/lab/d3d9_device_object_methods.c
+tests/lab/d3d9_device_object_methods.py
+docs/d3d9-device-object-methods.md
 wine/ps5/d3d9/pw_d3d9_native_getter.h
 wine/ps5/d3d9/pw_d3d9_native_getter.c
 tests/lab/d3d9_native_getter.c
