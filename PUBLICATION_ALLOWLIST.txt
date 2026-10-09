@@ -532,3 +532,7 @@ wine/ps5/pw_d3d9_objects.c
 wine/ps5/pw_d3d9_objects.h
 tests/test_d3d9_objects.c
 docs/d3d9-object-lifetime.md
+wine/ps5/pw_d3d9_window.c
+wine/ps5/pw_d3d9_window.h
+tests/test_d3d9_window.c
+docs/d3d9-bridge-windows.md
