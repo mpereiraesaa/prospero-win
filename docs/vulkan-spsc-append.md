@@ -89,6 +89,10 @@ changes replay order. Statistics-off operation does not read the diagnostic cloc
 A PE fixture pauses a producer after reservation, observes the diagnostic, then
 publishes and verifies ordered replay resumes.
 
-The first A1 console candidate completed GTA IV but stalled in GTA SA during
-menu-to-game transition. That candidate is not accepted; the diagnostic is for
-identifying the waiting path. No deadlock fix or performance acceptance is claimed.
+The first A1 console candidate completed GTA IV; one GTA SA transition run
+stopped rendering. The diagnostic repeat passed the transition and continued
+through its requested close, without a missing-prefix or quiescence report.
+On 2026-10-09 the owner classified this as an intermittent diagnostic timing
+race and explicitly directed proceeding with multicore replay. No further stall
+investigation is an implementation gate. These runs do not establish improved
+mean or low FPS; the combined replay candidate still needs matched measurements.
