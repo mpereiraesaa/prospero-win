@@ -523,6 +523,12 @@ docs/vulkan-replay-dispatch.md
 tools/stage_vk_replay_barriers.py
 tests/lab/vk_replay_barriers.py
 docs/vulkan-async-pe-boundary.md
+tools/generate_d3d9_inventory.py
+wine/ps5/d3d9/pw_d3d9_inventory.h
+tests/test_d3d9_inventory.py
+tests/lab/d3d9_inventory.c
+docs/d3d9-method-inventory.md
+
 wine/patches/0902-ntdll-native-service-domain.patch
 tests/lab/d3d9_native_domain.c
 tests/lab/d3d9_native_domain.py
