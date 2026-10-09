@@ -7,7 +7,7 @@ def production_features(source_root):
  values=re.findall(r'^#define[ \t]+PW_D3D9_COMMAND_POLICY_FEATURE[ \t]+([0-9]+)u[ \t]*$',text,re.M)
  if len(values)!=1:raise ValueError('missing or ambiguous command policy feature')
  feature=int(values[0])
- if not feature or feature&(feature-1) or feature&14335:raise ValueError('invalid command policy feature')
+ if not feature or feature>0xffffffff or feature&(feature-1) or feature&14335:raise ValueError('invalid command policy feature')
  return 14335|feature
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',type=pathlib.Path,required=True)
 parser.add_argument('--api-diagnostics',action='store_true',help='compile opt-in guest COM result observation')
