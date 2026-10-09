@@ -34,7 +34,7 @@ static void roundtrip(struct fixture *f,unsigned value)
 {
     unsigned char payload[35],scratch[128];struct pw_d3d9_message m=call(sizeof(payload)),r;
     const unsigned operations[]={PW_D3D9_FACTORY_CALL,PW_D3D9_DEVICE_CALL,PW_D3D9_RESOURCE_CALL,
-        PW_D3D9_COMMAND_CALL,PW_D3D9_PROGRAM_CALL,PW_D3D9_TEXTURE_CALL,PW_D3D9_GETTER_CALL,PW_D3D9_OBJECT_GETTER_CALL,PW_D3D9_STATEBLOCK_CALL,PW_D3D9_PROGRAM_QUERY_CALL,PW_D3D9_UP_DRAW_CALL,PW_D3D9_QUERY_CALL,PW_D3D9_CURSOR_CALL,PW_D3D9_GAMMA_CALL,PW_D3D9_IMPLICIT_CALL};
+        PW_D3D9_COMMAND_CALL,PW_D3D9_PROGRAM_CALL,PW_D3D9_TEXTURE_CALL,PW_D3D9_GETTER_CALL,PW_D3D9_OBJECT_GETTER_CALL,PW_D3D9_STATEBLOCK_CALL,PW_D3D9_PROGRAM_QUERY_CALL,PW_D3D9_UP_DRAW_CALL,PW_D3D9_QUERY_CALL,PW_D3D9_CURSOR_CALL,PW_D3D9_GAMMA_CALL,PW_D3D9_IMPLICIT_CALL,PW_D3D9_COMMAND_BATCH_CALL};
     m.opcode=operations[value % (sizeof(operations)/sizeof(operations[0]))];
     memset(payload,(int)value,sizeof(payload));
     assert(pw_d3d9_channel_send(&f->client,&m,payload)==PW_D3D9_OK);
@@ -57,7 +57,7 @@ static void basic(void)
     hello(&f);
     m=(struct pw_d3d9_message){.opcode=PW_D3D9_STOP};
     assert(pw_d3d9_channel_send(&f.client,&m,NULL)==PW_D3D9_INVALID);
-    m.opcode=33;assert(pw_d3d9_channel_send(&f.client,&m,NULL)==PW_D3D9_INVALID);
+    m.opcode=34;assert(pw_d3d9_channel_send(&f.client,&m,NULL)==PW_D3D9_INVALID);
     for(unsigned i=0;i<500;i++)roundtrip(&f,i);
     /* The positions are unsigned modular counters; simulate the 4GiB boundary. */
     for(unsigned i=0;i<4;i++)atomic_store((_Atomic uint32_t *)(f.memory+48+i*4),UINT32_MAX-63);
