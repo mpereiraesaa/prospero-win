@@ -11,3 +11,7 @@ Baseline frozen source `ea153ed` fails at the first BeginStateBlock with HRESULT
 The positive run changes only production fix `d436a57`: its service reply wrapper bounds available capacity and invokes the fixed-size codec with exact16. The adapter and fixture are byte-identical across baseline and corrected runs. `/tmp/prospero-d3d9-stateblock-transport-positive-r1/receipt.json` passed all three clean cycles. Frozen-source comparison found only session.c and service_stateblock.c changed; the test adapter and fixture were identical.
 
 Run `tests/lab/d3d9_stateblock_transport.py` with `--wine-build`, `--prefix`, `--backend64` and `--output`. Add `--expect-rejection` only for the frozen unfixed baseline. The runner freezes source hashes, captures both binaries and real backend hashes, and requires all three clean cycles for success.
+
+## Evidence retention after workstation reboot
+
+The October 9 workstation reboot removed the `/tmp` artifacts named above, including the original receipts, binaries and logs. Those paths describe historical reviewed runs; they are no longer available for independent hash verification. The fixture sources and review history survive in Git. No result or receipt has been reconstructed as a new execution. Future runs must use a persistent output directory and record fresh artifact hashes.
