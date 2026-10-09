@@ -2,7 +2,7 @@
 
 The getter schema names 28 exact IDirect3DDevice9 vtable slots. It covers scalar
 state, display/raster status, transform/viewport/material/light/clip/scissor
-structures, palettes, shader constant arrays and three value-return queries.
+structures, palettes, shader constant arrays and four value-return queries.
 Objects returned by GetTexture/GetStreamSource and similar methods require a
 separate registry-aware path and are not represented as pointers here.
 
