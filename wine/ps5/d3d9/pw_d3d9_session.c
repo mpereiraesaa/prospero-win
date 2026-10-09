@@ -76,6 +76,9 @@ static uint32_t compiled_features(void)
 #ifdef PW_D3D9_ENABLE_GAMMA
     mask|=1024u;
 #endif
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+    mask|=4096u;
+#endif
     return mask;
 }
 struct descriptor {
@@ -221,6 +224,8 @@ static DWORD WINAPI broker_main(void *parameter)
     if(!s->status && returned!=sizeof(s->bootstrap))s->status=(LONG)0xc0000004;
     return (DWORD)s->status;
 }
+int pw_d3d9_session_in_callback(void)
+{return !!callback_depth();}
 HRESULT pw_d3d9_session_defer(struct pw_d3d9_session *s,struct pw_d3d9_deferred *item)
 {
     if(!s||!item||!item->function)return E_INVALIDARG;
@@ -538,6 +543,21 @@ HRESULT pw_d3d9_session_up(struct pw_d3d9_session *s,struct pw_d3d9_object_ref r
     *reply=decoded;return hr;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+HRESULT pw_d3d9_session_implicit(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,
+ const struct pw_d3d9_implicit_request *request,struct pw_d3d9_implicit_reply *reply)
+{
+    unsigned char in[PW_D3D9_IMPLICIT_REQUEST_BYTES],out[PW_D3D9_IMPLICIT_REPLY_BYTES];
+    struct pw_d3d9_implicit_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_IMPLICIT_CALL,.device=1,.object=ref.id,.generation=ref.generation,.payload_bytes=sizeof(in)},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_implicit_request_encode(in,sizeof(in),request))return D3DERR_INVALIDCALL;
+    HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_implicit_reply_decode(&decoded,request,out,r.payload_bytes)||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
+#endif
 HRESULT pw_d3d9_session_release(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref)
 {
     struct pw_d3d9_message m={.opcode=PW_D3D9_RELEASE,.device=1,.object=ref.id,.generation=ref.generation},r;
@@ -624,6 +644,37 @@ static int destroy_objects(struct pw_d3d9_objects *objects)
     } while(progress);
     return okay;
 }
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+static HRESULT implicit_call(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref ref,
+ const struct pw_d3d9_implicit_request *q,struct pw_d3d9_implicit_reply *r)
+{
+    memset(r,0,sizeof(*r));r->operation=q->operation;r->hresult=D3DERR_INVALIDCALL;
+    const struct pw_d3d9_object_slot *slot=pw_d3d9_object_lookup(objects,objects->device,objects->epoch,ref);
+    if(!slot||slot->kind!=PW_D3D9_KIND_DEVICE||!pw_d3d9_object_queue(objects,ref))return r->hresult;
+    struct pw_d3d9_native_device *d=(void *)slot->context;
+    unsigned phase=pw_d3d9_native_device_implicit_phase(d);HRESULT hr=D3DERR_INVALIDCALL;UINT count=0;
+    if(q->operation==PW_D3D9_IMPLICIT_LIST&&phase==PW_D3D9_IMPLICIT_IDLE){
+        hr=pw_d3d9_service_texture_owners_list(objects,ref,r->objects,PW_D3D9_IMPLICIT_MAX,&count);
+    }else if(q->operation==PW_D3D9_IMPLICIT_PREPARE&&phase==PW_D3D9_IMPLICIT_IDLE){
+        hr=pw_d3d9_service_texture_owners_prepare(objects,ref,q->objects,q->count);
+        if(SUCCEEDED(hr))pw_d3d9_native_device_implicit_set_phase(d,PW_D3D9_IMPLICIT_PREPARED);
+    }else if(q->operation==PW_D3D9_IMPLICIT_FINISH&&
+             (phase==PW_D3D9_IMPLICIT_DONE_RESTORED||phase==PW_D3D9_IMPLICIT_DONE_RETIRED)){
+        hr=pw_d3d9_service_texture_owners_list(objects,ref,r->objects,PW_D3D9_IMPLICIT_MAX,&count);
+        if(SUCCEEDED(hr)){
+            r->disposition=phase==PW_D3D9_IMPLICIT_DONE_RESTORED?PW_D3D9_IMPLICIT_RESTORED:PW_D3D9_IMPLICIT_RETIRED;
+            pw_d3d9_native_device_implicit_set_phase(d,PW_D3D9_IMPLICIT_IDLE);
+        }
+    }else if(q->operation==PW_D3D9_IMPLICIT_DRAIN&&phase==PW_D3D9_IMPLICIT_IDLE){
+        hr=pw_d3d9_service_texture_owners_drain(objects,ref);
+        if(SUCCEEDED(hr))pw_d3d9_native_device_implicit_set_phase(d,PW_D3D9_IMPLICIT_DRAINED);
+    }
+    if(!pw_d3d9_object_complete(objects,ref))hr=E_FAIL;
+    if(FAILED(hr)){memset(r,0,sizeof(*r));r->operation=q->operation;}
+    else r->count=count;
+    r->hresult=hr;return hr;
+}
+#endif
 static HRESULT create_factory(struct pw_d3d9_objects *objects,IDirect3D9 *(WINAPI *factory)(UINT),
                               UINT sdk,struct pw_d3d9_object_ref *ref)
 {
@@ -766,7 +817,28 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             unsigned kind=request.operation==PW_D3D9_DEVICE_CREATE?1:2;
             hr=D3DERR_INVALIDCALL;
             if(slot&&slot->kind==kind&&pw_d3d9_object_queue(&objects,ref)){
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+                int resetting=request.operation==PW_D3D9_DEVICE_RESET;
+                struct pw_d3d9_native_device *native=kind==2?(void *)slot->context:NULL;
+                if(resetting && (pw_d3d9_native_device_implicit_phase(native)!=PW_D3D9_IMPLICIT_PREPARED ||
+                    FAILED(pw_d3d9_service_texture_owners_begin_reset(&objects,ref)))){
+                    pw_d3d9_object_complete(&objects,ref);goto done;
+                }
+#endif
                 pw_d3d9_native_device_call(kind==1?(void *)slot->context:NULL,kind==2?(void *)slot->context:NULL,&request,&reply,&created);
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+                if(resetting){
+                    BOOL restore=pw_d3d9_native_device_reset_preserved(native);
+                    if(FAILED(pw_d3d9_service_texture_owners_finish_reset(&objects,ref,restore))){
+                        pw_d3d9_object_complete(&objects,ref);goto done;
+                    }
+                    pw_d3d9_native_device_implicit_set_phase(native,restore?PW_D3D9_IMPLICIT_DONE_RESTORED:PW_D3D9_IMPLICIT_DONE_RETIRED);
+                    if(pw_d3d9_native_device_reset_succeeded(native) && FAILED(pw_d3d9_service_texture_owners_capture(&objects,ref,
+                        reply.parameters.count,reply.parameters.auto_depth_stencil))){
+                        pw_d3d9_object_complete(&objects,ref);goto done;
+                    }
+                }
+#endif
                 if(!pw_d3d9_object_complete(&objects,ref))goto done;
                 if(created){
                     struct pw_d3d9_object_ref device_ref;
@@ -775,7 +847,13 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
                         pw_d3d9_native_device_destroy(created);reply.hresult=E_OUTOFMEMORY;
                     }else if(!pw_d3d9_object_commit(&objects,device_ref,identity,(uintptr_t)created,2)){
                         pw_d3d9_object_abort(&objects,device_ref);pw_d3d9_native_device_destroy(created);reply.hresult=E_FAIL;
-                    }else reply.object=device_ref;
+                    }else {
+                        reply.object=device_ref;
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+                        if(FAILED(pw_d3d9_service_texture_owners_capture(&objects,device_ref,
+                            reply.parameters.count,reply.parameters.auto_depth_stencil)))goto done;
+#endif
+                    }
                 }
                 hr=(HRESULT)reply.hresult;
                 if(pw_d3d9_device_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_DEVICE_OK)goto done;
@@ -789,6 +867,15 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             if(pw_d3d9_resource_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_RESOURCE_OK)goto done;
 #endif
 #ifdef PW_D3D9_ENABLE_TEXTURE
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+        }else if(m.opcode==PW_D3D9_IMPLICIT_CALL){
+            struct pw_d3d9_implicit_request request;struct pw_d3d9_implicit_reply reply;
+            if(m.device!=objects.device||pw_d3d9_implicit_request_decode(&request,payload,m.payload_bytes))goto done;
+            hr=implicit_call(&objects,ref,&request,&reply);
+            if(pw_d3d9_implicit_reply_encode(output,PW_D3D9_IMPLICIT_REPLY_BYTES,&request,&reply))goto done;
+            bytes=PW_D3D9_IMPLICIT_REPLY_BYTES;
+            if(!destroy_objects(&objects))goto done;
+#endif
         }else if(m.opcode==PW_D3D9_TEXTURE_CALL){
             struct pw_d3d9_texture_request request;struct pw_d3d9_texture_reply reply;
             if(m.device!=objects.device||pw_d3d9_texture_request_decode(&request,payload,m.payload_bytes)!=PW_D3D9_RESOURCE_OK)goto done;

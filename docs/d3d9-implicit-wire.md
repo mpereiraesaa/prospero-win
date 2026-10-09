@@ -1,7 +1,9 @@
 # Implicit surface ownership protocol
 
-This codec is a foundation for a paired proxy/service implementation. It does
-not change shipping ownership or enable a new transport opcode by itself.
+The session adapter reserves outer opcode 32. Its implementation is gated by
+`PW_D3D9_ENABLE_IMPLICIT`, which requires device/texture support and adds HELLO
+feature bit 4096. Shipping builders enable it only after frontend integration;
+unpaired feature masks are rejected before object publication.
 
 Version 1 carries at most 16 generation-checked surface IDs. All integers are
 little endian; fixed request/reply sizes are 144/152 bytes. No native pointer
@@ -30,3 +32,21 @@ public references remain separate obligations.
 
 `make build/host/test_d3d9_implicit_wire` builds the focused portable fixture;
 it is also included in the normal and sanitizer host suites.
+
+## Service transaction
+
+Per-device phases enforce LIST/PREPARE, one Reset, FINISH and final DRAIN.
+Prepare validates the frontend zero-public snapshot; the service parks those
+native storage references immediately before Reset, including unexposed owners.
+The exact backend outcome is captured inside the native adapter, before a later
+window mirror failure can replace its HRESULT. A successful native Reset always
+retires old ownership, even if the subsequent mirror reports failure. Preflight
+rejection and pinned-backend early validation rejection preserve old ownership.
+
+Service finish destroys retired zero-public entries before capturing new native
+default surfaces, preventing reuse of an old identity when the allocator reuses
+an address. Genuine public references retain their native storage pin. Creation
+and successful Reset capture actual normalized backbuffer count and initial
+auto-depth ownership; later bound surfaces are not classified as implicit.
+Internal ownership failures cancel the session; they cannot return a partially
+published device or a success reply with incomplete lifetime tracking.

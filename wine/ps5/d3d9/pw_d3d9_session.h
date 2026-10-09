@@ -12,6 +12,14 @@
 #include "../pw_d3d9_texture_wire.h"
 #endif
 struct pw_d3d9_session;
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+#if !defined(PW_D3D9_ENABLE_DEVICE) || !defined(PW_D3D9_ENABLE_TEXTURE)
+#error Implicit owners require device and texture support
+#endif
+#include "../pw_d3d9_implicit_wire.h"
+HRESULT pw_d3d9_session_implicit(struct pw_d3d9_session *,struct pw_d3d9_object_ref,
+ const struct pw_d3d9_implicit_request *,struct pw_d3d9_implicit_reply *);
+#endif
 #ifdef PW_D3D9_ENABLE_METHODS
 #include "../pw_d3d9_command_wire.h"
 #include "../pw_d3d9_getter_wire.h"
@@ -60,6 +68,8 @@ struct pw_d3d9_deferred {
     void *context;
     unsigned queued;
 };
+/* Client callback admission: final cleanup must defer before any ownership RPC. */
+int pw_d3d9_session_in_callback(void);
 HRESULT pw_d3d9_session_defer(struct pw_d3d9_session *,struct pw_d3d9_deferred *);
 /* DLL detach only; no sessions or callers may remain. No waits or callbacks. */
 void pw_d3d9_session_process_detach(void);
@@ -93,5 +103,12 @@ void *pw_d3d9_native_device_backend(struct pw_d3d9_native_device *);
 uintptr_t pw_d3d9_native_device_identity(struct pw_d3d9_native_device *);
 int pw_d3d9_native_device_destroy(struct pw_d3d9_native_device *);
 int pw_d3d9_native_device_shutdown(void);
+/* Serialized service transaction state; no native pointers on the wire. */
+enum pw_d3d9_implicit_phase { PW_D3D9_IMPLICIT_IDLE, PW_D3D9_IMPLICIT_PREPARED,
+ PW_D3D9_IMPLICIT_DONE_RESTORED, PW_D3D9_IMPLICIT_DONE_RETIRED, PW_D3D9_IMPLICIT_DRAINED };
+unsigned pw_d3d9_native_device_implicit_phase(struct pw_d3d9_native_device *);
+void pw_d3d9_native_device_implicit_set_phase(struct pw_d3d9_native_device *,unsigned);
+int pw_d3d9_native_device_reset_succeeded(struct pw_d3d9_native_device *);
+int pw_d3d9_native_device_reset_preserved(struct pw_d3d9_native_device *);
 #endif
 #endif

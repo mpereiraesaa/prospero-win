@@ -10,7 +10,8 @@ struct pw_d3d9_native_device {
     HWND window;
     struct pw_d3d9_window_id guest,association;
     uint64_t sequence;
-    int closed,destroyed,fullscreen,log_geometry;
+    int closed,destroyed,fullscreen,log_geometry,reset_preserved,reset_succeeded;
+    unsigned implicit_phase;
     struct pw_d3d9_native_device *next;
 };
 static struct pw_d3d9_native_device *devices;
@@ -113,6 +114,14 @@ int pw_d3d9_native_device_shutdown(void)
 }
 void *pw_d3d9_native_device_backend(struct pw_d3d9_native_device *d)
 {return d?d->device:NULL;}
+unsigned pw_d3d9_native_device_implicit_phase(struct pw_d3d9_native_device *d)
+{return d->implicit_phase;}
+void pw_d3d9_native_device_implicit_set_phase(struct pw_d3d9_native_device *d,unsigned phase)
+{d->implicit_phase=phase;}
+int pw_d3d9_native_device_reset_succeeded(struct pw_d3d9_native_device *d)
+{return d->reset_succeeded;}
+int pw_d3d9_native_device_reset_preserved(struct pw_d3d9_native_device *d)
+{return d->reset_preserved;}
 uintptr_t pw_d3d9_native_device_identity(struct pw_d3d9_native_device *d)
 {
     IUnknown *identity=NULL;
@@ -158,10 +167,16 @@ void pw_d3d9_native_device_call(void *factory,struct pw_d3d9_native_device *devi
     }
     if(!device){r->hresult=D3DERR_INVALIDCALL;return;}
     if(q->operation==PW_D3D9_DEVICE_RESET){
+        device->reset_preserved=1;device->reset_succeeded=0; /* No backend call on preflight failure. */
         if((!null_id(q->parameters.window)&&!same(q->parameters.window,device->guest)))return;
         if(!mirror(device,0)){r->hresult=D3DERR_DEVICELOST;return;}
         D3DPRESENT_PARAMETERS p;native_parameters(&p,&q->parameters,device->window);
         r->hresult=IDirect3DDevice9_Reset(device->device,&p);
+        /* The pinned backend leaves owners intact only on early validation
+         * failure. Capture this BEFORE a post-Reset mirror can change HRESULT. */
+        device->reset_succeeded=SUCCEEDED((HRESULT)r->hresult);
+        device->reset_preserved=!device->reset_succeeded &&
+            IDirect3DDevice9_TestCooperativeLevel(device->device)==S_OK;
         if(SUCCEEDED((HRESULT)r->hresult)){device->fullscreen=!p.Windowed;device->log_geometry=1;if(!mirror(device,0))r->hresult=D3DERR_DEVICELOST;}
         if(p.hDeviceWindow&&p.hDeviceWindow!=device->window)r->hresult=E_FAIL;
         reply_parameters(&r->parameters,&p,device->guest);
