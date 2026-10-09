@@ -546,6 +546,9 @@ wine/patches/0905-ntdll-native-session-token.patch
 docs/d3d9-native-session.md
 tests/lab/d3d9_native_domain.c
 tests/lab/d3d9_native_domain.py
+tests/lab/d3d9_native_suspend.c
+tests/lab/d3d9_native_suspend.py
+docs/d3d9-native-suspend.md
 docs/d3d9-native-domain.md
 
 wine/ps5/pw_d3d9_objects.c
@@ -667,6 +670,7 @@ wine/patches/0906-win32u-native-bridge-window-association.patch
 tests/test_d3d9_window_driver.c
 
 wine/patches/0907-win32u-bridge-opaque-guest-window-ids.patch
+wine/patches/0908-ntdll-preserve-native-suspend-context.patch
 wine/ps5/pw_d3d9_resource_wire.h
 wine/ps5/pw_d3d9_resource_wire.c
 tests/test_d3d9_resource_wire.c
