@@ -62,7 +62,26 @@ int main(int argc,char **argv)
  VkInstance handle;VkInstanceCreateInfo info={0};struct vkCreateInstance_params create={0};HANDLE thread;struct vkResetCommandBuffer_params destroy={0};unsigned prior;
  assert(argc==2);async_support=!strncmp(argv[1],"async-",6);support=strcmp(argv[1],"old")!=0;SetEnvironmentVariableA("PW_VK_BATCH",(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats"))?"0":"1");SetEnvironmentVariableA("PW_VK_BATCH_STATS",(!strcmp(argv[1],"stats")||!strcmp(argv[1],"profile")||!strcmp(argv[1],"stall-report"))?"1":"0");SetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",(!strcmp(argv[1],"profile")||!strcmp(argv[1],"profile-no-stats"))?"1":"0");
  create.pCreateInfo=&info;create.pInstance=&handle;assert(pw_vk_batch_call(unix_vkCreateInstance,&create)==0);
- if(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats")||!support){draw_index(1);assert(draw_raw==1&&batches==0);if(!strcmp(argv[1],"stats")){struct vkQueuePresentKHR_params q={0};assert(pw_vk_batch_call(unix_vkQueuePresentKHR,&q)==0);assert(crossings_total==3&&present==1);}else assert(crossings_total==0);puts("PASS original path and old-Unix capability without new table access");return 0;}
+ if(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats")||!support){
+  draw_index(1);assert(draw_raw==1&&batches==0);
+  if(!strcmp(argv[1],"stats")){
+   struct vkQueuePresentKHR_params q={0};struct vkDestroyDevice_params destroyed={0};unsigned i;
+   q.queue=(VkQueue)(uintptr_t)7;
+   assert(pw_vk_batch_call(unix_vkQueuePresentKHR,&q)==0);assert(crossings_total==3&&present==1);
+   assert(present_frequency.QuadPart>0&&present_queues[0].stats.primed&&!present_queues[0].stats.intervals);
+   assert(!pw_vk_batch_call(unix_vkQueuePresentKHR,&q));assert(present_queues[0].stats.intervals==1);
+   q.result=VK_ERROR_DEVICE_LOST;assert(!pw_vk_batch_call(unix_vkQueuePresentKHR,&q));
+   assert(!present_queues[0].stats.primed&&present_queues[0].stats.intervals==1);
+   q.result=VK_SUBOPTIMAL_KHR;assert(!pw_vk_batch_call(unix_vkQueuePresentKHR,&q));
+   assert(present_queues[0].stats.primed&&present_queues[0].stats.intervals==1);
+   for(i=1;i<8;i++){q.queue=(VkQueue)(uintptr_t)(7+i);assert(!pw_vk_batch_call(unix_vkQueuePresentKHR,&q));assert(present_queues[i].stats.primed&&!present_queues[i].stats.intervals);}
+   q.queue=(VkQueue)(uintptr_t)99;assert(!pw_vk_batch_call(unix_vkQueuePresentKHR,&q));
+   assert(present_queues[7].queue==(VkQueue)(uintptr_t)14);
+   assert(!pw_vk_batch_call(unix_vkDestroyDevice,&destroyed));
+   for(i=0;i<8;i++)assert(!present_queues[i].queue&&!present_queues[i].stats.primed);
+  }else assert(crossings_total==0);
+  puts("PASS original path, bounded per-queue present diagnostics, error re-prime and device reset");return 0;
+ }
  assert(negotiated&&enabled);assert(!!async_backend==!!async_support);
  if(async_support){
   struct vkQueuePresentKHR_params present_args={0};
