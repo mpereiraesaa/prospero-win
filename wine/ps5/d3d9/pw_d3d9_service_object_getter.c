@@ -29,7 +29,7 @@ void pw_d3d9_service_object_getter(struct pw_d3d9_objects *objects,struct pw_d3d
         }
     }
     pw_d3d9_native_object_result_release(&result);
-    if(!pw_d3d9_object_complete(objects,target))hr=E_FAIL;
+    if(!pw_d3d9_object_complete(objects,target)){pw_d3d9_objects_cancel(objects);hr=E_FAIL;}
     r->hresult=hr;
     if(FAILED(hr)){r->kind=r->id=r->generation=r->offset=r->stride=0;}
 }
