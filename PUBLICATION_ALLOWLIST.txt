@@ -693,6 +693,10 @@ wine/ps5/pw_d3d9_texture_wire.h
 wine/ps5/pw_d3d9_texture_wire.c
 tests/test_d3d9_texture_wire.c
 docs/d3d9-texture-wire.md
+tests/lab/d3d9_game_smoke.c
+tests/lab/d3d9_game_smoke_fx.h
+tests/lab/d3d9_game_smoke.py
+docs/d3d9-game-smoke.md
 wine/ps5/d3d9/pw_d3d9_native_texture.c
 wine/ps5/d3d9/pw_d3d9_native_texture.h
 tests/lab/d3d9_native_texture.c
