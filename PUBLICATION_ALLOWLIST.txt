@@ -676,3 +676,10 @@ wine/ps5/d3d9/pw_d3d9_native_texture.h
 tests/lab/d3d9_native_texture.c
 tests/lab/d3d9_native_texture.py
 docs/d3d9-native-textures.md
+wine/ps5/d3d9/pw_d3d9_staging.c
+wine/ps5/d3d9/pw_d3d9_staging.h
+wine/ps5/d3d9/pw_d3d9_texture_client.c
+wine/ps5/d3d9/pw_d3d9_texture_client.h
+tests/lab/d3d9_texture_client.c
+tests/lab/d3d9_texture_client.py
+docs/d3d9-texture-client.md
