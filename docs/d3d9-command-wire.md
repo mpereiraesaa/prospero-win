@@ -63,3 +63,22 @@ derives upload size from vertex declaration state; indexed uploads also include
 the minimum vertex prefix. Guessing primitive count times stride would not prove
 a safe complete copy. Resource creation, getters, query results, state blocks
 and UP uploads require their own reviewed adapters.
+
+## Encoder temporary initialization
+
+The encoder retains its local temporary to preserve overlapping command/output
+buffers, but does not clear the entire 4,144-byte capacity before each call.
+The published range has no gaps: four header words fill bytes 0..15, the schema
+argument words immediately follow, then exactly the validated payload. Every
+payload shape is a multiple of four bytes; scalar-word payloads use explicit
+little-endian stores and palette payloads use an exact byte copy. Only that
+fully written range is copied to the destination. Unused temporary bytes are
+never published.
+
+All validation and error precedence precede destination publication. The
+existing `written` result behavior is unchanged, including required length on
+insufficient capacity. The final temporary-to-output copy retains alias safety.
+A frozen initialized-encoder reference checks every method, each output capacity,
+maximal vector/BOOL/clear payloads, zero payloads, opaque bits, poisoned unused
+fields, invalid inputs and overlapping source/output positions. This is a
+source-level initialization reduction, not a measured runtime speedup.

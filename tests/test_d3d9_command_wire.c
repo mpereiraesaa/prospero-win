@@ -87,6 +87,71 @@ static void validation_corpus(const unsigned char *wire, size_t bytes)
     assert(!pw_d3d9_command_decode(&overlap.command, overlap.bytes, bytes));
     assert(!memcmp(&overlap.command, &expected, sizeof(expected)));
 }
+/* Frozen initialized encoder reference: the optimization changes no bytes or
+ * failure precedence and must retain the temporary's alias protection. */
+static int reference_encode(void *wire, size_t capacity, size_t *written,
+                            const struct pw_d3d9_command *c)
+{
+    unsigned char tmp[PW_D3D9_COMMAND_MAX] = {0};
+    const struct pw_d3d9_command_schema *schema;
+    size_t bytes, total;
+    int status;
+    if (!c || !written) return PW_D3D9_COMMAND_INVALID;
+    *written = 0;
+    status = pw_d3d9_command_data_bytes(c->method, c->args, &bytes);
+    if (status) return status;
+    schema = pw_d3d9_command_schema(c->method);
+    if (bytes != c->data_bytes) return PW_D3D9_COMMAND_INVALID;
+    if (schema->shape == PW_D3D9_DATA_BOOL)
+        for (size_t i = 0; i < c->data_bytes / 4; ++i)
+            if (c->data.words[i] > 1) return PW_D3D9_COMMAND_INVALID;
+    total = 16 + 4 * schema->words + bytes; *written = total;
+    if (capacity < total) return PW_D3D9_COMMAND_SMALL;
+    if (!wire) return PW_D3D9_COMMAND_INVALID;
+    put32(tmp, PW_D3D9_COMMAND_VERSION); put32(tmp + 4, c->method);
+    put32(tmp + 8, schema->words); put32(tmp + 12, c->data_bytes);
+    for (unsigned i = 0; i < schema->words; ++i) put32(tmp + 16 + 4 * i, c->args[i]);
+    if (schema->shape == PW_D3D9_DATA_PALETTE) memcpy(tmp + 16 + 4 * schema->words, c->data.bytes, bytes);
+    else for (size_t i = 0; i < bytes / 4; ++i) put32(tmp + 16 + 4 * schema->words + 4 * i, c->data.words[i]);
+    memcpy(wire, tmp, total); return PW_D3D9_COMMAND_OK;
+}
+static unsigned encode_comparisons;
+static void encode_equal(const struct pw_d3d9_command *c, size_t capacity)
+{
+    unsigned char expected[PW_D3D9_COMMAND_MAX + 8], actual[sizeof(expected)];
+    size_t expected_bytes = 91, actual_bytes = 91;
+    memset(expected, 0xad, sizeof(expected)); memset(actual, 0xad, sizeof(actual));
+    int result = reference_encode(expected, capacity, &expected_bytes, c);
+    assert(pw_d3d9_command_encode(actual, capacity, &actual_bytes, c) == result);
+    assert(actual_bytes == expected_bytes && !memcmp(expected, actual, sizeof(actual)));
+    ++encode_comparisons;
+}
+static void encode_corpus(const struct pw_d3d9_command *source)
+{
+    struct pw_d3d9_command c = *source;
+    const struct pw_d3d9_command_schema *schema = pw_d3d9_command_schema(c.method);
+    size_t total = 16 + 4 * schema->words + c.data_bytes;
+    /* Poison bytes outside the published range: no unused field can leak. */
+    for (unsigned i = schema->words; i < PW_D3D9_COMMAND_WORDS; ++i) c.args[i] = 0xdeadbeef;
+    memset(c.data.bytes + c.data_bytes, 0xa7, sizeof(c.data.bytes) - c.data_bytes);
+    for (size_t n = 0; n <= total + 1; ++n) encode_equal(&c, n);
+    for (unsigned offset = 0; offset <= 8; offset += 4) {
+        union overlap {
+            struct { uint32_t prefix; struct pw_d3d9_command command; } input;
+            unsigned char bytes[2 * PW_D3D9_COMMAND_MAX];
+        } expected, actual;
+        memset(&expected, 0x7b, sizeof(expected)); expected.input.command = c; actual = expected;
+        size_t a = 19, b = 19;
+        assert(!reference_encode(expected.bytes + offset, PW_D3D9_COMMAND_MAX, &a, &expected.input.command));
+        assert(!pw_d3d9_command_encode(actual.bytes + offset, PW_D3D9_COMMAND_MAX, &b, &actual.input.command));
+        assert(a == b && !memcmp(&actual, &expected, sizeof(actual)));
+        ++encode_comparisons;
+    }
+    size_t a = 7, b = 7;
+    assert(reference_encode(NULL, total, &a, &c) == pw_d3d9_command_encode(NULL, total, &b, &c) && a == b);
+    assert(reference_encode(NULL, 0, &a, &c) == pw_d3d9_command_encode(NULL, 0, &b, &c) && a == b);
+    assert(reference_encode(NULL, total, NULL, &c) == pw_d3d9_command_encode(NULL, total, NULL, &c));
+}
 static void exercise(unsigned method)
 {
     const struct pw_d3d9_command_schema *s = pw_d3d9_command_schema(method);
@@ -100,6 +165,7 @@ static void exercise(unsigned method)
     assert(!pw_d3d9_command_data_bytes(method, c.args, &data_bytes));
     c.data_bytes = (uint32_t)data_bytes;
     for (i = 0; i < data_bytes / 4; ++i) c.data.words[i] = s->shape == PW_D3D9_DATA_BOOL ? i % 2 : UINT32_C(0x81234500) + (uint32_t)i;
+    encode_corpus(&c);
     memset(wire, 0xa5, sizeof(wire));
     assert(!pw_d3d9_command_encode(wire, sizeof(wire), &bytes, &c));
     assert(bytes == 16 + 4 * s->words + data_bytes && wire[bytes] == 0xa5);
@@ -180,24 +246,35 @@ int main(void)
     validation_corpus(wire, bytes);
     assert(!pw_d3d9_command_decode(&out, wire, bytes));
     assert(out.data.words[0] == c.data.words[0] && out.data.words[1] == UINT32_MAX);
-    c.args[1] = 257; assert(pw_d3d9_command_encode(wire, sizeof(wire), &n, &c) == PW_D3D9_COMMAND_UNSUPPORTED);
+    encode_corpus(&c);
+    c.args[1] = 257; encode_equal(&c, sizeof(wire)); assert(pw_d3d9_command_encode(wire, sizeof(wire), &n, &c) == PW_D3D9_COMMAND_UNSUPPORTED);
     c.method = 98; c.args[1] = 1024; c.data.words[0] = 2;
     assert(pw_d3d9_command_encode(wire, sizeof(wire), &n, &c) == PW_D3D9_COMMAND_INVALID);
+    encode_equal(&c, sizeof(wire));
     memset(&c.data, 0, sizeof(c.data));
     assert(!pw_d3d9_command_encode(wire, sizeof(wire), &bytes, &c));
+    encode_corpus(&c);
     validation_corpus(wire, bytes);
     wire[24] = 2; equivalent(wire, bytes); assert(pw_d3d9_command_decode(&out, wire, bytes));
     c.args[1] = 0; c.data_bytes = 0; assert(!pw_d3d9_command_encode(wire, sizeof(wire), &bytes, &c) && bytes == 24);
+    encode_corpus(&c);
     c.method = 43; c.args[0] = 256; c.data_bytes = 4096;
     assert(!pw_d3d9_command_encode(wire, sizeof(wire), &bytes, &c));
+    encode_corpus(&c);
     c.method = 71; c.args[0] = 0; c.data_bytes = 1024;
     for (i = 0; i < 1024; ++i) c.data.bytes[i] = (unsigned char)i;
     assert(!pw_d3d9_command_encode(wire, sizeof(wire), &bytes, &c));
     assert(!memcmp(wire + 20, c.data.bytes, 1024));
     assert(!pw_d3d9_command_decode(&out, wire, bytes));
     assert(!memcmp(out.data.bytes, c.data.bytes, 1024));
+    encode_corpus(&c);
+    encode_equal(NULL, sizeof(wire));
+    c.method = UINT32_MAX; encode_equal(&c, sizeof(wire));
+    c = (struct pw_d3d9_command){.method = 65, .args = {0, 1, 0}}; encode_equal(&c, sizeof(wire));
+    c = (struct pw_d3d9_command){.method = 53, .args = {0, 2}}; encode_equal(&c, sizeof(wire));
+    c = (struct pw_d3d9_command){.method = 57, .data_bytes = 4}; encode_equal(&c, sizeof(wire));
     assert(pw_d3d9_command_decode(NULL, wire, bytes));
     assert(pw_d3d9_command_data_bytes(43, NULL, &n));
-    printf("D3D9 command wire: PASS methods=%u equivalence=%u\n", (unsigned)(sizeof(methods) / sizeof(methods[0])), comparisons);
+    printf("D3D9 command wire: PASS methods=%u equivalence=%u encode_equivalence=%u\n", (unsigned)(sizeof(methods) / sizeof(methods[0])), comparisons, encode_comparisons);
     return 0;
 }

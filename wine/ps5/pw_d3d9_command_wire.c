@@ -71,7 +71,9 @@ static int valid_data(const struct pw_d3d9_command_schema *s, const struct pw_d3
 { return valid_payload(s, c->data.bytes, c->data_bytes, 0); }
 int pw_d3d9_command_encode(void *wire, size_t capacity, size_t *written, const struct pw_d3d9_command *c)
 {
-    unsigned char tmp[PW_D3D9_COMMAND_MAX] = {0};
+    /* Header, schema arguments and the exact payload fill [0,total). No
+     * padding is published; keep the temporary for overlapping input/output. */
+    unsigned char tmp[PW_D3D9_COMMAND_MAX];
     const struct pw_d3d9_command_schema *s;
     size_t bytes, total;
     unsigned i;
