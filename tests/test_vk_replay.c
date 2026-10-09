@@ -12,33 +12,57 @@
 #include "wine/ps5/pw_vk_replay.h"
 /* Deterministic partial worker-start failure, without altering production API. */
 static unsigned create_calls,fail_create,fail_attr_init,fail_attr_set,fail_attr_destroy,live_attrs,worker_attrs;
+/* ASan may create/destroy its own attributes inside pthread_create. Only the
+ * first attribute initialized by this thread's scheduler call is our target. */
+static _Thread_local unsigned attribute_scope;
+static _Thread_local pthread_attr_t *target_attr;
 int __real_pthread_attr_init(pthread_attr_t *);
 int __real_pthread_attr_setstacksize(pthread_attr_t *,size_t);
 int __real_pthread_attr_destroy(pthread_attr_t *);
 int __wrap_pthread_attr_init(pthread_attr_t *a)
 {
- int status;if(fail_attr_init){fail_attr_init=0;return EAGAIN;}
+ int status;
+ if(!attribute_scope || target_attr)return __real_pthread_attr_init(a);
+ target_attr=a;
+ if(fail_attr_init){fail_attr_init=0;return EAGAIN;}
  status=__real_pthread_attr_init(a);if(!status)++live_attrs;return status;
 }
 int __wrap_pthread_attr_setstacksize(pthread_attr_t *a,size_t bytes)
 {
+ if(!attribute_scope || a!=target_attr)return __real_pthread_attr_setstacksize(a,bytes);
  assert(bytes==PW_VK_REPLAY_WORKER_STACK);
  if(fail_attr_set){fail_attr_set=0;return EINVAL;}
  return __real_pthread_attr_setstacksize(a,bytes);
 }
 int __wrap_pthread_attr_destroy(pthread_attr_t *a)
 {
- int status=__real_pthread_attr_destroy(a);if(!status){assert(live_attrs);--live_attrs;}
+ int status;
+ if(!attribute_scope || a!=target_attr)return __real_pthread_attr_destroy(a);
+ status=__real_pthread_attr_destroy(a);if(!status){assert(live_attrs);--live_attrs;}
  if(fail_attr_destroy){fail_attr_destroy=0;return EINVAL;}
  return status;
 }
 int __real_pthread_create(pthread_t *,const pthread_attr_t *,void *(*)(void *),void *);
 int __wrap_pthread_create(pthread_t *t,const pthread_attr_t *a,void *(*fn)(void *),void *arg)
 {
- if(a){size_t bytes=0;assert(!pthread_attr_getstacksize(a,&bytes));assert(bytes==PW_VK_REPLAY_WORKER_STACK);++worker_attrs;}
- if(++create_calls==fail_create)return EAGAIN;
+ if(attribute_scope && a==target_attr){
+  size_t bytes=0;assert(!pthread_attr_getstacksize(a,&bytes));assert(bytes==PW_VK_REPLAY_WORKER_STACK);++worker_attrs;
+  /* Reproduce sanitizer-internal attribute activity without letting it
+   * consume the pending failure for the scheduler's own object. */
+  {pthread_attr_t auxiliary;unsigned pending=fail_attr_destroy;
+   assert(!__wrap_pthread_attr_init(&auxiliary));assert(!__wrap_pthread_attr_destroy(&auxiliary));
+   assert(fail_attr_destroy==pending);}
+  if(++create_calls==fail_create)return EAGAIN;
+ }
  return __real_pthread_create(t,a,fn,arg);
 }
+static struct pw_vk_replay *fixture_create(unsigned workers,size_t limit,pw_vk_replay_fn execute)
+{
+ struct pw_vk_replay *result;assert(!attribute_scope);attribute_scope=1;target_attr=NULL;
+ result=pw_vk_replay_create(workers,limit,execute);
+ attribute_scope=0;target_attr=NULL;return result;
+}
+#define pw_vk_replay_create fixture_create
 struct fixture {
  pthread_mutex_t mutex;
  pthread_cond_t changed;
