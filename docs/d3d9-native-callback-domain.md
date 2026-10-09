@@ -46,3 +46,31 @@ cycle recorded four guest notices, two guest callbacks before/after service,
 three guest exceptions, two native exceptions and one native child window.
 The registration NULL/replacement rejection checks passed. This is host
 execution evidence; console acceptance remains pending.
+
+
+## Builtin window procedure preservation
+
+The first console UI probe completed its three explicit callback cycles, but
+reported four access violations while destroying the guest IME window. The
+fault address was the truncated native NtdllImeWndProc_W address. Native user32
+initialization had also overwritten win32u's process-global builtin window
+procedure table. The first routing patch preserved custom window callbacks,
+but did not preserve these builtin procedure addresses.
+
+Patch `0904-win32u-native-builtin-procs.patch` retains a separate WoW64 builtin
+procedure table. Builtin handles remain architecture-neutral indices, and
+lookup selects addresses for the current callback domain. Dynamically allocated
+procedure handles retain their existing storage. The first registered user32
+module remains the stable owner of shared builtin classes; registration checks
+use the caller domain's module.
+
+An expanded host fixture reproduces the failure deterministically by using
+unsubclassed STATIC windows on both sides. With only the first routing patch,
+guest SetWindowTextW faults during the first native service cycle. A clean
+console teardown result remains required before acceptance.
+
+With both patches, the expanded host UI-only and real-DXVK modes each pass
+three cycles, including three guest builtin-window checks and two native
+builtin-window checks per cycle. CreateDevice, Reset and Present remain S_OK
+in full mode. The failing baseline and passing runs use the same expanded
+fixture, and retain source/binary identities in their receipts.

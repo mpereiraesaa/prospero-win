@@ -1,0 +1,94 @@
+Subject: win32u: preserve builtin window procedures per callback domain
+
+--- a/dlls/win32u/class.c
++++ b/dlls/win32u/class.c
+@@ -169,12 +169,23 @@
+ } WINDOWPROC;
+ 
+ static WINDOWPROC winproc_array[MAX_WINPROCS];
++/* Builtin handles are architecture-neutral indices. Resolve them using the
++ * current callback domain; native user32 must not overwrite guest addresses. */
++static WINDOWPROC wow64_builtin_procs[NTUSER_NB_PROCS];
++static HINSTANCE domain_user32_modules[2];
+ static UINT winproc_used = NTUSER_NB_PROCS;
+ static pthread_mutex_t winproc_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
+ static struct list class_list = LIST_INIT( class_list );
+ 
+ HINSTANCE user32_module = 0;
++
++static WINDOWPROC *domain_winproc( WINDOWPROC *proc )
++{
++    if (NtCurrentTeb()->WowTebOffset && proc - winproc_array < NTUSER_NB_PROCS)
++        return &wow64_builtin_procs[proc - winproc_array];
++    return proc;
++}
+ 
+ /* find an existing winproc for a given function and type */
+ /* FIXME: probably should do something more clever than a linear search */
+@@ -185,7 +196,8 @@
+     for (i = 0; i < NTUSER_NB_PROCS; i++)
+     {
+         /* match either proc, some apps confuse A and W */
+-        if (winproc_array[i].procA != func && winproc_array[i].procW != func) continue;
++        WINDOWPROC *proc = domain_winproc( &winproc_array[i] );
++        if (proc->procA != func && proc->procW != func) continue;
+         return &winproc_array[i];
+     }
+     for ( ; i < winproc_used; i++)
+@@ -262,6 +274,7 @@
+     WINDOWPROC *ptr = get_winproc_ptr( proc );
+ 
+     if (!ptr || ptr == WINPROC_PROC16) return proc;
++    ptr = domain_winproc( ptr );
+     if (ansi)
+     {
+         if (ptr->procA) return ptr->procA;
+@@ -288,6 +301,7 @@
+     }
+     else
+     {
++        proc = domain_winproc( proc );
+         params->procA = proc->procA;
+         params->procW = proc->procW;
+ 
+@@ -316,6 +330,7 @@
+ 
+     if (!(proc = get_winproc_ptr( (WNDPROC)ret ))) return ret;
+     if (proc == WINPROC_PROC16) return WINPROC_PROC16;
++    proc = domain_winproc( proc );
+     return (DLGPROC)(ansi ? proc->procA : proc->procW);
+ }
+ 
+@@ -340,14 +355,18 @@
+                                                  HINSTANCE user_module )
+ {
+     static pthread_once_t init_once = PTHREAD_ONCE_INIT;
++    BOOL wow64 = !!NtCurrentTeb()->WowTebOffset;
++    WINDOWPROC *procs = wow64 ? wow64_builtin_procs : winproc_array;
+     UINT i;
+ 
+     for (i = 0; i < NTUSER_NB_PROCS; i++)
+     {
+-        winproc_array[i].procA = client_procsA[i][0];
+-        winproc_array[i].procW = client_procsW[i][0];
+-    }
+-    user32_module = user_module;
++        procs[i].procA = client_procsA[i][0];
++        procs[i].procW = client_procsW[i][0];
++    }
++    domain_user32_modules[wow64] = user_module;
++    /* Builtin classes are registered once per process, with stable handles. */
++    if (!user32_module) user32_module = user_module;
+ 
+     pthread_once( &init_once, init_user );
+     return STATUS_SUCCESS;
+@@ -599,7 +618,7 @@
+     if (!fnid) get_desktop_window();
+ 
+     if (wc->cbSize != sizeof(*wc) || wc->cbClsExtra < 0 || wc->cbWndExtra < 0 ||
+-        (!fnid && wc->hInstance == user32_module))  /* we can't register a class for user32 */
++        (!fnid && wc->hInstance == domain_user32_modules[!!NtCurrentTeb()->WowTebOffset]))  /* we can't register a class for user32 */
+     {
+          RtlSetLastWin32Error( ERROR_INVALID_PARAMETER );
+          return 0;
