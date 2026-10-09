@@ -51,12 +51,12 @@ static DWORD WINAPI suspend_parent(void *arg)
     HANDLE parent=arg;
     Sleep(50);
     for(unsigned i=0;i<8;i++){
-        if(SuspendThread(parent)==(DWORD)-1)return 31;
+        if(SuspendThread(parent)==(DWORD)-1){InterlockedExchange(&suspend_done,1);return 31;}
         CONTEXT context={0};context.ContextFlags=CONTEXT_CONTROL|CONTEXT_INTEGER;
         if(!GetThreadContext(parent,&context)){ResumeThread(parent);InterlockedExchange(&suspend_done,1);return 32;}
         if(context.Rip<=UINT32_MAX||context.Rsp<=UINT32_MAX){ResumeThread(parent);InterlockedExchange(&suspend_done,1);return 35;}
         fprintf(stderr,"PW_NATIVE_SUSPEND iteration=%u rip=%llx rsp=%llx\n",i,(unsigned long long)context.Rip,(unsigned long long)context.Rsp);fflush(stderr);
-        if(ResumeThread(parent)==(DWORD)-1)return 33;
+        if(ResumeThread(parent)==(DWORD)-1){InterlockedExchange(&suspend_done,1);return 33;}
         Sleep(10);
     }
     InterlockedExchange(&suspend_done,1);return 0;
@@ -65,7 +65,7 @@ __attribute__((used,noinline)) static DWORD suspend_probe(void)
     {
         HANDLE parent,worker;
         if(!DuplicateHandle(GetCurrentProcess(),GetCurrentThread(),GetCurrentProcess(),&parent,0,FALSE,DUPLICATE_SAME_ACCESS))return 30;
-        suspend_done=0;worker=CreateThread(NULL,0,suspend_parent,parent,0,NULL);if(!worker)return 34;
+        suspend_done=0;worker=CreateThread(NULL,0,suspend_parent,parent,0,NULL);if(!worker){CloseHandle(parent);return 34;}
         while(!suspend_done)MsgWaitForMultipleObjectsEx(0,NULL,5,QS_ALLINPUT,MWMO_ALERTABLE);
         WaitForSingleObject(worker,INFINITE);DWORD result_code;GetExitCodeThread(worker,&result_code);
         CloseHandle(worker);CloseHandle(parent);if(result_code)return result_code;return 0;

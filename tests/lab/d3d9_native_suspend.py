@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Execute the PE32 -> PE64 native-domain proof against a patched host Wine."""
+import atexit
+import sys
 import argparse
 import hashlib
 import json
@@ -21,6 +23,20 @@ out.mkdir(parents=True, exist_ok=False)
 source = Path(__file__).with_suffix('.c').resolve()
 receipt = {'schema': 1, 'status':'running', 'tests': [], 'artifacts': {}, 'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest()}
 
+def persist_terminal():
+    if receipt['status'] == 'running':
+        receipt['status'] = 'failed'
+    (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+
+original_hook = sys.excepthook
+def failure_hook(kind, error, traceback):
+    receipt['status'] = 'timeout' if isinstance(error, subprocess.TimeoutExpired) else 'failed'
+    receipt['error'] = {'type': kind.__name__, 'message': str(error)}
+    original_hook(kind, error, traceback)
+sys.excepthook = failure_hook
+atexit.register(persist_terminal)
+
+
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -31,6 +47,7 @@ def run(command, name, env=None, expected=0):
         (out / (name + '.log')).write_bytes((error.stdout or b'') + (error.stderr or b''))
         (out / 'failure.json').write_text(json.dumps({'status':'timeout','seconds':45}))
         raise
+    receipt.setdefault('commands', []).append({'name': name, 'command': [str(x) for x in command], 'exit_code': result.returncode})
     (out / (name + '.log')).write_text(result.stdout + result.stderr)
     if result.returncode != expected:
         raise RuntimeError(f'{name}: exit {result.returncode}; see {out / (name + ".log")}')
