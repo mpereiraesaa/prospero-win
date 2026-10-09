@@ -19,6 +19,9 @@
 #ifdef PW_D3D9_ENABLE_OBJECT_GETTER
 #include "pw_d3d9_device_object_methods.h"
 #endif
+#ifdef PW_D3D9_ENABLE_UP
+#include "pw_d3d9_up_client.h"
+#endif
 #include "pw_d3d9_inventory.h"
 #include "../pw_d3d9_window_driver.h"
 #include <stdio.h>
@@ -325,6 +328,13 @@ static HRESULT wrap_object(IDirect3DDevice9 *iface,uint32_t kind,struct pw_d3d9_
     fail_device(iface,E_NOINTERFACE);return E_NOINTERFACE;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_UP
+static HRESULT up_call(IDirect3DDevice9 *iface,const struct pw_d3d9_up_request *q,struct pw_d3d9_up_reply *r)
+{
+    struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
+    addref(iface);HRESULT hr=pw_d3d9_session_up(d->session,d->remote,q,r);release(iface);return hr;
+}
+#endif
 static BOOL CALLBACK init_vtable(INIT_ONCE *once,void *parameter,void **context)
 {
     (void)once;(void)parameter;(void)context;
@@ -352,6 +362,9 @@ static BOOL CALLBACK init_vtable(INIT_ONCE *once,void *parameter,void **context)
 #endif
 #ifdef PW_D3D9_ENABLE_OBJECT_GETTER
     const struct pw_d3d9_device_object_methods_ops objects={object_getter_call,wrap_object,fail_device};pw_d3d9_device_object_methods_install(&vtable,&objects);
+#endif
+#ifdef PW_D3D9_ENABLE_UP
+    const struct pw_d3d9_up_client_ops up={up_call,fail_device};pw_d3d9_up_client_install(&vtable,&up);
 #endif
     return TRUE;
 }
