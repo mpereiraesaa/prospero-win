@@ -20,6 +20,7 @@ static const GUID guid={0x12345678,0x9abc,0xdef0,{0x12,0x34,0x56,0x78,0x9a,0xbc,
 void pw_d3d9_api_test_output(const char *text)
 {
  if(strstr(text,"PW_D3D9_API_OUTPUT ")){
+  assert(strstr(text," self.address="));
   ++output_logs;
   if(strstr(text,"method=GetAvailableTextureMem")){++memory_logs;assert(strstr(text,"result=fedcba98"));}
   if(strstr(text,"unreadable"))++unreadable_logs;

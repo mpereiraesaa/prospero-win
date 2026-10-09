@@ -11,7 +11,8 @@ OUTPUT_METHODS={'CreateTexture','CreateRenderTarget','CreateDepthStencilSurface'
  'GetLevelCount','GetType','GetAdapterModeCount'}
 
 def output_fields(declarations,names):
- before=[' static LONG samples;int sample=pw_d3d9_api_sample(&samples);'];fields=[]
+ before=[' static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;']
+ fields=['{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER}']
  for declaration,name in zip(declarations,names):
   if '*' not in declaration:
    fields.append(f'{{"{name}",&{name},sizeof({name}),PW_D3D9_API_WORDS}}')

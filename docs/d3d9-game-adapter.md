@@ -51,7 +51,9 @@ type and adapter mode count. The counter saturates and is shared by objects of
 the same interface; failed HRESULT calls consume a sample but never read output
 storage. Existing failure records remain independent of the sample limit.
 
-Records include copied parameters and output values. Descriptors and the complete
+Records include copied parameters, output values and the numerical object address
+captured before dispatch, allowing creation and subsequent resource calls to be
+correlated without reading the object after dispatch. Descriptors and the complete
 D3DCAPS9 are hexadecimal 32-bit words in native structure order; floating-point
 fields retain their original bits. LockRect prints signed Pitch and pBits without
 reading pixel memory. Requested rectangles are safely copied before the target

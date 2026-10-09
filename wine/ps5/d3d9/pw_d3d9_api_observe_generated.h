@@ -31,10 +31,10 @@ static HRESULT WINAPI observe_IDirect3D9_GetAdapterIdentifier(IDirect3D9 *self, 
  return result;
 }
 static UINT WINAPI observe_IDirect3D9_GetAdapterModeCount(IDirect3D9 *self, UINT Adapter, D3DFORMAT Format) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  UINT result=raw_IDirect3D9.GetAdapterModeCount(self, Adapter, Format);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"Adapter",&Adapter,sizeof(Adapter),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Adapter",&Adapter,sizeof(Adapter),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3D9",6,"GetAdapterModeCount",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -75,11 +75,11 @@ static HRESULT WINAPI observe_IDirect3D9_CheckDeviceFormatConversion(IDirect3D9 
  return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_GetDeviceCaps(IDirect3D9 *self, UINT Adapter, D3DDEVTYPE DeviceType, D3DCAPS9* pCaps) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3D9.GetDeviceCaps(self, Adapter, DeviceType, pCaps);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",14,"GetDeviceCaps",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"Adapter",&Adapter,sizeof(Adapter),PW_D3D9_API_WORDS},{"DeviceType",&DeviceType,sizeof(DeviceType),PW_D3D9_API_WORDS},{"pCaps.address",&pCaps,sizeof(pCaps),PW_D3D9_API_POINTER},{"pCaps",pCaps,sizeof(*pCaps),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Adapter",&Adapter,sizeof(Adapter),PW_D3D9_API_WORDS},{"DeviceType",&DeviceType,sizeof(DeviceType),PW_D3D9_API_WORDS},{"pCaps.address",&pCaps,sizeof(pCaps),PW_D3D9_API_POINTER},{"pCaps",pCaps,sizeof(*pCaps),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3D9",14,"GetDeviceCaps",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -145,11 +145,11 @@ static HRESULT WINAPI observe_IDirect3DVolume9_GetContainer(IDirect3DVolume9 *se
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolume9_GetDesc(IDirect3DVolume9 *self, D3DVOLUME_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DVolume9.GetDesc(self, pDesc);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolume9",8,"GetDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DVolume9",8,"GetDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -202,11 +202,11 @@ static HRESULT WINAPI observe_IDirect3DSwapChain9_GetFrontBufferData(IDirect3DSw
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSwapChain9_GetBackBuffer(IDirect3DSwapChain9 *self, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, struct IDirect3DSurface9 **ppBackBuffer) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DSwapChain9.GetBackBuffer(self, iBackBuffer, Type, ppBackBuffer);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DSwapChain9",5,"GetBackBuffer",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"iBackBuffer",&iBackBuffer,sizeof(iBackBuffer),PW_D3D9_API_WORDS},{"Type",&Type,sizeof(Type),PW_D3D9_API_WORDS},{"ppBackBuffer.address",&ppBackBuffer,sizeof(ppBackBuffer),PW_D3D9_API_POINTER},{"ppBackBuffer",ppBackBuffer,sizeof(*ppBackBuffer),PW_D3D9_API_POINTER}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"iBackBuffer",&iBackBuffer,sizeof(iBackBuffer),PW_D3D9_API_WORDS},{"Type",&Type,sizeof(Type),PW_D3D9_API_WORDS},{"ppBackBuffer.address",&ppBackBuffer,sizeof(ppBackBuffer),PW_D3D9_API_POINTER},{"ppBackBuffer",ppBackBuffer,sizeof(*ppBackBuffer),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DSwapChain9",5,"GetBackBuffer",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -288,10 +288,10 @@ static void WINAPI observe_IDirect3DResource9_PreLoad(IDirect3DResource9 *self) 
  raw_IDirect3DResource9.PreLoad(self);
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DResource9_GetType(IDirect3DResource9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DResource9.GetType(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DResource9",10,"GetType",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -353,10 +353,10 @@ static void WINAPI observe_IDirect3DSurface9_PreLoad(IDirect3DSurface9 *self) {
  raw_IDirect3DSurface9.PreLoad(self);
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DSurface9_GetType(IDirect3DSurface9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DSurface9.GetType(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DSurface9",10,"GetType",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -367,22 +367,22 @@ static HRESULT WINAPI observe_IDirect3DSurface9_GetContainer(IDirect3DSurface9 *
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_GetDesc(IDirect3DSurface9 *self, D3DSURFACE_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DSurface9.GetDesc(self, pDesc);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",12,"GetDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DSurface9",12,"GetDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_LockRect(IDirect3DSurface9 *self, D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  RECT snapshot_rect;int valid_rect=sample&&pw_d3d9_api_read(&snapshot_rect,rect,sizeof(snapshot_rect));
  HRESULT result=raw_IDirect3DSurface9.LockRect(self, locked_rect, rect, flags);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",13,"LockRect",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"locked_rect.address",&locked_rect,sizeof(locked_rect),PW_D3D9_API_POINTER},{"locked_rect",locked_rect,sizeof(*locked_rect),PW_D3D9_API_LOCKED_RECT},{"rect.address",&rect,sizeof(rect),PW_D3D9_API_POINTER},{"rect",valid_rect?&snapshot_rect:NULL,sizeof(snapshot_rect),PW_D3D9_API_WORDS},{"flags",&flags,sizeof(flags),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"locked_rect.address",&locked_rect,sizeof(locked_rect),PW_D3D9_API_POINTER},{"locked_rect",locked_rect,sizeof(*locked_rect),PW_D3D9_API_LOCKED_RECT},{"rect.address",&rect,sizeof(rect),PW_D3D9_API_POINTER},{"rect",valid_rect?&snapshot_rect:NULL,sizeof(snapshot_rect),PW_D3D9_API_WORDS},{"flags",&flags,sizeof(flags),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DSurface9",13,"LockRect",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -459,10 +459,10 @@ static void WINAPI observe_IDirect3DVertexBuffer9_PreLoad(IDirect3DVertexBuffer9
  raw_IDirect3DVertexBuffer9.PreLoad(self);
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DVertexBuffer9_GetType(IDirect3DVertexBuffer9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DVertexBuffer9.GetType(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DVertexBuffer9",10,"GetType",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -478,11 +478,11 @@ static HRESULT WINAPI observe_IDirect3DVertexBuffer9_Unlock(IDirect3DVertexBuffe
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexBuffer9_GetDesc(IDirect3DVertexBuffer9 *self, D3DVERTEXBUFFER_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DVertexBuffer9.GetDesc(self, pDesc);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexBuffer9",13,"GetDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DVertexBuffer9",13,"GetDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -544,10 +544,10 @@ static void WINAPI observe_IDirect3DIndexBuffer9_PreLoad(IDirect3DIndexBuffer9 *
  raw_IDirect3DIndexBuffer9.PreLoad(self);
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DIndexBuffer9_GetType(IDirect3DIndexBuffer9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DIndexBuffer9.GetType(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DIndexBuffer9",10,"GetType",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -563,11 +563,11 @@ static HRESULT WINAPI observe_IDirect3DIndexBuffer9_Unlock(IDirect3DIndexBuffer9
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DIndexBuffer9_GetDesc(IDirect3DIndexBuffer9 *self, D3DINDEXBUFFER_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DIndexBuffer9.GetDesc(self, pDesc);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DIndexBuffer9",13,"GetDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DIndexBuffer9",13,"GetDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -629,10 +629,10 @@ static void WINAPI observe_IDirect3DBaseTexture9_PreLoad(IDirect3DBaseTexture9 *
  raw_IDirect3DBaseTexture9.PreLoad(self);
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DBaseTexture9_GetType(IDirect3DBaseTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DBaseTexture9.GetType(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DBaseTexture9",10,"GetType",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -644,10 +644,10 @@ static DWORD WINAPI observe_IDirect3DBaseTexture9_GetLOD(IDirect3DBaseTexture9 *
  return raw_IDirect3DBaseTexture9.GetLOD(self);
 }
 static DWORD WINAPI observe_IDirect3DBaseTexture9_GetLevelCount(IDirect3DBaseTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  DWORD result=raw_IDirect3DBaseTexture9.GetLevelCount(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DBaseTexture9",13,"GetLevelCount",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -720,10 +720,10 @@ static void WINAPI observe_IDirect3DCubeTexture9_PreLoad(IDirect3DCubeTexture9 *
  raw_IDirect3DCubeTexture9.PreLoad(self);
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DCubeTexture9_GetType(IDirect3DCubeTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DCubeTexture9.GetType(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DCubeTexture9",10,"GetType",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -735,10 +735,10 @@ static DWORD WINAPI observe_IDirect3DCubeTexture9_GetLOD(IDirect3DCubeTexture9 *
  return raw_IDirect3DCubeTexture9.GetLOD(self);
 }
 static DWORD WINAPI observe_IDirect3DCubeTexture9_GetLevelCount(IDirect3DCubeTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  DWORD result=raw_IDirect3DCubeTexture9.GetLevelCount(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DCubeTexture9",13,"GetLevelCount",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -755,11 +755,11 @@ static void WINAPI observe_IDirect3DCubeTexture9_GenerateMipSubLevels(IDirect3DC
  raw_IDirect3DCubeTexture9.GenerateMipSubLevels(self);
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_GetLevelDesc(IDirect3DCubeTexture9 *self, UINT Level, D3DSURFACE_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DCubeTexture9.GetLevelDesc(self, Level, pDesc);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"Level",&Level,sizeof(Level),PW_D3D9_API_WORDS},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Level",&Level,sizeof(Level),PW_D3D9_API_WORDS},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DCubeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -770,12 +770,12 @@ static HRESULT WINAPI observe_IDirect3DCubeTexture9_GetCubeMapSurface(IDirect3DC
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_LockRect(IDirect3DCubeTexture9 *self, D3DCUBEMAP_FACES face, UINT level, D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  RECT snapshot_rect;int valid_rect=sample&&pw_d3d9_api_read(&snapshot_rect,rect,sizeof(snapshot_rect));
  HRESULT result=raw_IDirect3DCubeTexture9.LockRect(self, face, level, locked_rect, rect, flags);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",19,"LockRect",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"face",&face,sizeof(face),PW_D3D9_API_WORDS},{"level",&level,sizeof(level),PW_D3D9_API_WORDS},{"locked_rect.address",&locked_rect,sizeof(locked_rect),PW_D3D9_API_POINTER},{"locked_rect",locked_rect,sizeof(*locked_rect),PW_D3D9_API_LOCKED_RECT},{"rect.address",&rect,sizeof(rect),PW_D3D9_API_POINTER},{"rect",valid_rect?&snapshot_rect:NULL,sizeof(snapshot_rect),PW_D3D9_API_WORDS},{"flags",&flags,sizeof(flags),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"face",&face,sizeof(face),PW_D3D9_API_WORDS},{"level",&level,sizeof(level),PW_D3D9_API_WORDS},{"locked_rect.address",&locked_rect,sizeof(locked_rect),PW_D3D9_API_POINTER},{"locked_rect",locked_rect,sizeof(*locked_rect),PW_D3D9_API_LOCKED_RECT},{"rect.address",&rect,sizeof(rect),PW_D3D9_API_POINTER},{"rect",valid_rect?&snapshot_rect:NULL,sizeof(snapshot_rect),PW_D3D9_API_WORDS},{"flags",&flags,sizeof(flags),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DCubeTexture9",19,"LockRect",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -847,10 +847,10 @@ static void WINAPI observe_IDirect3DTexture9_PreLoad(IDirect3DTexture9 *self) {
  raw_IDirect3DTexture9.PreLoad(self);
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DTexture9_GetType(IDirect3DTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DTexture9.GetType(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DTexture9",10,"GetType",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -862,10 +862,10 @@ static DWORD WINAPI observe_IDirect3DTexture9_GetLOD(IDirect3DTexture9 *self) {
  return raw_IDirect3DTexture9.GetLOD(self);
 }
 static DWORD WINAPI observe_IDirect3DTexture9_GetLevelCount(IDirect3DTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  DWORD result=raw_IDirect3DTexture9.GetLevelCount(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DTexture9",13,"GetLevelCount",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -882,11 +882,11 @@ static void WINAPI observe_IDirect3DTexture9_GenerateMipSubLevels(IDirect3DTextu
  raw_IDirect3DTexture9.GenerateMipSubLevels(self);
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_GetLevelDesc(IDirect3DTexture9 *self, UINT Level, D3DSURFACE_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DTexture9.GetLevelDesc(self, Level, pDesc);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"Level",&Level,sizeof(Level),PW_D3D9_API_WORDS},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Level",&Level,sizeof(Level),PW_D3D9_API_WORDS},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -897,12 +897,12 @@ static HRESULT WINAPI observe_IDirect3DTexture9_GetSurfaceLevel(IDirect3DTexture
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_LockRect(IDirect3DTexture9 *self, UINT level, D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  RECT snapshot_rect;int valid_rect=sample&&pw_d3d9_api_read(&snapshot_rect,rect,sizeof(snapshot_rect));
  HRESULT result=raw_IDirect3DTexture9.LockRect(self, level, locked_rect, rect, flags);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",19,"LockRect",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"level",&level,sizeof(level),PW_D3D9_API_WORDS},{"locked_rect.address",&locked_rect,sizeof(locked_rect),PW_D3D9_API_POINTER},{"locked_rect",locked_rect,sizeof(*locked_rect),PW_D3D9_API_LOCKED_RECT},{"rect.address",&rect,sizeof(rect),PW_D3D9_API_POINTER},{"rect",valid_rect?&snapshot_rect:NULL,sizeof(snapshot_rect),PW_D3D9_API_WORDS},{"flags",&flags,sizeof(flags),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"level",&level,sizeof(level),PW_D3D9_API_WORDS},{"locked_rect.address",&locked_rect,sizeof(locked_rect),PW_D3D9_API_POINTER},{"locked_rect",locked_rect,sizeof(*locked_rect),PW_D3D9_API_LOCKED_RECT},{"rect.address",&rect,sizeof(rect),PW_D3D9_API_POINTER},{"rect",valid_rect?&snapshot_rect:NULL,sizeof(snapshot_rect),PW_D3D9_API_WORDS},{"flags",&flags,sizeof(flags),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DTexture9",19,"LockRect",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -974,10 +974,10 @@ static void WINAPI observe_IDirect3DVolumeTexture9_PreLoad(IDirect3DVolumeTextur
  raw_IDirect3DVolumeTexture9.PreLoad(self);
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DVolumeTexture9_GetType(IDirect3DVolumeTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DVolumeTexture9.GetType(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DVolumeTexture9",10,"GetType",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -989,10 +989,10 @@ static DWORD WINAPI observe_IDirect3DVolumeTexture9_GetLOD(IDirect3DVolumeTextur
  return raw_IDirect3DVolumeTexture9.GetLOD(self);
 }
 static DWORD WINAPI observe_IDirect3DVolumeTexture9_GetLevelCount(IDirect3DVolumeTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  DWORD result=raw_IDirect3DVolumeTexture9.GetLevelCount(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DVolumeTexture9",13,"GetLevelCount",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1009,11 +1009,11 @@ static void WINAPI observe_IDirect3DVolumeTexture9_GenerateMipSubLevels(IDirect3
  raw_IDirect3DVolumeTexture9.GenerateMipSubLevels(self);
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_GetLevelDesc(IDirect3DVolumeTexture9 *self, UINT Level, D3DVOLUME_DESC *pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DVolumeTexture9.GetLevelDesc(self, Level, pDesc);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"Level",&Level,sizeof(Level),PW_D3D9_API_WORDS},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Level",&Level,sizeof(Level),PW_D3D9_API_WORDS},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DVolumeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1224,10 +1224,10 @@ static HRESULT WINAPI observe_IDirect3DQuery9_GetDevice(IDirect3DQuery9 *self, s
  return result;
 }
 static D3DQUERYTYPE WINAPI observe_IDirect3DQuery9_GetType(IDirect3DQuery9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DQUERYTYPE result=raw_IDirect3DQuery9.GetType(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DQuery9",4,"GetType",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1278,10 +1278,10 @@ static HRESULT WINAPI observe_IDirect3DDevice9_TestCooperativeLevel(IDirect3DDev
  return result;
 }
 static UINT WINAPI observe_IDirect3DDevice9_GetAvailableTextureMem(IDirect3DDevice9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  UINT result=raw_IDirect3DDevice9.GetAvailableTextureMem(self);
  if(sample){
-  const struct pw_d3d9_api_field fields[]={{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DDevice9",4,"GetAvailableTextureMem",S_OK,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1297,11 +1297,11 @@ static HRESULT WINAPI observe_IDirect3DDevice9_GetDirect3D(IDirect3DDevice9 *sel
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetDeviceCaps(IDirect3DDevice9 *self, D3DCAPS9* pCaps) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.GetDeviceCaps(self, pCaps);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",7,"GetDeviceCaps",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"pCaps.address",&pCaps,sizeof(pCaps),PW_D3D9_API_POINTER},{"pCaps",pCaps,sizeof(*pCaps),PW_D3D9_API_WORDS}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pCaps.address",&pCaps,sizeof(pCaps),PW_D3D9_API_POINTER},{"pCaps",pCaps,sizeof(*pCaps),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DDevice9",7,"GetDeviceCaps",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1351,11 +1351,11 @@ static HRESULT WINAPI observe_IDirect3DDevice9_Present(IDirect3DDevice9 *self, c
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetBackBuffer(IDirect3DDevice9 *self, UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.GetBackBuffer(self, iSwapChain, iBackBuffer, Type, ppBackBuffer);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",18,"GetBackBuffer",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"iSwapChain",&iSwapChain,sizeof(iSwapChain),PW_D3D9_API_WORDS},{"iBackBuffer",&iBackBuffer,sizeof(iBackBuffer),PW_D3D9_API_WORDS},{"Type",&Type,sizeof(Type),PW_D3D9_API_WORDS},{"ppBackBuffer.address",&ppBackBuffer,sizeof(ppBackBuffer),PW_D3D9_API_POINTER},{"ppBackBuffer",ppBackBuffer,sizeof(*ppBackBuffer),PW_D3D9_API_POINTER}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"iSwapChain",&iSwapChain,sizeof(iSwapChain),PW_D3D9_API_WORDS},{"iBackBuffer",&iBackBuffer,sizeof(iBackBuffer),PW_D3D9_API_WORDS},{"Type",&Type,sizeof(Type),PW_D3D9_API_WORDS},{"ppBackBuffer.address",&ppBackBuffer,sizeof(ppBackBuffer),PW_D3D9_API_POINTER},{"ppBackBuffer",ppBackBuffer,sizeof(*ppBackBuffer),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",18,"GetBackBuffer",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1377,11 +1377,11 @@ static void WINAPI observe_IDirect3DDevice9_GetGammaRamp(IDirect3DDevice9 *self,
  raw_IDirect3DDevice9.GetGammaRamp(self, iSwapChain, pRamp);
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateTexture(IDirect3DDevice9 *self, UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.CreateTexture(self, Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",23,"CreateTexture",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Levels",&Levels,sizeof(Levels),PW_D3D9_API_WORDS},{"Usage",&Usage,sizeof(Usage),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"Pool",&Pool,sizeof(Pool),PW_D3D9_API_WORDS},{"ppTexture.address",&ppTexture,sizeof(ppTexture),PW_D3D9_API_POINTER},{"ppTexture",ppTexture,sizeof(*ppTexture),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Levels",&Levels,sizeof(Levels),PW_D3D9_API_WORDS},{"Usage",&Usage,sizeof(Usage),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"Pool",&Pool,sizeof(Pool),PW_D3D9_API_WORDS},{"ppTexture.address",&ppTexture,sizeof(ppTexture),PW_D3D9_API_POINTER},{"ppTexture",ppTexture,sizeof(*ppTexture),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",23,"CreateTexture",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1407,21 +1407,21 @@ static HRESULT WINAPI observe_IDirect3DDevice9_CreateIndexBuffer(IDirect3DDevice
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateRenderTarget(IDirect3DDevice9 *self, UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Lockable, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.CreateRenderTarget(self, Width, Height, Format, MultiSample, MultisampleQuality, Lockable, ppSurface, pSharedHandle);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",28,"CreateRenderTarget",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"MultiSample",&MultiSample,sizeof(MultiSample),PW_D3D9_API_WORDS},{"MultisampleQuality",&MultisampleQuality,sizeof(MultisampleQuality),PW_D3D9_API_WORDS},{"Lockable",&Lockable,sizeof(Lockable),PW_D3D9_API_WORDS},{"ppSurface.address",&ppSurface,sizeof(ppSurface),PW_D3D9_API_POINTER},{"ppSurface",ppSurface,sizeof(*ppSurface),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"MultiSample",&MultiSample,sizeof(MultiSample),PW_D3D9_API_WORDS},{"MultisampleQuality",&MultisampleQuality,sizeof(MultisampleQuality),PW_D3D9_API_WORDS},{"Lockable",&Lockable,sizeof(Lockable),PW_D3D9_API_WORDS},{"ppSurface.address",&ppSurface,sizeof(ppSurface),PW_D3D9_API_POINTER},{"ppSurface",ppSurface,sizeof(*ppSurface),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",28,"CreateRenderTarget",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateDepthStencilSurface(IDirect3DDevice9 *self, UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Discard, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.CreateDepthStencilSurface(self, Width, Height, Format, MultiSample, MultisampleQuality, Discard, ppSurface, pSharedHandle);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",29,"CreateDepthStencilSurface",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"MultiSample",&MultiSample,sizeof(MultiSample),PW_D3D9_API_WORDS},{"MultisampleQuality",&MultisampleQuality,sizeof(MultisampleQuality),PW_D3D9_API_WORDS},{"Discard",&Discard,sizeof(Discard),PW_D3D9_API_WORDS},{"ppSurface.address",&ppSurface,sizeof(ppSurface),PW_D3D9_API_POINTER},{"ppSurface",ppSurface,sizeof(*ppSurface),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"MultiSample",&MultiSample,sizeof(MultiSample),PW_D3D9_API_WORDS},{"MultisampleQuality",&MultisampleQuality,sizeof(MultisampleQuality),PW_D3D9_API_WORDS},{"Discard",&Discard,sizeof(Discard),PW_D3D9_API_WORDS},{"ppSurface.address",&ppSurface,sizeof(ppSurface),PW_D3D9_API_POINTER},{"ppSurface",ppSurface,sizeof(*ppSurface),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",29,"CreateDepthStencilSurface",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1457,11 +1457,11 @@ static HRESULT WINAPI observe_IDirect3DDevice9_ColorFill(IDirect3DDevice9 *self,
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateOffscreenPlainSurface(IDirect3DDevice9 *self, UINT Width, UINT Height, D3DFORMAT Format, D3DPOOL Pool, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.CreateOffscreenPlainSurface(self, Width, Height, Format, Pool, ppSurface, pSharedHandle);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",36,"CreateOffscreenPlainSurface",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"Pool",&Pool,sizeof(Pool),PW_D3D9_API_WORDS},{"ppSurface.address",&ppSurface,sizeof(ppSurface),PW_D3D9_API_POINTER},{"ppSurface",ppSurface,sizeof(*ppSurface),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"Pool",&Pool,sizeof(Pool),PW_D3D9_API_WORDS},{"ppSurface.address",&ppSurface,sizeof(ppSurface),PW_D3D9_API_POINTER},{"ppSurface",ppSurface,sizeof(*ppSurface),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",36,"CreateOffscreenPlainSurface",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1472,11 +1472,11 @@ static HRESULT WINAPI observe_IDirect3DDevice9_SetRenderTarget(IDirect3DDevice9 
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetRenderTarget(IDirect3DDevice9 *self, DWORD RenderTargetIndex, IDirect3DSurface9** ppRenderTarget) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.GetRenderTarget(self, RenderTargetIndex, ppRenderTarget);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",38,"GetRenderTarget",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"RenderTargetIndex",&RenderTargetIndex,sizeof(RenderTargetIndex),PW_D3D9_API_WORDS},{"ppRenderTarget.address",&ppRenderTarget,sizeof(ppRenderTarget),PW_D3D9_API_POINTER},{"ppRenderTarget",ppRenderTarget,sizeof(*ppRenderTarget),PW_D3D9_API_POINTER}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"RenderTargetIndex",&RenderTargetIndex,sizeof(RenderTargetIndex),PW_D3D9_API_WORDS},{"ppRenderTarget.address",&ppRenderTarget,sizeof(ppRenderTarget),PW_D3D9_API_POINTER},{"ppRenderTarget",ppRenderTarget,sizeof(*ppRenderTarget),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",38,"GetRenderTarget",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
@@ -1487,11 +1487,11 @@ static HRESULT WINAPI observe_IDirect3DDevice9_SetDepthStencilSurface(IDirect3DD
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetDepthStencilSurface(IDirect3DDevice9 *self, IDirect3DSurface9** ppZStencilSurface) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);
+ static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.GetDepthStencilSurface(self, ppZStencilSurface);
  if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",40,"GetDepthStencilSurface",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
-  const struct pw_d3d9_api_field fields[]={{"ppZStencilSurface.address",&ppZStencilSurface,sizeof(ppZStencilSurface),PW_D3D9_API_POINTER},{"ppZStencilSurface",ppZStencilSurface,sizeof(*ppZStencilSurface),PW_D3D9_API_POINTER}};
+  const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"ppZStencilSurface.address",&ppZStencilSurface,sizeof(ppZStencilSurface),PW_D3D9_API_POINTER},{"ppZStencilSurface",ppZStencilSurface,sizeof(*ppZStencilSurface),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",40,"GetDepthStencilSurface",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
  }
  return result;
