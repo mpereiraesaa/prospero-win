@@ -11,6 +11,7 @@
 #include "pw_vk_disable_guard.h"
 #include "pw_vk_function_names.h"
 #include "pw_vk_progress_guard.h"
+#include "pw_vk_present_interval.h"
 WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 struct producer {
  struct producer *next;struct pw_vk_spsc stream;LONG retired,publishing;DWORD tid;
@@ -27,6 +28,27 @@ static struct pw_vk_template_cache templates;
 static struct pw_vk_retirement retirement;
 static unsigned char *scratch;
 static BOOL enabled,stats_enabled;
+static CRITICAL_SECTION present_gate;
+static LARGE_INTEGER present_frequency;
+static struct { VkQueue queue; struct pw_vk_present_interval stats; } present_queues[8];
+static void present_interval(unsigned int code,void *args,NTSTATUS status)
+{
+ LARGE_INTEGER now;struct pw_vk_present_interval copy;uint64_t us=0;unsigned i;int valid;
+ struct vkQueuePresentKHR_params *q=args;
+ if(!stats_enabled||code!=unix_vkQueuePresentKHR)return;
+ if(!QueryPerformanceCounter(&now))return;
+ EnterCriticalSection(&present_gate);
+ for(i=0;i<8;i++)if(!present_queues[i].queue||present_queues[i].queue==q->queue)break;
+ if(i==8){LeaveCriticalSection(&present_gate);WINE_MESSAGE("PW_VK_PRESENT_INTERVAL version=1 dropped=1 reason=queue_capacity\n");return;}
+ present_queues[i].queue=q->queue;
+ valid=pw_vk_present_interval_add(&present_queues[i].stats,now.QuadPart,present_frequency.QuadPart,
+     !status&&(q->result==VK_SUCCESS||q->result==VK_SUBOPTIMAL_KHR),&us);
+ copy=present_queues[i].stats;
+ LeaveCriticalSection(&present_gate);
+ WINE_MESSAGE("PW_VK_PRESENT_INTERVAL version=1 scope=queue_return queue=%p tick=%llu frequency=%llu result=%d status=%lu valid=%u interval_us=%llu intervals=%llu max_us=%llu over25ms=%llu over33ms=%llu over50ms=%llu\n",
+     q->queue,(UINT64)now.QuadPart,(UINT64)present_frequency.QuadPart,q->result,(ULONG)status,valid,
+     (UINT64)us,(UINT64)copy.intervals,(UINT64)copy.maximum_us,(UINT64)copy.over25,(UINT64)copy.over33,(UINT64)copy.over50);
+}
 static _Atomic int negotiated,async_backend;
 /* Only the existing gated fallback path owns these arrays. */
 static BOOL fallback_profile;
@@ -66,6 +88,7 @@ static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
 {
  char env[8];(void)o;(void)p;(void)ctx;
  stats_enabled=GetEnvironmentVariableA("PW_VK_BATCH_STATS",env,sizeof(env))==1&&env[0]=='1';
+ if(stats_enabled){InitializeCriticalSection(&present_gate);QueryPerformanceFrequency(&present_frequency);}
  fallback_profile=stats_enabled&&GetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",env,sizeof(env))==1&&env[0]=='1';
  enabled=GetEnvironmentVariableA("PW_VK_BATCH",env,sizeof(env))==1&&env[0]=='1'&&!pw_vk_stream_environment_unsafe();
  if(!read_opcode_mask())enabled=FALSE; /* Invalid explicit masks fail closed. */
@@ -168,7 +191,11 @@ void pw_vk_batch_thread_detach(void)
  struct producer *p;if(tls==TLS_OUT_OF_INDEXES)return;p=TlsGetValue(tls);
  if(p){/* No mutex or driver call under the loader lock. */TlsSetValue(tls,NULL);InterlockedExchange(&p->retired,1);}
 }
-static NTSTATUS raw_call(unsigned int code,void *args){if(stats_enabled)InterlockedIncrement64((LONG64 *)&crossings_total);return WINE_UNIX_CALL(code,args);}
+static NTSTATUS raw_call(unsigned int code,void *args)
+{
+ NTSTATUS status;if(stats_enabled)InterlockedIncrement64((LONG64 *)&crossings_total);
+ status=WINE_UNIX_CALL(code,args);present_interval(code,args,status);return status;
+}
 static NTSTATUS flush_call(unsigned int code,void *args)
 {
  size_t bytes=0,records=0;struct pw_vk_batch_params p;NTSTATUS status;
@@ -308,6 +335,9 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
 {
  unsigned char *wire;size_t bytes;uint32_t opcode;struct producer *p;NTSTATUS status;int appended;
  InitOnceExecuteOnce(&once,initialize,NULL,NULL);
+ /* Queue handles may be reused after device destruction. Reset diagnostics
+  * before that lifetime ends; no driver work executes under this lock. */
+ if(stats_enabled&&code==unix_vkDestroyDevice){EnterCriticalSection(&present_gate);memset(present_queues,0,sizeof(present_queues));LeaveCriticalSection(&present_gate);}
  /* Init and availability calls precede capability negotiation; old Unix never
   * receives the new table index. Disabled64 builds retain original macro. */
  if(!enabled||InterlockedCompareExchange(&sticky_disabled,0,0)){status=raw_call(code,args);snapshot(code,args);return status;}
