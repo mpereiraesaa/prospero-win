@@ -63,5 +63,9 @@ Host receipt `/tmp/prospero-d3d9-persistent-r3/receipt.json` passed three
 complete sessions, all slots4–14, 1200 concurrent guest calls, malformed
 startup recovery, exclusive-session rejection, backend failure HRESULT,
 unsupported methods, stale IDs, generation reuse, live-object STOP cleanup,
-and cancellation followed by a new clean session. This is host evidence;
-no console persistent-session result is claimed yet.
+and cancellation followed by a new clean session.
+
+Claude subsequently ran the exact r3 client/service on the accepted callback
+r2 console runtime: all three cycles reported adapters1/status0, cancellation
+recovery reported1200 calls, and Wine exited cleanly with no access violations
+or ignored callback exceptions. Console request cbe607ad identifies the run.
