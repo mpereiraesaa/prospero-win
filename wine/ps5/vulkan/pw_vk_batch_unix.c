@@ -114,7 +114,7 @@ static int worker_replay(void *lane_context,const void *data,size_t bytes)
  if(startup_trace && __atomic_load_n(&trace_jobs,__ATOMIC_RELAXED)<8){
   unsigned job=__atomic_fetch_add(&trace_jobs,1,__ATOMIC_RELAXED);
   if(job<8){ctx.trace=1;ctx.trace_job=job+1;ctx.trace_records=0;ctx.trace_cb=(uintptr_t)lane_context;
-   ctx.trace_pool=(uintptr_t)((struct wine_cmd_buffer *)lane_context)->pool;}
+   ctx.trace_pool=lane_context?(uintptr_t)((struct wine_cmd_buffer *)lane_context)->pool:0;}
  }
  result=pw_vk_stream_replay(data,bytes,replay,&ctx,&completed);
  context_free(&ctx);return result!=PW_VK_STREAM_OK;
@@ -170,7 +170,7 @@ void pw_vk_async_wait_buffer(VkCommandBuffer handle)
 {
  struct wine_cmd_buffer *cb;
  pthread_mutex_lock(&admission);
- if(workers && handle){cb=wine_cmd_buffer_from_handle(handle);if(cb->replay_lane)must_complete(pw_vk_replay_wait(cb->replay_lane,pw_vk_replay_marker(cb->replay_lane)));}
+ if(workers && handle){cb=wine_cmd_buffer_from_handle(handle);if(cb->replay_lane)must_complete(pw_vk_replay_wait(cb->replay_lane,pw_vk_replay_marker(cb->replay_lane)));else must_complete(pw_vk_replay_wait_pool(workers,(uintptr_t)&cb->pool->slots[cb->pool_slot]));}
  pthread_mutex_unlock(&admission);
 }
 void pw_vk_async_wait_buffer_pool(VkCommandBuffer handle)
@@ -208,38 +208,48 @@ static void __attribute__((destructor)) stop_workers(void)
 }
 struct schedule_context {
  struct replay_context decode;
- struct wine_cmd_buffer *pending_cb;
+ struct pw_vk_replay_lane *lanes[PW_VK_REPLAY_MAX_GROUP_LANES];
+ unsigned lane_count,ordered;
  const unsigned char *pending_data;
  size_t pending_bytes;
 };
 static int flush_pending(struct schedule_context *ctx)
 {
- struct wine_cmd_buffer *cb=ctx->pending_cb;uint64_t ticket;int status;
- if(!cb)return 0;
- if(!cb->replay_lane)cb->replay_lane=pw_vk_replay_lane_create(workers,(uintptr_t)&cb->pool->slots[cb->pool_slot],cb);
- if(!cb->replay_lane)return 1;
- if(startup_trace && trace_enqueues<8)fprintf(stderr,"PW_VK_REPLAY_TRACE event=enqueue_begin cb=%p pool=%p bytes=%zu\n",(void *)cb,(void *)cb->pool,ctx->pending_bytes);
- status=pw_vk_replay_enqueue(cb->replay_lane,ctx->pending_data,ctx->pending_bytes,&ticket);
- if(startup_trace && trace_enqueues<8){++trace_enqueues;fprintf(stderr,"PW_VK_REPLAY_TRACE event=enqueue_end cb=%p result=%d\n",(void *)cb,status);}
- ctx->pending_cb=NULL;ctx->pending_bytes=0;return status!=PW_VK_REPLAY_OK;
+ int status;
+ if(!ctx->pending_bytes)return 0;
+ if(startup_trace && trace_enqueues<8)fprintf(stderr,"PW_VK_REPLAY_TRACE event=enqueue_begin lanes=%u ordered=%u bytes=%zu\n",ctx->lane_count,ctx->ordered,ctx->pending_bytes);
+ status=pw_vk_replay_enqueue_group(workers,ctx->lanes,ctx->lane_count,ctx->ordered,ctx->pending_data,ctx->pending_bytes);
+ if(startup_trace && trace_enqueues<8){++trace_enqueues;fprintf(stderr,"PW_VK_REPLAY_TRACE event=enqueue_end result=%d\n",status);}
+ ctx->pending_data=NULL;ctx->pending_bytes=0;ctx->lane_count=0;ctx->ordered=0;
+ return status!=PW_VK_REPLAY_OK;
 }
 static int schedule_record(void *context,const struct pw_vk_stream_record *r)
 {
  struct schedule_context *ctx=context;VkCommandBuffer handle=NULL;struct wine_cmd_buffer *cb;
- void *params;unsigned code;int status;
+ void *params;unsigned code,i,ordered=r->opcode==PW_VK_UPDATE_TEMPLATE;int status;
  if(r->opcode==PW_VK_BATCH_GENERATED_OPCODE){
   if(!generated_record(&ctx->decode,r,&params))return 1;
   memcpy(&code,r->payload,4);handle=pw_vk_replay_command_buffer(code,params);
- }else if(r->opcode!=PW_VK_UPDATE_TEMPLATE)handle=(VkCommandBuffer)UlongToPtr(pw_vk_wire_u32(r->payload));
- if(handle){
-  cb=wine_cmd_buffer_from_handle(handle);
-  if(ctx->pending_cb && ctx->pending_cb!=cb && flush_pending(ctx))return 1;
-  if(!ctx->pending_cb){ctx->pending_cb=cb;ctx->pending_data=r->payload-PW_VK_STREAM_HEADER;}
+  ordered=pw_vk_replay_ordered_update(code);
+ }else if(!ordered)handle=(VkCommandBuffer)UlongToPtr(pw_vk_wire_u32(r->payload));
+ if(handle || ordered){
+  if(handle){
+   cb=wine_cmd_buffer_from_handle(handle);
+   if(!cb->replay_lane)cb->replay_lane=pw_vk_replay_lane_create(workers,(uintptr_t)&cb->pool->slots[cb->pool_slot],cb);
+   if(!cb->replay_lane)return 1;
+   for(i=0;i<ctx->lane_count;i++)if(ctx->lanes[i]==cb->replay_lane)break;
+   if(i==ctx->lane_count){
+    if(ctx->lane_count==PW_VK_REPLAY_MAX_GROUP_LANES && flush_pending(ctx))return 1;
+    ctx->lanes[ctx->lane_count++]=cb->replay_lane;
+   }
+  }
+  if(!ctx->pending_bytes)ctx->pending_data=r->payload-PW_VK_STREAM_HEADER;
   ctx->pending_bytes+=(PW_VK_STREAM_HEADER+(size_t)r->payload_bytes+7)&~(size_t)7;
+  ctx->ordered|=ordered;
   return 0;
  }
- /* Resource mutation and unreviewed commands retain synchronous global order.
-  * Release admission around Wine dispatch: lifecycle hooks acquire it themselves. */
+ /* Unknown/destructive commands retain global completion and caller-thread
+  * execution. Reviewed descriptor writes stay inside owned ordered epochs. */
  if(flush_pending(ctx) || pw_vk_replay_wait_all(workers))return 1;
  pthread_mutex_unlock(&admission);status=replay(&ctx->decode,r);pthread_mutex_lock(&admission);
  return status;

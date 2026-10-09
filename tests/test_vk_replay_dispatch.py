@@ -58,6 +58,19 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(eligible, ['vkCmdDraw'])
         self.assertIn('vkCmdFoo', excluded)
 
+    def test_ordered_updates_fail_closed(self):
+        device_driver = DRIVER.replace('vulkan_command_buffer', 'vulkan_device').replace('VkCommandBuffer', 'VkDevice')
+        name = 'vkUpdateDescriptorSets'
+        source = thunk(name).replace('vulkan_command_buffer_from_handle(params->commandBuffer)->device', 'vulkan_device_from_handle(params->device)').replace('vulkan_command_buffer_from_handle(params->commandBuffer)->host.command_buffer', 'vulkan_device_from_handle(params->device)->host.device')
+        native_header = header([name]).replace('VkCommandBuffer commandBuffer', 'VkDevice device')
+        self.assertEqual(dispatch.classify_ordered(source, native_header, device_driver), [name])
+        self.assertEqual(dispatch.classify_ordered(source.replace('struct '+name+'_params *params = args;', 'struct '+name+'_params *params = args; TRACE("unsafe");'), native_header, device_driver), [])
+        self.assertEqual(dispatch.classify_ordered(source.replace(name, 'vkDestroyDescriptorPool'), native_header.replace(name, 'vkDestroyDescriptorPool'), device_driver), [])
+        with self.assertRaises(ValueError):
+            dispatch.classify_ordered(source, native_header, device_driver.replace('return ', 'TRACE("TLS"); return '))
+        with self.assertRaises(ValueError):
+            dispatch.classify_ordered(source, native_header.replace('VkDevice device', 'unsigned device'), device_driver)
+
 
 def actual_abi(source):
     source = pathlib.Path(source)
@@ -65,13 +78,15 @@ def actual_abi(source):
     eligible, excluded = dispatch.classify((directory / 'vulkan_thunks.c').read_text(),
                                            (directory / 'loader_thunks.h').read_text(),
                                            (source / 'include/wine/vulkan_driver.h').read_text())
+    ordered = dispatch.classify_ordered((directory / 'vulkan_thunks.c').read_text(), (directory / 'loader_thunks.h').read_text(), (source / 'include/wine/vulkan_driver.h').read_text())
+    assert ordered == ['vkUpdateDescriptorSets', 'vkUpdateDescriptorSetWithTemplate'], ordered
     required = ['vkCmdDraw', 'vkCmdDrawIndexed', 'vkCmdBindPipeline', 'vkCmdPipelineBarrier',
                 'vkCmdBindDescriptorSets', 'vkCmdCopyBuffer', 'vkCmdDispatch']
     assert all(name in eligible for name in required), eligible
     assert 'vkCmdExecuteCommands' not in eligible
     with tempfile.TemporaryDirectory(prefix='vk-replay-dispatch-') as temporary:
         work = pathlib.Path(temporary)
-        (work / 'pw_vk_replay_dispatch.h').write_text(dispatch.generate(eligible))
+        (work / 'pw_vk_replay_dispatch.h').write_text(dispatch.generate(eligible, ordered))
         (work / 'fixture.c').write_text('''#define WINE_UNIX_LIB
 #include <assert.h>
 #include <stdint.h>
@@ -89,7 +104,13 @@ int main(void) {
     assert(!pw_vk_replay_command_buffer(unix_{name}, &p));
 #endif
     }}
-''' for name in eligible) + '''    assert(!pw_vk_replay_command_buffer(unix_vkCmdExecuteCommands, 0));
+''' for name in eligible) + ''.join(f'''#ifdef _WIN64
+    assert(pw_vk_replay_ordered_update(unix_{name}));
+#else
+    assert(!pw_vk_replay_ordered_update(unix_{name}));
+#endif
+''' for name in ordered) + '''    assert(!pw_vk_replay_ordered_update(unix_vkDestroyDescriptorPool));
+    assert(!pw_vk_replay_command_buffer(unix_vkCmdExecuteCommands, 0));
     assert(!pw_vk_replay_command_buffer(unix_vkQueueSubmit, 0));
     assert(!pw_vk_replay_command_buffer(~0u, 0));
     assert(!pw_vk_replay_command_buffer(unix_vkCmdDraw, 0));

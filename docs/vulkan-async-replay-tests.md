@@ -126,3 +126,62 @@ reset, trim, free and destroy coverage and the immutable combined candidate are
 listed in [the fanout evidence](vulkan-replay-pool-fanout.md#combined-candidate-evidence).
 The candidate is not a console acceptance claim. Keep the runtime and fanout
 changes in draft until the owner reviews matched console results.
+
+
+## Adapter descriptor epochs and measured handoffs
+
+The adapter keeps contiguous reviewed recording and descriptor updates in one
+owned group, up to 256 distinct buffer lanes. A descriptor update makes the
+whole group globally ordered. Unknown records still flush the group, wait for
+all replay work, and execute on the caller. Destructive raw fallbacks retain the
+same completion barrier. Callback disable/retirement uses the existing complete
+flush; the admission-only sentinel does not replace it.
+
+Only the inspected direct native implementations of `vkUpdateDescriptorSets`
+and `vkUpdateDescriptorSetWithTemplate` qualify. The classifier verifies the
+device unwrap helper and exact direct-call body. The KHR template thunk currently
+contains Wine `TRACE` and remains synchronous. Allocation callbacks and guest
+callbacks still require the existing quiesce-and-disable protocol; this change
+does not enable workers in a callback-unsafe session.
+
+Template ownership is already encoded by `pw_vk_wire_template`: supported
+entries contain descriptor values and handles, not retained source pointers;
+holes are zeroed and unsupported entry types fail encoding. Manual replay copies
+the inline payload into worker-local storage. The generated template codec
+snapshots the same payload during encoding and reconstructs `pData` in its own
+decode arena. Other generated descriptor pointer graphs use the existing offset
+codec. Admission retains no decoded pointers: the immutable wire bytes are
+copied into the job and decoded again on the worker. Template/layout/resource
+destruction cannot pass earlier epochs because unknown/destructive fallbacks
+wait globally. Lane and pool consumers observe the ordered epoch even when it
+contains no recording commands; buffers without a lane use the pool barrier.
+
+The actual-adapter fixture builds the prior adapter from integration `9896ac5`
+and the new adapter against the same scheduler and controlled driver. For 24
+alternating recording/template-update fragments (48 records):
+
+| Policy | Jobs | Admission global-wait calls |
+| --- | ---: | ---: |
+| Previous adapter | 24 | 24 |
+| Owned ordered group | 1 | 0 |
+
+The new group is completed at the actual consumer boundary. Condition-variable
+wait counts depend on scheduling and are not the deterministic comparison. This
+is a handoff count proof, not a console FPS claim. Globally ordered groups may
+serialize across otherwise independent descriptor users; pure disjoint groups
+still overlap. Empty flush elision and physical pool fanout alone do not remove
+the old descriptor-update handoffs.
+
+Run the lab with `--baseline-adapter` pointing to the previous actual source for
+the comparison. Host and ASan cases clobber the source immediately after
+admission, verify all descriptor/recording values in order, hold the worker while
+a destructor waits, and check a malformed descriptor-only epoch cannot return
+success through a buffer consumer with no lane. The generated classifier is
+checked against the real pinned Wine headers; generated codec execution remains
+covered by its separate PE lab, not the manual-codec adapter fixture.
+
+Local receipts: `/tmp/prospero-replay-epochs-async-r6/receipt.json` and
+`/tmp/prospero-replay-epoch-negatives/receipt.json`. Removing the queued overlap
+check or ordered-epoch dependency makes the blocked core fixture fail. These
+changes require fresh staged PE/SDK checks and owner-approved console comparison;
+the previously rejected one-worker package stays immutable and is not retried.

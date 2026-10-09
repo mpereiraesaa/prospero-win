@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import resource
 import runpy
@@ -14,6 +15,7 @@ parser.add_argument('--source', required=True, help='Full pinned or staged Wine 
 parser.add_argument('--build', required=True, help='Configured native Wine build (config headers)')
 parser.add_argument('--runtime-root', help='Repository containing the adapter under test')
 parser.add_argument('--output', required=True)
+parser.add_argument('--baseline-adapter', help='Optional previous actual adapter for isolated handoff comparison')
 args = parser.parse_args()
 repo = Path(__file__).resolve().parents[2]
 runtime = Path(args.runtime_root).resolve() if args.runtime_root else repo
@@ -41,7 +43,9 @@ for name in ('vulkan_loader.h', 'vulkan_thunks.h'):
 classifier = runpy.run_path(str(runtime / 'tools/generate_vk_replay_dispatch.py'))
 eligible, _ = classifier['classify']((directory / 'vulkan_thunks.c').read_text(), loader,
                                     (source / 'include/wine/vulkan_driver.h').read_text())
-(output / 'pw_vk_replay_dispatch.h').write_text(classifier['generate'](eligible))
+ordered = classifier['classify_ordered']((directory / 'vulkan_thunks.c').read_text(), loader,
+                                        (source / 'include/wine/vulkan_driver.h').read_text())
+(output / 'pw_vk_replay_dispatch.h').write_text(classifier['generate'](eligible, ordered))
 # Copy the exact adapter: quoted includes then resolve against the staged fixture
 # headers, rather than accidentally selecting a different staged generation.
 for name in ('pw_vk_batch_unix.c', 'pw_vk_async.h'):
@@ -69,6 +73,9 @@ for name, extra in [('host', []), ('sanitize', ['-fsanitize=address,undefined', 
     execute([str(output / name), 'legacy'])
     execute([str(output / name), 'fanout'])
     execute([str(output / name), 'init-race'])
+    epoch = execute([str(output / name), 'epoch-workload'])
+    assert 'jobs=1 admission_global_waits=0' in epoch.stdout, epoch.stdout
+    execute([str(output / name), 'epoch-overlap'])
 traced = execute([str(output / 'host')], trace=True)
 for event in ('initialize_begin', 'initialize_end', 'create_begin', 'create_end',
               'worker_enter', 'enqueue_begin', 'enqueue_end', 'job_begin', 'job_end',
@@ -84,6 +91,7 @@ for event in ('dispatch_begin', 'dispatch_end'):
     assert 'event=' + event + ' job=9 ' not in bounded.stderr
 assert 'event=stack_default ' in bounded.stderr
 execute([str(output / 'host'), 'fatal'], failure=True)
+execute([str(output / 'host'), 'fatal-epoch'], failure=True)
 # Recreate the missing-initialization-lock regression; the paused constructor
 # makes the raw hook's premature return deterministic, without a timing race.
 actual_adapter = (output / 'pw_vk_batch_unix.c').read_text()
@@ -100,7 +108,20 @@ finally:
     (output / 'pw_vk_batch_unix.c').write_text(actual_adapter)
 execute([str(output / 'negative-init'), 'init-race'], failure=True, expected_message='!waiter_done')
 
-receipt = dict(status='pass', console_accessed=False, actual_unix_adapter=True, actual_manual_codec=True,
+baseline_comparison = None
+if args.baseline_adapter:
+    baseline = Path(args.baseline_adapter).read_bytes()
+    (output / 'pw_vk_batch_unix.c').write_bytes(baseline)
+    try:
+        execute(['cc', *flags, *map(str, inputs), '-pthread', '-o', str(output / 'baseline')])
+    finally:
+        (output / 'pw_vk_batch_unix.c').write_text(actual_adapter)
+    before = execute([str(output / 'baseline'), 'epoch-workload'])
+    assert 'jobs=24 admission_global_waits=24' in before.stdout, before.stdout
+    baseline_comparison = dict(adapter_sha256=hashlib.sha256(baseline).hexdigest(),
+                               before=before.stdout.strip(), after=epoch.stdout.strip())
+
+receipt = dict(status='pass', baseline_comparison=baseline_comparison, console_accessed=False, actual_unix_adapter=True, actual_manual_codec=True,
                generated_codec_tested=False, commands=commands,
                sha256={str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in
                        inputs + [output / 'pw_vk_batch_unix.c', output / 'vulkan_private.h', output / 'pw_vk_replay_dispatch.h']})

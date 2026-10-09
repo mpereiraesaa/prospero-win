@@ -6,9 +6,14 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+#define pw_vk_replay_wait_all counted_replay_wait_all
 #define pw_vk_replay_create intercepted_replay_create
 #include "pw_vk_batch_unix.c"
 #undef pw_vk_replay_create
+#undef pw_vk_replay_wait_all
+int pw_vk_replay_wait_all(struct pw_vk_replay *);
+static unsigned caller_global_waits;
+int counted_replay_wait_all(struct pw_vk_replay *s){++caller_global_waits;return pw_vk_replay_wait_all(s);}
 struct pw_vk_replay *pw_vk_replay_create(unsigned,size_t,pw_vk_replay_fn);
 
 static pthread_mutex_t driver_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -21,6 +26,8 @@ static struct VkCommandBuffer_T *clients;
 static struct vk_command_pool *client_pools;
 static unsigned char *batch_memory;
 static unsigned fanout_mode,expected_fanout,init_pause,init_entered,init_release;
+static unsigned epoch_workload,descriptor_value,sync_consumed;
+static struct vulkan_client_object *device_client;
 struct pw_vk_replay *intercepted_replay_create(unsigned count,size_t capacity,pw_vk_replay_fn execute)
 {
  if(init_pause){
@@ -52,6 +59,7 @@ NTSTATUS pw_vk_batch_dispatch(unsigned code,void *params)
 {
  (void)params;
  if(code==unix_vkCreateCommandPool || code==unix_vkAllocateCommandBuffers){assert(pw_vk_async_pool_fanout_count()==expected_fanout);return STATUS_SUCCESS;}
+ if(code==unix_vkDestroyDescriptorPool){assert(epoch_workload && finished[0]==24 && descriptor_value==24);sync_consumed=1;return STATUS_SUCCESS;}
  assert(code==unix_vkGetFenceStatus);return STATUS_SUCCESS;
 }
 static void driver_push(VkCommandBuffer host,VkPipelineLayout layout,VkShaderStageFlags stages,
@@ -65,8 +73,14 @@ static void driver_push(VkCommandBuffer host,VkPipelineLayout layout,VkShaderSta
  while(blocked[id])pthread_cond_wait(&driver_cond,&driver_mutex);
  /* Read after unblock: the producer has already overwritten every input byte. */
  memcpy(&value,data,sizeof(value));assert(value==next_value[id]++);
+ if(epoch_workload)assert(descriptor_value==value);
  active_pool[pool]--;finished[id]++;pthread_cond_broadcast(&driver_cond);
  pthread_mutex_unlock(&driver_mutex);
+}
+static void driver_template(VkDevice host,VkDescriptorSet set,VkDescriptorUpdateTemplate update,const void *data)
+{
+ uint64_t value;assert(host==(VkDevice)(uintptr_t)17 && set==19 && update==23);
+ memcpy(&value,data,sizeof(value));assert(value==descriptor_value+1);descriptor_value=(unsigned)value;
 }
 static void await_entered(unsigned id,unsigned target)
 {
@@ -128,7 +142,8 @@ static void setup(void)
  void *memory=mmap(NULL,16384,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_32BIT,-1,0);
  assert(memory!=MAP_FAILED && (uintptr_t)memory+16384<=UINT32_MAX);
  clients=memory;client_pools=(void *)((unsigned char *)memory+4096);batch_memory=(unsigned char *)memory+8192;
- device.p_vkCmdPushConstants=driver_push;
+ device.p_vkCmdPushConstants=driver_push;device.p_vkUpdateDescriptorSetWithTemplate=driver_template;
+ device.host.device=(VkDevice)(uintptr_t)17;device_client=(void *)((unsigned char *)memory+15360);device_client->unix_handle=(uintptr_t)&device;
  for(unsigned i=0;i<2;i++){client_pools[i].obj.unix_handle=(uintptr_t)&pools[i];pools[i].slot_count=1;pools[i].slot_limit=1;}
  for(unsigned i=0;i<3;i++){
   clients[i].obj.unix_handle=(uintptr_t)&buffers[i];buffers[i].obj.device=&device;
@@ -136,13 +151,49 @@ static void setup(void)
  }
  assert(!setenv("PW_VK_REPLAY_THREADS","2",1));assert(!setenv("PW_VK_BATCH_STATS","1",1));
 }
-static void fatal_failure(void)
+static void epoch_records(void)
+{
+ unsigned char payload[96],arena[4096];size_t bytes,records,n;
+ struct pw_vk_stream_registry registry;struct pw_vk_stream stream={0};struct pw_vk_batch_params p={0};
+ struct pw_vk_template_entry entry={6,1,0,24};
+ pw_vk_stream_registry_init(&registry);assert(!pw_vk_stream_register(&registry,&stream,arena,sizeof(arena)));
+ for(unsigned i=0;i<24;i++){
+  unsigned value=i;uint64_t descriptor[3]={i+1,0,16};
+  assert(pw_vk_wire_push_constants(payload,sizeof(payload),(uintptr_t)&clients[0],17,1,0,sizeof(value),&value,&n));
+  assert(!pw_vk_stream_append(&registry,&stream,PW_VK_PUSH_CONSTANTS,payload,n));
+  assert(pw_vk_wire_template(payload,sizeof(payload),(uintptr_t)device_client,19,23,&entry,1,descriptor,&n));
+  assert(!pw_vk_stream_append(&registry,&stream,PW_VK_UPDATE_TEMPLATE,payload,n));
+ }
+ assert(!pw_vk_stream_collect(&registry,batch_memory,4096,&bytes,&records));assert(records==48);
+ p.version=PW_VK_BATCH_ASYNC_VERSION;p.batch=(uintptr_t)batch_memory;p.bytes=bytes;p.code=unix_count+1;
+ assert(!pw_vk_batch_unix(&p));memset(batch_memory,0xcc,bytes);memset(arena,0xcc,sizeof(arena));memset(payload,0xcc,sizeof(payload));
+}
+static void *epoch_destroy(void *unused)
+{
+ struct pw_vk_batch_params p={0};(void)unused;p.version=PW_VK_BATCH_ASYNC_VERSION;p.code=unix_vkDestroyDescriptorPool;
+ pthread_mutex_lock(&driver_mutex);waiter_started=1;pthread_cond_broadcast(&driver_cond);pthread_mutex_unlock(&driver_mutex);
+ assert(!pw_vk_batch_unix(&p));
+ pthread_mutex_lock(&driver_mutex);waiter_done=1;pthread_cond_broadcast(&driver_cond);pthread_mutex_unlock(&driver_mutex);return NULL;
+}
+static void epoch_case(int overlap)
+{
+ struct pw_vk_replay_stats stats;unsigned waits;pthread_t destroyer;
+ epoch_workload=1;if(overlap)blocked[0]=1;
+ epoch_records();waits=caller_global_waits;
+ if(overlap){await_entered(0,1);assert(!waits && !sync_consumed);waiter_started=waiter_done=0;assert(!pthread_create(&destroyer,NULL,epoch_destroy,NULL));assert_waiter_blocked();release_driver(0);assert(!pthread_join(destroyer,NULL));assert(sync_consumed);}
+ pw_vk_async_wait_buffer(&clients[0]);assert(finished[0]==24 && descriptor_value==24);
+ pw_vk_replay_get_stats(workers,&stats);
+ printf("EPOCH_WORKLOAD fragments=24 records=48 jobs=%llu admission_global_waits=%u completion_waits=%llu\n",(unsigned long long)stats.submitted,waits,(unsigned long long)stats.completion_waits);
+ pw_vk_async_forget_buffer(&clients[0]);stop_workers();munmap(clients,16384);
+}
+static void fatal_failure(int epoch)
 {
  unsigned char invalid[PW_VK_STREAM_HEADER]={0};uint64_t ticket;
  pthread_once(&worker_once,initialize_workers);assert(workers);
  buffers[0].replay_lane=pw_vk_replay_lane_create(workers,(uintptr_t)buffers[0].pool,&buffers[0]);
  assert(buffers[0].replay_lane);
- assert(!pw_vk_replay_enqueue(buffers[0].replay_lane,invalid,sizeof(invalid),&ticket));
+ if(epoch){assert(!pw_vk_replay_enqueue_group(workers,NULL,0,1,invalid,sizeof(invalid)));pw_vk_async_wait_buffer(&clients[2]);}
+ else assert(!pw_vk_replay_enqueue(buffers[0].replay_lane,invalid,sizeof(invalid),&ticket));
  pw_vk_async_wait_buffer(&clients[0]);
  assert(!"failed worker returned through lifecycle hook");
 }
@@ -162,6 +213,8 @@ int main(int argc,char **argv)
   stop_workers();munmap(clients,16384);
   puts("PASS raw lifecycle hook cannot observe partially initialized workers");return 0;
  }
+ if(argc>1 && !strcmp(argv[1],"epoch-workload")){epoch_case(0);return 0;}
+ if(argc>1 && !strcmp(argv[1],"epoch-overlap")){epoch_case(1);return 0;}
  if(argc>1 && !strcmp(argv[1],"legacy")){
   submitted_version=PW_VK_BATCH_VERSION;submit_records(0,0,3);
   assert(finished[0]==3 && !workers);
@@ -188,7 +241,7 @@ int main(int argc,char **argv)
   params.version=PW_VK_BATCH_VERSION;assert(!pw_vk_batch_unix(&params));
   params.version=PW_VK_BATCH_ASYNC_VERSION;params.code=unix_vkAllocateCommandBuffers;expected_fanout=2;
   assert(!pw_vk_batch_unix(&params));assert(pw_vk_async_pool_fanout_count()==1);
- }else if(argc>1){fatal_failure();return 2;}
+ }else if(argc>1){fatal_failure(!strcmp(argv[1],"fatal-epoch"));return 2;}
 
  blocked[0]=blocked[2]=1;
  submit_records(0,0,3);await_entered(0,1);

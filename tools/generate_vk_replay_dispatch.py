@@ -55,7 +55,29 @@ def classify(thunks, header, driver):
     return eligible, excluded
 
 
-def generate(eligible):
+def classify_ordered(thunks, header, driver):
+    """Only reviewed direct descriptor updates may run inside ordered epochs."""
+    unwrap = function_body(driver, r'static inline struct vulkan_device \*vulkan_device_from_handle\(\s*VkDevice handle\s*\)')
+    expected = ('struct vulkan_client_object *client = (struct vulkan_client_object *)handle; '
+                'return (struct vulkan_device *)(UINT_PTR)client->unix_handle;')
+    if unwrap is None or re.sub(r'\s+', '', unwrap) != re.sub(r'\s+', '', expected):
+        raise ValueError('device unwrap changed; ordered worker safety needs review')
+    eligible = []
+    for name in ('vkUpdateDescriptorSets', 'vkUpdateDescriptorSetWithTemplate', 'vkUpdateDescriptorSetWithTemplateKHR'):
+        body = function_body(thunks, rf'static void thunk64_{name}\(void \*args\)')
+        grammar = (rf'\s*struct {name}_params \*params = args;\s*'
+                   rf'vulkan_device_from_handle\(params->device\)->p_{name}\('
+                   r'vulkan_device_from_handle\(params->device\)->host.device'
+                   r'(?:, params->\w+)*\);\s*')
+        if re.fullmatch(grammar, body or '') and re.search(rf'\bunix_{name},', header):
+            struct = re.search(rf'struct {name}_params\s*\{{([^}}]+)\}};', header)
+            if not struct or not re.search(r'\bVkDevice device;', struct[1]):
+                raise ValueError(name + ': missing native device member')
+            eligible.append(name)
+    return eligible
+
+
+def generate(eligible, ordered=()):
     return ('/* Generated from inspected native Wine thunks. Do not edit. */\n'
             '#ifndef PW_VK_REPLAY_DISPATCH_H\n#define PW_VK_REPLAY_DISPATCH_H\n'
             'static VkCommandBuffer pw_vk_replay_command_buffer(unsigned code, const void *decoded_native_params)\n'
@@ -64,7 +86,10 @@ def generate(eligible):
                 f'    case unix_{name}: return ((const struct {name}_params *)decoded_native_params)->commandBuffer;\n'
                 for name in eligible) +
             '    default: break;\n    }\n#else\n    (void)code; (void)decoded_native_params;\n#endif\n'
-            '    return (VkCommandBuffer)0;\n}\n#endif\n')
+            '    return (VkCommandBuffer)0;\n}\n'
+            'static inline int pw_vk_replay_ordered_update(unsigned code)\n{\n#ifdef _WIN64\n'
+            '    switch (code) {\n' + ''.join(f'    case unix_{name}: return 1;\n' for name in ordered) +
+            '    default: break;\n    }\n#else\n    (void)code;\n#endif\n    return 0;\n}\n#endif\n')
 
 
 def main():
@@ -80,9 +105,12 @@ def main():
                                   (pathlib.Path(args.driver_header) if args.driver_header else source / 'include/wine/vulkan_driver.h').read_text())
     output = pathlib.Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    (output / 'pw_vk_replay_dispatch.h').write_text(generate(eligible))
+    ordered = classify_ordered((directory / 'vulkan_thunks.c').read_text(),
+                               (directory / 'loader_thunks.h').read_text(),
+                               (pathlib.Path(args.driver_header) if args.driver_header else source / 'include/wine/vulkan_driver.h').read_text())
+    (output / 'pw_vk_replay_dispatch.h').write_text(generate(eligible, ordered))
     (output / 'pw_vk_replay_dispatch.json').write_text(json.dumps(
-        {'eligible': eligible, 'excluded': excluded, 'native_bits': 64}, indent=2) + '\n')
+        {'eligible': eligible, 'ordered_updates': ordered, 'excluded': excluded, 'native_bits': 64}, indent=2) + '\n')
 
 
 if __name__ == '__main__':
