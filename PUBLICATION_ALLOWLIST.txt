@@ -869,6 +869,9 @@ tests/test_d3d9_transport_stats.c
 tests/lab/d3d9_transport_profile.c
 tests/lab/d3d9_batch_client.c
 tests/lab/d3d9_batch_client.py
+tests/lab/d3d9_batch_transport.py
+tests/lab/d3d9_batch_lifetime.py
+docs/d3d9-batch-runtime.md
 docs/d3d9-batch-client.md
 tests/lab/d3d9_profile_transport.py
 tests/lab/d3d9_profile_transport_device.c
