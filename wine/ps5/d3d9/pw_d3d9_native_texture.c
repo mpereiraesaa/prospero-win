@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_native_texture.h"
+#include "pw_d3d9_failure_diag.h"
 #include <d3d9.h>
 #include <string.h>
 #define ACTIVE_LOCKS 128u
@@ -116,6 +117,7 @@ void pw_d3d9_native_texture_create(void *device,const struct pw_d3d9_texture_req
   if(SUCCEEDED(hr)){describe(&reply->desc,&d);reply->levels=r->kind==PW_D3D9_KIND_TEXTURE_2D?IDirect3DTexture9_GetLevelCount(r->object.texture):1;if(!reply->levels)hr=E_FAIL;}
  }
  if(FAILED(hr)){pw_d3d9_native_texture_destroy(r);memset(&reply->desc,0,sizeof(reply->desc));reply->levels=0;}else *out=r;
+ pw_d3d9_texture_failure(stderr,q,(uint32_t)hr);
  reply->hresult=(uint32_t)hr;
 }
 static HRESULT begin(struct pw_d3d9_native_texture *r,const struct pw_d3d9_texture_request *q,struct pw_d3d9_texture_reply *reply)
@@ -215,6 +217,7 @@ void pw_d3d9_native_texture_call(struct pw_d3d9_native_texture *r,const struct p
   if(r->kind==PW_D3D9_KIND_TEXTURE_2D){RECT rect={q->left,q->top,q->right,q->bottom};hr=IDirect3DTexture9_AddDirtyRect(r->object.texture,q->has_rect?&rect:NULL);}break;
  default:hr=E_NOTIMPL;break;
  }
+ pw_d3d9_texture_failure(stderr,q,(uint32_t)hr);
  reply->hresult=(uint32_t)hr;
 }
 void pw_d3d9_native_texture_container(struct pw_d3d9_native_texture *r,const struct pw_d3d9_texture_request *q,
@@ -250,6 +253,7 @@ void pw_d3d9_native_texture_container(struct pw_d3d9_native_texture *r,const str
  if(texture)IDirect3DTexture9_Release(texture);
  if(raw)IUnknown_Release(raw);
  if(FAILED(hr)){reply->levels=0;reply->container_kind=0;}
+ pw_d3d9_texture_failure(stderr,q,(uint32_t)hr);
  reply->hresult=(uint32_t)hr;
 }
 void pw_d3d9_native_texture_copy(void *device,struct pw_d3d9_native_texture *source,struct pw_d3d9_native_texture *destination,const struct pw_d3d9_texture_request *q,struct pw_d3d9_texture_reply *reply)
@@ -269,5 +273,6 @@ void pw_d3d9_native_texture_copy(void *device,struct pw_d3d9_native_texture *sou
   RECT destination_rect={q->destination_left,q->destination_top,q->destination_right,q->destination_bottom};
   hr=IDirect3DDevice9_StretchRect((IDirect3DDevice9 *)device,source->object.surface,q->has_rect?&source_rect:NULL,destination->object.surface,q->has_destination_rect?&destination_rect:NULL,q->filter);
  }
+ pw_d3d9_texture_failure(stderr,q,(uint32_t)hr);
  reply->hresult=(uint32_t)hr;
 }

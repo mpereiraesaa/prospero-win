@@ -804,3 +804,7 @@ wine/ps5/pw_d3d9_gamma_wire.c
 wine/ps5/pw_d3d9_gamma_wire.h
 tests/test_d3d9_gamma_wire.c
 docs/d3d9-gamma-wire.md
+
+wine/ps5/d3d9/pw_d3d9_failure_diag.h
+tests/test_d3d9_failure_diag.c
+docs/d3d9-failure-diagnostics.md

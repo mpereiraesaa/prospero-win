@@ -4,6 +4,7 @@
 #include "pw_d3d9_service_texture.h"
 #endif
 #include "pw_d3d9_session.h"
+#include "pw_d3d9_failure_diag.h"
 #ifdef PW_D3D9_ENABLE_STATEBLOCK
 #include "pw_d3d9_service_stateblock.h"
 #endif
@@ -629,6 +630,7 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
                 if(!pw_d3d9_object_complete(&objects,ref))goto done;
             }
             hr=(HRESULT)reply.hresult;
+            pw_d3d9_factory_failure(stderr,&request,reply.hresult);
             /* Invalid targets carry only the outer failure; the typed count
              * codec deliberately cannot represent a failed count operation. */
             if(slot && slot->kind==1){
