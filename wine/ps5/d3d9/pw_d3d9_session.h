@@ -9,6 +9,8 @@
  * Calls are serialized internally. Close requires all API callers to finish;
  * it cancels/joins before releasing mappings, including on startup failure. */
 struct pw_d3d9_session;
+/* DLL detach only; no sessions or callers may remain. No waits or callbacks. */
+void pw_d3d9_session_process_detach(void);
 HRESULT pw_d3d9_session_open(const WCHAR *service_path,const WCHAR *backend_path,
                             struct pw_d3d9_session **);
 HRESULT pw_d3d9_session_create(struct pw_d3d9_session *,UINT sdk_version,
@@ -20,6 +22,8 @@ HRESULT pw_d3d9_session_device(struct pw_d3d9_session *,struct pw_d3d9_object_re
 HRESULT pw_d3d9_session_release(struct pw_d3d9_session *,struct pw_d3d9_object_ref);
 /* Cancellation wakes both endpoints; close still joins and frees ownership. */
 void pw_d3d9_session_cancel(struct pw_d3d9_session *);
+/* Join without freeing a cancelled session; callers must still close it. */
+HRESULT pw_d3d9_session_join(struct pw_d3d9_session *);
 HRESULT pw_d3d9_session_close(struct pw_d3d9_session *);
 #ifdef _WIN64
 struct pw_d3d9_native_device;

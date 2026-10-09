@@ -13,9 +13,26 @@ struct proxy {
 static SRWLOCK lock=SRWLOCK_INIT;
 static struct pw_d3d9_session *session;
 static struct proxy *proxies;
+static unsigned users;
+static int opening,closing;
 static struct proxy *object(IDirect3D9 *iface) {return (struct proxy *)iface;}
+static ULONG WINAPI proxy_addref(IDirect3D9 *iface);
+static ULONG WINAPI proxy_release(IDirect3D9 *iface);
+static void put_session(struct pw_d3d9_session *owned)
+{
+    int stop=0;
+    AcquireSRWLockExclusive(&lock);
+    if(!--users&&!proxies){session=NULL;closing=1;stop=1;}
+    ReleaseSRWLockExclusive(&lock);
+    if(stop){pw_d3d9_session_close(owned);AcquireSRWLockExclusive(&lock);closing=0;ReleaseSRWLockExclusive(&lock);}
+}
 static HRESULT call(IDirect3D9 *iface,struct pw_d3d9_factory_request *q,struct pw_d3d9_factory_reply *r)
-{return pw_d3d9_session_factory(session,object(iface)->remote,q,r);}
+{
+    proxy_addref(iface);
+    AcquireSRWLockExclusive(&lock);struct pw_d3d9_session *owned=session;users++;ReleaseSRWLockExclusive(&lock);
+    HRESULT hr=pw_d3d9_session_factory(owned,object(iface)->remote,q,r);
+    put_session(owned);proxy_release(iface);return hr;
+}
 static ULONG WINAPI proxy_addref(IDirect3D9 *iface)
 {
     AcquireSRWLockExclusive(&lock);
@@ -31,17 +48,19 @@ static HRESULT WINAPI proxy_query(IDirect3D9 *iface,REFIID iid,void **out)
 }
 static ULONG WINAPI proxy_release(IDirect3D9 *iface)
 {
-    struct proxy *p=object(iface),**link;
+    struct proxy *p=object(iface),**link;struct pw_d3d9_session *owned=NULL;
     AcquireSRWLockExclusive(&lock);
     ULONG refs=--p->references;
     if(!refs){
         for(link=&proxies;*link!=p;link=&(*link)->next){}
-        *link=p->next;
-        pw_d3d9_session_release(session,p->remote);
-        HeapFree(GetProcessHeap(),0,p);
-        if(!proxies){pw_d3d9_session_close(session);session=NULL;}
+        *link=p->next;owned=session;users++;
     }
-    ReleaseSRWLockExclusive(&lock);return refs;
+    ReleaseSRWLockExclusive(&lock);
+    if(!refs){
+        if(FAILED(pw_d3d9_session_release(owned,p->remote)))pw_d3d9_session_cancel(owned);
+        HeapFree(GetProcessHeap(),0,p);put_session(owned);
+    }
+    return refs;
 }
 static HRESULT WINAPI proxy_software(IDirect3D9 *iface,void *callback)
 {(void)iface;(void)callback;return D3DERR_NOTAVAILABLE;}
@@ -134,26 +153,40 @@ static IDirect3D9Vtbl vtable={proxy_query,proxy_addref,proxy_release,proxy_softw
     proxy_format,proxy_multisample,proxy_depth,proxy_conversion,proxy_caps,proxy_monitor,proxy_device};
 __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
 {
-    struct proxy *p=NULL;struct pw_d3d9_object_ref remote;
+    struct proxy *p=NULL;struct pw_d3d9_object_ref remote;struct pw_d3d9_session *owned;
+    int create_session=0;
     AcquireSRWLockExclusive(&lock);
-    if(!session){
+    if(opening||closing){ReleaseSRWLockExclusive(&lock);return NULL;}
+    owned=session;
+    if(owned)users++;
+    else {opening=1;create_session=1;}
+    ReleaseSRWLockExclusive(&lock);
+    if(create_session){
         WCHAR service[260],backend[260];
         DWORD a=GetEnvironmentVariableW(L"PW_D3D9_SERVICE64",service,260);
         DWORD b=GetEnvironmentVariableW(L"PW_D3D9_BACKEND64",backend,260);
-        if(!a||a>=260||!b||b>=260||FAILED(pw_d3d9_session_open(service,backend,&session)))goto done;
+        if(!a||a>=260||!b||b>=260||FAILED(pw_d3d9_session_open(service,backend,&owned)))owned=NULL;
+        AcquireSRWLockExclusive(&lock);opening=0;session=owned;if(owned)users=1;ReleaseSRWLockExclusive(&lock);
+        if(!owned)return NULL;
     }
-    if(FAILED(pw_d3d9_session_create(session,sdk,&remote)))goto cleanup;
-    for(p=proxies;p;p=p->next)if(p->remote.id==remote.id&&p->remote.generation==remote.generation){
-        p->references++;pw_d3d9_session_release(session,remote);goto done;
+    if(FAILED(pw_d3d9_session_create(owned,sdk,&remote))){put_session(owned);return NULL;}
+    int duplicate=0;
+    AcquireSRWLockExclusive(&lock);
+    for(p=proxies;p;p=p->next)if(p->remote.id==remote.id&&p->remote.generation==remote.generation){p->references++;duplicate=1;break;}
+    if(!p){
+        p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));
+        if(p){p->iface.lpVtbl=&vtable;p->references=1;p->remote=remote;p->next=proxies;proxies=p;}
     }
-    p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));
-    if(!p){pw_d3d9_session_release(session,remote);goto cleanup;}
-    p->iface.lpVtbl=&vtable;p->references=1;p->remote=remote;p->next=proxies;proxies=p;
-    goto done;
- cleanup:
-    if(!proxies){pw_d3d9_session_close(session);session=NULL;}
- done:
-    ReleaseSRWLockExclusive(&lock);return p?&p->iface:NULL;
+    ReleaseSRWLockExclusive(&lock);
+    if(!p||duplicate)if(FAILED(pw_d3d9_session_release(owned,remote)))pw_d3d9_session_cancel(owned);
+    put_session(owned);return p?&p->iface:NULL;
 }
 __declspec(dllexport) HRESULT WINAPI Direct3DCreate9Ex(UINT sdk,IDirect3D9Ex **out)
 {(void)sdk;if(!out)return E_POINTER;*out=NULL;return D3DERR_NOTAVAILABLE;}
+
+BOOL WINAPI DllMain(HINSTANCE module,DWORD reason,void *reserved)
+{
+    (void)module;(void)reserved;
+    if(reason==DLL_PROCESS_DETACH)pw_d3d9_session_process_detach();
+    return TRUE;
+}

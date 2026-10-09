@@ -56,6 +56,59 @@ static void hello_payload(unsigned char bytes[32],DWORD epoch)
     uint32_t fields[]={1,epoch,RING_BYTES,BACKEND_CRC,BACKEND_BYTES,FACTORY_METHODS,DEVICE_FEATURES,0};
     for(unsigned n=0;n<8;n++)put32(bytes+n*4,fields[n]);
 }
+#ifndef _WIN64
+static INIT_ONCE tls_once=INIT_ONCE_STATIC_INIT;
+static DWORD callback_tls=TLS_OUT_OF_INDEXES,quit_seen_tls=TLS_OUT_OF_INDEXES,quit_code_tls=TLS_OUT_OF_INDEXES;
+static BOOL CALLBACK init_tls(INIT_ONCE *once,void *parameter,void **context)
+{
+    (void)once;(void)parameter;(void)context;
+    callback_tls=TlsAlloc();quit_seen_tls=TlsAlloc();quit_code_tls=TlsAlloc();
+    if(callback_tls!=TLS_OUT_OF_INDEXES&&quit_seen_tls!=TLS_OUT_OF_INDEXES&&quit_code_tls!=TLS_OUT_OF_INDEXES)return TRUE;
+    if(callback_tls!=TLS_OUT_OF_INDEXES)TlsFree(callback_tls);
+    if(quit_seen_tls!=TLS_OUT_OF_INDEXES)TlsFree(quit_seen_tls);
+    if(quit_code_tls!=TLS_OUT_OF_INDEXES)TlsFree(quit_code_tls);
+    callback_tls=quit_seen_tls=quit_code_tls=TLS_OUT_OF_INDEXES;return FALSE;
+}
+void pw_d3d9_session_process_detach(void)
+{
+    if(callback_tls!=TLS_OUT_OF_INDEXES)TlsFree(callback_tls);
+    if(quit_seen_tls!=TLS_OUT_OF_INDEXES)TlsFree(quit_seen_tls);
+    if(quit_code_tls!=TLS_OUT_OF_INDEXES)TlsFree(quit_code_tls);
+}
+static unsigned callback_depth(void)
+{return (unsigned)(uintptr_t)TlsGetValue(callback_tls);}
+static void callback_enter(void)
+{TlsSetValue(callback_tls,(void *)(uintptr_t)(callback_depth()+1));}
+static void callback_leave(void)
+{TlsSetValue(callback_tls,(void *)(uintptr_t)(callback_depth()-1));}
+static void client_pump(void)
+{
+    MSG message;
+    callback_enter();
+    while(PeekMessageW(&message,NULL,0,0,PM_REMOVE)){
+        if(message.message==WM_QUIT){TlsSetValue(quit_seen_tls,(void *)1);TlsSetValue(quit_code_tls,(void *)message.wParam);continue;}
+        TranslateMessage(&message);DispatchMessageW(&message);
+    }
+    callback_leave();
+}
+static void restore_quit(void)
+{if(TlsGetValue(quit_seen_tls)){int code=(int)(uintptr_t)TlsGetValue(quit_code_tls);TlsSetValue(quit_seen_tls,NULL);PostQuitMessage(code);}}
+static DWORD client_wait(DWORD count,const HANDLE *handles,DWORD timeout)
+{
+    ULONGLONG end=GetTickCount64()+timeout;
+    for(;;){
+        DWORD remaining=INFINITE;
+        if(timeout!=INFINITE){ULONGLONG now=GetTickCount64();if(now>=end)return WAIT_TIMEOUT;remaining=(DWORD)(end-now);}
+        /* Also guard callbacks entered directly by the wait syscall, before
+         * PeekMessage gets a chance to dispatch queued work. */
+        callback_enter();
+        DWORD result=MsgWaitForMultipleObjects(count,handles,FALSE,remaining,QS_ALLINPUT);
+        callback_leave();
+        if(result!=WAIT_OBJECT_0+count)return result;
+        client_pump();
+    }
+}
+#endif
 static int receive_wait(struct ipc *i,struct pw_d3d9_message *m,unsigned char *scratch,size_t bytes,HANDLE peer)
 {
     HANDLE waits[]={i->channel.role==PW_D3D9_CLIENT?i->reply:i->request,i->cancel,peer};
@@ -66,8 +119,10 @@ static int receive_wait(struct ipc *i,struct pw_d3d9_message *m,unsigned char *s
 #if defined(_WIN64) && defined(PW_D3D9_ENABLE_DEVICE)
         wait=MsgWaitForMultipleObjects(2,waits,FALSE,INFINITE,QS_ALLINPUT);
         if(wait==WAIT_OBJECT_0+2){MSG message;while(PeekMessageW(&message,NULL,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}continue;}
-#else
+#elif defined(_WIN64)
         wait=WaitForMultipleObjects(peer?3:2,waits,FALSE,peer?30000:INFINITE);
+#else
+        wait=client_wait(peer?3:2,waits,peer?30000:INFINITE);
 #endif
         if(wait!=WAIT_OBJECT_0){cancel_ipc(i);return PW_D3D9_CLOSED;}
     }
@@ -85,7 +140,8 @@ static int send_wake(struct ipc *i,struct pw_d3d9_message *m,const void *payload
 struct bootstrap { ULONG version,size;WCHAR path[260];uint64_t result[8]; };
 struct pw_d3d9_session {
     struct ipc ipc;
-    HANDLE broker;
+    HANDLE broker,serial_event;
+    DWORD active_thread;
     CRITICAL_SECTION lock;
     struct bootstrap bootstrap;
     LONG status;
@@ -106,19 +162,31 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
 {
     HRESULT result=E_FAIL;unsigned char scratch[RING_BYTES];
     memset(reply,0,sizeof(*reply));
-    EnterCriticalSection(&s->lock);
+    if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+    while(!TryEnterCriticalSection(&s->lock)){
+        if(client_wait(1,&s->serial_event,30000)!=WAIT_OBJECT_0){restore_quit();return E_FAIL;}
+    }
+    if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
+    s->active_thread=GetCurrentThreadId();
     if(send_wake(&s->ipc,m,payload)!=PW_D3D9_OK)goto done;
+#ifdef PW_D3D9_SESSION_TEST_CALLBACK
+    extern void pw_d3d9_session_test_callback(void);
+    pw_d3d9_session_test_callback();
+#endif
+    client_pump();
     if(receive_wait(&s->ipc,reply,scratch,sizeof(scratch),s->broker)!=PW_D3D9_OK)goto done;
     if(reply->payload_bytes>capacity){cancel_ipc(&s->ipc);goto done;}
     if(reply->payload_bytes)memcpy(output,scratch+64,reply->payload_bytes);
     result=(HRESULT)reply->result;
  done:
-    LeaveCriticalSection(&s->lock);return result;
+    s->active_thread=0;LeaveCriticalSection(&s->lock);SetEvent(s->serial_event);
+    restore_quit();return result;
 }
 static void destroy_session(struct pw_d3d9_session *s)
 {
-    if(s->broker){WaitForSingleObject(s->broker,INFINITE);CloseHandle(s->broker);}
-    close_ipc(&s->ipc);DeleteCriticalSection(&s->lock);HeapFree(GetProcessHeap(),0,s);
+    if(s->broker){client_wait(1,&s->broker,INFINITE);CloseHandle(s->broker);}
+    if(s->serial_event)CloseHandle(s->serial_event);
+    restore_quit();close_ipc(&s->ipc);DeleteCriticalSection(&s->lock);HeapFree(GetProcessHeap(),0,s);
     InterlockedExchange(&session_claim,0);
 }
 HRESULT pw_d3d9_session_open(const WCHAR *service,const WCHAR *backend,struct pw_d3d9_session **out)
@@ -127,6 +195,8 @@ HRESULT pw_d3d9_session_open(const WCHAR *service,const WCHAR *backend,struct pw
     unsigned char payload[32],reply_bytes[32];struct pw_d3d9_message m={.opcode=PW_D3D9_HELLO,.payload_bytes=32},r;
     if(!out)return E_POINTER;
     *out=NULL;
+    if(!InitOnceExecuteOnce(&tls_once,init_tls,NULL,NULL))return E_OUTOFMEMORY;
+    if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
     if(!absolute_path(service)||!absolute_path(backend))return E_INVALIDARG;
     if(InterlockedCompareExchange(&session_claim,1,0))return HRESULT_FROM_WIN32(ERROR_BUSY);
     if(session_serial==0x7fffffff){InterlockedExchange(&session_claim,0);return E_OUTOFMEMORY;}
@@ -134,6 +204,8 @@ HRESULT pw_d3d9_session_open(const WCHAR *service,const WCHAR *backend,struct pw
     s=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*s));
     if(!s){InterlockedExchange(&session_claim,0);return E_OUTOFMEMORY;}
     InitializeCriticalSection(&s->lock);
+    s->serial_event=CreateEventW(NULL,FALSE,FALSE,NULL);
+    if(!s->serial_event)goto fail;
     name(object_name,L"BOOT",pid,0);
     s->ipc.descriptor_mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,NULL,PAGE_READWRITE,0,sizeof(struct descriptor),object_name);
     if(!s->ipc.descriptor_mapping || GetLastError()==ERROR_ALREADY_EXISTS)goto fail;
@@ -157,10 +229,10 @@ HRESULT pw_d3d9_session_open(const WCHAR *service,const WCHAR *backend,struct pw
     MemoryBarrier();s->broker=CreateThread(NULL,0,broker_main,s,0,NULL);
     if(!s->broker)goto fail;
     HANDLE waits[]={s->ipc.opened,s->broker};
-    if(WaitForMultipleObjects(2,waits,FALSE,30000)!=WAIT_OBJECT_0)goto fail;
+    if(client_wait(2,waits,30000)!=WAIT_OBJECT_0)goto fail;
     hello_payload(payload,epoch);
     if(FAILED(transact(s,&m,payload,reply_bytes,sizeof(reply_bytes),&r)) || r.payload_bytes!=32 || memcmp(payload,reply_bytes,32))goto fail;
-    *out=s;return S_OK;
+    *out=s;restore_quit();return S_OK;
  fail:
     cancel_ipc(&s->ipc);destroy_session(s);return E_FAIL;
 }
@@ -217,13 +289,21 @@ HRESULT pw_d3d9_session_release(struct pw_d3d9_session *s,struct pw_d3d9_object_
 }
 void pw_d3d9_session_cancel(struct pw_d3d9_session *s)
 { if(s)cancel_ipc(&s->ipc); }
+HRESULT pw_d3d9_session_join(struct pw_d3d9_session *s)
+{
+    if(!s)return E_POINTER;
+    if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+    DWORD wait=client_wait(1,&s->broker,INFINITE);restore_quit();
+    return wait==WAIT_OBJECT_0&&!s->status?S_OK:E_FAIL;
+}
 HRESULT pw_d3d9_session_close(struct pw_d3d9_session *s)
 {
     struct pw_d3d9_message m={.opcode=PW_D3D9_STOP},r;HRESULT hr=E_FAIL;
     if(!s)return E_POINTER;
+    if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
     if(pw_d3d9_channel_stop(&s->ipc.channel)==PW_D3D9_OK)hr=transact(s,&m,NULL,NULL,0,&r);
     if(FAILED(hr))cancel_ipc(&s->ipc);
-    WaitForSingleObject(s->broker,INFINITE);
+    client_wait(1,&s->broker,INFINITE);
     if(s->status || pw_d3d9_channel_state(&s->ipc.channel)!=PW_D3D9_STOPPED)hr=E_FAIL;
     destroy_session(s);return hr;
 }
