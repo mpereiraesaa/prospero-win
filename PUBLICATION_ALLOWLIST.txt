@@ -797,6 +797,11 @@ wine/ps5/d3d9/pw_d3d9_native_gamma.h
 tests/lab/d3d9_native_gamma.c
 tests/lab/d3d9_native_gamma.py
 docs/d3d9-native-gamma.md
+wine/ps5/d3d9/pw_d3d9_service_query.c
+wine/ps5/d3d9/pw_d3d9_service_query.h
+tests/lab/d3d9_service_query.c
+tests/lab/d3d9_service_query.py
+docs/d3d9-service-query.md
 tests/lab/d3d9_native_query.c
 tests/lab/d3d9_native_query.py
 docs/d3d9-native-query.md
