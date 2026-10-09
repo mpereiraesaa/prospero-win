@@ -536,3 +536,6 @@ wine/ps5/pw_d3d9_window.c
 wine/ps5/pw_d3d9_window.h
 tests/test_d3d9_window.c
 docs/d3d9-bridge-windows.md
+tests/lab/d3d9_bridge_window.c
+tests/lab/d3d9_bridge_window.py
+docs/d3d9-bridge-window-probe.md
