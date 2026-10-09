@@ -6,12 +6,18 @@
 #include "pw_d3d9_kinds.h"
 #include "pw_d3d9_private_data.h"
 #include <string.h>
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+#include "pw_d3d9_queue_ticket.h"
+#endif
 struct buffer {
  union { IDirect3DVertexBuffer9 vb; IDirect3DIndexBuffer9 ib; } iface;
  struct buffer *next;
  IDirect3DDevice9 *parent;
  struct pw_d3d9_object_ref remote;
  ULONG references;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ unsigned queue_refs,closed,finishing,remote_done;
+#endif
  uint32_t kind;
  LONG busy;
  struct pw_d3d9_buffer_client client;
@@ -24,7 +30,11 @@ static struct pw_d3d9_buffer_proxy_ops ops;
 static int installed;
 static ULONG addref(struct buffer *p)
 {
- AcquireSRWLockExclusive(&cache_lock);ULONG n=++p->references;ReleaseSRWLockExclusive(&cache_lock);return n;
+ AcquireSRWLockExclusive(&cache_lock);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ if(p->closed){ReleaseSRWLockExclusive(&cache_lock);return 0;}
+#endif
+ ULONG n=++p->references;ReleaseSRWLockExclusive(&cache_lock);return n;
 }
 static uint32_t client_call(void *context,struct pw_d3d9_object_ref ref,const struct pw_d3d9_resource_request *q,struct pw_d3d9_resource_reply *r)
 { return (uint32_t)ops.resource(((struct buffer *)context)->parent,ref,q,r); }
@@ -51,13 +61,25 @@ static void dispose(void *context)
   return;
  }
  if(FAILED(hr))ops.fail(p->parent,hr);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ AcquireSRWLockExclusive(&cache_lock);p->remote_done=1;p->finishing=0;int dead=!p->queue_refs;ReleaseSRWLockExclusive(&cache_lock);
+ if(dead)free_local(p);
+#else
  free_local(p);
+#endif
 }
 static void cleanup(struct buffer *p){dispose(p);}
 static ULONG release(struct buffer *p)
 {
- struct buffer **link;AcquireSRWLockExclusive(&cache_lock);ULONG n=--p->references;
+ struct buffer **link;AcquireSRWLockExclusive(&cache_lock);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ if(p->closed){ReleaseSRWLockExclusive(&cache_lock);return 0;}
+#endif
+ ULONG n=--p->references;
  if(!n){for(link=&cache;*link&&*link!=p;link=&(*link)->next){}if(*link)*link=p->next;}
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ if(!n){p->closed=1;p->finishing=1;}
+#endif
  ReleaseSRWLockExclusive(&cache_lock);if(!n)cleanup(p);return n;
 }
 static HRESULT query(struct buffer *p,REFIID iid,void **out)
@@ -66,7 +88,8 @@ static HRESULT query(struct buffer *p,REFIID iid,void **out)
  *out=NULL;
  if(!IsEqualGUID(iid,&IID_IUnknown)&&!IsEqualGUID(iid,&IID_IDirect3DResource9)&&
     !IsEqualGUID(iid,p->kind==PW_D3D9_KIND_VERTEX_BUFFER?&IID_IDirect3DVertexBuffer9:&IID_IDirect3DIndexBuffer9))return E_NOINTERFACE;
- addref(p);*out=p;return S_OK;
+ if(!addref(p))return D3DERR_INVALIDCALL;
+ *out=p;return S_OK;
 }
 static HRESULT device(struct buffer *p,IDirect3DDevice9 **out)
 {if(!out)return D3DERR_INVALIDCALL;IDirect3DDevice9_AddRef(p->parent);*out=p->parent;return S_OK;}
@@ -197,3 +220,26 @@ HRESULT pw_d3d9_buffer_proxy_install(IDirect3DDevice9Vtbl *vtable,const struct p
  ops=*callbacks;installed=1;ReleaseSRWLockExclusive(&cache_lock);
  vtable->CreateVertexBuffer=create_vb;vtable->CreateIndexBuffer=create_ib;return S_OK;
 }
+
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+static void ticket_drop(void *context)
+{
+ struct buffer *p=context;int dead;AcquireSRWLockExclusive(&cache_lock);
+ --p->queue_refs;dead=!p->queue_refs&&p->closed&&p->remote_done&&!p->finishing;
+ ReleaseSRWLockExclusive(&cache_lock);if(dead)free_local(p);
+}
+HRESULT pw_d3d9_buffer_proxy_ticket(IDirect3DDevice9 *parent,IUnknown *local,uint32_t kind,
+ struct pw_d3d9_object_ref *out,struct pw_d3d9_queue_ticket *ticket)
+{
+ if(!out||!ticket)return E_POINTER;
+ if(ticket->drop||(kind!=PW_D3D9_KIND_VERTEX_BUFFER&&kind!=PW_D3D9_KIND_INDEX_BUFFER))return D3DERR_INVALIDCALL;
+ *out=(struct pw_d3d9_object_ref){0};if(!local)return S_OK;
+ HRESULT hr=D3DERR_INVALIDCALL;AcquireSRWLockExclusive(&cache_lock);
+ for(struct buffer *p=cache;p;p=p->next)
+  if((void *)p==(void *)local&&p->parent==parent&&p->kind==kind&&!p->closed&&p->references){
+   if(p->queue_refs==UINT32_MAX){hr=E_OUTOFMEMORY;break;}
+   ++p->queue_refs;*out=p->remote;ticket->context=p;ticket->drop=ticket_drop;hr=S_OK;break;
+  }
+ ReleaseSRWLockExclusive(&cache_lock);return hr;
+}
+#endif

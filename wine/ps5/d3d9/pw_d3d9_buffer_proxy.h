@@ -17,4 +17,10 @@ HRESULT pw_d3d9_buffer_proxy_install(IDirect3DDevice9Vtbl *,const struct pw_d3d9
 HRESULT pw_d3d9_buffer_proxy_wrap(IDirect3DDevice9 *,uint32_t,struct pw_d3d9_object_ref,void **);
 /* Address lookup only: foreign pointers are never dereferenced. */
 HRESULT pw_d3d9_buffer_proxy_resolve(IDirect3DDevice9 *,IUnknown *,uint32_t,struct pw_d3d9_object_ref *);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+#include "pw_d3d9_queue_ticket.h"
+/* Caller holds admission gate. Zero-initialize ticket; drop after gate unlock. */
+HRESULT pw_d3d9_buffer_proxy_ticket(IDirect3DDevice9 *,IUnknown *,uint32_t,
+ struct pw_d3d9_object_ref *,struct pw_d3d9_queue_ticket *);
+#endif
 #endif
