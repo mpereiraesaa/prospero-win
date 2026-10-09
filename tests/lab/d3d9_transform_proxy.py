@@ -31,7 +31,7 @@ try:
  else:assert prefix.is_dir()
  for abi,cc in [('32','i686-w64-mingw32-gcc'),('64','x86_64-w64-mingw32-gcc')]:
   target=out/(abi+'.exe');run([cc,'-std=c11','-O2','-Wall','-Wextra','-Werror','-municode',source,'-o',target],'compile-'+abi);r['artifacts'][str(target)]=sha(target)
- env=os.environ.copy();env.update(WINEPREFIX=str(prefix),WINEDEBUG='-all',WINEDLLOVERRIDES='mscoree,mshtml=;d3d9=n',PW_D3D9_PROFILE='1')
+ env=os.environ.copy();env.update(WINEPREFIX=str(prefix),WINEDEBUG='-all',WINEDLLOVERRIDES='mscoree,mshtml=;d3d9=n',PW_D3D9_PROFILE='1',PW_D3D9_DIAGNOSTICS='0')
  rows={};metrics={}
  for mode in ('native','0','1'):
   env['PW_D3D9_ASYNC']='0' if mode=='native' else mode
