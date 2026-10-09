@@ -34,7 +34,7 @@ def render(raw):
  lines+=['#ifdef PW_D3D9_API_OBSERVE_IMPLEMENTATION','const void *pw_d3d9_api_original_vtable(const void *table) {']
  for interface in interfaces:lines.append(f' if(table==&wrapped_{interface})return source_{interface};')
  lines+=[' return table;','}','#endif']
- return '\n'.join(lines)+'\n' 
+ return '\n'.join(lines)+'\n'
 if __name__=='__main__':
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--header',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--check',action='store_true');a=p.parse_args();s=render(a.header.read_bytes())
  if a.check:
