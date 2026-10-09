@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
+#ifdef PW_D3D9_ENABLE_UP
+#include "pw_d3d9_service_up.h"
+#endif
 #ifdef PW_D3D9_ENABLE_OBJECT_GETTER
 #include "pw_d3d9_service_object_getter.h"
 #endif
@@ -56,6 +59,9 @@ static uint32_t compiled_features(void)
 #endif
 #ifdef PW_D3D9_ENABLE_OBJECT_GETTER
     mask|=64u;
+#endif
+#ifdef PW_D3D9_ENABLE_UP
+    mask|=128u;
 #endif
     return mask;
 }
@@ -465,6 +471,19 @@ HRESULT pw_d3d9_session_object_getter(struct pw_d3d9_session *s,struct pw_d3d9_o
     *reply=decoded;return hr;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_UP
+HRESULT pw_d3d9_session_up(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_up_request *request,struct pw_d3d9_up_reply *reply)
+{
+    unsigned char in[PW_D3D9_UP_WIRE_MAX],out[24];size_t bytes;struct pw_d3d9_up_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_UP_DRAW_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_up_encode(in,sizeof(in),&bytes,request)!=PW_D3D9_UP_OK)return D3DERR_INVALIDCALL;
+    m.payload_bytes=(uint32_t)bytes;HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_up_reply_decode(&decoded,out,r.payload_bytes)!=PW_D3D9_UP_OK||decoded.operation!=request->operation||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
+#endif
 HRESULT pw_d3d9_session_release(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref)
 {
     struct pw_d3d9_message m={.opcode=PW_D3D9_RELEASE,.device=1,.object=ref.id,.generation=ref.generation},r;
@@ -535,6 +554,9 @@ static int destroy_objects(struct pw_d3d9_objects *objects)
             else if(objects->slots[n].kind==2){
 #ifdef PW_D3D9_ENABLE_PROGRAM
                 pw_d3d9_service_program_retire(objects,ref);
+#endif
+#ifdef PW_D3D9_ENABLE_UP
+                pw_d3d9_service_up_retire(objects,ref);
 #endif
                 if(!pw_d3d9_native_device_destroy((void *)context))okay=0;}
             else okay=0;
@@ -645,6 +667,9 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
 #ifdef PW_D3D9_ENABLE_PROGRAM
             pw_d3d9_service_program_shutdown(&objects);
 #endif
+#ifdef PW_D3D9_ENABLE_UP
+            pw_d3d9_service_up_shutdown(&objects);
+#endif
             pw_d3d9_objects_cancel(&objects);
             if(!destroy_objects(&objects))goto done;
 #ifdef PW_D3D9_ENABLE_DEVICE
@@ -729,6 +754,13 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             pw_d3d9_service_program_call(&objects,ref,&request,&reply);hr=(HRESULT)reply.hresult;
             if(pw_d3d9_program_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_PROGRAM_OK)goto done;
 #endif
+#ifdef PW_D3D9_ENABLE_UP
+        }else if(m.opcode==PW_D3D9_UP_DRAW_CALL){
+            struct pw_d3d9_up_request request;struct pw_d3d9_up_reply reply;
+            if(m.device!=objects.device||pw_d3d9_up_decode(&request,payload,m.payload_bytes)!=PW_D3D9_UP_OK)goto done;
+            pw_d3d9_service_up_call(&objects,ref,&request,&reply);hr=(HRESULT)reply.hresult;
+            if(pw_d3d9_up_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_UP_OK)goto done;
+#endif
 #ifdef PW_D3D9_ENABLE_OBJECT_GETTER
         }else if(m.opcode==PW_D3D9_OBJECT_GETTER_CALL){
             struct pw_d3d9_object_getter_request request;struct pw_d3d9_object_getter_reply reply;
@@ -755,6 +787,9 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
     if(objects_ready){
 #ifdef PW_D3D9_ENABLE_PROGRAM
         pw_d3d9_service_program_shutdown(&objects);
+#endif
+#ifdef PW_D3D9_ENABLE_UP
+        pw_d3d9_service_up_shutdown(&objects);
 #endif
         pw_d3d9_objects_cancel(&objects);destroy_objects(&objects);
     }
