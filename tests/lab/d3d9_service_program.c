@@ -30,7 +30,7 @@ static void registry_proof(IDirect3DDevice9 *device)
  assert(data.hresult==S_OK&&data.size==2&&data.total==16&&data.count==16&&!memcmp(data.data,declaration,16));
  void *owned=NULL;assert(pw_d3d9_service_program_acquire(&objects,program,8,device,&owned)==D3DERR_INVALIDCALL&&!owned);
  assert(pw_d3d9_service_program_acquire(&objects,program,7,device,&owned)==S_OK&&owned);
- D3DVERTEXELEMENT9 copied[3];UINT count=3;assert(IDirect3DVertexDeclaration9_GetDeclaration((IDirect3DVertexDeclaration9 *)owned,copied,&count)==S_OK&&count==2);IUnknown_Release((IUnknown *)owned);
+ D3DVERTEXELEMENT9 copied[3];UINT count=3;assert(IDirect3DVertexDeclaration9_GetDeclaration((IDirect3DVertexDeclaration9 *)owned,copied,&count)==S_OK&&count==2);struct pw_d3d9_object_ref duplicate;assert(pw_d3d9_service_program_adopt(&objects,parent,7,owned,&duplicate)==S_OK&&duplicate.id==program.id);assert(pw_d3d9_object_release(&objects,duplicate));
  pw_d3d9_service_program_call(&objects,parent,&q,&r);assert(r.hresult==(uint32_t)D3DERR_INVALIDCALL&&!r.id&&!r.transfer);
  q=(struct pw_d3d9_program_request){.operation=PW_D3D9_PROGRAM_BEGIN,.kind=7,.total=sizeof(declaration)};
  pw_d3d9_service_program_call(&objects,parent,&q,&r);assert(r.hresult==S_OK&&r.transfer>transfer);

@@ -46,6 +46,16 @@ static HRESULT publish(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref
     }
     pw_d3d9_native_program_destroy(native);HeapFree(GetProcessHeap(),0,owner);return hr;
 }
+HRESULT pw_d3d9_service_program_adopt(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref parent,
+ uint32_t kind,void *owned,struct pw_d3d9_object_ref *out)
+{
+    const struct pw_d3d9_object_slot *slot=lookup(objects,parent);
+    if(!slot||slot->kind!=PW_D3D9_KIND_DEVICE){if(owned)IUnknown_Release((IUnknown *)owned);return D3DERR_INVALIDCALL;}
+    struct pw_d3d9_native_program *native=NULL;
+    HRESULT hr=pw_d3d9_native_program_adopt(pw_d3d9_native_device_backend((void *)slot->context),kind,owned,&native);
+    if(SUCCEEDED(hr)){HRESULT published=publish(objects,parent,native,out);if(FAILED(published))hr=published;}
+    return hr;
+}
 void pw_d3d9_service_program_call(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref target,const struct pw_d3d9_program_request *q,struct pw_d3d9_program_reply *r)
 {
     memset(r,0,sizeof(*r));r->operation=q->operation;r->hresult=D3DERR_INVALIDCALL;

@@ -11,4 +11,6 @@ void pw_d3d9_service_program_shutdown(struct pw_d3d9_objects *);
 void pw_d3d9_service_program_retire(struct pw_d3d9_objects *,struct pw_d3d9_object_ref);
 HRESULT pw_d3d9_service_program_destroy(struct pw_d3d9_objects *,uintptr_t);
 HRESULT pw_d3d9_service_program_acquire(struct pw_d3d9_objects *,struct pw_d3d9_object_ref,uint32_t,void *,void **);
+HRESULT pw_d3d9_service_program_adopt(struct pw_d3d9_objects *,struct pw_d3d9_object_ref,
+ uint32_t kind,void *owned,struct pw_d3d9_object_ref *);
 #endif

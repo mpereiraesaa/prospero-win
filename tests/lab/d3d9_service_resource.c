@@ -19,7 +19,7 @@ static void registry_proof(IDirect3DDevice9 *device)
  assert(slots[parent.id-1].queued_refs==1);
  void *owned=NULL;assert(pw_d3d9_service_resource_acquire(&objects,buffer,PW_D3D9_KIND_INDEX_BUFFER,device,&owned)==D3DERR_INVALIDCALL&&!owned);
  assert(pw_d3d9_service_resource_acquire(&objects,buffer,PW_D3D9_KIND_VERTEX_BUFFER,(char *)device+1,&owned)==D3DERR_INVALIDCALL&&!owned);
- assert(pw_d3d9_service_resource_acquire(&objects,buffer,PW_D3D9_KIND_VERTEX_BUFFER,device,&owned)==S_OK&&owned);IUnknown_Release((IUnknown *)owned);
+ assert(pw_d3d9_service_resource_acquire(&objects,buffer,PW_D3D9_KIND_VERTEX_BUFFER,device,&owned)==S_OK&&owned);struct pw_d3d9_object_ref duplicate;assert(pw_d3d9_service_resource_adopt(&objects,parent,3,owned,&duplicate)==S_OK&&duplicate.id==buffer.id);assert(pw_d3d9_object_release(&objects,duplicate));
  assert(pw_d3d9_object_release(&objects,parent));uintptr_t context;assert(!pw_d3d9_object_take_destroy(&objects,parent,&context));
  q=(struct pw_d3d9_resource_request){.operation=PW_D3D9_RESOURCE_LOCK,.flags=D3DLOCK_READONLY};
  pw_d3d9_service_resource_call(&objects,buffer,&q,&r);assert(r.hresult==S_OK&&r.length==16384);

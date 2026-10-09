@@ -12,4 +12,6 @@ HRESULT pw_d3d9_service_resource_destroy(struct pw_d3d9_objects *,uintptr_t);
 /* Returns one owned typed COM reference after kind and parent validation. */
 HRESULT pw_d3d9_service_resource_acquire(struct pw_d3d9_objects *,struct pw_d3d9_object_ref,
  uint32_t kind,void *native_device,void **);
+HRESULT pw_d3d9_service_resource_adopt(struct pw_d3d9_objects *,struct pw_d3d9_object_ref,
+ uint32_t kind,void *owned,struct pw_d3d9_object_ref *);
 #endif
