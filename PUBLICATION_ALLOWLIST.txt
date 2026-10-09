@@ -539,3 +539,5 @@ docs/d3d9-bridge-windows.md
 tests/lab/d3d9_bridge_window.c
 tests/lab/d3d9_bridge_window.py
 docs/d3d9-bridge-window-probe.md
+wine/patches/0903-ntdll-native-callback-domain.patch
+docs/d3d9-native-callback-domain.md

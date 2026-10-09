@@ -1,0 +1,63 @@
+--- a/dlls/ntdll/signal_x86_64.c
++++ b/dlls/ntdll/signal_x86_64.c
+@@ -416,6 +416,18 @@
+                    "int3" )
+ 
+ 
++/* The PE64 user32 table and WoW64 marshal table coexist in a native
++ * service process. Never select callback ABI using process-global PEB state. */
++void **pw_wow64_callback_table;
++
++NTSTATUS WINAPI __wine_register_wow64_callbacks( void **table )
++{
++    void *previous;
++    if (!table) return STATUS_INVALID_PARAMETER;
++    previous = InterlockedCompareExchangePointer( (void **)&pw_wow64_callback_table, table, NULL );
++    return !previous || previous == table ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
++}
++
+ /*******************************************************************
+  *		KiUserCallbackDispatcher (NTDLL.@)
+  */
+@@ -432,8 +444,11 @@
+                    "movl 0x2c(%rsp),%r8d\n\t"  /* id */
+ #ifdef __WINE_PE_BUILD
+                    "movq %gs:0x60,%rax\n\t"     /* peb */
+-                   "movq 0x58(%rax),%rax\n\t"   /* peb->KernelCallbackTable */
+-                   "call *(%rax,%r8,8)\n\t"     /* KernelCallbackTable[id] */
++                   "movq 0x58(%rax),%rax\n\t"   /* native user32 table */
++                   "cmpl $0,%gs:0x180c\n\t"    /* teb->WowTebOffset */
++                   "jz 1f\n\t"
++                   "movq " __ASM_NAME("pw_wow64_callback_table") "(%rip),%rax\n\t"
++                   "1: call *(%rax,%r8,8)\n\t"     /* KernelCallbackTable[id] */
+                    ".seh_handler " __ASM_NAME("user_callback_handler") ", @except\n\t"
+                    ".globl " __ASM_NAME("KiUserCallbackDispatcherReturn") "\n"
+                    __ASM_NAME("KiUserCallbackDispatcherReturn") ":\n\t"
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1783,3 +1783,6 @@
+ @ cdecl wine_get_version()
+ @ cdecl wine_get_build_id()
+ @ cdecl wine_get_host_version(ptr ptr)
++
++# Private mixed-domain callback registration
++@ stdcall -private -arch=x86_64 __wine_register_wow64_callbacks(ptr)
+--- a/dlls/wow64win/syscall.c
++++ b/dlls/wow64win/syscall.c
+@@ -72,6 +72,16 @@
+ {
+     if (reason != DLL_PROCESS_ATTACH) return TRUE;
+     LdrDisableThreadCalloutsForDll( inst );
++#ifdef __x86_64__
++    {
++        UNICODE_STRING name = RTL_CONSTANT_STRING( L"ntdll.dll" );
++        NTSTATUS (WINAPI *register_callbacks)( void **table );
++        HMODULE module;
++        if (LdrGetDllHandle( NULL, 0, &name, &module )) return FALSE;
++        register_callbacks = RtlFindExportedRoutineByName( module, "__wine_register_wow64_callbacks" );
++        if (!register_callbacks || register_callbacks( (void **)user_callbacks )) return FALSE;
++    }
++#endif
+     NtCurrentTeb()->Peb->KernelCallbackTable = user_callbacks;
+     return TRUE;
+ }
