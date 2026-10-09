@@ -1,3 +1,4 @@
+#define COBJMACROS
 #ifdef PW_D3D9_ENABLE_TEXTURE
 #include "pw_d3d9_service_texture.h"
 #endif
@@ -23,6 +24,13 @@
 #include "pw_d3d9_binding_leases.h"
 #endif
 #include "../pw_d3d9_command_policy.h"
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+#ifndef PW_D3D9_ENABLE_BINDING_TICKETS
+#error Draw batches require prepared binding leases
+#endif
+#include "pw_d3d9_native_draw_state.h"
+#include "../pw_d3d9_draw_shadow.h"
+#endif
 #include <string.h>
 #endif
 static HRESULT acquire(void *context,uint32_t id,uint32_t generation,uint32_t kind,IDirect3DDevice9 *device,void **out)
@@ -96,6 +104,37 @@ int pw_d3d9_service_batch_bindings(struct pw_d3d9_service_batch_state *s,int ena
     s->bindings=!!enabled;return 1;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+int pw_d3d9_service_batch_draws(struct pw_d3d9_service_batch_state *s,int enabled)
+{
+    if(!s||!s->bindings||s->next_sequence!=1||s->failed_result||s->exhausted)return 0;
+    s->draws=!!enabled;return 1;
+}
+static int batch_draw_state(struct pw_d3d9_native_device *context,IDirect3DDevice9 *device,
+ const struct pw_d3d9_command_batch *batch,const struct pw_d3d9_binding_leases *leases)
+{
+    struct pw_d3d9_draw_shadow shadow;pw_d3d9_draw_init(&shadow);
+    unsigned recording=pw_d3d9_native_device_recording(context);
+    if(recording!=PW_D3D9_RECORDING_LIVE&&recording!=PW_D3D9_RECORDING_ACTIVE)return 0;
+    shadow.recording=recording==PW_D3D9_RECORDING_ACTIVE;
+    IDirect3DVertexDeclaration9 *declaration=NULL;
+    HRESULT hr=IDirect3DDevice9_GetVertexDeclaration(device,&declaration);
+    if(hr==S_OK)pw_d3d9_draw_observe(&shadow,declaration!=NULL,0);
+    if(declaration)IDirect3DVertexDeclaration9_Release(declaration);
+    if(hr!=S_OK)return 0;
+    for(uint32_t n=0;n<batch->count;n++){
+        struct pw_d3d9_command command;
+        if(pw_d3d9_batch_command(&command,batch,n))return 0;
+        /* A saved binding failure stops execution at this position. Never
+         * manufacture a new declaration from an unresolved object. */
+        if(leases->records[n].result!=S_OK)break;
+        if(command.method==87)pw_d3d9_draw_declaration(&shadow,command.args[0]!=0,0);
+        else if(command.method==89)pw_d3d9_draw_fvf(&shadow,command.args[0],0);
+        else if((command.method==81||command.method==82)&&!pw_d3d9_draw_can_queue(&shadow,&command))return 0;
+    }
+    return 1;
+}
+#endif
 static void batch_fail(struct pw_d3d9_service_batch_state *s,uint64_t sequence,uint32_t hr)
 {
     if(!s->failed_result){s->failed_sequence=sequence;s->failed_result=hr;}
@@ -108,6 +147,9 @@ int pw_d3d9_service_batch(struct pw_d3d9_service_batch_state *state,
     struct pw_d3d9_batch_reply reply;IDirect3DDevice9 *device=NULL;int pinned=0,valid=0;
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
     struct pw_d3d9_binding_leases leases;int leased=0;
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    int has_draw=0;
+#endif
 #endif
     if(!bytes||!hr)return 0;
     *bytes=0;*hr=E_FAIL;
@@ -123,6 +165,13 @@ int pw_d3d9_service_batch(struct pw_d3d9_service_batch_state *state,
         if(!eligible&&state->bindings){struct pw_d3d9_binding binding;
             eligible=pw_d3d9_binding_plan(&command,&binding)==PW_D3D9_BINDING_READY;}
 #endif
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+        if(!eligible&&state->draws){
+            const struct pw_d3d9_draw_shadow shape={.active=PW_D3D9_DECL_PRESENT};
+            eligible=pw_d3d9_draw_can_queue(&shape,&command);
+            if(eligible)has_draw=1;
+        }
+#endif
         if(!eligible)goto protocol_failure;
     }
     reply=(struct pw_d3d9_batch_reply){batch.first_sequence,batch.count,0,UINT32_MAX,0};
@@ -137,9 +186,17 @@ int pw_d3d9_service_batch(struct pw_d3d9_service_batch_state *state,
         unsigned char owned[PW_D3D9_BATCH_MAX];size_t owned_bytes;
         memset(&leases,0,sizeof(leases));
         if(pw_d3d9_batch_encode(owned,sizeof(owned),&owned_bytes,&batch)||
-           !pw_d3d9_binding_leases_prepare(&leases,objects,device,owned,owned_bytes,acquire,objects))goto protocol_failure;
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+           !pw_d3d9_binding_leases_prepare_draws(&leases,objects,device,owned,owned_bytes,acquire,objects,state->draws)
+#else
+           !pw_d3d9_binding_leases_prepare(&leases,objects,device,owned,owned_bytes,acquire,objects)
+#endif
+           )goto protocol_failure;
         leased=1;
     }
+#endif
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    if(has_draw&&(!leased||!device||!batch_draw_state((void *)slot->context,device,&batch,&leases)))goto protocol_failure;
 #endif
     for(uint32_t n=0;n<batch.count;n++){
         uint64_t sequence=batch.first_sequence+n;
