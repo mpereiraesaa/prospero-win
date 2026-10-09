@@ -36,15 +36,20 @@ Each callback exercises local AddRef/Release, rejects nested GetDeviceCaps and
 nested Direct3DCreate9, and checks unchanged failed output. The hook is absent
 from normal builds and does not replace any backend operation.
 
-Host proof requires20 real owner calls,40 callbacks,80 nested rejects and
-preserved WM_QUIT code37 and20 deferred final releases without cancelling
+Host proof requires20 real owner calls,41 callbacks,82 nested rejects and
+preserved WM_QUIT code37 and21 deferred final releases without cancelling
 the healthy session. Existing persistent and DLL proxy fixtures are also
 run separately to cover1200 concurrent calls, cancellation/reopen, canonical
 identity and final cleanup. This is a client RPC foundation; it does not itself
 prove owner-thread CreateDevice/Reset or complete game compatibility.
 
-Receipts: `/tmp/prospero-d3d9-rpc-ui-r5/receipt.json`,
+Receipts: `/tmp/prospero-d3d9-rpc-ui-r8/receipt.json`,
 `/tmp/prospero-d3d9-rpc-ui-proxy-final/receipt.json` and
 `/tmp/prospero-d3d9-rpc-ui-session-final/receipt.json` all passed with the
 final deferred-release implementation. Win32 TLS slots avoid an extra libgcc
 DLL dependency and are freed without waiting during proxy detach.
+
+A deterministic contended-call fixture pumps a final Release and injects a
+serialization wait failure. Every safe outer exit drains cleanup, including
+that wait failure, so the retained proxy/session reference cannot be stranded
+when the competing operation drains before the callback enqueues its release.

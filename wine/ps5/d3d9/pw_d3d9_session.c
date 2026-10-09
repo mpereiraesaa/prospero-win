@@ -191,7 +191,14 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
     memset(reply,0,sizeof(*reply));
     if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
     while(!TryEnterCriticalSection(&s->lock)){
-        if(client_wait(1,&s->serial_event,30000)!=WAIT_OBJECT_0){restore_quit();return E_FAIL;}
+        DWORD wait;
+#ifdef PW_D3D9_SESSION_TEST_CALLBACK
+        extern int pw_d3d9_session_test_serial_failure(void);
+        if(pw_d3d9_session_test_serial_failure()){client_pump();wait=WAIT_FAILED;}
+        else
+#endif
+        wait=client_wait(1,&s->serial_event,30000);
+        if(wait!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
     }
     if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
     s->active_thread=GetCurrentThreadId();
