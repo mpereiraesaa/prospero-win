@@ -16,7 +16,7 @@ diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
      }
  
      RtlAcquirePebLock();
-@@ -4535,6 +4539,30 @@
+@@ -4535,6 +4539,34 @@
      {
  #ifdef _WIN64
          if (NtCurrentTeb()->WowTebOffset) init_wow64( context );
@@ -28,7 +28,7 @@ diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
 +            {
 +                WINE_MODREF *kernel32;
 +                if ((status = load_dll( NULL, L"kernel32.dll", 0, &kernel32, FALSE )))
-+                    NtTerminateThread( GetCurrentThread(), status );
++                    goto native_domain_failed;
 +                node_kernel32 = kernel32->ldr.DdagNode;
 +                pBaseThreadInitThunk = RtlFindExportedRoutineByName( kernel32->ldr.DllBase,
 +                                                                    "BaseThreadInitThunk" );
@@ -36,12 +36,16 @@ diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
 +                locale_init();
 +            }
 +            NtCurrentTeb()->FlsSlots = fls_alloc_data();
-+            if ((status = alloc_thread_tls())) NtTerminateThread( GetCurrentThread(), status );
++            if ((status = alloc_thread_tls())) goto native_domain_failed;
 +            if ((status = process_attach( node_ntdll, NULL )) ||
 +                (status = process_attach( node_kernel32, NULL )))
-+                NtTerminateThread( GetCurrentThread(), status );
++                goto native_domain_failed;
 +            if (!NtCurrentTeb()->SkipThreadAttach) thread_attach();
 +            RtlLeaveCriticalSection( &loader_section );
++            return;
++        native_domain_failed:
++            RtlLeaveCriticalSection( &loader_section );
++            NtTerminateThread( GetCurrentThread(), status );
 +            return;
 +        }
  #endif

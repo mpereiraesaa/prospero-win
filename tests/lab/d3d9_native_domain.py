@@ -57,6 +57,6 @@ for mode in ['native'] + (['dxvk'] if args.backend64 else []):
     assert rows == [(str(i), str(expected)) for i in range(10)], rows
     receipt[mode] = {'iterations': 10, 'flags': expected, 'exit': 0}
 receipt['scope'] = ('PE64 module load/unload, native child inheritance, PE32 guest threads before/after, '
-                    'CRT/Win32 TLS, >4GiB storage, vectored exceptions, malformed version/length')
+                    'CRT/Win32 TLS, >4GiB storage, vectored exceptions, malformed version/length, missing DLL recovery')
 (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
 print(json.dumps(receipt, indent=2))

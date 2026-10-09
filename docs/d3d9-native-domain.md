@@ -63,7 +63,7 @@ unmodified runtime rejects the extension. The output directory must be new.
 The fixture checks native service and child TEBs, Win32 and CRT TLS isolation,
 a read/write allocation at 8 GiB, vectored exception handling on both native
 threads, ordinary PE32 child startup before and after, and malformed request
-version/length rejection. With `--backend64`, it loads the specified PE64 DXVK
+version/length rejection, and a missing-DLL failure followed by successful bootstrap. With `--backend64`, it loads the specified PE64 DXVK
 DLL, calls `Direct3DCreate9`, and releases the returned real interface on every
 iteration. It never substitutes Wine D3D9 or a 32-bit DLL.
 

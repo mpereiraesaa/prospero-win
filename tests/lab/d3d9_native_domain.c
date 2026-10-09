@@ -87,11 +87,15 @@ int main(int argc,char **argv)
     memset(&req,0,sizeof(req));req.version=2;req.size=sizeof(req);
     if(query(GetCurrentProcess(),0x50570001,&req,sizeof(req),&size)!=(LONG)0xc000000d)return 4;
     if(query(GetCurrentProcess(),0x50570001,&req,sizeof(req)-1,&size)!=(LONG)0xc0000004)return 5;
+    req.version=1;
+    MultiByteToWideChar(CP_UTF8,0,"Z:/pw-native-domain-missing/service.dll",-1,req.path,260);
+    for(i=0;req.path[i];i++)if(req.path[i]=='/')req.path[i]=0x5c;
+    if(query(GetCurrentProcess(),0x50570001,&req,sizeof(req),&size)!=(LONG)0xc0000135)return 6;
     for(i=0;i<10;i++) {
         memset(&req,0,sizeof(req));req.version=1;req.size=sizeof(req);
         MultiByteToWideChar(CP_UTF8,0,argv[1],-1,req.path,260);
         status=query(GetCurrentProcess(),0x50570001,&req,sizeof(req),&size);
-        printf("PW_NATIVE_DOMAIN iteration=%u status=%08lx size=%lu parent=%llx child=%llx high=%llx flags=%llu\n",i,status,size,req.result[0],req.result[1],req.result[2],req.result[3]);fflush(stdout);
+        printf("PW_NATIVE_DOMAIN iteration=%u status=%08lx size=%lu parent=%llx child=%llx high=%llx backend=%llx flags=%llu\n",i,status,size,req.result[0],req.result[1],req.result[2],req.result[4],req.result[3]);fflush(stdout);
         if(status || size!=592 || (req.result[3]&31)!=31 || req.result[2]<=UINT32_MAX || !req.result[1] || req.result[0]==req.result[1]) return 2;
     }
     return guest_check();
