@@ -2,9 +2,8 @@
 
 The [approved bridge design](d3d9-bridge-design.md) keeps the PE32 game window as
 input/message owner and creates a separate PE64 service window for DXVK. This
-change supplies a tested registry and display-ownership state machine. It is not
-yet connected to Wine's UI or Vulkan driver and does not claim a working device,
-window bridge, or game proxy.
+change supplies a tested registry and display-ownership state machine. The adapter described below connects it to Wine driver hooks; runtime
+acceptance and a game proxy remain separate work.
 
 ## Local state and wire identities
 
@@ -40,7 +39,7 @@ All functions require caller serialization. They contain no allocation, waits,
 locks, Wine calls, or callbacks. This allows the adapter to take a snapshot under
 its lock and perform reentrant user32 calls after releasing that lock.
 
-## Inspected integration points and next patch
+## Inspected integration points
 
 The pinned Wine is `490f6d5dcbb2a5047345b8af88d114bbcaad69a8`, with this project's
 PS5 driver patches. The inspected DXVK reference is v2.6.2
@@ -56,13 +55,13 @@ PS5 driver patches. The inspected DXVK reference is v2.6.2
 | `ps5_DestroyWindow` | Removes the local visible-window entry. | Close the matching pair immediately; keep its generation and leases until native surfaces and pending mirror work have completed. Service destruction must not destroy the guest window. |
 | DXVK `d3d9_window.cpp` | Fullscreen installs `D3D9WindowProc` through `GWLP_WNDPROC` and calls the saved procedure. | Pass only the service HWND to DXVK; its previous WNDPROC must also be PE64. Never install or call that procedure through the guest HWND. |
 
-The native registration API is still needed. It must authenticate the persistent
-bridge session/epoch and validate both local HWND owners through Wine's server
-state. The wire agent reserves opcodes `0x20+` for association/mirror operations;
+The native registration adapter below validates its lifecycle token and both
+local HWND owners through Wine server state. Persistent service integration
+still has to call it and correlate its returned IDs with the wire session. The wire agent reserves opcodes `0x20+` for association/mirror operations;
 those numbers are not active protocol implementations. A production operation
 must receive a registered ID, not look up arbitrary HWNDs from a guest packet.
-The current one-shot bootstrap cannot supply this persistent registration and
-callback lifetime by itself.
+The original one-shot bootstrap does not supply the token foundation by itself;
+the token extension and persistent cleanup discipline are separate dependencies.
 
 ## Tests and remaining UI proof
 
@@ -78,3 +77,48 @@ WNDPROC; real DXVK CreateDevice, Reset and Present results; focus, size, input a
 normal teardown. Fullscreen subclass/restore and hardware input/display-plane
 ownership must be tested separately. A registry pass does not establish any of
 those platform results.
+
+## Driver adapter (patch 0906)
+
+`pw_d3d9_window_driver.[ch]` connects the registry to PS5 window lifetimes,
+input selection, view geometry, and Vulkan surface creation/destruction. It
+requires the separate native lifecycle-token query: current-thread
+`NtQueryInformationThread` class `0x50570002`, version 1, size 16. Tokens correlate
+service lifetimes and native children; they are not a same-process security
+boundary.
+
+The service invokes native `NtUserCallTwoParam(&request, sizeof(request),
+0x50570020)` with the 80-byte request in the header. The WoW64 thunk rejects this
+operation and the driver independently requires a native token. Creation hooks
+record hidden and visible HWND owners/domains. Attach checks actual Wine server
+owners, a WoW64 guest, and a service owned by the calling native thread/token.
+The 256-entry owner table leaves ordinary windows usable on exhaustion, but
+unrecorded windows cannot join a bridge.
+
+The driver assigns a monotonic nonzero epoch, independently of wire session
+epochs; exhaustion fails. A new token waits until prior associations and surfaces
+are gone. All API operations require the original service owner thread. UI
+operations and scalar callbacks run outside driver locks between BEGIN and ACK;
+ACK must carry the real result. Destroyed associated windows retain tombstones
+so ACK/CLOSE/DETACH can drain after destruction. A window destruction never drops
+a live surface lease. Explicit detach is required before bootstrap returns;
+missing cleanup fails closed and blocks the next session.
+
+Native service/probe windows are excluded from input fallback and view bounds.
+Foreground service input maps to the live guest; suppressed associations cannot
+send null-target events back through the server's foreground selection. Ordinary
+unassociated dialogs retain their routing. Every surface reserves one of 64
+bounded slots before display release/enumeration. Existing ordinary surfaces
+block first attach; native probes cannot reserve before attach. Associated
+service/token checks and generation validation precede leases. Same-pair reset
+replacement surfaces may overlap. Failures cancel their reservation; the exact
+(instance, host surface) lease is released only after actual host destruction.
+Client-surface lookup runs outside the driver lock to avoid lock inversion.
+
+The host contract includes the actual adapter C with controlled Wine owner/token
+and surface-lookup boundaries. It checks rejection, ownership, mirror gating,
+input, replacement/failure, post-destroy cleanup and stale epochs. Modified Wine
+ps5drv.c/sysparams.c/vulkan.c compile with the pinned SDK commands. These are
+compile/contract results: token-enabled runtime packaging, service integration,
+and console input/display acceptance remain pending. The earlier device probe
+does not call this API and does not establish these hooks' runtime acceptance.

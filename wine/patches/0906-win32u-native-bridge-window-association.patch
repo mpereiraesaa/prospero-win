@@ -1,0 +1,165 @@
+Subject: win32u: associate native bridge windows with checked input and display leases
+
+Requires native lifecycle-token query class 0x50570002.
+
+diff --git a/dlls/win32u/ntuser_private.h b/dlls/win32u/ntuser_private.h
+--- a/dlls/win32u/ntuser_private.h
++++ b/dlls/win32u/ntuser_private.h
+@@ -239,4 +239,10 @@
+ BOOL is_window( HWND hwnd );
+ extern WNDPROC get_window_wndproc_handle( HWND hwnd, BOOL *ansi );
+ 
++
++#ifdef WINE_PS5_USER_DRIVER
++extern ULONG_PTR ps5_bridge_window_call( void *request, ULONG_PTR size );
++extern void ps5_bridge_surface_destroyed( UINT_PTR instance, UINT64 surface );
++#endif
+ #endif /* __WINE_NTUSER_PRIVATE_H */
++
+diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -114,6 +114,8 @@
+ static DWORD input_threads[PS5_MAX_WINDOWS];
+ static UINT input_thread_count;
+ 
++#include "pw_d3d9_window_driver.c"
++
+ static struct ps5_window *find_window( HWND hwnd )
+ {
+     UINT i;
+@@ -168,7 +170,7 @@
+ 
+     if (!view_windows) return screen_rect;
+     for (i = 0; i < window_count; i++)
+-        if (windows[i].shown) union_rect( &box, &box, &windows[i].visible );
++        if (windows[i].shown && !bridge_service_window( windows[i].hwnd )) union_rect( &box, &box, &windows[i].visible );
+     if (!intersect_rect( &box, &box, &screen_rect )) return screen_rect;
+     return box;
+ }
+@@ -367,7 +369,7 @@
+ 
+ static BOOL ps5_CreateWindow( HWND hwnd )
+ {
+-    register_input_fd();
++    if (!bridge_window_created( hwnd )) register_input_fd();
+     return TRUE;
+ }
+ 
+@@ -407,6 +409,7 @@
+     struct ps5_window *window;
+ 
+     pthread_mutex_lock( &screen_lock );
++    bridge_window_destroyed( hwnd );
+     if ((window = find_window( hwnd )))
+     {
+         if (window->shown)
+@@ -455,7 +458,7 @@
+ 
+     pthread_mutex_lock( &screen_lock );
+     for (i = window_count; i > 0; i--)
+-        if (windows[i - 1].shown) { hwnd = windows[i - 1].hwnd; break; }
++        if (windows[i - 1].shown && (hwnd = bridge_input_window( windows[i - 1].hwnd ))) break;
+     pthread_mutex_unlock( &screen_lock );
+     return hwnd;
+ }
+@@ -543,8 +546,14 @@
+     struct ps5_input event;
+     HWND hwnd = NtUserGetForegroundWindow();
+     UINT processed = 0;
+-
+-    if (!next_input) return FALSE;
++    BOOL suppress_bridge_input;
++
++    if (!next_input || bridge_current_token()) return FALSE;
++    pthread_mutex_lock( &screen_lock );
++    suppress_bridge_input = bridge_token || bridge_service_window( hwnd );
++    hwnd = bridge_input_window( hwnd );
++    pthread_mutex_unlock( &screen_lock );
++    if (hwnd && hwnd != NtUserGetForegroundWindow()) NtUserSetForegroundWindow( hwnd );
+     if (!hwnd && (hwnd = last_shown_window()))
+     {
+         /* no window manager activates windows here: the newest one gets
+@@ -563,6 +572,7 @@
+         INPUT input = {.type = INPUT_KEYBOARD};
+ 
+         processed++;
++        if (!hwnd && suppress_bridge_input) continue;
+         switch (event.type)
+         {
+         case 1:
+@@ -793,6 +803,10 @@
+     VkPhysicalDevice physical;
+     uint32_t count = 1, chosen = 0, i;
+     VkResult res;
++    struct bridge_surface *reservation = bridge_surface_reserve( client );
++
++    if (!reservation) return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
++    *handle = 0;
+ 
+     /* A host driver may open the video output as soon as its displays are
+      * queried (RADV does; ps5vk waits for the swapchain), so the title lets
+@@ -800,6 +814,7 @@
+     if (release_display && release_display())
+     {
+         ERR( "the title kept the video output\n" );
++        bridge_surface_finish( reservation, 0, 0, VK_ERROR_NATIVE_WINDOW_IN_USE_KHR );
+         return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
+     }
+ 
+@@ -835,9 +850,11 @@
+     res = instance->p_vkCreateDisplayPlaneSurfaceKHR( instance->host.instance, &info, NULL, handle );
+     TRACE( "%s: mode %u of %u, %ux%u display plane surface 0x%s, res %d\n", debugstr_client_surface( client ),
+            chosen, count, info.imageExtent.width, info.imageExtent.height, wine_dbgstr_longlong( *handle ), res );
++    bridge_surface_finish( reservation, instance->host.instance, *handle, res );
+     return res;
+ 
+ failed:
++    bridge_surface_finish( reservation, 0, 0, VK_ERROR_INITIALIZATION_FAILED );
+     ERR( "no host display (%u found), res %d\n", count, res );
+     return res < VK_SUCCESS ? res : VK_ERROR_INITIALIZATION_FAILED;
+ }
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -7704,6 +7704,14 @@
+ 
+ ULONG_PTR WINAPI NtUserCallTwoParam( ULONG_PTR arg1, ULONG_PTR arg2, ULONG code )
+ {
++    if (code == 0x50570020)
++    {
++#ifdef WINE_PS5_USER_DRIVER
++        return ps5_bridge_window_call( (void *)arg1, arg2 );
++#else
++        return 1; /* PW_D3D9_WINDOW_INVALID: no PS5 association provider */
++#endif
++    }
+     switch(code)
+     {
+     case PW_KEY_QUERY:
+diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
+--- a/dlls/win32u/vulkan.c
++++ b/dlls/win32u/vulkan.c
+@@ -1573,6 +1573,9 @@
+     if (allocator) FIXME( "Support for allocation callbacks not implemented yet\n" );
+ 
+     instance->p_vkDestroySurfaceKHR( instance->host.instance, surface->obj.host.surface, NULL /* allocator */ );
++#if defined(WINE_PS5_USER_DRIVER) && defined(SONAME_LIBVULKAN)
++    ps5_bridge_surface_destroyed( (UINT_PTR)instance->host.instance, (UINT64)surface->obj.host.surface );
++#endif
+     use_window_client_surface( surface->client, FALSE );
+     client_surface_release( surface->client );
+ 
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -1801,6 +1801,9 @@
+     ULONG_PTR arg2 = get_ulong( &args );
+     ULONG code = get_ulong( &args );
+ 
++    /* Native local request contains handles/pointers and has no guest thunk. */
++    if (code == 0x50570020) return 1; /* PW_D3D9_WINDOW_INVALID */
++
+     switch (code)
+     {
+     case NtUserCallTwoParam_GetMenuInfo:
