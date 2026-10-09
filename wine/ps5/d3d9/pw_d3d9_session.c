@@ -73,6 +73,9 @@ static uint32_t compiled_features(void)
 #ifdef PW_D3D9_ENABLE_CURSOR
     mask|=512u;
 #endif
+#ifdef PW_D3D9_ENABLE_GAMMA
+    mask|=1024u;
+#endif
     return mask;
 }
 struct descriptor {
@@ -455,6 +458,19 @@ HRESULT pw_d3d9_session_program(struct pw_d3d9_session *s,struct pw_d3d9_object_
     *reply=decoded;return hr;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_GAMMA
+HRESULT pw_d3d9_session_gamma(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_gamma_request *request,struct pw_d3d9_gamma_reply *reply)
+{
+    unsigned char in[PW_D3D9_GAMMA_REQUEST_BYTES],out[PW_D3D9_GAMMA_REPLY_BYTES];struct pw_d3d9_gamma_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_GAMMA_CALL,.device=1,.object=ref.id,.generation=ref.generation,.payload_bytes=sizeof(in)},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_gamma_request_encode(in,sizeof(in),request))return D3DERR_INVALIDCALL;
+    HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_gamma_reply_decode(&decoded,request,out,r.payload_bytes)||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
+#endif
 #ifdef PW_D3D9_ENABLE_CURSOR
 HRESULT pw_d3d9_session_cursor(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_cursor_request *request,struct pw_d3d9_cursor_reply *reply)
 {
@@ -783,6 +799,9 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
         }else if(m.opcode==PW_D3D9_COMMAND_CALL||m.opcode==PW_D3D9_GETTER_CALL
 #ifdef PW_D3D9_ENABLE_CURSOR
                   ||m.opcode==PW_D3D9_CURSOR_CALL
+#endif
+#ifdef PW_D3D9_ENABLE_GAMMA
+                  ||m.opcode==PW_D3D9_GAMMA_CALL
 #endif
 ){
             if(m.device!=objects.device||!pw_d3d9_service_methods(&objects,ref,m.opcode,payload,m.payload_bytes,output,sizeof(output),&bytes,&hr))goto done;
