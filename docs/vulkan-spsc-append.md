@@ -1,7 +1,8 @@
 # Producer-owned Vulkan record transport
 
 The SPSC core is a dependency for removing the PE batching gate from append.
-It is not connected to the Wine adapter yet and changes no runtime default.
+The PE adapter integration is under validation; no console performance gain is
+claimed.
 
 Each producer owns a bounded byte ring with power-of-two capacity. One serialized consumer copies records
 into its own scratch and releases capacity only after copying. Release/acquire
@@ -25,13 +26,13 @@ producer has stopped and consumer has drained them. No reset/reinitialization is
 allowed while either side can access a ring. The consumer must supply scratch
 separate from every ring and control object. Full/error results consume nothing.
 
-## Remaining adapter work
+## Adapter obligations
 
-Move encoder storage into the producer; protect immutable descriptor-template
-snapshots and metadata retirement independently of replay; implement registry
+Keep encoder storage in the producer; protect descriptor-template
+snapshots and metadata retirement independently of replay; preserve registry
 publication and safe thread retirement; merge exact sequence prefixes; preserve
 synchronous fallback, callback disabling, flush boundaries and fatal replay-error
-semantics. This foundation alone does not remove the process gate or establish
+semantics. The portable core alone does not establish adapter correctness or
 performance gains. Parallel host workers additionally require command-pool
 ownership and buffer lifecycle synchronization.
 
@@ -54,3 +55,25 @@ wine /tmp/test_vk_spsc.exe
 This checks actual PE32 atomics and Win32 thread scheduling without Wine Vulkan
 or a graphics driver. The fixture also rejects malformed framing and verifies
 that failed reads do not reclaim ring storage.
+
+## PE adapter integration (in validation)
+
+The PE adapter now owns encoder storage per producer and merges SPSC records
+through a reserved-sequence marker into replay scratch. Ordinary append does not
+enter the replay critical section. A separate short registry lock protects node
+publication and reclamation, and template snapshots use a separate metadata lock;
+neither is held across native replay. A producer's full ring may request a drain.
+
+Callback/allocator disabling first blocks new publication and waits for active
+publishers, then captures and drains the completed prefix before making raw
+callback dispatch available. A producer releases its active state before asking
+for a full-ring drain, avoiding a cycle with a disable owner. Enqueued statistics
+now describe the accepted prefix at the drain marker, rather than racing a shared
+increment on every append. Client allocations retire only after owned replay.
+
+The actual PE fixture holds a foreign thread inside mocked Unix replay and
+requires another producer's append to return before releasing it. The later
+record must remain pending until a subsequent drain. Existing template ownership,
+thread retirement, sticky callback, synchronous status and progress-API fixtures
+remain required. These fixtures do not establish driver correctness or console
+performance; the integration is not yet an accepted runtime change.
