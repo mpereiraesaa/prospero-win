@@ -96,6 +96,8 @@ static pthread_once_t worker_once = PTHREAD_ONCE_INIT;
 static struct pw_vk_replay *workers;
 static int startup_failed;
 static unsigned report_enabled;
+static pthread_key_t fanout_key;
+static unsigned fanout_workers;
 static uint64_t boundary_count;
 static void context_init(struct replay_context *ctx,unsigned version)
 {
@@ -129,14 +131,40 @@ static void initialize_workers(void)
  if(!count)goto done;
  workers=pw_vk_replay_create((unsigned)count,2u*PW_VK_BATCH_SCRATCH,worker_replay);
  if(!workers)startup_failed=1;
+ if(workers && count>=2){const char *fanout=getenv("PW_VK_REPLAY_POOL_FANOUT");if(fanout && !strcmp(fanout,"1") && !pthread_key_create(&fanout_key,NULL))fanout_workers=(unsigned)count;}
  done:if(startup_trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=initialize_end workers=%lu failed=%d ready=%d\n",count,startup_failed,workers!=NULL);
  pthread_mutex_unlock(&admission);
 }
+
 static void must_complete(int status)
 {
  /* Continuing a lifecycle operation after failed replay could free live driver
   * objects. Preserve the existing fatal batch failure contract on raw hooks. */
  if(status){fprintf(stderr,"PW_VK_REPLAY_FATAL status=%d\n",status);abort();}
+}
+unsigned pw_vk_async_pool_fanout_count(void)
+{
+ unsigned count;
+ pthread_mutex_lock(&admission);
+ count=fanout_workers;
+ pthread_mutex_unlock(&admission);
+ return count && pthread_getspecific(fanout_key)?count:1;
+}
+/* Only native lifecycle dispatch for a callback-safe v3 PE entry can grow
+ * physical pools. Inspect original WOW64 pNext before Wine drops unknown nodes.
+ * These prefix fields match the checked pinned thunk32 Create/Allocate layouts. */
+static int fanout_scope_begin(unsigned code,const void *args,void **previous)
+{
+ uint32_t fields[3],info[2];unsigned count;int allowed;
+ if(code!=unix_vkCreateCommandPool && code!=unix_vkAllocateCommandBuffers)return 0;
+ pthread_mutex_lock(&admission);count=fanout_workers;pthread_mutex_unlock(&admission);
+ if(!count)return 0;
+ memcpy(fields,args,sizeof(fields));
+ allowed=fields[1] && (code!=unix_vkCreateCommandPool || !fields[2]);
+ if(allowed){memcpy(info,UlongToPtr(fields[1]),sizeof(info));allowed=!info[1];}
+ *previous=pthread_getspecific(fanout_key);
+ must_complete(pthread_setspecific(fanout_key,allowed?(void *)(uintptr_t)1:NULL));
+ return 1;
 }
 void pw_vk_async_wait_buffer(VkCommandBuffer handle)
 {
@@ -148,13 +176,13 @@ void pw_vk_async_wait_buffer(VkCommandBuffer handle)
 void pw_vk_async_wait_buffer_pool(VkCommandBuffer handle)
 {
  pthread_mutex_lock(&admission);
- if(workers && handle)must_complete(pw_vk_replay_wait_pool(workers,(uintptr_t)wine_cmd_buffer_from_handle(handle)->pool));
+ if(workers && handle){struct wine_cmd_buffer *cb=wine_cmd_buffer_from_handle(handle);must_complete(pw_vk_replay_wait_pool(workers,(uintptr_t)&cb->pool->slots[cb->pool_slot]));}
  pthread_mutex_unlock(&admission);
 }
 void pw_vk_async_wait_pool(VkCommandPool handle)
 {
  pthread_mutex_lock(&admission);
- if(workers && handle)must_complete(pw_vk_replay_wait_pool(workers,(uintptr_t)wine_cmd_pool_from_handle(handle)));
+ if(workers && handle){struct wine_cmd_pool *pool=wine_cmd_pool_from_handle(handle);unsigned i;for(i=0;i<pool->slot_count;i++)must_complete(pw_vk_replay_wait_pool(workers,(uintptr_t)&pool->slots[i]));}
  pthread_mutex_unlock(&admission);
 }
 void pw_vk_async_forget_buffer(VkCommandBuffer handle)
@@ -175,6 +203,7 @@ static void __attribute__((destructor)) stop_workers(void)
 {
  pthread_mutex_lock(&admission);
  if(workers){report_workers();pw_vk_replay_destroy(workers);workers=NULL;}
+ if(fanout_workers){pthread_key_delete(fanout_key);fanout_workers=0;}
  pthread_mutex_unlock(&admission);
 }
 struct schedule_context {
@@ -187,7 +216,7 @@ static int flush_pending(struct schedule_context *ctx)
 {
  struct wine_cmd_buffer *cb=ctx->pending_cb;uint64_t ticket;int status;
  if(!cb)return 0;
- if(!cb->replay_lane)cb->replay_lane=pw_vk_replay_lane_create(workers,(uintptr_t)cb->pool,cb);
+ if(!cb->replay_lane)cb->replay_lane=pw_vk_replay_lane_create(workers,(uintptr_t)&cb->pool->slots[cb->pool_slot],cb);
  if(!cb->replay_lane)return 1;
  if(startup_trace && trace_enqueues<8)fprintf(stderr,"PW_VK_REPLAY_TRACE event=enqueue_begin cb=%p pool=%p bytes=%zu\n",(void *)cb,(void *)cb->pool,ctx->pending_bytes);
  status=pw_vk_replay_enqueue(cb->replay_lane,ctx->pending_data,ctx->pending_bytes,&ticket);
@@ -255,6 +284,13 @@ NTSTATUS pw_vk_batch_unix(void *args)
  }
  if((p->code==unix_count+1 || p->code==unix_vkQueuePresentKHR) && !(++boundary_count%1024))report_workers();
  pthread_mutex_unlock(&admission);
- if(!status){p->status=STATUS_SUCCESS;if(p->code<unix_count)p->status=pw_vk_batch_dispatch(p->code,UlongToPtr(p->args));}
+ if(!status){
+  p->status=STATUS_SUCCESS;
+  if(p->code<unix_count){
+   void *previous=NULL;int scoped=p->version==PW_VK_BATCH_ASYNC_VERSION && fanout_scope_begin(p->code,UlongToPtr(p->args),&previous);
+   p->status=pw_vk_batch_dispatch(p->code,UlongToPtr(p->args));
+   if(scoped)must_complete(pthread_setspecific(fanout_key,previous));
+  }
+ }
  done:context_free(&ctx.decode);return status;
 }

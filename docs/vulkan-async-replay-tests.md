@@ -103,3 +103,26 @@ A pure group blocked on one pool also reserves its position in every other pool
 it touches: later overlapping groups cannot pass it. The fixture repeats the
 blocked preceding/group/following sequence without an ordered epoch to check
 this multi-pool dependency and monotonic lane completion.
+
+
+## Physical pools and initialization exclusion
+
+The `fanout` fixture mode places two physical replay domains inside one logical
+command pool. It proves overlapping work on the separate physical slots, strict
+exclusion within each slot, a command-buffer wait that does not wait for another
+slot, and a logical pool wait that includes every slot. The real adapter checks
+original WOW64 argument prefixes before permitting optional pool growth; raw,
+legacy, callback-allocation and unknown-chain cases remain excluded.
+
+The `init-race` mode pauses worker construction while another API thread enters
+a raw lifecycle hook. The hook must wait for initialization under the admission
+mutex. A negative build removes that mutex acquisition and must fail at the
+premature waiter-completion assertion. This verifies the initialization fix
+rather than relying on a probabilistic stress race.
+
+Positive host and ASan/UBSan runs plus the missing-lock negative are recorded in
+`/tmp/prospero-replay-fanout-async-r2/receipt.json`. Actual staged native allocation,
+reset, trim, free and destroy coverage and the immutable combined candidate are
+listed in [the fanout evidence](vulkan-replay-pool-fanout.md#combined-candidate-evidence).
+The candidate is not a console acceptance claim. Keep the runtime and fanout
+changes in draft until the owner reviews matched console results.

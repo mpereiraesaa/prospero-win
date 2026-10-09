@@ -81,6 +81,7 @@ def generator(s):
  s=once(s,needle,needle+addition);ast.parse(s);return s
 edit('make_vulkan',generator)
 subprocess.run([sys.executable,str(repo/'tools/stage_vk_replay_barriers.py'),'--source',a.source],check=True)
+subprocess.run([sys.executable,str(repo/'tools/stage_vk_replay_fanout.py'),'--source',a.source],check=True)
 classifier=[sys.executable,str(repo/'tools/generate_vk_replay_dispatch.py'),'--source',a.source,'--output',str(d)]
 if a.driver_header:classifier+=['--driver-header',a.driver_header]
 subprocess.run(classifier,check=True)

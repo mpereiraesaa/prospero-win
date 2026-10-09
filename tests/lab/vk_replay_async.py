@@ -24,6 +24,13 @@ header = (directory / 'vulkan_private.h').read_text()
 if 'struct wine_cmd_buffer\n' not in header:
     stage = runpy.run_path(str(runtime / 'tools/stage_vk_replay_lifecycle.py'))
     header, _ = stage['transform'](header, (directory / 'vulkan.c').read_text())
+if 'PW_VK_POOL_MAX_SLOTS' not in header:
+    life = runpy.run_path(str(runtime / 'tools/stage_vk_replay_lifecycle.py'))
+    barriers = runpy.run_path(str(runtime / 'tools/stage_vk_replay_barriers.py'))
+    fanout = runpy.run_path(str(runtime / 'tools/stage_vk_replay_fanout.py'))
+    original_header, original_source = life['transform']((directory / 'vulkan_private.h').read_text(), (directory / 'vulkan.c').read_text())
+    staged = barriers['transform'](original_header, original_source, (directory / 'vulkan_thunks.c').read_text(), (directory / 'make_vulkan').read_text())
+    header, _, _, _ = fanout['transform'](*staged)
 (output / 'vulkan_private.h').write_text(header)
 loader = (directory / 'loader_thunks.h').read_text()
 if 'unix_pw_vk_batch,' not in loader:
@@ -45,14 +52,14 @@ flags = ['-std=gnu11', '-g', '-Wall', '-Wextra', '-Werror', '-D__WINESRC__', '-D
 inputs = [repo / 'tests/lab/vk_replay_async.c'] + [runtime / 'wine/ps5' / name for name in
           ('pw_vk_wire.c', 'pw_vk_command_stream.c', 'pw_vk_replay.c')]
 commands = []
-def execute(command, failure=False, trace=False):
+def execute(command, failure=False, expected_message='PW_VK_REPLAY_FATAL', trace=False):
     result = subprocess.run(command, text=True, capture_output=True, timeout=45,
                             env={**os.environ, "PW_VK_REPLAY_TRACE": "1" if trace else "0"},
                             preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
     commands.append(dict(command=command, exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr,
                          expected_failure=failure))
     if failure:
-        assert result.returncode == -6 and 'PW_VK_REPLAY_FATAL' in result.stderr, result.stdout + result.stderr
+        assert result.returncode == -6 and expected_message in result.stderr, result.stdout + result.stderr
     else:
         assert result.returncode == 0, result.stdout + result.stderr
     return result
@@ -60,6 +67,8 @@ for name, extra in [('host', []), ('sanitize', ['-fsanitize=address,undefined', 
     execute(['cc', *flags, *extra, *map(str, inputs), '-pthread', '-o', str(output / name)])
     execute([str(output / name)])
     execute([str(output / name), 'legacy'])
+    execute([str(output / name), 'fanout'])
+    execute([str(output / name), 'init-race'])
 traced = execute([str(output / 'host')], trace=True)
 for event in ('initialize_begin', 'initialize_end', 'create_begin', 'create_end',
               'worker_enter', 'enqueue_begin', 'enqueue_end', 'job_begin', 'job_end',
@@ -75,6 +84,22 @@ for event in ('dispatch_begin', 'dispatch_end'):
     assert 'event=' + event + ' job=9 ' not in bounded.stderr
 assert 'event=stack_default ' in bounded.stderr
 execute([str(output / 'host'), 'fatal'], failure=True)
+# Recreate the missing-initialization-lock regression; the paused constructor
+# makes the raw hook's premature return deterministic, without a timing race.
+actual_adapter = (output / 'pw_vk_batch_unix.c').read_text()
+start = actual_adapter.index('static void initialize_workers(void)')
+end = actual_adapter.index('\nstatic void must_complete', start)
+init = actual_adapter[start:end]
+assert init.count('pthread_mutex_lock(&admission);') == 1
+assert init.count('pthread_mutex_unlock(&admission);') == 1
+broken = init.replace('pthread_mutex_lock(&admission);', '').replace('pthread_mutex_unlock(&admission);', ';')
+(output / 'pw_vk_batch_unix.c').write_text(actual_adapter[:start] + broken + actual_adapter[end:])
+try:
+    execute(['cc', *flags, *map(str, inputs), '-pthread', '-o', str(output / 'negative-init')])
+finally:
+    (output / 'pw_vk_batch_unix.c').write_text(actual_adapter)
+execute([str(output / 'negative-init'), 'init-race'], failure=True, expected_message='!waiter_done')
+
 receipt = dict(status='pass', console_accessed=False, actual_unix_adapter=True, actual_manual_codec=True,
                generated_codec_tested=False, commands=commands,
                sha256={str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in
