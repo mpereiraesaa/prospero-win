@@ -21,6 +21,10 @@ struct window_state {
 #endif
 };
 static struct window_state *state;
+static BOOL fullscreen_probe;
+#ifdef _WIN64
+static uint32_t fullscreen_width=1920,fullscreen_height=1080;
+#endif
 static HANDLE acknowledge;
 static WCHAR guest_name[96],service_name[96],mapping_name[96],event_name[96];
 static void names(const WCHAR *session)
@@ -103,6 +107,7 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
 #endif
  WNDCLASSW cls={0};HMODULE backend=NULL;IDirect3D9 *d3d=NULL;IDirect3DDevice9 *device=NULL;
  IDirect3D9 *(WINAPI *factory)(UINT);LONG (WINAPI *register_callbacks)(void **);void *bogus_table[1]={NULL};D3DPRESENT_PARAMETERS pp={0};DWORD error=0;
+ fullscreen_probe=GetEnvironmentVariableW(L"PW_BRIDGE_WINDOW_FULLSCREEN",mode,4)&&mode[0]==L'1';
  register_callbacks=(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"__wine_register_wow64_callbacks");
  if(!register_callbacks || register_callbacks(NULL)!=(LONG)0xc000000d || register_callbacks(bogus_table)!=(LONG)0xc000000d)return 31;
  if(!native_domain() || !GetEnvironmentVariableW(L"PW_BRIDGE_WINDOW_SESSION",session,48))return 10;
@@ -147,7 +152,8 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  if(device_test){
  if(!GetEnvironmentVariableW(L"PW_BRIDGE_BACKEND64",path,260) || !(backend=LoadLibraryW(path))){error=17;goto done;}
  factory=(void *)GetProcAddress(backend,"Direct3DCreate9");if(!factory || !(d3d=factory(D3D_SDK_VERSION))){error=18;goto done;}
- pp.Windowed=TRUE;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;pp.BackBufferFormat=D3DFMT_X8R8G8B8;
+ pp.Windowed=!fullscreen_probe;pp.SwapEffect=fullscreen_probe?D3DSWAPEFFECT_FLIP:D3DSWAPEFFECT_DISCARD;pp.BackBufferFormat=fullscreen_probe?D3DFMT_A8R8G8B8:D3DFMT_X8R8G8B8;
+ if(fullscreen_probe){state->width=fullscreen_width;state->height=fullscreen_height;pp.EnableAutoDepthStencil=TRUE;pp.AutoDepthStencilFormat=D3DFMT_D16;}
  pp.BackBufferWidth=state->width;pp.BackBufferHeight=state->height;pp.hDeviceWindow=window;pp.PresentationInterval=D3DPRESENT_INTERVAL_IMMEDIATE;
  checkpoint("before-create-device");
  state->create_hr=IDirect3D9_CreateDevice(d3d,D3DADAPTER_DEFAULT,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING,&pp,&device);
@@ -158,12 +164,12 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
 #ifdef PW_BRIDGE_DRIVER_ASSOCIATION
  if(!driver_apply(window,&association)){error=38;goto done;}
 #else
- if(!SetWindowPos(window,NULL,360,20,state->width,state->height,SWP_NOACTIVATE|SWP_NOZORDER)){error=21;goto done;}
+ if(!fullscreen_probe&&!SetWindowPos(window,NULL,360,20,state->width,state->height,SWP_NOACTIVATE|SWP_NOZORDER)){error=21;goto done;}
 #endif
  /* Explicit mirror delivered only to this native window's native procedure. */
- SendMessageW(window,WM_ACTIVATEAPP,FALSE,0);SendMessageW(window,WM_ACTIVATEAPP,TRUE,0);
+ if(!fullscreen_probe){SendMessageW(window,WM_ACTIVATEAPP,FALSE,0);SendMessageW(window,WM_ACTIVATEAPP,TRUE,0);}
  if(device_test){
- pp.BackBufferWidth=state->width;pp.BackBufferHeight=state->height;
+ pp.BackBufferWidth=fullscreen_probe?fullscreen_width:state->width;pp.BackBufferHeight=fullscreen_probe?fullscreen_height:state->height;
  checkpoint("before-reset");
  state->reset_hr=IDirect3DDevice9_Reset(device,&pp);result[5]=state->reset_hr;
  if(FAILED((HRESULT)state->reset_hr)){error=22;goto done;}
@@ -171,6 +177,12 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  checkpoint("before-present");
  state->present_hr=IDirect3DDevice9_Present(device,NULL,NULL,NULL,NULL);result[6]=state->present_hr;
  if(FAILED((HRESULT)state->present_hr)){error=24;goto done;}
+ }
+ if(fullscreen_probe){
+  RECT rect;GetWindowRect(window,&rect);
+  fprintf(stderr,"PW_FULLSCREEN foreground=%p guest=%p service=%p guest_foreground=%u service_iconic=%u service_rect=%ld,%ld,%ld,%ld cooperative=%08lx\n",
+    GetForegroundWindow(),guest,window,GetForegroundWindow()==guest,IsIconic(window),rect.left,rect.top,rect.right,rect.bottom,(unsigned long)IDirect3DDevice9_TestCooperativeLevel(device));
+  if(GetForegroundWindow()!=guest||IsIconic(window)||(uint32_t)(rect.right-rect.left)!=fullscreen_width||(uint32_t)(rect.bottom-rect.top)!=fullscreen_height){error=41;goto done;}
  }
  if(!notify_guest(guest,3)){error=25;goto done;}
  done:
@@ -222,12 +234,14 @@ static LRESULT CALLBACK guest_proc(HWND window,UINT message,WPARAM wp,LPARAM lp)
   if((uint32_t)lp!=state->generation || GetWindowLongPtrW(window,GWLP_WNDPROC)!=(LONG_PTR)original_proc)InterlockedExchange(&state->error,81);
   InterlockedIncrement(&state->guest_calls);
   if(wp==1){
+   if(fullscreen_probe){SetForegroundWindow(window);SetFocus(window);}
    HWND during=builtin_create(window);
    if(!builtin_roundtrip(guest_builtin) || !builtin_roundtrip(during))InterlockedExchange(&state->error,83);
    if(during)DestroyWindow(during);
    InterlockedIncrement(&state->guest_builtins);PostMessageW(window,WM_KEYDOWN,VK_F9,1);
   }
-  if(wp==2){RaiseException(0xe0425751,0,0,NULL);state->width=640;state->height=480;SetWindowPos(window,NULL,20,20,640,480,SWP_NOZORDER|SWP_NOACTIVATE);}
+  if(wp==2){if(fullscreen_probe){fprintf(stderr,"PW_FULLSCREEN_GUEST phase=2 foreground=%p guest=%p set=%u\n",GetForegroundWindow(),window,SetForegroundWindow(window));SetFocus(window);}
+   RaiseException(0xe0425751,0,0,NULL);state->width=640;state->height=480;SetWindowPos(window,NULL,20,20,640,480,SWP_NOZORDER|SWP_NOACTIVATE);}
   if(wp==3)SetFocus(window);
   SetEvent(acknowledge);return 0;
  }
@@ -248,6 +262,7 @@ int main(int argc,char **argv)
  WCHAR session[48];HANDLE mapping,thread;HWND window;WNDCLASSW cls={0};MSG message;DWORD code=1,start;void *handler;
  if(argc!=2)return 1;
  guest_thread=GetCurrentThreadId();
+ {WCHAR mode[4];fullscreen_probe=GetEnvironmentVariableW(L"PW_BRIDGE_WINDOW_FULLSCREEN",mode,4)&&mode[0]==L'1';}
  if(!GetEnvironmentVariableW(L"PW_BRIDGE_WINDOW_SESSION",session,48))return 10;
  names(session);
  mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,NULL,PAGE_READWRITE,0,sizeof(*state),mapping_name);if(!mapping)return 2;
@@ -309,9 +324,14 @@ int main(int argc,char **argv)
  if(GetWindowLongPtrW(window,GWLP_WNDPROC)!=(LONG_PTR)original_proc)code=9;
  if(code)break;
  }
+ fprintf(stderr,"PW_WINDOW_GUEST final=before-remove-handler code=%lu\n",code);fflush(stderr);
  RemoveVectoredExceptionHandler(handler);
- DestroyWindow(window);UnregisterClassW(guest_name,cls.hInstance);
+ fprintf(stderr,"PW_WINDOW_GUEST final=before-destroy\n");fflush(stderr);
+ DestroyWindow(window);
+ fprintf(stderr,"PW_WINDOW_GUEST final=after-destroy\n");fflush(stderr);
+ UnregisterClassW(guest_name,cls.hInstance);
  UnmapViewOfFile(state);state=NULL;CloseHandle(acknowledge);CloseHandle(mapping);
+ fprintf(stderr,"PW_WINDOW_GUEST final=return code=%lu\n",code);fflush(stderr);
  return code;
 }
 #endif

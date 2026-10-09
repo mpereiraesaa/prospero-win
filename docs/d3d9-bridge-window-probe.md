@@ -116,3 +116,27 @@ existing builtin-window, callback and exception checks. This proves the local
 driver API and teardown; UI-only mode does not exercise Vulkan display-plane
 leases or console hardware input. It does not establish a successful D3D9
 device on a host without `VK_KHR_display`.
+
+## Fullscreen focus probe
+
+`tests/lab/d3d9_bridge_window.py --fullscreen` uses real DXVK fullscreen
+1920x1080 A8R8G8B8, D16 and FLIP parameters with architecture-local procedures.
+It retains WS_EX_NOACTIVATE on the service window, skips windowed geometry
+mirroring and the synthetic activation pair, and explicitly restores guest
+foreground/focus after CreateDevice. Three cycles assert successful Reset and
+Present, guest foreground, a noniconic 1920x1080 service window and cooperative
+status S_OK. It runs on the ordinary host display driver; it does not establish
+PS5 hardware-input routing or console acceptance.
+
+Pinned DXVK fullscreen entry uses SWP_NOACTIVATE. Its fullscreen procedure
+minimizes on WM_ACTIVATEAPP(FALSE); device-loss-on-focus-loss is separately
+configurable and defaults false. Therefore a source-level potential activation
+hazard is not sufficient to justify broad callback suppression. The actual
+host probe preserves guest focus without minimizing the backend window.
+
+Observed host evidence: the earlier 640x480 probe passed three cycles and clean
+process exit. At exact 1920x1080, all three cycles and guest HWND teardown passed,
+including a final `main` return code 0 checkpoint, but the Unix Wine process
+subsequently ended with SIGKILL. The runner correctly marks that receipt failed;
+clean process teardown at 1920x1080 remains unresolved. No driver activation
+policy is changed by this fixture update.
