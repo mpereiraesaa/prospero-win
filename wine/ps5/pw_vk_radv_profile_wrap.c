@@ -107,8 +107,11 @@ static void enable_locked(int from_env)
         else if (xdg && *xdg) snprintf(probe, sizeof(probe), "%s", xdg);
         else if (home && *home) snprintf(probe, sizeof(probe), "%s/.cache", home);
         else probe[0] = 0;
-        n = snprintf(line + used, sizeof(line) - used, " cache_root=%s writable=%d", probe[0] ? probe : "(none)",
-                     probe[0] ? access(probe, W_OK) == 0 : 0);
+        /* Mesa keeps the cache off without a word when the real and
+         * effective ids differ (its __normal_user check). */
+        n = snprintf(line + used, sizeof(line) - used, " cache_root=%s writable=%d uid=%d euid=%d gid=%d egid=%d",
+                     probe[0] ? probe : "(none)", probe[0] ? access(probe, W_OK) == 0 : 0, (int)getuid(),
+                     (int)geteuid(), (int)getgid(), (int)getegid());
         if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
         emit(line, used);
     }
