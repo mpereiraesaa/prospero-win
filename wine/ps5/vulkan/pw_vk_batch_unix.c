@@ -5,12 +5,18 @@
 #endif
 #include "config.h"
 #include <stdlib.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <errno.h>
 #include <string.h>
 #include "vulkan_private.h"
 #include "pw_vk_wire.h"
 #include "pw_vk_batch.h"
 #include "pw_vk_codec.h"
 #include "pw_vk_command_stream.h"
+#include "pw_vk_replay.h"
+#include "pw_vk_async.h"
+#include "pw_vk_replay_dispatch.h"
 int pw_wine_vk_replay(uint32_t op,const void *wire,size_t bytes)
 {
  const unsigned char *p=wire; struct vulkan_command_buffer *cb;
@@ -50,7 +56,7 @@ struct replay_context {
 static int generated_record(struct replay_context *ctx,const struct pw_vk_stream_record *r,void **params)
 {
  unsigned code;
- if(ctx->version!=PW_VK_BATCH_VERSION||r->payload_bytes<4||r->payload_bytes>PW_VK_CODEC_MAX_BYTES)return 0;
+ if((ctx->version!=PW_VK_BATCH_VERSION&&ctx->version!=PW_VK_BATCH_ASYNC_VERSION)||r->payload_bytes<4||r->payload_bytes>PW_VK_CODEC_MAX_BYTES)return 0;
  memcpy(&code,r->payload,4);
  if(code>=unix_pw_vk_batch)return 0;
  if(pw_vk_generated_decode(code,r->payload+4,r->payload_bytes-4,ctx->arena,ctx->capacity,params))return 1;
@@ -75,20 +81,163 @@ static int replay(void *context,const struct pw_vk_stream_record *r)
  if(!generated_record(ctx,r,&params))return 1;
  memcpy(&code,r->payload,4);return pw_vk_batch_dispatch_native(code,params)!=STATUS_SUCCESS;
 }
+/* Admission protects lane ownership and synchronization snapshots. Workers
+ * never acquire it or call Wine TLS helpers. Vulkan application synchronization
+ * still owns command-buffer/pool use across external API callers. */
+static pthread_mutex_t admission = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t worker_once = PTHREAD_ONCE_INIT;
+static struct pw_vk_replay *workers;
+static int startup_failed;
+static unsigned report_enabled;
+static uint64_t boundary_count;
+static void context_init(struct replay_context *ctx,unsigned version)
+{
+ ctx->version=version;ctx->arena=ctx->local;ctx->capacity=sizeof(ctx->local);ctx->failure=STATUS_SUCCESS;
+}
+static void context_free(struct replay_context *ctx)
+{
+ if(ctx->arena && ctx->arena!=ctx->local)free(ctx->arena);
+}
+static int worker_replay(void *lane_context,const void *data,size_t bytes)
+{
+ struct replay_context ctx;size_t completed;int result;(void)lane_context;
+ context_init(&ctx,PW_VK_BATCH_VERSION);
+ result=pw_vk_stream_replay(data,bytes,replay,&ctx,&completed);
+ context_free(&ctx);return result!=PW_VK_STREAM_OK;
+}
+static void initialize_workers(void)
+{
+ const char *value=getenv("PW_VK_REPLAY_THREADS"),*stats=getenv("PW_VK_BATCH_STATS");
+ unsigned long count=2;char *end;
+ pthread_mutex_lock(&admission);
+ report_enabled=stats && !strcmp(stats,"1");
+ if(value){errno=0;count=strtoul(value,&end,10);if(errno || !*value || *end || count>PW_VK_REPLAY_MAX_WORKERS){startup_failed=1;goto done;}}
+ if(!count)goto done;
+ workers=pw_vk_replay_create((unsigned)count,2u*PW_VK_BATCH_SCRATCH,worker_replay);
+ if(!workers)startup_failed=1;
+ done:pthread_mutex_unlock(&admission);
+}
+static void must_complete(int status)
+{
+ /* Continuing a lifecycle operation after failed replay could free live driver
+  * objects. Preserve the existing fatal batch failure contract on raw hooks. */
+ if(status){fprintf(stderr,"PW_VK_REPLAY_FATAL status=%d\n",status);abort();}
+}
+void pw_vk_async_wait_buffer(VkCommandBuffer handle)
+{
+ struct wine_cmd_buffer *cb;
+ pthread_mutex_lock(&admission);
+ if(workers && handle){cb=wine_cmd_buffer_from_handle(handle);if(cb->replay_lane)must_complete(pw_vk_replay_wait(cb->replay_lane,pw_vk_replay_marker(cb->replay_lane)));}
+ pthread_mutex_unlock(&admission);
+}
+void pw_vk_async_wait_buffer_pool(VkCommandBuffer handle)
+{
+ pthread_mutex_lock(&admission);
+ if(workers && handle)must_complete(pw_vk_replay_wait_pool(workers,(uintptr_t)wine_cmd_buffer_from_handle(handle)->pool));
+ pthread_mutex_unlock(&admission);
+}
+void pw_vk_async_wait_pool(VkCommandPool handle)
+{
+ pthread_mutex_lock(&admission);
+ if(workers && handle)must_complete(pw_vk_replay_wait_pool(workers,(uintptr_t)wine_cmd_pool_from_handle(handle)));
+ pthread_mutex_unlock(&admission);
+}
+void pw_vk_async_forget_buffer(VkCommandBuffer handle)
+{
+ struct wine_cmd_buffer *cb;
+ pthread_mutex_lock(&admission);
+ if(workers && handle){cb=wine_cmd_buffer_from_handle(handle);if(cb->replay_lane){must_complete(pw_vk_replay_lane_drop(cb->replay_lane));cb->replay_lane=NULL;}}
+ pthread_mutex_unlock(&admission);
+}
+static void report_workers(void)
+{
+ struct pw_vk_replay_stats s;
+ if(!workers || !report_enabled)return;
+ pw_vk_replay_get_stats(workers,&s);
+ fprintf(stderr,"PW_VK_REPLAY version=1 workers=%u jobs=%llu completed=%llu peak_active=%u owned=%zu peak_owned=%zu capacity_waits=%llu completion_waits=%llu error=%d worker0=%llu worker1=%llu worker2=%llu worker3=%llu\n",s.workers,(unsigned long long)s.submitted,(unsigned long long)s.completed,s.peak_active,s.owned_bytes,s.peak_owned_bytes,(unsigned long long)s.capacity_waits,(unsigned long long)s.completion_waits,s.callback_error,(unsigned long long)s.worker_jobs[0],(unsigned long long)s.worker_jobs[1],(unsigned long long)s.worker_jobs[2],(unsigned long long)s.worker_jobs[3]);
+}
+static void __attribute__((destructor)) stop_workers(void)
+{
+ pthread_mutex_lock(&admission);
+ if(workers){report_workers();pw_vk_replay_destroy(workers);workers=NULL;}
+ pthread_mutex_unlock(&admission);
+}
+struct schedule_context {
+ struct replay_context decode;
+ struct wine_cmd_buffer *pending_cb;
+ const unsigned char *pending_data;
+ size_t pending_bytes;
+};
+static int flush_pending(struct schedule_context *ctx)
+{
+ struct wine_cmd_buffer *cb=ctx->pending_cb;uint64_t ticket;int status;
+ if(!cb)return 0;
+ if(!cb->replay_lane)cb->replay_lane=pw_vk_replay_lane_create(workers,(uintptr_t)cb->pool,cb);
+ if(!cb->replay_lane)return 1;
+ status=pw_vk_replay_enqueue(cb->replay_lane,ctx->pending_data,ctx->pending_bytes,&ticket);
+ ctx->pending_cb=NULL;ctx->pending_bytes=0;return status!=PW_VK_REPLAY_OK;
+}
+static int schedule_record(void *context,const struct pw_vk_stream_record *r)
+{
+ struct schedule_context *ctx=context;VkCommandBuffer handle=NULL;struct wine_cmd_buffer *cb;
+ void *params;unsigned code;int status;
+ if(r->opcode==PW_VK_BATCH_GENERATED_OPCODE){
+  if(!generated_record(&ctx->decode,r,&params))return 1;
+  memcpy(&code,r->payload,4);handle=pw_vk_replay_command_buffer(code,params);
+ }else if(r->opcode!=PW_VK_UPDATE_TEMPLATE)handle=(VkCommandBuffer)UlongToPtr(pw_vk_wire_u32(r->payload));
+ if(handle){
+  cb=wine_cmd_buffer_from_handle(handle);
+  if(ctx->pending_cb && ctx->pending_cb!=cb && flush_pending(ctx))return 1;
+  if(!ctx->pending_cb){ctx->pending_cb=cb;ctx->pending_data=r->payload-PW_VK_STREAM_HEADER;}
+  ctx->pending_bytes+=(PW_VK_STREAM_HEADER+(size_t)r->payload_bytes+7)&~(size_t)7;
+  return 0;
+ }
+ /* Resource mutation and unreviewed commands retain synchronous global order.
+  * Release admission around Wine dispatch: lifecycle hooks acquire it themselves. */
+ if(flush_pending(ctx) || pw_vk_replay_wait_all(workers))return 1;
+ pthread_mutex_unlock(&admission);status=replay(&ctx->decode,r);pthread_mutex_lock(&admission);
+ return status;
+}
+/* These raw calls have their own scoped lifecycle barriers, or only observe /
+ * advance queue/GPU progress. None mutates a resource used by worker recording. */
+static int scoped_fallback(unsigned code)
+{
+ switch(code){
+ case unix_vkBeginCommandBuffer:case unix_vkEndCommandBuffer:case unix_vkResetCommandBuffer:
+ case unix_vkResetCommandPool:case unix_vkTrimCommandPool:case unix_vkTrimCommandPoolKHR:
+ case unix_vkAllocateCommandBuffers:case unix_vkFreeCommandBuffers:case unix_vkDestroyCommandPool:
+ case unix_vkQueueSubmit:case unix_vkQueueSubmit2:case unix_vkQueueSubmit2KHR:
+ case unix_vkQueuePresentKHR:case unix_vkQueueWaitIdle:case unix_vkDeviceWaitIdle:
+ case unix_vkWaitForFences:case unix_vkWaitSemaphores:case unix_vkWaitSemaphoresKHR:
+ case unix_vkSignalSemaphore:case unix_vkSignalSemaphoreKHR:
+ case unix_vkAcquireNextImageKHR:case unix_vkAcquireNextImage2KHR:
+ case unix_vkGetFenceStatus:case unix_vkGetSemaphoreCounterValue:case unix_vkGetSemaphoreCounterValueKHR:
+  return 1;
+ default:return 0;
+ }
+}
 NTSTATUS pw_vk_batch_unix(void *args)
 {
- struct pw_vk_batch_params *p=args;size_t completed;struct replay_context ctx;NTSTATUS status=STATUS_SUCCESS;
- if((p->version!=PW_VK_BATCH_VERSION&&p->version!=PW_VK_BATCH_LEGACY_VERSION)||p->bytes>PW_VK_BATCH_SCRATCH||p->code>unix_count||p->code==unix_pw_vk_batch)return STATUS_INVALID_PARAMETER;
- ctx.version=p->version;ctx.arena=ctx.local;ctx.capacity=sizeof(ctx.local);ctx.failure=STATUS_SUCCESS;
- if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,preflight,&ctx,&completed)!=PW_VK_STREAM_OK)status=ctx.failure?ctx.failure:STATUS_INVALID_PARAMETER;
- else if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,replay,&ctx,&completed)!=PW_VK_STREAM_OK)status=STATUS_UNSUCCESSFUL;
- if(ctx.arena&&ctx.arena!=ctx.local)free(ctx.arena);
- if(status)return status;
- p->status=STATUS_SUCCESS;
- /* unix_count is the private flush-only sentinel. This check occurs before
-  * any dispatch; ordinary perf-critical thunks really return void. */
- if(p->code!=unix_count){
-  p->status=pw_vk_batch_dispatch(p->code,UlongToPtr(p->args));
+ struct pw_vk_batch_params *p=args;size_t completed;struct schedule_context ctx;NTSTATUS status=STATUS_SUCCESS;
+ if((p->version!=PW_VK_BATCH_VERSION&&p->version!=PW_VK_BATCH_LEGACY_VERSION&&p->version!=PW_VK_BATCH_ASYNC_VERSION)||p->bytes>PW_VK_BATCH_SCRATCH||p->code>unix_count+(p->version==PW_VK_BATCH_ASYNC_VERSION)||p->code==unix_pw_vk_batch)return STATUS_INVALID_PARAMETER;
+ memset(&ctx,0,sizeof(ctx));context_init(&ctx.decode,p->version);
+ if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,preflight,&ctx.decode,&completed)!=PW_VK_STREAM_OK){status=ctx.decode.failure?ctx.decode.failure:STATUS_INVALID_PARAMETER;goto done;}
+ if(p->version==PW_VK_BATCH_ASYNC_VERSION)pthread_once(&worker_once,initialize_workers);
+ pthread_mutex_lock(&admission);
+ if(startup_failed){pthread_mutex_unlock(&admission);status=STATUS_NO_MEMORY;goto done;}
+ if(workers && p->version==PW_VK_BATCH_ASYNC_VERSION){
+  if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,schedule_record,&ctx,&completed)!=PW_VK_STREAM_OK || flush_pending(&ctx))status=STATUS_UNSUCCESSFUL;
+  /* A flush-only call is also the PE callback-disable and retirement boundary.
+   * It must complete all owned jobs before returning to that unchanged ABI. */
+  if(!status && p->code!=unix_count+1 && !scoped_fallback(p->code) && pw_vk_replay_wait_all(workers))status=STATUS_UNSUCCESSFUL;
+ }else{
+  if(workers)must_complete(pw_vk_replay_wait_all(workers));
+  pthread_mutex_unlock(&admission);
+  if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,replay,&ctx.decode,&completed)!=PW_VK_STREAM_OK)status=STATUS_UNSUCCESSFUL;
+  pthread_mutex_lock(&admission);
  }
- return STATUS_SUCCESS;
+ if((p->code==unix_count+1 || p->code==unix_vkQueuePresentKHR) && !(++boundary_count%1024))report_workers();
+ pthread_mutex_unlock(&admission);
+ if(!status){p->status=STATUS_SUCCESS;if(p->code<unix_count)p->status=pw_vk_batch_dispatch(p->code,UlongToPtr(p->args));}
+ done:context_free(&ctx.decode);return status;
 }

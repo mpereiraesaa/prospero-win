@@ -2,7 +2,7 @@
 """Compare generated PE32 snapshots to real Unix64 Wine parameter layouts.
 No Vulkan driver or console access. Compilers are capped; no full Wine build.
 """
-import argparse,hashlib,json,os,pathlib,shutil,subprocess
+import argparse,hashlib,json,os,pathlib,shutil,subprocess,runpy
 p=argparse.ArgumentParser();p.add_argument('--source',required=True);p.add_argument('--build',required=True);p.add_argument('--xml',required=True);p.add_argument('--video-xml',required=True);p.add_argument('--output',required=True);p.add_argument('--wine',default='wine');a=p.parse_args()
 repo=pathlib.Path(__file__).resolve().parents[2];out=pathlib.Path(a.output).resolve();out.mkdir(parents=True,exist_ok=True);source=pathlib.Path(a.source).resolve();build=pathlib.Path(a.build).resolve();commands=[]
 def run(argv,env=None):
@@ -28,8 +28,12 @@ run([out/'stride64','consume',out/'stride.bin'])
 # Its header must come from this candidate, before cached Wine's old adapter.
 shutil.copy2(repo/'wine/ps5/vulkan/pw_vk_batch.h',out)
 shutil.copy2(source/'dlls/winevulkan/vulkan_loader.h',out)
-private=(source/'dlls/winevulkan/vulkan_private.h').read_text();(out/'vulkan_private.h').write_text(private)
-replay_sources=[repo/'tests/lab/vk_generated_replay.c',repo/'wine/ps5/vulkan/pw_vk_batch_unix.c',repo/'wine/ps5/vulkan/pw_vk_codec.c',out/'pw_vk_generated.c',repo/'wine/ps5/pw_vk_wire.c',repo/'wine/ps5/pw_vk_command_stream.c']
+private=(source/'dlls/winevulkan/vulkan_private.h').read_text()
+if 'struct wine_cmd_buffer' not in private:
+ private,_=runpy.run_path(str(repo/'tools/stage_vk_replay_lifecycle.py'))['transform'](private,(source/'dlls/winevulkan/vulkan.c').read_text())
+(out/'vulkan_private.h').write_text(private)
+run(['python3',repo/'tools/generate_vk_replay_dispatch.py','--source',source,'--output',out])
+replay_sources=[repo/'tests/lab/vk_generated_replay.c',repo/'wine/ps5/vulkan/pw_vk_batch_unix.c',repo/'wine/ps5/vulkan/pw_vk_codec.c',out/'pw_vk_generated.c',repo/'wine/ps5/pw_vk_wire.c',repo/'wine/ps5/pw_vk_command_stream.c',repo/'wine/ps5/pw_vk_replay.c']
 replay_flags=['-std=gnu11','-Wall','-Wextra','-Werror','-D__WINESRC__','-DWINE_UNIX_LIB','-D_WIN64','-I'+str(out),'-I'+str(repo/'wine/ps5/vulkan'),'-I'+str(repo/'wine/ps5'),'-I'+str(build/'include'),'-I'+str(source/'include'),'-I'+str(source/'dlls/winevulkan')]
 run([*cap,'cc',*replay_flags,*replay_sources,'-pthread','-Wl,--wrap=pw_vk_codec_value','-Wl,--wrap=malloc','-Wl,--wrap=free','-o',out/'replay64'])
 run([out/'replay64'])

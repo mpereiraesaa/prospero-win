@@ -3,7 +3,7 @@
 Use an isolated source tree. Generated changes mirror generator changes.
 """
 import argparse,pathlib,re,shutil,ast,subprocess,sys
-ap=argparse.ArgumentParser();ap.add_argument('--source',required=True);ap.add_argument('--repo',default=str(pathlib.Path(__file__).resolve().parents[1]));a=ap.parse_args();repo=pathlib.Path(a.repo);d=pathlib.Path(a.source)/'dlls/winevulkan'
+ap=argparse.ArgumentParser();ap.add_argument('--source',required=True);ap.add_argument('--driver-header');ap.add_argument('--repo',default=str(pathlib.Path(__file__).resolve().parents[1]));a=ap.parse_args();repo=pathlib.Path(a.repo);d=pathlib.Path(a.source)/'dlls/winevulkan'
 def edit(name,fn):
  p=d/name;s=p.read_text();p.write_text(fn(s))
 def once(s,old,new):
@@ -27,10 +27,12 @@ edit('loader.c',retire_loader)
 edit('vulkan_loader.h',lambda s:once(s,'    struct list pool_link;\n};','    struct list pool_link;\n    VkDevice device;\n};'))
 edit('loader.c',lambda s:once(s,'    for (i = 0; i < allocate_info->commandBufferCount; i++)\n        buffers[i] = vulkan_client_object_create(sizeof(*buffers[i]));','    for (i = 0; i < allocate_info->commandBufferCount; i++)\n    {\n        buffers[i] = vulkan_client_object_create(sizeof(*buffers[i]));\n        if (buffers[i]) buffers[i]->device = device;\n    }'))
 
-edit('vulkan.c',lambda s:once(s,'    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);', '    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    if (!strcmp(name, PW_VK_BATCH_NAME)) return PW_VK_BATCH_CAPABILITY;\n    if (!strcmp(name, PW_VK_BATCH_LEGACY_NAME)) return PW_VK_BATCH_LEGACY_CAPABILITY;\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);'))
+edit('vulkan.c',lambda s:once(s,'    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);', '    struct vulkan_instance *instance = vulkan_instance_from_handle(handle);\n    if (!strcmp(name, PW_VK_BATCH_ASYNC_NAME)) return PW_VK_BATCH_ASYNC_CAPABILITY;\n    if (!strcmp(name, PW_VK_BATCH_NAME)) return PW_VK_BATCH_CAPABILITY;\n    if (!strcmp(name, PW_VK_BATCH_LEGACY_NAME)) return PW_VK_BATCH_LEGACY_CAPABILITY;\n    return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);'))
 subprocess.run([sys.executable,str(repo/'tools/stage_vk_replay_lifecycle.py'),'--source',a.source],check=True)
 names=['pw_vk_wire','pw_vk_template_cache','pw_vk_command_stream','pw_vk_spsc']
-sources=['pw_vk_batch_pe.c','pw_vk_batch_unix.c','pw_vk_retire.c']
+sources=['pw_vk_batch_pe.c','pw_vk_batch_unix.c','pw_vk_retire.c','pw_vk_replay_unix.c']
+for ext in ['c','h']:shutil.copyfile(repo/'wine/ps5'/('pw_vk_replay.'+ext),d/('pw_vk_replay.'+ext))
+(d/'pw_vk_replay_unix.c').write_text('#if 0\n#pragma makedep unix\n#endif\n#include "pw_vk_replay.c"\n')
 names+=['pw_vk_codec','pw_vk_generated']
 subprocess.run([sys.executable,str(repo/'tools/generate_vk_codecs.py'),'--source',a.source,'--output',str(d)],check=True)
 for name in names:
@@ -78,4 +80,8 @@ def generator(s):
  addition+='        f.write('+repr('        default: return __wine_unix_call_funcs[code](args);\n    }\n}\n')+')\n'
  s=once(s,needle,needle+addition);ast.parse(s);return s
 edit('make_vulkan',generator)
+subprocess.run([sys.executable,str(repo/'tools/stage_vk_replay_barriers.py'),'--source',a.source],check=True)
+classifier=[sys.executable,str(repo/'tools/generate_vk_replay_dispatch.py'),'--source',a.source,'--output',str(d)]
+if a.driver_header:classifier+=['--driver-header',a.driver_header]
+subprocess.run(classifier,check=True)
 print(d)

@@ -38,3 +38,33 @@ resource fallback reaches completion, and empty callback disable completes work
 before callback reentry. Original version 2 and unsupported-backend cases remain
 in the same suite. These tests exercise real Win32 APIs and PE structures; the
 backend is mocked and full native scheduler validation is separate.
+
+## Native adapter
+
+`PW_VK_REPLAY_THREADS` selects 0 (synchronous), 1, or 2–8 host workers; the
+initial default is 2. Only version 3 enables them. Versions 1 and 2 preserve
+synchronous completion, including when an async client already initialized
+workers in the process. Invalid configuration or startup failure fails the
+batch rather than silently changing the requested mode.
+
+The native entry preflights the entire batch, groups consecutive recording
+commands for the same command buffer, then copies those chunks into a bounded
+32 MiB scheduler. Each worker owns its decoder arena. It only calls reviewed
+direct driver wrappers and the existing manual codecs; unsupported commands
+and resource mutations wait globally and run on the calling Wine thread.
+Per-pool exclusion preserves native command-pool synchronization. Lifecycle
+hooks wait or drop lanes before reset/free/destroy; submits wait only referenced
+buffers. Secondary execution completes the dependencies synchronously before
+recording the parent command.
+
+An admission mutex protects lane ownership and worker initialization. Workers
+never acquire it, invoke guest code or enter Wine helpers requiring thread TLS.
+Callback/layer/allocator guards permanently disable PE batching after completing
+outstanding work. An old PE caller cannot accidentally opt into this mode.
+
+With `PW_VK_BATCH_STATS=1`, bounded `PW_VK_REPLAY` reports include jobs per worker,
+peak simultaneous jobs, owned bytes and waits. The initial pool-affinity adapter
+may serialize DXVK buffers sharing a logical graphics pool; measured worker
+activity, FPS and profiler results are required before claiming gains. Separate
+pool fanout is not enabled here. No console performance result is implied by
+the host concurrency tests.
