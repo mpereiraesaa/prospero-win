@@ -1,0 +1,65 @@
+# Fresh worker desktop recognition
+
+The PS5 server creates a desktop without a process-local `WND`. Wine recognizes
+that handle using `user_thread_info.top_window` and `msg_window`. A fresh native
+DXVK worker can reach `NtUserGetAncestor(GA_ROOT)` through Vulkan presentation
+before any call has initialized those per-thread handles. The ancestor walk then
+fails when it reaches the desktop. This also affects ordinary guest workers.
+
+Patch 0910 queries **existing** desktop handles before the PS5 ancestor walk.
+It uses `get_desktop_window(force=FALSE)` directly; it does not invoke the full
+client initialization routine, create windows, install drivers, or register
+classes. There is no loader/thread-attach hook, recursive `get_win_ptr` call, or
+RPC while the ancestor walk holds a USER object lock. A failed query leaves the
+cache empty and a later call retries. Changing thread desktop already clears the
+same cache in Wine. Other platforms retain the existing ancestor path.
+
+The surface rectangle helper additionally returns empty virtual/monitor rectangles
+when the root or its rectangle cannot be fetched. It cannot publish uninitialized
+stack contents. This guard applies to all platforms. It does not fabricate a
+successful ancestor or a valid surface size.
+
+## Evidence and limits
+
+The R4 console log showed native worker 004c reporting root zero and alternating
+surface origins `(50331560,32)`, `(50841576,32)`, and `(50841704,32)`. All retained
+1920×1080 extents. Parent 0048 reported the correct root. These are stored internal
+rectangles, not unrelated trace arguments. PS5's fallback client-surface update
+and present callbacks are no-ops; Vulkan validates actual HWND surface dimensions
+separately. This defect does not establish a cause for game behavior or prove
+that the actual display moved.
+
+Run the focused source contract against a pinned Wine tree before 0910:
+
+```sh
+python3 tests/lab/d3d9_worker_desktop.py --wine-source /path/to/wine/source --output /fresh/contract
+```
+
+It compiles the exact ancestor walk, desktop recognition/cache, and rectangle
+functions from Wine. Controlled server replies reproduce the failed old walk,
+check cached and retry paths, and force ancestor/rectangle failures. Normal and
+ASan/UBSan runs assert zero failure outputs and no subsequent mapping.
+
+For actual PE32 and native PE64 worker execution, also pass `--wine-build` and
+`--prefix`. Build an isolated host Wine overlay with `WINE_PS5_USER_DRIVER` for
+`dce`, `driver`, `ps5drv`, `window`, `winstation`, and `vulkan`, then relink win32u.
+The runner disables explorer so the desktop has the same server-only ownership
+as the console. A regular explorer-owned X11 desktop does not reproduce this
+failure and is not a substitute. `--expect-worker-failure` records the old-runtime
+negative; omit it for the corrected runtime. Each process creates a parent
+window and then makes the child's first USER call `GetAncestor`, checks client
+extent, repeats lookup, and destroys the window after joining the child.
+
+Wine build scripts discover numerically named patches automatically, so no
+builder manifest edit is needed. Runtime deployment needs the corrected win32u
+Unix module; no PE wire protocol or D3D9 proxy/service change is required. This
+patch is independent of surface-object lifetime fixes and is not in earlier
+immutable console candidates.
+
+The persistent 2026-10-09 evidence under `worker-desktop` records three baseline
+processes with zero roots in both ABIs (`negative-r2`), and three corrected
+processes with correct roots/extents (`positive-r1`). Normal and sanitizer source
+contracts passed in the same runner. `source-closure.json` records both runtime
+source trees and the runner metadata-only difference. An initial explorer-owned
+negative attempt returned valid roots and was retained as a failed expectation.
+No console execution is claimed for 0910.

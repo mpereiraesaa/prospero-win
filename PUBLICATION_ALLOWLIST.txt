@@ -548,6 +548,9 @@ tests/lab/d3d9_native_domain.c
 tests/lab/d3d9_native_domain.py
 tests/lab/d3d9_native_suspend.c
 tests/lab/d3d9_native_suspend.py
+tests/lab/d3d9_worker_desktop.c
+tests/lab/d3d9_worker_desktop.py
+docs/d3d9-worker-desktop.md
 docs/d3d9-native-suspend.md
 docs/d3d9-native-domain.md
 
@@ -679,6 +682,7 @@ tests/test_d3d9_window_driver.c
 
 wine/patches/0907-win32u-bridge-opaque-guest-window-ids.patch
 wine/patches/0908-ntdll-preserve-native-suspend-context.patch
+wine/patches/0910-win32u-ps5-worker-desktop-cache.patch
 wine/ps5/pw_d3d9_resource_wire.h
 wine/ps5/pw_d3d9_resource_wire.c
 tests/test_d3d9_resource_wire.c
