@@ -657,6 +657,19 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   window it adds `VkSwapchainPresentScalingCreateInfoEXT` in front of
   the application's structures (patch 0456); dropping them crashed DXVK's
   swapchain in Mesa's WSI.
+- **One display.** VideoOut has one display, so one swapchain presents at a
+  time. A new swapchain replaces the current one through `oldSwapchain`, or
+  takes the display from one that has never presented; a swapchain that has
+  presented keeps it until it is destroyed or replaced, and another window's
+  is refused (`VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`). This matters for OpenGL
+  games under Zink that load wined3d: `hl.exe` (Half-Life, Counter-Strike)
+  reads OpenGL's caps from a context on a hidden 10x10 window, Zink makes a
+  swapchain on it and never presents, and before PS5_Mesa `f2ee389`
+  (PS5_Vulkan #4) that swapchain kept the display, so the game's window
+  stayed black with no menu. Counter-Strike 1.6 under Zink, native CPU with
+  batching, showed its menu and cursor and played dust2 at 60 fps with the
+  fix (2026-10-09); the old workaround, `hl.exe`'s Direct3D
+  `renderer=no3d` AppDefault, is not needed with it.
 - **DLLs.** DXVK's DLLs go beside the game, and its profile sets
   `dll_overrides` (`d3d11,dxgi=n`, `d3d9=n`, `d3d8,d3d9=n` or
   `d3d10core,d3d11,dxgi=n`). The unmodified Win32-WSI DXVK build is the one

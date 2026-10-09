@@ -246,6 +246,12 @@ builtin `graphics: opengl`. Existing D3D overrides remain intact: Zink selects
 WGL for OpenGL applications, not a D3D conversion. No renderer or performance
 claim follows from successfully installing a provider.
 
+Games whose executable also loads wined3d, such as `hl.exe` for Half-Life
+and Counter-Strike, need a runtime whose `libvulkan.prx` is built from
+PS5_Mesa `f2ee389` or later (PS5_Vulkan #4); with an older one their window
+stays black, because wined3d's hidden probe window keeps the display (see
+[One display](WINE_PS5_BUILD.md#vulkan)).
+
 The profile's `[application]` section comes from the script's `game` section:
 the executable, its arguments and its working folder.
 
