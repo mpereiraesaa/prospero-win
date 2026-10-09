@@ -15,7 +15,7 @@ int wmain(int argc,WCHAR **argv)
 {
  struct pw_d3d9_object_ref factory,target,readback;struct pw_d3d9_device_reply dr;struct pw_d3d9_texture_request tq;struct pw_d3d9_texture_reply tr;
  IDirect3DDevice9Vtbl table={.AddRef=addref,.Release=release};IDirect3DDevice9 guest={&table};struct pw_d3d9_up_client_ops ops={up,fail};
- struct vertex{float x,y,z,w;DWORD color;} vertices[5];WORD indices[3]={2,3,4};
+ struct vertex{float x,y,z,w;DWORD color;} vertices[5]={0};WORD indices[3]={2,3,4};
  if(argc!=3)return 2;
  pw_d3d9_up_client_install(&table,&ops);
  for(unsigned cycle=0;cycle<3;cycle++){
