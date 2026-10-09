@@ -850,3 +850,9 @@ tests/lab/d3d9_stateblock_transport.c
 tests/lab/d3d9_stateblock_transport_device.c
 tests/lab/d3d9_stateblock_transport.py
 docs/d3d9-stateblock-transport.md
+tools/generate_d3d9_api_observe.py
+wine/ps5/d3d9/pw_d3d9_api_observe.c
+wine/ps5/d3d9/pw_d3d9_api_observe.h
+wine/ps5/d3d9/pw_d3d9_api_observe_generated.h
+tests/lab/d3d9_api_observe.c
+tests/lab/d3d9_api_observe.py
