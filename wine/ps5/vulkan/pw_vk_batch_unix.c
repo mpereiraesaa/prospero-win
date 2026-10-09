@@ -49,10 +49,10 @@ extern NTSTATUS pw_vk_batch_dispatch_native(unsigned int,void *);
 /* Each entry owns its arena, including recursive and concurrent invocations.
  * Common records need no heap allocation; unusually large schemas retain the
  * existing bound and grow at most once across preflight and replay. */
-static unsigned startup_trace,trace_records,trace_enqueues;
+static unsigned startup_trace,trace_jobs,trace_enqueues;
 struct replay_context {
  uint64_t local[512];
- void *arena; size_t capacity; unsigned version,trace; NTSTATUS failure;
+ void *arena; size_t capacity; unsigned version,trace,trace_records,trace_job; uintptr_t trace_cb,trace_pool; NTSTATUS failure;
 };
 static int generated_record(struct replay_context *ctx,const struct pw_vk_stream_record *r,void **params)
 {
@@ -78,14 +78,14 @@ static int preflight(void *context,const struct pw_vk_stream_record *r)
 static int replay(void *context,const struct pw_vk_stream_record *r)
 {
  struct replay_context *ctx=context;void *params;unsigned code=0,traced=0;int result;
- if(ctx->trace){unsigned n=__atomic_load_n(&trace_records,__ATOMIC_RELAXED);if(n<8)traced=__atomic_fetch_add(&trace_records,1,__ATOMIC_RELAXED)<8;}
+ if(ctx->trace && ctx->trace_records<32){++ctx->trace_records;traced=1;}
  if(r->opcode==PW_VK_BATCH_GENERATED_OPCODE){
   if(!generated_record(ctx,r,&params))return 1;
   memcpy(&code,r->payload,4);
  }
- if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=dispatch_begin opcode=%u code=%u bytes=%u\n",r->opcode,code,r->payload_bytes);
+ if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=dispatch_begin job=%u record=%u cb=%p pool=%p opcode=%u code=%u bytes=%u\n",ctx->trace_job,ctx->trace_records,(void *)ctx->trace_cb,(void *)ctx->trace_pool,r->opcode,code,r->payload_bytes);
  result=r->opcode==PW_VK_BATCH_GENERATED_OPCODE?pw_vk_batch_dispatch_native(code,params)!=STATUS_SUCCESS:!pw_wine_vk_replay(r->opcode,r->payload,r->payload_bytes);
- if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=dispatch_end opcode=%u code=%u result=%d\n",r->opcode,code,result);
+ if(traced)fprintf(stderr,"PW_VK_REPLAY_TRACE event=dispatch_end job=%u record=%u cb=%p pool=%p opcode=%u code=%u result=%d\n",ctx->trace_job,ctx->trace_records,(void *)ctx->trace_cb,(void *)ctx->trace_pool,r->opcode,code,result);
  return result;
 }
 /* Admission protects lane ownership and synchronization snapshots. Workers
@@ -107,8 +107,13 @@ static void context_free(struct replay_context *ctx)
 }
 static int worker_replay(void *lane_context,const void *data,size_t bytes)
 {
- struct replay_context ctx;size_t completed;int result;(void)lane_context;
- context_init(&ctx,PW_VK_BATCH_VERSION);ctx.trace=startup_trace;
+ struct replay_context ctx;size_t completed;int result;
+ context_init(&ctx,PW_VK_BATCH_VERSION);
+ if(startup_trace && __atomic_load_n(&trace_jobs,__ATOMIC_RELAXED)<8){
+  unsigned job=__atomic_fetch_add(&trace_jobs,1,__ATOMIC_RELAXED);
+  if(job<8){ctx.trace=1;ctx.trace_job=job+1;ctx.trace_records=0;ctx.trace_cb=(uintptr_t)lane_context;
+   ctx.trace_pool=(uintptr_t)((struct wine_cmd_buffer *)lane_context)->pool;}
+ }
  result=pw_vk_stream_replay(data,bytes,replay,&ctx,&completed);
  context_free(&ctx);return result!=PW_VK_STREAM_OK;
 }

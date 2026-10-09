@@ -66,7 +66,14 @@ for event in ('initialize_begin', 'initialize_end', 'create_begin', 'create_end'
               'dispatch_begin', 'dispatch_end'):
     assert 'event=' + event in traced.stderr, (event, traced.stderr)
 for event in ('enqueue_begin', 'enqueue_end', 'job_begin', 'job_end', 'dispatch_begin', 'dispatch_end'):
-    assert 1 <= traced.stderr.count('event=' + event + ' ') <= 8, (event, traced.stderr)
+    assert 1 <= traced.stderr.count('event=' + event + ' ') <= (256 if event.startswith('dispatch') else 8), (event, traced.stderr)
+bounded = execute([str(output / 'host'), 'trace-bounds'], trace=True)
+for event in ('dispatch_begin', 'dispatch_end'):
+    assert bounded.stderr.count('event=' + event + ' ') == 8 * 32, bounded.stderr
+    for job in range(1, 9):
+        assert bounded.stderr.count('event=' + event + ' job=' + str(job) + ' ') == 32
+    assert 'event=' + event + ' job=9 ' not in bounded.stderr
+assert 'event=stack_default ' in bounded.stderr
 execute([str(output / 'host'), 'fatal'], failure=True)
 receipt = dict(status='pass', console_accessed=False, actual_unix_adapter=True, actual_manual_codec=True,
                generated_codec_tested=False, commands=commands,

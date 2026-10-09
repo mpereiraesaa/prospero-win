@@ -159,6 +159,8 @@ static void startup_trace(void)
   if(!enabled)assert(!bytes);
   else{
    assert(occurrences(text,"event=create_begin ")==1);
+   assert(occurrences(text,"event=stack_default ")==1);
+   assert(strstr(text,"query_result=0 destroy_result=0"));
    assert(occurrences(text,"event=create_end ")==1);
    assert(occurrences(text,"event=pthread_create_begin ")==2);
    assert(occurrences(text,"event=pthread_create_end ")==2);

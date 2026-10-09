@@ -79,6 +79,11 @@ struct pw_vk_replay *pw_vk_replay_create(unsigned workers,size_t limit,pw_vk_rep
 {
  struct pw_vk_replay *s;unsigned i;const char *value=getenv("PW_VK_REPLAY_TRACE");int trace=value && !strcmp(value,"1");
  if(trace)fprintf(stderr,"PW_VK_REPLAY_TRACE event=create_begin workers=%u limit=%zu stack=default\n",workers,limit);
+ if(trace){
+  pthread_attr_t attr;size_t stack_bytes=0;int status=pthread_attr_init(&attr),destroy_status=0;
+  if(!status){status=pthread_attr_getstacksize(&attr,&stack_bytes);destroy_status=pthread_attr_destroy(&attr);}
+  fprintf(stderr,"PW_VK_REPLAY_TRACE event=stack_default bytes=%zu query_result=%d destroy_result=%d\n",stack_bytes,status,destroy_status);
+ }
  if(!workers || workers>PW_VK_REPLAY_MAX_WORKERS || limit<sizeof(struct job) || !execute)return NULL;
  if(!(s=calloc(1,sizeof(*s))))return NULL;
  s->limit=limit;s->execute=execute;s->stats.workers=workers;s->trace=trace;

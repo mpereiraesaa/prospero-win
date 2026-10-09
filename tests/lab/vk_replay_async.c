@@ -136,6 +136,11 @@ int main(int argc,char **argv)
   munmap(clients,16384);
   puts("PASS legacy v2 remains synchronous and does not start workers");return 0;
  }
+ if(argc>1 && !strcmp(argv[1],"trace-bounds")){
+  for(unsigned i=0;i<10;i++){submit_records(0,40*i,40);pw_vk_async_wait_buffer(&clients[0]);}
+  assert(finished[0]==400);pw_vk_async_forget_buffer(&clients[0]);stop_workers();munmap(clients,16384);
+  puts("PASS trace per-job bounds: ten jobs of forty records");return 0;
+ }
  if(argc>1){fatal_failure();return 2;}
  blocked[0]=blocked[2]=1;
  submit_records(0,0,3);await_entered(0,1);

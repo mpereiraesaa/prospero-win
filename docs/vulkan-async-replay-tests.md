@@ -42,14 +42,24 @@ console driver behavior.
 ## Opt-in startup localization
 
 `PW_VK_REPLAY_TRACE=1` enables native stderr records before and after worker
-creation, on worker entry, and around the first eight jobs, admissions, and
-record dispatches. The default emits none. These traces use native `fprintf`
+creation, on worker entry, and around the first eight jobs and admissions. Each of the first eight
+worker callbacks traces up to 32 record dispatches, tagged by callback ID, record
+number, command buffer and pool; unrelated jobs cannot consume this local bound. The default emits none. These traces use native `fprintf`
 and do not call Wine logging or guest TLS helpers. A completed create followed
 by a job/dispatch begin without its matching end narrows the next investigation;
 it does not by itself establish a driver, stack, or scheduler diagnosis.
 
-The worker stack remains the pthread default. No Linux-only stack query API is
-assumed on the target. The host regression captures stderr and checks exact
+The worker stack remains the pthread default. Opt-in tracing queries a fresh
+pthread attribute object for its default stack size; query failures are reported
+and do not alter worker creation. This reports the default attribute value, not
+a measured live worker stack extent. The SDK title stub exports the three
+standard attribute APIs used; no Linux-only stack query API is assumed. The host regression captures stderr and checks exact
 startup counts and the eight-job bound across twenty jobs, plus default silence.
 The prior immutable console package is unchanged; the two-worker startup process
 failure requires a separately identified diagnostic package and console review.
+
+The trace bounds fixture replays ten jobs of forty records and checks exactly
+32 begin/end record pairs for each of the first eight jobs, with no ninth-job
+dispatch trace. A prior diagnostic observed both workers enter and multiple
+driver calls complete, so thread construction alone does not explain the console
+startup failure. Missing final stderr records still require cautious interpretation.
