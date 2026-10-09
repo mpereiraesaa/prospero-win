@@ -2,6 +2,9 @@
 #ifndef PW_VK_BATCH_H
 #define PW_VK_BATCH_H
 #define PW_VK_BATCH_VERSION 2u
+#define PW_VK_BATCH_ASYNC_VERSION 3u
+#define PW_VK_BATCH_ASYNC_CAPABILITY 0x50570202u
+#define PW_VK_BATCH_ASYNC_NAME "__wine_pw_vk_batch_async_v2"
 #define PW_VK_BATCH_LEGACY_VERSION 1u
 #define PW_VK_BATCH_CAPABILITY 0x50570201u
 #define PW_VK_BATCH_NAME "__wine_pw_vk_batch_v2"

@@ -522,3 +522,4 @@ tests/test_vk_replay_dispatch.py
 docs/vulkan-replay-dispatch.md
 tools/stage_vk_replay_barriers.py
 tests/lab/vk_replay_barriers.py
+docs/vulkan-async-pe-boundary.md
