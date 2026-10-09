@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_texture_proxy.h"
+#include "pw_d3d9_api_observe.h"
 #include "pw_d3d9_private_data.h"
 struct proxy {
  IUnknown iface;ULONG refs;uint32_t kind,levels,lock_level;LONG busy;IDirect3DDevice9 *parent;
@@ -74,7 +75,10 @@ static HRESULT adopt(struct proxy *p,uint32_t levels,void **out)
 static struct proxy *allocate(IDirect3DDevice9 *parent,uint32_t kind)
 {
  struct proxy *p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));if(!p)return NULL;
- p->iface.lpVtbl=(IUnknownVtbl *)(kind==PW_D3D9_KIND_TEXTURE_2D?(void *)&texture_vtable:(void *)&surface_vtable);
+ p->iface.lpVtbl=(IUnknownVtbl *)(kind==PW_D3D9_KIND_TEXTURE_2D?
+  (const void *)PW_D3D9_API_OBSERVE(IDirect3DTexture9,&texture_vtable):
+  (const void *)PW_D3D9_API_OBSERVE(IDirect3DSurface9,&surface_vtable));
+ if(!p->iface.lpVtbl){HeapFree(GetProcessHeap(),0,p);return NULL;}
  p->parent=parent;p->kind=kind;p->refs=1;p->client.context=p;p->client.call=client_call;p->client.fail=client_fail;IDirect3DDevice9_AddRef(parent);return p;
 }
 HRESULT pw_d3d9_texture_proxy_wrap(IDirect3DDevice9 *parent,uint32_t kind,struct pw_d3d9_object_ref ref,uint32_t levels,void **out)

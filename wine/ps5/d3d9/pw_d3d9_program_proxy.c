@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_program_proxy.h"
+#include "pw_d3d9_api_observe.h"
 #include <string.h>
 struct program_proxy {
     const void *vtable;
@@ -71,7 +72,10 @@ static struct program_proxy *allocate_shell(IDirect3DDevice9 *parent,uint32_t ki
     struct program_proxy *p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));
     if(!p)return NULL;
     p->parent=parent;p->kind=kind;p->references=1;
-    p->vtable=kind==7?(const void *)&decl_vtable:kind==8?(const void *)&vs_vtable:(const void *)&ps_vtable;
+    p->vtable=kind==7?(const void *)PW_D3D9_API_OBSERVE(IDirect3DVertexDeclaration9,&decl_vtable):
+        kind==8?(const void *)PW_D3D9_API_OBSERVE(IDirect3DVertexShader9,&vs_vtable):
+        (const void *)PW_D3D9_API_OBSERVE(IDirect3DPixelShader9,&ps_vtable);
+    if(!p->vtable){HeapFree(GetProcessHeap(),0,p);return NULL;}
     IDirect3DDevice9_AddRef(parent); /* No COM calls under the cache lock. */
     return p;
 }

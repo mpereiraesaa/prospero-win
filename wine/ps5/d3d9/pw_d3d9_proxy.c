@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_session.h"
+#include "pw_d3d9_api_observe.h"
 #ifdef PW_D3D9_ENABLE_DEVICE
 #include "pw_d3d9_device_proxy.h"
 #endif
@@ -194,6 +195,8 @@ __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
 {
     struct proxy *p=NULL;struct pw_d3d9_object_ref remote;struct pw_d3d9_session *owned;
     int create_session=0;
+    const IDirect3D9Vtbl *observed=PW_D3D9_API_OBSERVE(IDirect3D9,&vtable);
+    if(!observed)return NULL;
     AcquireSRWLockExclusive(&lock);
     if(opening||closing){ReleaseSRWLockExclusive(&lock);return NULL;}
     owned=session;
@@ -220,7 +223,7 @@ __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
     for(p=proxies;p;p=p->next)if(p->remote.id==remote.id&&p->remote.generation==remote.generation){p->references++;duplicate=1;break;}
     if(!p){
         p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));
-        if(p){p->iface.lpVtbl=&vtable;p->references=1;p->remote=remote;p->next=proxies;proxies=p;}
+        if(p){p->iface.lpVtbl=(IDirect3D9Vtbl *)observed;p->references=1;p->remote=remote;p->next=proxies;proxies=p;}
     }
     ReleaseSRWLockExclusive(&lock);
     if(!p||duplicate)if(FAILED(pw_d3d9_session_release(owned,remote)))pw_d3d9_session_cancel(owned);

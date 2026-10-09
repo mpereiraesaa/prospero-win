@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_stateblock_client.h"
+#include "pw_d3d9_api_observe.h"
 struct proxy {
  IDirect3DStateBlock9 iface;ULONG refs;IDirect3DDevice9 *parent;
  struct pw_d3d9_object_ref remote;struct pw_d3d9_deferred cleanup;struct proxy *next;
@@ -63,9 +64,11 @@ static HRESULT create_block(IDirect3DDevice9 *parent,uint32_t method,D3DSTATEBLO
  struct pw_d3d9_stateblock_request q={method,(uint32_t)type};struct pw_d3d9_stateblock_reply r={0};struct proxy *p,*found=NULL;HRESULT hr;
  if(!out)return D3DERR_INVALIDCALL;
  *out=NULL;
+ const IDirect3DStateBlock9Vtbl *observed=PW_D3D9_API_OBSERVE(IDirect3DStateBlock9,&vtable);
+ if(!observed)return E_FAIL;
  /* Allocate before RPC so OOM cannot strand an acquired remote reference. */
  p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));if(!p)return E_OUTOFMEMORY;
- p->iface.lpVtbl=&vtable;p->refs=1;p->parent=parent;IDirect3DDevice9_AddRef(parent);
+ p->iface.lpVtbl=(IDirect3DStateBlock9Vtbl *)observed;p->refs=1;p->parent=parent;IDirect3DDevice9_AddRef(parent);
  hr=invoke(parent,(struct pw_d3d9_object_ref){0},&q,&r);
  if(FAILED(hr)){destroy_local(p);return hr;}
  p->remote=r.object;

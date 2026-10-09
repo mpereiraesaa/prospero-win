@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_device_proxy.h"
+#include "pw_d3d9_api_observe.h"
 #ifdef PW_D3D9_ENABLE_METHODS
 #include "pw_d3d9_device_methods.h"
 #endif
@@ -166,6 +167,7 @@ PW_D3D9_METHODS_IDirect3DDevice9(STUB)
 #undef STUB
 #pragma GCC diagnostic pop
 static IDirect3DDevice9Vtbl vtable;
+static const IDirect3DDevice9Vtbl *observed_vtable;
 static INIT_ONCE vtable_once=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI get_parent(IDirect3DDevice9 *iface,IDirect3D9 **out)
 {if(!out)return D3DERR_INVALIDCALL;*out=device(iface)->parent;IDirect3D9_AddRef(*out);return S_OK;}
@@ -406,7 +408,8 @@ static BOOL CALLBACK init_vtable(INIT_ONCE *once,void *parameter,void **context)
 #ifdef PW_D3D9_ENABLE_UP
     const struct pw_d3d9_up_client_ops up={up_call,fail_device};pw_d3d9_up_client_install(&vtable,&up);
 #endif
-    return TRUE;
+    observed_vtable=PW_D3D9_API_OBSERVE(IDirect3DDevice9,&vtable);
+    return observed_vtable!=NULL;
 }
 HRESULT pw_d3d9_device_proxy_create(IDirect3D9 *parent,struct pw_d3d9_session *session,
     struct pw_d3d9_object_ref parent_ref,UINT adapter,D3DDEVTYPE type,HWND focus,DWORD flags,D3DPRESENT_PARAMETERS *parameters,IDirect3DDevice9 **out)
@@ -431,6 +434,6 @@ HRESULT pw_d3d9_device_proxy_create(IDirect3D9 *parent,struct pw_d3d9_session *s
         if(!release_window(d->window,session)){OutputDebugStringA("PW_D3D9: retaining failed creation cleanup\n");return hr;}
         IDirect3D9_Release(parent);HeapFree(GetProcessHeap(),0,d);return hr;
     }
-    d->iface.lpVtbl=&vtable;d->references=1;d->remote=r.object;
+    d->iface.lpVtbl=(IDirect3DDevice9Vtbl *)observed_vtable;d->references=1;d->remote=r.object;
     d->creation=(D3DDEVICE_CREATION_PARAMETERS){adapter,type,focus,flags};*out=&d->iface;return hr;
 }

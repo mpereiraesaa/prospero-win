@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_buffer_proxy.h"
+#include "pw_d3d9_api_observe.h"
 #include "pw_d3d9_buffer_client.h"
 #include "pw_d3d9_kinds.h"
 #include "pw_d3d9_private_data.h"
@@ -151,7 +152,9 @@ HRESULT pw_d3d9_buffer_proxy_wrap(IDirect3DDevice9 *parent,uint32_t kind,struct 
  if(!out||!remote.id||!remote.generation||(kind!=PW_D3D9_KIND_VERTEX_BUFFER&&kind!=PW_D3D9_KIND_INDEX_BUFFER)){
   cleanup(p);return E_INVALIDARG;
  }
- if(kind==PW_D3D9_KIND_VERTEX_BUFFER)p->iface.vb.lpVtbl=&vb_vtable;else p->iface.ib.lpVtbl=&ib_vtable;
+ if(kind==PW_D3D9_KIND_VERTEX_BUFFER)p->iface.vb.lpVtbl=(IDirect3DVertexBuffer9Vtbl *)PW_D3D9_API_OBSERVE(IDirect3DVertexBuffer9,&vb_vtable);
+ else p->iface.ib.lpVtbl=(IDirect3DIndexBuffer9Vtbl *)PW_D3D9_API_OBSERVE(IDirect3DIndexBuffer9,&ib_vtable);
+ if(!p->iface.vb.lpVtbl){cleanup(p);return E_FAIL;}
  p->client=(struct pw_d3d9_buffer_client){.context=p,.call=client_call,.fail=client_fail,.object=remote};
  AcquireSRWLockExclusive(&cache_lock);
  for(found=cache;found;found=found->next)if(found->parent==parent&&found->kind==kind&&found->remote.id==remote.id&&found->remote.generation==remote.generation){found->references++;break;}

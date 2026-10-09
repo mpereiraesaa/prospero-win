@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_query_proxy.h"
+#include "pw_d3d9_api_observe.h"
 #include <string.h>
 struct proxy {IDirect3DQuery9 iface;LONG refs;IDirect3DDevice9 *parent;struct pw_d3d9_object_ref remote;uint32_t type,size;struct pw_d3d9_deferred cleanup;};
 static struct pw_d3d9_query_proxy_ops ops;
@@ -46,8 +47,10 @@ static HRESULT WINAPI create(IDirect3DDevice9 *parent,D3DQUERYTYPE type,IDirect3
 {
  struct proxy *p=NULL;struct pw_d3d9_query_request q={.method=PW_D3D9_QUERY_CREATE,.type=type,.want_object=out!=NULL};struct pw_d3d9_query_reply r={0};HRESULT hr;int valid;
  if(out)*out=NULL;
+ const IDirect3DQuery9Vtbl *observed=out?PW_D3D9_API_OBSERVE(IDirect3DQuery9,&vtable):NULL;
+ if(out&&!observed)return E_FAIL;
  IDirect3DDevice9_AddRef(parent);
- if(out){p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));if(!p){IDirect3DDevice9_Release(parent);return E_OUTOFMEMORY;}p->iface.lpVtbl=&vtable;p->refs=1;p->parent=parent;}
+ if(out){p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));if(!p){IDirect3DDevice9_Release(parent);return E_OUTOFMEMORY;}p->iface.lpVtbl=(IDirect3DQuery9Vtbl *)observed;p->refs=1;p->parent=parent;}
  hr=invoke(parent,(struct pw_d3d9_object_ref){0},&q,&r,&valid);
  if(FAILED(hr)){if(p)free_local(p);else IDirect3DDevice9_Release(parent);return hr;}
  if(p){p->remote=r.object;p->type=r.type;p->size=r.size;*out=&p->iface;}else IDirect3DDevice9_Release(parent);
