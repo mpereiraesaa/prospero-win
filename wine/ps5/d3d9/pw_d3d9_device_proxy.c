@@ -398,8 +398,10 @@ static HRESULT program_query(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref r
         if(r.total!=total||r.offset!=offset||r.count!=q.count){hr=E_FAIL;fail_device(iface,hr);goto done;}
         memcpy(copy+offset,r.data,r.count);offset+=r.count;returned_size=r.size;
     }while(offset<bytes);
-    SIZE_T written=0;
-    if(bytes&&(!WriteProcessMemory(GetCurrentProcess(),output,copy,bytes,&written)||written!=bytes)){hr=D3DERR_INVALIDCALL;goto done;}
+    /* This is a local COM output buffer. WriteProcessMemory would route through
+     * wineserver's cross-process writer, which requires ptrace on PS5. Publish
+     * only after all immutable chunks have been validated and staged. */
+    if(bytes)memcpy(output,copy,bytes);
     *size=returned_size;
  done:
     if(copy)HeapFree(GetProcessHeap(),0,copy);

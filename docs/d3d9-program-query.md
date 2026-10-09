@@ -29,3 +29,24 @@ Native helper, registry pins and PE32 COM integration are separate layers.
 
 Backend semantics reference: [shader](https://github.com/doitsujin/dxvk/blob/v2.6.2/src/d3d9/d3d9_shader.h)
 and [declaration](https://github.com/doitsujin/dxvk/blob/v2.6.2/src/d3d9/d3d9_vertex_declaration.cpp).
+
+## Local frontend output publication
+
+Program readback publishes its validated, fully staged byte copy directly to the
+caller's local COM output buffer. It does not use WriteProcessMemory: pinned
+Wine routes that API through NtWriteVirtualMemory and wineserver's process-memory
+writer even for the current process. The PS5 server build has no
+`HAVE_PROCESS_VM_WRITEV`; its fallback requires ptrace, which the PS5 compatibility
+layer rejects with EPERM. That path can reject a valid local stack output buffer.
+
+The declaration input count remains ignored, matching the pinned backend. Shader
+readback retains its byte-capacity semantics. Nothing is copied to the caller
+until every requested chunk has succeeded and matched the immutable total.
+
+`tests/lab/d3d9_program_copy.py` runs the actual PE32 and PE64 program COM proxy,
+device frontend, and wire codecs with controlled successful backend replies and
+a denied WriteProcessMemory hook. The unfixed control reproduces INVALIDCALL with
+untouched output; the corrected path copies successfully without calling the
+hook. Both cover poisoned declaration counts, shader zero/partial/multiple-chunk
+reads, and a second-chunk error leaving all caller bytes unchanged. These are
+controlled frontend proofs, not console or native-backend acceptance.
