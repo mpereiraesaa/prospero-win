@@ -41,10 +41,35 @@ int main(void)
     }
     c=(struct pw_d3d9_command){.method=69,.args={0xffffffff,1,0}};check(&c,0);
     c=(struct pw_d3d9_command){.method=67,.args={0,0xffffffff,0}};check(&c,0);
+    /* Exact constant bounds, clamping, NULL and creation-mode behavior. */
+    const unsigned constants[]={94,96,98,109,111,113};
+    const unsigned flags[]={0x40,0x20,0x80,0xa0};
+    for(unsigned m=0;m<6;m++)for(unsigned f=0;f<4;f++) {
+        unsigned method=constants[m],vertex=m<3,floating=m==0||m==3;
+        uint32_t software=vertex?(floating?8192u:2048u):(floating?224u:16u);
+        uint32_t hardware=vertex&&!(flags[f]&0xa0u)?(floating?256u:16u):software;
+        uint32_t effective=999;
+        assert(pw_d3d9_command_constant_count(method,0,0,flags[f],0,&effective)==1&&effective==0);
+        assert(pw_d3d9_command_constant_count(method,software,0,flags[f],0,&effective)==1&&effective==0);
+        effective=999;assert(pw_d3d9_command_constant_count(method,software+1,0,flags[f],0,&effective)==-1&&effective==999);
+        assert(pw_d3d9_command_constant_count(method,UINT32_MAX,1,flags[f],1,&effective)==-1&&effective==999);
+        assert(pw_d3d9_command_constant_count(method,0,1,flags[f],0,&effective)==-1&&effective==999);
+        assert(pw_d3d9_command_constant_count(method,hardware,software-hardware,flags[f],0,&effective)==1&&effective==0);
+        assert(pw_d3d9_command_constant_count(method,hardware-1,software-hardware+1,flags[f],1,&effective)==1&&effective==1);
+        assert(pw_d3d9_command_constant_count(method,0,software,flags[f],1,&effective)==1&&effective==hardware);
+        c=(struct pw_d3d9_command){.method=method,.args={software,0}};check(&c,1);
+        c.args[0]++;check(&c,0);
+        c=(struct pw_d3d9_command){.method=method,.args={0,1},.data_bytes=(method==98||method==113)?4:16};check(&c,1);
+        if(method==98||method==113){c.data.words[0]=2;check(&c,0);}
+    }
+    for(unsigned state=0;state<520;state++) {
+        c=(struct pw_d3d9_command){.method=44,.args={state},.data_bytes=64};
+        check(&c,state==2||state==3||(state>=16&&state<=23)||(state>=256&&state<=511));
+    }
     /* Every other known schema remains synchronous even when well formed. */
     for(unsigned method=0;method<256;method++) {
         size_t bytes;
-        if(method==47||method==49||method==57||method==67||method==69||method==75)continue;
+        if(method==44||method==47||method==49||method==57||method==67||method==69||method==75||method==94||method==96||method==98||method==109||method==111||method==113)continue;
         c=(struct pw_d3d9_command){.method=method};
         if(!pw_d3d9_command_data_bytes(method,c.args,&bytes))c.data_bytes=(uint32_t)bytes;
         check(&c,0);

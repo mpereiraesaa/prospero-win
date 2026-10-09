@@ -26,6 +26,7 @@ static HRESULT acquire(void *context,uint32_t id,uint32_t generation,uint32_t ki
 static HRESULT direct_policy(IDirect3DDevice9 *device,const struct pw_d3d9_command *c)
 {
  switch(c->method){
+ case 44:return IDirect3DDevice9_SetTransform(device,c->args[0],(const D3DMATRIX *)c->data.bytes);
  case 57:return IDirect3DDevice9_SetRenderState(device,c->args[0],c->args[1]);
  case 67:return IDirect3DDevice9_SetTextureStageState(device,c->args[0],c->args[1],c->args[2]);
  case 69:return IDirect3DDevice9_SetSamplerState(device,c->args[0],c->args[1],c->args[2]);
@@ -43,6 +44,55 @@ static int policy_case(IDirect3DDevice9 *device,struct pw_d3d9_command *c,int el
  HRESULT direct=direct_policy(device,c),actual=pw_d3d9_native_command_dispatch(device,&decoded,NULL,NULL);
  if(actual!=direct || (eligible && actual!=S_OK))return 0;
  ++*count;return 1;
+}
+static HRESULT direct_constant(IDirect3DDevice9 *device,unsigned method,UINT start,const void *data,UINT count)
+{
+ switch(method){
+ case 94:return IDirect3DDevice9_SetVertexShaderConstantF(device,start,data,count);
+ case 96:return IDirect3DDevice9_SetVertexShaderConstantI(device,start,data,count);
+ case 98:return IDirect3DDevice9_SetVertexShaderConstantB(device,start,data,count);
+ case 109:return IDirect3DDevice9_SetPixelShaderConstantF(device,start,data,count);
+ case 111:return IDirect3DDevice9_SetPixelShaderConstantI(device,start,data,count);
+ default:return IDirect3DDevice9_SetPixelShaderConstantB(device,start,data,count);
+ }
+}
+static int constant_policy_proof(IDirect3DDevice9 *device)
+{
+ D3DDEVICE_CREATION_PARAMETERS creation;IDirect3DStateBlock9 *saved=NULL,*recorded=NULL;
+ const unsigned methods[]={94,96,98,109,111,113};uint32_t values[1024]={0};unsigned comparisons=0;int ok=0;
+ if(FAILED(IDirect3DDevice9_GetCreationParameters(device,&creation)) ||
+ FAILED(IDirect3DDevice9_CreateStateBlock(device,D3DSBT_ALL,&saved)))return 0;
+ for(unsigned record=0;record<2;record++){
+  if(record && FAILED(IDirect3DDevice9_BeginStateBlock(device)))goto done;
+  for(unsigned m=0;m<6;m++){
+   unsigned vertex=m<3,floating=m==0||m==3;
+   UINT software=vertex?(floating?8192u:2048u):(floating?224u:16u);
+   UINT hardware=vertex&&!(creation.BehaviorFlags&0xa0)?(floating?256u:16u):software;
+   struct edge {UINT start,count;int present;} edges[]={
+    {0,0,0},{0,1,0},{software,0,0},{software+1,0,0},{UINT32_MAX,1,1},
+    {hardware-1,2,1},{hardware,1,0},{software-1,1,1},{0,1,1},{0,256,1},{0,0,1}};
+   for(unsigned i=0;i<sizeof(edges)/sizeof(edges[0]);i++){
+    struct edge e=edges[i];UINT effective=999;
+    int plan=pw_d3d9_command_constant_count(methods[m],e.start,e.count,creation.BehaviorFlags,e.present,&effective);
+    HRESULT direct=direct_constant(device,methods[m],e.start,e.present?values:NULL,e.count);
+    if(plan<0){if(direct!=D3DERR_INVALIDCALL || effective!=999)goto done;}
+    else{
+     struct pw_d3d9_command c={.method=methods[m],.args={e.start,effective}};
+     c.data_bytes=effective*((m==2||m==5)?4:16);
+     if(plan!=1 || c.data_bytes>sizeof(values) || !pw_d3d9_command_can_queue(&c) || direct!=S_OK ||
+      pw_d3d9_native_command_dispatch(device,&c,NULL,NULL)!=direct)goto done;
+    }
+    ++comparisons;
+   }
+  }
+  if(record && FAILED(IDirect3DDevice9_EndStateBlock(device,&recorded)))goto done;
+ }
+ ok=comparisons==132;
+ done:
+ if(recorded)IDirect3DStateBlock9_Release(recorded);
+ if(saved){if(FAILED(IDirect3DStateBlock9_Apply(saved)))ok=0;IDirect3DStateBlock9_Release(saved);}
+ printf("PW_CONSTANT_POLICY creation=%08lx comparisons=%u live_and_recorded=1 ok=%d\n",creation.BehaviorFlags,comparisons,ok);
+ return ok;
 }
 static int policy_proof(IDirect3DDevice9 *device)
 {
@@ -73,11 +123,17 @@ static int policy_proof(IDirect3DDevice9 *device)
   c=(struct pw_d3d9_command){.method=75,.data_bytes=16};
   {RECT value={0,0,64,64};memcpy(c.data.bytes,&value,sizeof(value));}
   if(!policy_case(device,&c,1,&count))goto done;
+ {const unsigned states[]={2,3,16,23,256,511};
+ for(unsigned i=0;i<6;i++){
+  c=(struct pw_d3d9_command){.method=44,.args={states[i]},.data_bytes=64};
+  D3DMATRIX value={0};value._11=value._22=value._33=value._44=1;memcpy(c.data.bytes,&value,sizeof(value));
+  if(!policy_case(device,&c,1,&count))goto done;
+ }}
   if(record && FAILED(IDirect3DDevice9_EndStateBlock(device,&recorded)))goto done;
  }
  if(IDirect3DDevice9_SetMaterial(device,NULL)!=D3DERR_INVALIDCALL ||
  IDirect3DDevice9_SetScissorRect(device,NULL)!=D3DERR_INVALIDCALL)goto done;
- ok=count==596;
+ ok=count==608;
  done:
  if(recorded)IDirect3DStateBlock9_Release(recorded);
  if(saved){if(FAILED(IDirect3DStateBlock9_Apply(saved)))ok=0;IDirect3DStateBlock9_Release(saved);}
@@ -88,7 +144,7 @@ static LRESULT CALLBACK proc(HWND w,UINT m,WPARAM a,LPARAM b){return DefWindowPr
 __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
 {
  HANDLE mapping=NULL;struct shared *s=NULL;WCHAR path[260];HMODULE backend=NULL;IDirect3D9 *d3d=NULL;
- IDirect3D9 *(WINAPI *factory)(UINT);IDirect3DDevice9 *device=NULL;D3DPRESENT_PARAMETERS pp={0};
+ IDirect3D9 *(WINAPI *factory)(UINT);IDirect3DDevice9 *device=NULL;D3DPRESENT_PARAMETERS pp={0};WCHAR behavior_text[32];DWORD behavior=D3DCREATE_HARDWARE_VERTEXPROCESSING;
  IDirect3DSurface9 *surface=NULL,*readback=NULL;IDirect3DTexture9 *texture=NULL;IDirect3DVertexBuffer9 *vb=NULL;IDirect3DIndexBuffer9 *ib=NULL;
  WNDCLASSW cls={0};HWND window=NULL;DWORD error=1;struct objects objects={0};void *data;
  struct vertex {float x,y,z,w;DWORD color;} vertices[3]={{4,4,0.5f,1,0xffff0000},{60,4,0.5f,1,0xff00ff00},{4,60,0.5f,1,0xff0000ff}};
@@ -106,10 +162,11 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  factory=(void *)GetProcAddress(backend,"Direct3DCreate9");
  if(!factory || !(d3d=factory(D3D_SDK_VERSION)))goto done;
  pp.Windowed=TRUE;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;pp.BackBufferFormat=D3DFMT_X8R8G8B8;pp.BackBufferWidth=pp.BackBufferHeight=64;pp.hDeviceWindow=window;pp.PresentationInterval=D3DPRESENT_INTERVAL_IMMEDIATE;
- hr=IDirect3D9_CreateDevice(d3d,0,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING,&pp,&device);
+ if(GetEnvironmentVariableW(L"PW_COMMAND_BEHAVIOR",behavior_text,32))behavior=wcstoul(behavior_text,NULL,0);
+ hr=IDirect3D9_CreateDevice(d3d,0,D3DDEVTYPE_HAL,window,behavior,&pp,&device);
  result[0]=(uint32_t)hr;
  if(FAILED(hr))goto done;
- if(!policy_proof(device))goto done;
+ if(!policy_proof(device) || !constant_policy_proof(device))goto done;
  if(FAILED(IDirect3DDevice9_GetRenderTarget(device,0,&surface)) || FAILED(IDirect3DDevice9_CreateTexture(device,4,4,1,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&texture,NULL)) ||
  FAILED(IDirect3DDevice9_CreateVertexBuffer(device,sizeof(vertices),0,D3DFVF_XYZRHW|D3DFVF_DIFFUSE,D3DPOOL_MANAGED,&vb,NULL)) ||
  FAILED(IDirect3DDevice9_CreateIndexBuffer(device,sizeof(indices),0,D3DFMT_INDEX16,D3DPOOL_MANAGED,&ib,NULL)))goto done;
