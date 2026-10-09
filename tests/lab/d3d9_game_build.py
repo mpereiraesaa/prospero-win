@@ -9,7 +9,7 @@ flags=['-std=c11','-O2','-Wall','-Wextra','-Werror','-Wno-array-bounds','-DPW_D3
 shared=['d3d9/pw_d3d9_session.c','pw_d3d9_bridge_wire.c','pw_d3d9_objects.c','pw_d3d9_factory_wire.c','pw_d3d9_device_wire.c','pw_d3d9_resource_wire.c','pw_d3d9_command_wire.c','pw_d3d9_getter_wire.c','pw_d3d9_program_wire.c','pw_d3d9_program_query.c','pw_d3d9_texture_wire.c','pw_d3d9_stateblock_wire.c','pw_d3d9_object_getter.c']
 client=['d3d9/pw_d3d9_proxy.c','d3d9/pw_d3d9_device_proxy.c','d3d9/pw_d3d9_device_methods.c','d3d9/pw_d3d9_program_proxy.c','d3d9/pw_d3d9_buffer_proxy.c','d3d9/pw_d3d9_buffer_client.c','d3d9/pw_d3d9_staging.c','d3d9/pw_d3d9_texture_client.c','d3d9/pw_d3d9_texture_proxy.c','d3d9/pw_d3d9_private_data.c','d3d9/pw_d3d9_stateblock_client.c']
 service=['d3d9/pw_d3d9_native_device.c','d3d9/pw_d3d9_native_resource.c','d3d9/pw_d3d9_native_command.c','d3d9/pw_d3d9_native_getter.c','d3d9/pw_d3d9_native_program.c','d3d9/pw_d3d9_native_program_query.c','d3d9/pw_d3d9_service_resource.c','d3d9/pw_d3d9_service_methods.c','d3d9/pw_d3d9_service_program.c','d3d9/pw_d3d9_service_texture.c','d3d9/pw_d3d9_native_texture.c','d3d9/pw_d3d9_service_stateblock.c','d3d9/pw_d3d9_native_stateblock.c','d3d9/pw_d3d9_service_object_getter.c','d3d9/pw_d3d9_native_object_getter.c']
-r={'sources':{},'builds':[],'scope':'Paired production build; runtime acceptance is separate.'}
+r={'features':127,'sources':{},'builds':[],'scope':'Paired production build; runtime acceptance is separate.'}
 for path in sorted((root/'wine/ps5').rglob('*.h')):r['sources'][str(path.relative_to(root))]=hashlib.sha256(path.read_bytes()).hexdigest()
 for arch,extra,output in [('i686',client,'d3d9.dll'),('x86_64',service,'service.dll')]:
  paths=[root/'wine/ps5'/n for n in shared+extra]

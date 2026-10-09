@@ -15,3 +15,5 @@ Current omissions include UP draws, cube/volume resources, queries and surface D
 operations. Unsupported methods report failure; void/value-return methods also
 make the session failure sticky. GTA SA and its D3DX effects still require actual
 production-DLL smoke and console validation.
+
+The checked HELLO advertises all enabled method families. Proxy/service feature mismatches fail before publishing backend objects. Build receipts hash all shared headers as well as compiled source files.

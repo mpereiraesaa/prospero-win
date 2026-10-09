@@ -31,11 +31,34 @@
 #define BACKEND_CRC 0x6d86db72u
 #define FACTORY_METHODS 0x00007ff0u /* slots 4 through 14 */
 #define TRANSPORT_ERROR 0x100u
+/* This mask is part of the checked HELLO payload: reject differently built
+ * proxy/service pairs before any object publication or method dispatch. */
+static uint32_t compiled_features(void)
+{
+    uint32_t mask=0;
 #ifdef PW_D3D9_ENABLE_DEVICE
-#define DEVICE_FEATURES 1u
-#else
-#define DEVICE_FEATURES 0u
+    mask|=1u;
 #endif
+#ifdef PW_D3D9_ENABLE_RESOURCE
+    mask|=2u;
+#endif
+#ifdef PW_D3D9_ENABLE_METHODS
+    mask|=4u;
+#endif
+#ifdef PW_D3D9_ENABLE_PROGRAM
+    mask|=8u;
+#endif
+#ifdef PW_D3D9_ENABLE_TEXTURE
+    mask|=16u;
+#endif
+#ifdef PW_D3D9_ENABLE_STATEBLOCK
+    mask|=32u;
+#endif
+#ifdef PW_D3D9_ENABLE_OBJECT_GETTER
+    mask|=64u;
+#endif
+    return mask;
+}
 struct descriptor {
     uint32_t magic,version,bytes,epoch,pid,ring_bytes,backend_crc,backend_bytes;
     WCHAR backend[260];
@@ -72,7 +95,7 @@ static void cancel_ipc(struct ipc *i)
 }
 static void hello_payload(unsigned char bytes[32],DWORD epoch)
 {
-    uint32_t fields[]={1,epoch,RING_BYTES,BACKEND_CRC,BACKEND_BYTES,FACTORY_METHODS,DEVICE_FEATURES,0};
+    uint32_t fields[]={1,epoch,RING_BYTES,BACKEND_CRC,BACKEND_BYTES,FACTORY_METHODS,compiled_features(),0};
     for(unsigned n=0;n<8;n++)put32(bytes+n*4,fields[n]);
 }
 #ifndef _WIN64
