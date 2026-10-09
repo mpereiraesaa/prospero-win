@@ -55,8 +55,11 @@ for mode in ['native'] + (['dxvk'] if args.backend64 else []):
     rows = re.findall(r'PW_NATIVE_DOMAIN iteration=(\d+) status=00000000 size=592 .* flags=(\d+)', output)
     expected = 63 if mode == 'dxvk' else 31
     assert rows == [(str(i), str(expected)) for i in range(10)], rows
-    receipt[mode] = {'iterations': 10, 'flags': expected, 'exit': 0}
+    tokens = [(int(a), int(b)) for a, b in re.findall(r' token=(\d+) child_token=(\d+)', output)]
+    assert len(tokens) == 10 and all(a > 0 and a == b for a,b in tokens), tokens
+    assert all(tokens[i][0] < tokens[i+1][0] for i in range(9)), tokens
+    receipt[mode] = {'iterations': 10, 'flags': expected, 'exit': 0, 'tokens': tokens}
 receipt['scope'] = ('PE64 module load/unload, native child inheritance, PE32 guest threads before/after, '
-                    'CRT/Win32 TLS, >4GiB storage, vectored exceptions, malformed version/length, missing DLL recovery')
+                    'native session token inheritance/non-reuse, guest query rejection, CRT/Win32 TLS, >4GiB storage, vectored exceptions, malformed version/length, missing DLL recovery')
 (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
 print(json.dumps(receipt, indent=2))

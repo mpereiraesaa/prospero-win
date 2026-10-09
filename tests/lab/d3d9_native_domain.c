@@ -6,6 +6,23 @@
 #include <d3d9.h>
 #include <stdio.h>
 #include <stdint.h>
+struct session_info { ULONG version, size; uint64_t token; };
+static uint64_t session_token(void)
+{
+    typedef LONG (WINAPI *query_fn)(HANDLE,ULONG,void *,ULONG,ULONG *);
+    query_fn query=(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"NtQueryInformationThread");
+    struct session_info info={1,sizeof(info),0};ULONG returned=0;HANDLE duplicate;
+    if(!query || sizeof(info)!=16)return 0;
+    if(query(GetCurrentThread(),0x50570002,&info,sizeof(info)-1,&returned)!=(LONG)0xc0000004 || returned!=16)return 0;
+    info.version=2;
+    if(query(GetCurrentThread(),0x50570002,&info,sizeof(info),NULL)!=(LONG)0xc000000d)return 0;
+    info.version=1;
+    if(!DuplicateHandle(GetCurrentProcess(),GetCurrentThread(),GetCurrentProcess(),&duplicate,0,FALSE,DUPLICATE_SAME_ACCESS))return 0;
+    LONG status=query(duplicate,0x50570002,&info,sizeof(info),NULL);CloseHandle(duplicate);
+    if(status!=(LONG)0xc00000bb || info.token)return 0;
+    if(query(GetCurrentThread(),0x50570002,&info,sizeof(info),&returned) || returned!=16)return 0;
+    return info.token;
+}
 static __thread unsigned tls_value = 7;
 static DWORD tls_index;
 static volatile LONG exceptions;
@@ -25,13 +42,15 @@ static DWORD WINAPI child(void *arg)
     RaiseException(0xe0425057,0,0,NULL);
     if (tls_value != 19 || TlsGetValue(tls_index)!=(void *)(uintptr_t)0x12345678) return 3;
     result[1]=(uintptr_t)NtCurrentTeb();
-    return 0;
+    result[6]=session_token();
+    return result[6] ? 0 : 4;
 }
 __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
 {
     HANDLE thread; DWORD code; void *memory,*handler;
     if (!native_teb() || tls_value != 7) return 10;
     result[0]=(uintptr_t)NtCurrentTeb();
+    result[5]=session_token();if(!result[5])return 22;
     {
         typedef void *(WINAPI *alloc2_fn)(HANDLE,void *,SIZE_T,ULONG,ULONG,MEM_EXTENDED_PARAMETER *,ULONG);
         alloc2_fn alloc2=(void *)GetProcAddress(GetModuleHandleW(L"kernelbase.dll"),"VirtualAlloc2");
@@ -60,6 +79,7 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
     WaitForSingleObject(thread,INFINITE);GetExitCodeThread(thread,&code);CloseHandle(thread);
     RaiseException(0xe0425057,0,0,NULL);RemoveVectoredExceptionHandler(handler);
     if (code || exceptions != 2 || tls_value != 23 || TlsGetValue(tls_index)!=(void *)(uintptr_t)0x87654321) return 16;
+    if(result[5]!=result[6])return 23;
     TlsFree(tls_index);result[3]=31;
     {
         WCHAR path[260]; HMODULE backend; IDirect3D9 *d3d;
@@ -88,6 +108,10 @@ static DWORD WINAPI guest_child(void *unused)
 }
 static int guest_check(void)
 {
+    typedef LONG (WINAPI *thread_query_fn)(HANDLE,ULONG,void *,ULONG,ULONG *);
+    thread_query_fn query=(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"NtQueryInformationThread");
+    struct { ULONG version,size; uint64_t token; } info={1,16,0x1122334455667788ULL};
+    if(!query || query(GetCurrentThread(),0x50570002,&info,sizeof(info),NULL)!=(LONG)0xc0000003 || info.token!=0x1122334455667788ULL)return 1;
     DWORD code=1; HANDLE thread=CreateThread(NULL,0,guest_child,NULL,0,NULL);
     if(!thread)return 1;
     WaitForSingleObject(thread,INFINITE);GetExitCodeThread(thread,&code);CloseHandle(thread);
@@ -96,7 +120,7 @@ static int guest_check(void)
 int main(int argc,char **argv)
 {
     struct request req; query_fn query=(query_fn)GetProcAddress(GetModuleHandleA("ntdll.dll"),"NtQueryInformationProcess");
-    ULONG size; LONG status; unsigned i;
+    ULONG size; LONG status; unsigned i; uint64_t previous_token=0;
     if(argc!=2 || sizeof(req)!=592 || !query) return 1;
     if(guest_check())return 3;
     memset(&req,0,sizeof(req));req.version=2;req.size=sizeof(req);
@@ -110,8 +134,10 @@ int main(int argc,char **argv)
         memset(&req,0,sizeof(req));req.version=1;req.size=sizeof(req);
         MultiByteToWideChar(CP_UTF8,0,argv[1],-1,req.path,260);
         status=query(GetCurrentProcess(),0x50570001,&req,sizeof(req),&size);
-        printf("PW_NATIVE_DOMAIN iteration=%u status=%08lx size=%lu parent=%llx child=%llx high=%llx backend=%llx flags=%llu\n",i,status,size,req.result[0],req.result[1],req.result[2],req.result[4],req.result[3]);fflush(stdout);
+        printf("PW_NATIVE_DOMAIN iteration=%u status=%08lx size=%lu parent=%llx child=%llx high=%llx backend=%llx flags=%llu token=%llu child_token=%llu\n",i,status,size,req.result[0],req.result[1],req.result[2],req.result[4],req.result[3],req.result[5],req.result[6]);fflush(stdout);
         if(status || size!=592 || (req.result[3]&31)!=31 || req.result[2]<=UINT32_MAX || !req.result[1] || req.result[0]==req.result[1]) return 2;
+        if(req.result[5]<=previous_token || req.result[5]!=req.result[6])return 7;
+        previous_token=req.result[5];
     }
     return guest_check();
 }

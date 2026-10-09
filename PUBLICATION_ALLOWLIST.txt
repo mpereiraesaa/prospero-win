@@ -524,6 +524,8 @@ tools/stage_vk_replay_barriers.py
 tests/lab/vk_replay_barriers.py
 docs/vulkan-async-pe-boundary.md
 wine/patches/0902-ntdll-native-service-domain.patch
+wine/patches/0905-ntdll-native-session-token.patch
+docs/d3d9-native-session.md
 tests/lab/d3d9_native_domain.c
 tests/lab/d3d9_native_domain.py
 docs/d3d9-native-domain.md
