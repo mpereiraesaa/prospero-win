@@ -6,6 +6,8 @@ import pathlib
 import subprocess
 import tempfile
 import unittest
+import sys
+sys.dont_write_bytecode = True
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('dispatch', ROOT / 'tools/generate_vk_replay_dispatch.py')
