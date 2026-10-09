@@ -830,3 +830,7 @@ tests/lab/d3d9_stateblock_transport.c
 tests/lab/d3d9_stateblock_transport_device.c
 tests/lab/d3d9_stateblock_transport.py
 docs/d3d9-stateblock-transport.md
+tests/lab/d3d9_query_transport.c
+tests/lab/d3d9_query_transport.py
+tests/lab/d3d9_query_transport_device.c
+docs/d3d9-query-transport.md
