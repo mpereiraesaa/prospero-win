@@ -547,3 +547,10 @@ wine/patches/0910-win32u-ps5-worker-desktop-cache.patch
 
 
 # Actual native pipeline transport proof
+tests/test_vk_radv_profile.c
+tests/test_vk_radv_profile.py
+wine/ps5/pw_vk_radv_profile.c
+wine/ps5/pw_vk_radv_profile.h
+wine/ps5/pw_vk_radv_profile_list.h
+wine/ps5/pw_vk_radv_profile_wrap.c
+wine/ps5/pw_vk_radv_profile_wrap.h
