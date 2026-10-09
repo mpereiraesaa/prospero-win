@@ -903,3 +903,8 @@ wine/ps5/pw_d3d9_binding_plan.c
 wine/ps5/pw_d3d9_binding_plan.h
 tests/test_d3d9_binding_plan.c
 docs/d3d9-binding-plan.md
+wine/ps5/d3d9/pw_d3d9_binding_leases.c
+wine/ps5/d3d9/pw_d3d9_binding_leases.h
+tests/lab/d3d9_binding_leases.c
+tests/lab/d3d9_binding_leases.py
+docs/d3d9-binding-leases.md
