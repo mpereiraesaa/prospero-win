@@ -517,6 +517,11 @@ tools/stage_vk_replay_lifecycle.py
 tests/lab/vk_replay_lifecycle.py
 docs/vulkan-replay-lifecycle.md
 
+wine/ps5/pw_d3d9_command_wire.h
+wine/ps5/pw_d3d9_command_wire.c
+tests/test_d3d9_command_wire.c
+docs/d3d9-command-wire.md
+
 tools/generate_vk_replay_dispatch.py
 tests/test_vk_replay_dispatch.py
 docs/vulkan-replay-dispatch.md
