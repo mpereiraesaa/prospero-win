@@ -204,6 +204,12 @@ __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
         WCHAR service[260],backend[260];
         DWORD a=GetEnvironmentVariableW(L"PW_D3D9_SERVICE64",service,260);
         DWORD b=GetEnvironmentVariableW(L"PW_D3D9_BACKEND64",backend,260);
+        if(a&&a<260&&b&&b<260){
+            /* Profile environment values use forward slashes; the private
+             * bootstrap still receives a checked absolute Windows path. */
+            for(DWORD n=0;n<a;n++)if(service[n]=='/')service[n]='\\';
+            for(DWORD n=0;n<b;n++)if(backend[n]=='/')backend[n]='\\';
+        }
         if(!a||a>=260||!b||b>=260||FAILED(pw_d3d9_session_open(service,backend,&owned)))owned=NULL;
         AcquireSRWLockExclusive(&lock);opening=0;session=owned;if(owned)users=1;ReleaseSRWLockExclusive(&lock);
         if(!owned)return NULL;

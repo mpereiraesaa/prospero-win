@@ -40,3 +40,5 @@ by the guest display system and never crosses the bridge wire. Invalid adapters,
 empty or unterminated names, and missing guest matches return NULL. No default
 monitor is substituted for an unmatched native adapter. The actual backend
 fixture checks a valid guest monitor's name and invalid adapter rejection.
+
+Profile-compatible forward-slash environment paths are normalized to Windows backslashes before session startup. Drive-absolute validation remains in the session/bootstrap; relative paths still fail. The actual factory fixture supplies forward-slash paths to cover this launch path.

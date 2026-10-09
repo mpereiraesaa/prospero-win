@@ -8,6 +8,7 @@
 int wmain(int argc,WCHAR **argv)
 {
     CHECK(argc==4);
+    for(unsigned arg=2;arg<=3;arg++)for(WCHAR *p=argv[arg];*p;p++)if(*p==L'\\')*p=L'/';
     CHECK(SetEnvironmentVariableW(L"PW_D3D9_SERVICE64",argv[2]));
     CHECK(SetEnvironmentVariableW(L"PW_D3D9_BACKEND64",argv[3]));
     HMODULE module=LoadLibraryW(argv[1]);CHECK(module);
@@ -41,7 +42,11 @@ int wmain(int argc,WCHAR **argv)
         CHECK(monitor&&GetMonitorInfoA(monitor,(MONITORINFO *)&info)&&!lstrcmpiA(info.szDevice,id.DeviceName));
         CHECK(!IDirect3D9_GetAdapterMonitor(a,0xffffffff));
         IDirect3DDevice9 *device=(void *)1;
+#ifdef PW_D3D9_ENABLE_DEVICE
+        CHECK(IDirect3D9_CreateDevice(a,0,D3DDEVTYPE_HAL,NULL,0,NULL,&device)==D3DERR_INVALIDCALL&&!device);
+#else
         CHECK(IDirect3D9_CreateDevice(a,0,D3DDEVTYPE_HAL,NULL,0,NULL,&device)==D3DERR_NOTAVAILABLE&&!device);
+#endif
         CHECK(IDirect3D9_Release(a)==0);
         CHECK(IDirect3D9_GetAdapterCount(b)>0);
         CHECK(IDirect3D9_Release(b)==0);
