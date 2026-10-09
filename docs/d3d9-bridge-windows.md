@@ -33,6 +33,8 @@ Closing blocks new admission and input routing. Pending mirror completion and
 all surface releases must finish before detach. Reusing a slot changes its
 generation. Local input lookup maps either member of a visible live pair back
 to the original guest window; closing, hidden, or failed pairs have no target.
+Handle lookup distinguishes an ordinary unassociated HWND from a known pair
+whose input is suppressed, so the driver can preserve ordinary dialog routing.
 
 All functions require caller serialization. They contain no allocation, waits,
 locks, Wine calls, or callbacks. This allows the adapter to take a snapshot under

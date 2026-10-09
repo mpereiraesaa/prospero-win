@@ -28,12 +28,15 @@ int main(void)
  OK(pw_d3d9_window_get(&r,a,&view));assert(view.applied.width==320 && view.backend_result==1);
  assert(pw_d3d9_window_input(&r,service)==guest && pw_d3d9_window_input(&r,guest)==guest);
  assert(!pw_d3d9_window_input(&r,999));
+ assert(pw_d3d9_window_find(&r,999,&bad)==PW_D3D9_WINDOW_STALE);
+ OK(pw_d3d9_window_find(&r,service,&bad));assert(bad.id==a.id && bad.generation==a.generation);
  assert(pw_d3d9_window_acquire(&r,a,guest,&first)==PW_D3D9_WINDOW_INVALID);
  OK(pw_d3d9_window_acquire(&r,a,service,&first));stale=first;
  OK(pw_d3d9_window_acquire(&r,a,service,&second)); /* Reset overlap, same pair. */
  OK(pw_d3d9_window_begin(&r,b,1,&state));OK(pw_d3d9_window_ack(&r,b,1,0));
  assert(pw_d3d9_window_acquire(&r,b,UINT64_C(0x200002345),&full[0])==PW_D3D9_WINDOW_BUSY);
  OK(pw_d3d9_window_close(&r,a));assert(!pw_d3d9_window_input(&r,service));
+ OK(pw_d3d9_window_find(&r,service,&bad)); /* Known pair with suppressed input, not an ordinary HWND. */
  assert(pw_d3d9_window_acquire(&r,a,service,&full[0])==PW_D3D9_WINDOW_CLOSED);
  assert(pw_d3d9_window_detach(&r,a)==PW_D3D9_WINDOW_BUSY);
  OK(pw_d3d9_window_release(&r,first));assert(pw_d3d9_window_release(&r,first)==PW_D3D9_WINDOW_STALE);

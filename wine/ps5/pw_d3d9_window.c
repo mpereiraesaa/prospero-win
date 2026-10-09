@@ -33,6 +33,14 @@ int pw_d3d9_window_attach(struct pw_d3d9_windows *r,uint64_t guest,uint64_t serv
  }
  return PW_D3D9_WINDOW_EXHAUSTED;
 }
+int pw_d3d9_window_find(const struct pw_d3d9_windows *r,uint64_t handle,struct pw_d3d9_window_id *id)
+{
+ unsigned i;if(!r || !handle || !id)return PW_D3D9_WINDOW_INVALID;
+ for(i=0;i<PW_D3D9_WINDOWS;i++)if(r->windows[i].live && (r->windows[i].guest==handle || r->windows[i].service==handle)){
+  id->epoch=r->epoch;id->id=i+1;id->generation=r->windows[i].generation;return PW_D3D9_WINDOW_OK;
+ }
+ return PW_D3D9_WINDOW_STALE;
+}
 int pw_d3d9_window_get(const struct pw_d3d9_windows *r,struct pw_d3d9_window_id id,struct pw_d3d9_window_entry *out)
 {
  struct pw_d3d9_window_entry *e=entry((struct pw_d3d9_windows *)r,id);

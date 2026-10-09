@@ -32,6 +32,8 @@ enum pw_d3d9_window_result { PW_D3D9_WINDOW_OK, PW_D3D9_WINDOW_INVALID,
  * The native adapter must validate process/thread/domain ownership first. */
 int pw_d3d9_windows_init(struct pw_d3d9_windows *,uint32_t epoch);
 int pw_d3d9_window_attach(struct pw_d3d9_windows *,uint64_t guest,uint64_t service,struct pw_d3d9_window_id *);
+/* Distinguishes an unassociated ordinary HWND from a suppressed paired HWND. */
+int pw_d3d9_window_find(const struct pw_d3d9_windows *,uint64_t local_handle,struct pw_d3d9_window_id *);
 int pw_d3d9_window_get(const struct pw_d3d9_windows *,struct pw_d3d9_window_id,struct pw_d3d9_window_entry *);
 /* Ordered two-phase mirror. No presentation until first successful ack. */
 int pw_d3d9_window_begin(struct pw_d3d9_windows *,struct pw_d3d9_window_id,uint64_t sequence,const struct pw_d3d9_window_state *);
