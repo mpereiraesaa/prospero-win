@@ -118,12 +118,21 @@ int main(void)
     pw_d3d9_transform_apply(s, &failed, 0); /* unknown block */
     assert(unknown(s, VIEW) && unknown(s, PROJECTION) && unknown(s, WORLD));
     pw_d3d9_transform_set(s, VIEW, a, 0); pw_d3d9_transform_apply(s, NULL, 0); assert(unknown(s, VIEW));
+    /* Refused Capture/Apply while the model believed it was live: the recording
+     * domain is lost, everything is forgotten and nothing is served until a
+     * successful Begin/End pair; Capture, Apply or Create success do not count. */
     pw_d3d9_transform_set(s, VIEW, a, 0);
-    pw_d3d9_transform_apply(s, &all, BAD); assert(has(s, VIEW, a) && s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN);
-    pw_d3d9_transform_capture(s, NULL, 0);
-    pw_d3d9_transform_capture(s, &all, BAD); assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN);
-    pw_d3d9_transform_capture(s, NULL, 0);
-    pw_d3d9_transform_apply(s, &all, FAIL); assert(unknown(s, VIEW)); /* failed Apply may have applied */
+    pw_d3d9_transform_apply(s, &all, BAD);
+    assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN && unknown(s, VIEW));
+    pw_d3d9_transform_capture(s, &all, 0); pw_d3d9_transform_apply(s, &all, 0); pw_d3d9_transform_create(s, &pixel, 2, 0);
+    pw_d3d9_transform_observe(s, VIEW, a, 0);
+    assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN && unknown(s, VIEW));
+    pw_d3d9_transform_begin(s, 0); pw_d3d9_transform_end(s, NULL, 0); assert(s->recording == PW_D3D9_TRANSFORM_LIVE);
+    pw_d3d9_transform_set(s, VIEW, a, 0); pw_d3d9_transform_capture(s, &all, 0); /* refresh the ALL block */
+    pw_d3d9_transform_capture(s, &all, BAD); assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN && unknown(s, VIEW));
+    pw_d3d9_transform_begin(s, 0); pw_d3d9_transform_end(s, NULL, 0);
+    pw_d3d9_transform_set(s, VIEW, a, 0);
+    pw_d3d9_transform_apply(s, &all, FAIL); assert(unknown(s, VIEW) && s->recording == PW_D3D9_TRANSFORM_LIVE); /* may have applied */
     pw_d3d9_transform_block_prepare(&odd); pw_d3d9_transform_create(s, &odd, 9, 0); assert(!odd.known);
     pw_d3d9_transform_set(s, VIEW, a, 0); pw_d3d9_transform_apply(s, &odd, 0); assert(unknown(s, VIEW));
     pw_d3d9_transform_create(s, &oom, 1, 0); assert(!oom.known); /* no storage: unknown, not an error */
@@ -131,34 +140,30 @@ int main(void)
     pw_d3d9_transform_block_prepare(&all); assert(!all.known); /* reuse forgets old evidence */
     pw_d3d9_transform_set(s, VIEW, a, 0); pw_d3d9_transform_apply(s, &all, 0); assert(unknown(s, VIEW));
 
-    /* Unknown recording state: setters forget, the recorded block is unknown. */
+    /* Unknown Begin/End outcome (incl. a native End whose publication failed). */
     pw_d3d9_transform_set(s, VIEW, a, 0); pw_d3d9_transform_set(s, PROJECTION, a, 0);
     pw_d3d9_transform_begin(s, BAD);
-    assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN && has(s, VIEW, a));
-    pw_d3d9_transform_set(s, VIEW, b, 0); assert(unknown(s, VIEW) && has(s, PROJECTION, a));
+    assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN && unknown(s, VIEW) && unknown(s, PROJECTION));
+    pw_d3d9_transform_set(s, VIEW, b, 0); assert(unknown(s, VIEW));
     pw_d3d9_transform_block_prepare(&rec); pw_d3d9_transform_end(s, &rec, 0);
     assert(!rec.known && s->recording == PW_D3D9_TRANSFORM_LIVE);
-    pw_d3d9_transform_set(s, VIEW, b, 0); pw_d3d9_transform_apply(s, &rec, 0);
+    pw_d3d9_transform_set(s, VIEW, b, 0); pw_d3d9_transform_set(s, PROJECTION, b, 0); pw_d3d9_transform_apply(s, &rec, 0);
     assert(unknown(s, VIEW) && unknown(s, PROJECTION));
     pw_d3d9_transform_begin(s, 0); pw_d3d9_transform_set(s, VIEW, a, 0); pw_d3d9_transform_set(s, 300, a, BAD);
     pw_d3d9_transform_block_prepare(&rec); pw_d3d9_transform_end(s, &rec, 0); /* a failed recorded Set taints the block */
     assert(!rec.known);
     pw_d3d9_transform_begin(s, 0); pw_d3d9_transform_set(s, 4, a, 0);
     pw_d3d9_transform_block_prepare(&rec); pw_d3d9_transform_end(s, &rec, 0); assert(!rec.known);
-    pw_d3d9_transform_begin(s, 0); pw_d3d9_transform_end(s, &rec, BAD);
-    assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN);
+    pw_d3d9_transform_set(s, VIEW, a, 0);
+    pw_d3d9_transform_begin(s, 0); pw_d3d9_transform_set(s, PROJECTION, a, 0);
+    pw_d3d9_transform_block_prepare(&rec); pw_d3d9_transform_end(s, &rec, 0x8007000eu); /* E_OUTOFMEMORY after native End */
+    assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN && !rec.known && unknown(s, VIEW));
     pw_d3d9_transform_set(s, VIEW, a, 0); assert(unknown(s, VIEW));
-    pw_d3d9_transform_capture(s, NULL, 0); assert(s->recording == PW_D3D9_TRANSFORM_LIVE); /* Capture proves live */
-    pw_d3d9_transform_set(s, VIEW, a, 0); assert(has(s, VIEW, a));
-    pw_d3d9_transform_begin(s, BAD); pw_d3d9_transform_create(s, &pixel, 2, 0);
-    assert(s->recording == PW_D3D9_TRANSFORM_LIVE);
-    pw_d3d9_transform_begin(s, BAD); pw_d3d9_transform_apply(s, &pixel, 0);
-    assert(s->recording == PW_D3D9_TRANSFORM_LIVE && has(s, VIEW, a));
-    pw_d3d9_transform_begin(s, BAD); pw_d3d9_transform_capture(s, &pixel, BAD);
-    assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN);
+    pw_d3d9_transform_begin(s, BAD); assert(s->recording == PW_D3D9_TRANSFORM_RECORDING_UNKNOWN);
+    pw_d3d9_transform_begin(s, 0); assert(s->recording == PW_D3D9_TRANSFORM_RECORDING);
+    pw_d3d9_transform_end(s, NULL, 0); pw_d3d9_transform_set(s, VIEW, a, 0); assert(has(s, VIEW, a));
 
     /* Reset boundaries invalidate live values; snapshots and recording state stay. */
-    pw_d3d9_transform_capture(s, NULL, 0);
     pw_d3d9_transform_block_prepare(&all); pw_d3d9_transform_create(s, &all, 1, 0);
     pw_d3d9_transform_begin(s, 0);
     pw_d3d9_transform_invalidate(s); assert(unknown(s, VIEW) && s->recording == PW_D3D9_TRANSFORM_RECORDING);
