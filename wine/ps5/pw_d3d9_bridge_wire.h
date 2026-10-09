@@ -17,7 +17,10 @@ enum pw_d3d9_wire_role { PW_D3D9_CLIENT, PW_D3D9_SERVICE };
 enum pw_d3d9_wire_state { PW_D3D9_STARTING, PW_D3D9_READY, PW_D3D9_STOPPING, PW_D3D9_STOPPED };
 enum pw_d3d9_wire_opcode {
     PW_D3D9_HELLO = 1, PW_D3D9_STOP = 2, PW_D3D9_CREATE9 = 16,
-    PW_D3D9_FACTORY_CALL = 17, PW_D3D9_RELEASE = 18, PW_D3D9_DEVICE_CALL = 19
+    PW_D3D9_FACTORY_CALL = 17, PW_D3D9_RELEASE = 18, PW_D3D9_DEVICE_CALL = 19,
+    PW_D3D9_RESOURCE_CALL = 20, PW_D3D9_COMMAND_CALL = 21,
+    PW_D3D9_PROGRAM_CALL = 22, PW_D3D9_TEXTURE_CALL = 23, PW_D3D9_GETTER_CALL = 24,
+    PW_D3D9_OBJECT_GETTER_CALL = 25
 };
 /* Target identity is echoed in replies. Newly returned objects belong in a
  * typed payload, never in a pointer field. Sequence is zero for send; replies
