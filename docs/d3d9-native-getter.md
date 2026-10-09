@@ -34,3 +34,9 @@ the fixture compares direct backend and helper HRESULTs and preserves failure.
 Receipt: `/tmp/prospero-d3d9-native-getter-r2/receipt.json`.
 This proves the native helper and real PE codec boundary. It does not exercise
 production COM proxy/session wiring, a console, or game performance.
+
+## Device caps follow-up
+
+Device slot7 now calls the actual native device GetDeviceCaps through the getter transport (304 bytes, all76 field-wise words), rather than forwarding to factory caps. The PE32 output is published only after matched method, size and HRESULT validation. Failed replies leave caller output unchanged. An older service rejects the additive method, so deploy the matched rebuilt pair; no native caps values are invented or cached.
+
+The controlled ABI fixture exercises all76 caps words including arbitrary float/signed bits and backend failure. The actual DXVK fixture compares the entire decoded device caps to a direct device query and separately demonstrates factory/device caps differ. This corrects a real output mismatch; it does not establish the cause of GTA SA initialization failure.

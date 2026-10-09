@@ -2,6 +2,8 @@
 #define COBJMACROS
 #include "pw_d3d9_native_getter.h"
 #include <string.h>
+#include "../pw_d3d9_factory_wire.h"
+_Static_assert(sizeof(D3DCAPS9)==PW_D3D9_CAP_WORDS*4,"complete device caps");
 _Static_assert(sizeof(float)==4 && sizeof(int)==4 && sizeof(BOOL)==4,"D3D9 scalar ABI");
 static void floating(uint32_t *out,const float *value){memcpy(out,value,4);}
 static void color(uint32_t *out,const D3DCOLORVALUE *v)
@@ -12,7 +14,7 @@ int pw_d3d9_native_getter_dispatch(IDirect3DDevice9 *device,
     struct pw_d3d9_getter_request q;struct pw_d3d9_getter_reply r={0};
     union {DWORD word;UINT integer;D3DDISPLAYMODE mode;D3DRASTER_STATUS raster;
         D3DMATRIX matrix;D3DVIEWPORT9 viewport;D3DMATERIAL9 material;D3DLIGHT9 light;
-        D3DCLIPSTATUS9 clip;RECT rect;PALETTEENTRY palette[256];
+        D3DCAPS9 caps;D3DCLIPSTATUS9 clip;RECT rect;PALETTEENTRY palette[256];
         float f[1024];int integers[1024];BOOL booleans[1024];} n={0};
     size_t bytes;unsigned i;int status;HRESULT hr=S_OK;uint32_t *d=r.data.words;
     if(!device || !request || !out)return PW_D3D9_GETTER_INVALID;
@@ -20,6 +22,7 @@ int pw_d3d9_native_getter_dispatch(IDirect3DDevice9 *device,
 #define CALL(name,...) IDirect3DDevice9_##name(device, ##__VA_ARGS__)
     switch(q.method){
     case 4:n.integer=CALL(GetAvailableTextureMem);break;
+    case 7:hr=CALL(GetDeviceCaps,&n.caps);break;
     case 8:hr=CALL(GetDisplayMode,q.args[0],&n.mode);break;
     case 15:n.integer=CALL(GetNumberOfSwapChains);break;
     case 19:hr=CALL(GetRasterStatus,q.args[0],&n.raster);break;
@@ -55,6 +58,12 @@ int pw_d3d9_native_getter_dispatch(IDirect3DDevice9 *device,
     r.bytes=(uint32_t)bytes;
     switch(q.method){
     case 4:case 15:case 74:case 103:d[0]=n.integer;break;
+    case 7:
+        i=0;
+#define COPY_CAP(type,name,native) _Static_assert(sizeof(n.caps.native)==4,"caps field width");memcpy(d+i++,&n.caps.native,4);
+        PW_D3D9_CAP_FIELDS(COPY_CAP)
+#undef COPY_CAP
+        break;
     case 8:d[0]=n.mode.Width;d[1]=n.mode.Height;d[2]=n.mode.RefreshRate;d[3]=n.mode.Format;break;
     case 19:d[0]=(uint32_t)n.raster.InVBlank;d[1]=n.raster.ScanLine;break;
     case 45:for(i=0;i<16;i++)floating(d+i,&n.matrix.m[i/4][i%4]);break;

@@ -11,6 +11,7 @@
  * DWORDs except the 256 explicit red/green/blue/flags palette entries. */
 #define PW_D3D9_GETTER_METHODS(X) \
  X(4,GetAvailableTextureMem,0,4,0) \
+ X(7,GetDeviceCaps,0,304,0) \
  X(8,GetDisplayMode,1,16,0) \
  X(15,GetNumberOfSwapChains,0,4,0) \
  X(19,GetRasterStatus,1,8,0) \

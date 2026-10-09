@@ -12,6 +12,8 @@ static uint32_t data[1024];
 static HRESULT status(void){return fail?(HRESULT)0x8876086c:(HRESULT)0x1234;}
 static UINT STDMETHODCALLTYPE test_GetAvailableTextureMem(IDirect3DDevice9 *self)
 {assert(self==&device && expected.method==4);++calls;UINT value;memcpy(&value,data,4);return value;}
+static HRESULT STDMETHODCALLTYPE test_GetDeviceCaps(IDirect3DDevice9 *self,D3DCAPS9 *caps)
+{assert(self==&device && expected.method==7);++calls;assert(caps&&bytes==sizeof(*caps));memcpy(caps,data,bytes);return status();}
 static HRESULT STDMETHODCALLTYPE test_GetDisplayMode(IDirect3DDevice9 *self, UINT iSwapChain, D3DDISPLAYMODE* pMode)
 {assert(self==&device && expected.method==8);++calls;assert((uint32_t)iSwapChain==expected.args[0]);assert(pMode);if(bytes)memcpy(pMode,data,bytes);return status();}
 static UINT STDMETHODCALLTYPE test_GetNumberOfSwapChains(IDirect3DDevice9 *self)
@@ -68,6 +70,7 @@ static HRESULT STDMETHODCALLTYPE test_GetPixelShaderConstantB(IDirect3DDevice9 *
 {assert(self==&device && expected.method==114);++calls;assert((uint32_t)StartRegister==expected.args[0]);assert(pConstantData);if(bytes)memcpy(pConstantData,data,bytes);assert((uint32_t)BoolCount==expected.args[1]);return status();}
 static const IDirect3DDevice9Vtbl vtable={
 .GetAvailableTextureMem=test_GetAvailableTextureMem,
+.GetDeviceCaps=test_GetDeviceCaps,
 .GetDisplayMode=test_GetDisplayMode,
 .GetNumberOfSwapChains=test_GetNumberOfSwapChains,
 .GetRasterStatus=test_GetRasterStatus,
@@ -127,5 +130,5 @@ int main(void)
  assert(pw_d3d9_native_getter_dispatch(&device,&expected,&reply)==PW_D3D9_GETTER_INVALID);
  expected.method=84;assert(pw_d3d9_native_getter_dispatch(&device,&expected,&reply)==PW_D3D9_GETTER_UNSUPPORTED);
  assert(calls==before && !memcmp(&reply,&original,sizeof(reply)));
- puts("PASS native getter ABI:28 methods, exact HRESULT/BOOL/float bits, atomic failures, maximum and zero arrays");return 0;
+ puts("PASS native getter ABI:29 methods, exact HRESULT/BOOL/float bits, atomic failures, maximum and zero arrays");return 0;
 }

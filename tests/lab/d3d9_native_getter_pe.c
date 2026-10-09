@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "pw_d3d9_getter_wire.h"
+#include "pw_d3d9_factory_wire.h"
 #ifdef _WIN64
 #include "pw_d3d9_native_getter.h"
 #endif
@@ -59,6 +60,17 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
   struct pw_d3d9_getter_request q;struct pw_d3d9_getter_reply r;size_t written;
   if(pw_d3d9_getter_decode(&q,s->requests[i],24) || pw_d3d9_native_getter_dispatch(device,&q,&r) ||
      pw_d3d9_getter_reply_encode(s->replies[i],PW_D3D9_GETTER_MAX,&written,&q,&r))goto done;
+  if(q.method==7){
+   D3DCAPS9 direct={0},factory_caps={0},decoded={0};unsigned word=0;
+   HRESULT direct_hr=IDirect3DDevice9_GetDeviceCaps(device,&direct);
+   if(IDirect3D9_GetDeviceCaps(d3d,0,D3DDEVTYPE_HAL,&factory_caps)!=S_OK ||
+      (uint32_t)direct_hr!=r.hresult || r.bytes!=sizeof(direct))goto done;
+#define READ_CAP(type,name,native) memcpy(&decoded.native,r.data.words+word++,4);
+   PW_D3D9_CAP_FIELDS(READ_CAP)
+#undef READ_CAP
+   if(memcmp(&direct,&decoded,sizeof(direct)) || !memcmp(&direct,&factory_caps,sizeof(direct)))goto done;
+   printf("PW_GETTER_CAPS full304_equal=1 factory_index=%lu device_index=%lu\n",factory_caps.MaxVertexBlendMatrixIndex,direct.MaxVertexBlendMatrixIndex);
+  }
   if(q.method==72 || q.method==74){
    UINT current=0;HRESULT direct=q.method==72?IDirect3DDevice9_GetPaletteEntries(device,q.args[0],palette):IDirect3DDevice9_GetCurrentTexturePalette(device,&current);
    if((uint32_t)direct!=r.hresult)goto done;
@@ -143,14 +155,14 @@ int main(int argc,char **argv)
  query=(query_fn)GetProcAddress(GetModuleHandleA("ntdll.dll"),"NtQueryInformationProcess");
  if(!query)return 6;
  status=query(GetCurrentProcess(),0x50570001,&request,sizeof(request),&returned);
- if(status || returned!=sizeof(request) || request.result[0] || request.result[1]!=32 || request.result[7])goto done;
+ if(status || returned!=sizeof(request) || request.result[0] || request.result[1]!=33 || request.result[7])goto done;
  for(unsigned i=0;i<s->count;i++){
   struct pw_d3d9_getter_request q;struct pw_d3d9_getter_reply r;
   if(pw_d3d9_getter_decode(&q,s->requests[i],24) || pw_d3d9_getter_reply_decode(&r,&q,s->replies[i],s->reply_bytes[i]) || !validate(&q,&r)){printf("PW_GETTER_INVALID index=%u\n",i);goto done;}
  }
  result=0;
  done:
- printf("PW_GETTER_PE status=%08lx create=%08llx replies=%llu validated=%d error=%llu\n",status,request.result[0],request.result[1],result?0:32,request.result[7]);
+ printf("PW_GETTER_PE status=%08lx create=%08llx replies=%llu validated=%d error=%llu\n",status,request.result[0],request.result[1],result?0:33,request.result[7]);
  UnmapViewOfFile(s);CloseHandle(mapping);return result;
 }
 #endif

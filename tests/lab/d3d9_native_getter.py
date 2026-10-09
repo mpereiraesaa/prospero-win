@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Twenty-eight-method native ABI plus PE32-owned payloads on a real PE64 DXVK device."""
+"""Twenty-nine-method native ABI plus PE32-owned payloads on a real PE64 DXVK device."""
 import argparse
 import hashlib
 import json
@@ -21,7 +21,7 @@ def run(getter,label,env=None):
 native=root/'wine/ps5/d3d9/pw_d3d9_native_getter.c';codec=root/'wine/ps5/pw_d3d9_getter_wire.c'
 fixture=root/'tests/lab/d3d9_native_getter.c';pe=root/'tests/lab/d3d9_native_getter_pe.c'
 includes=['-I'+str(root/'wine/ps5'),'-I'+str(root/'wine/ps5/d3d9')]
-inputs=[native,native.with_suffix('.h'),codec,fixture,pe,Path(__file__)]
+inputs=[native,native.with_suffix('.h'),codec,fixture,pe,Path(__file__),root/'wine/ps5/pw_d3d9_getter_wire.h',root/'wine/ps5/pw_d3d9_factory_wire.h']
 frozen={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in inputs}
 flags=['-std=gnu11','-Wall','-Wextra','-Werror']
 for label,extra in [('host',[]),('sanitize',['-fsanitize=address,undefined','-fno-omit-frame-pointer'])]:
@@ -33,10 +33,10 @@ env=os.environ.copy();env.update(WINEPREFIX=str(a.prefix.resolve()),WINEDEBUG='-
 for i in range(3):
  env['PW_GETTER_SESSION']=uuid.uuid4().hex
  r=run([a.wine_build.resolve()/'loader/wine',out/'client.exe','Z:'+str(out/'service.dll').replace('/','\\')],'pe-'+str(i),env)
- assert len(re.findall('PW_GETTER_NATIVE index=',r.stdout))==32,r.stdout
- assert re.search(r'PW_GETTER_PE status=00000000 create=00000000 replies=32 validated=32 error=0',r.stdout),r.stdout
+ assert len(re.findall('PW_GETTER_NATIVE index=',r.stdout))==33,r.stdout
+ assert re.search(r'PW_GETTER_PE status=00000000 create=00000000 replies=33 validated=33 error=0',r.stdout),r.stdout
 assert frozen=={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in inputs},'source changed during proof'
-receipt.update(status='pass',native_methods=28,pe_processes=3,requests_per_process=32,
+receipt.update(status='pass',native_methods=29,pe_processes=3,requests_per_process=33,
  scope='Controlled exact HRESULT/BOOL/float ABI; PE32 getter requests decoded by PE64 helper on real DXVK. No production COM proxy/session wiring or console performance claim.',
  sha256={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [native,native.with_suffix('.h'),codec,fixture,pe,Path(__file__),a.backend64.resolve(),out/'client.exe',out/'service.dll']})
 (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');print('PASS '+str(out/'receipt.json'))

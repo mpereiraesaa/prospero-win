@@ -175,9 +175,26 @@ static HRESULT WINAPI get_creation(IDirect3DDevice9 *iface,D3DDEVICE_CREATION_PA
 {if(!out)return D3DERR_INVALIDCALL;*out=device(iface)->creation;return S_OK;}
 static HRESULT WINAPI get_caps(IDirect3DDevice9 *iface,D3DCAPS9 *out)
 {
+    if(!out)return D3DERR_INVALIDCALL;
+#ifdef PW_D3D9_ENABLE_METHODS
     addref(iface);struct device_proxy *d=device(iface);
-    HRESULT hr=IDirect3D9_GetDeviceCaps(d->parent,d->creation.AdapterOrdinal,d->creation.DeviceType,out);
+    struct pw_d3d9_getter_request q={.method=7};struct pw_d3d9_getter_reply r={0};
+    HRESULT hr=d->failed?D3DERR_NOTAVAILABLE:pw_d3d9_session_getter(d->session,d->remote,&q,&r);
+    if(SUCCEEDED(hr)){
+        if(r.method!=7||r.hresult!=(uint32_t)hr||r.bytes!=PW_D3D9_CAP_WORDS*4){
+            InterlockedExchange(&d->failed,1);pw_d3d9_session_cancel(d->session);hr=E_FAIL;
+        }else{
+            D3DCAPS9 value={0};unsigned i=0;
+#define COPY_CAP(type,name,native) _Static_assert(sizeof(value.native)==4,"caps field width");memcpy(&value.native,r.data.words+i++,4);
+            PW_D3D9_CAP_FIELDS(COPY_CAP)
+#undef COPY_CAP
+            *out=value;
+        }
+    }
     release(iface);return hr;
+#else
+    (void)iface;return D3DERR_NOTAVAILABLE;
+#endif
 }
 static int parameters_to_wire(struct pw_d3d9_present_parameters *out,const D3DPRESENT_PARAMETERS *p,struct guest_window *window)
 {
