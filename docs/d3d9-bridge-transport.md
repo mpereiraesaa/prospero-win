@@ -59,7 +59,8 @@ publish ordinary calls until it consumes the HELLO reply. The future typed
 handshake must validate backend identity, ABI/capabilities and section bounds
 before the service accepts it; a transport state change alone is not proof.
 
-The client transitions READY to STOPPING and queues STOP after prior requests.
+The client transitions READY to STOPPING and queues exactly one STOP after prior
+requests. Early STOP and repeated STOP publication are rejected.
 The service replies to all accepted work, releases its owned backend objects
 and joins children, acknowledges STOP, then enters STOPPED. The core refuses
 STOPPED while the request ring is nonempty or an accepted request still awaits

@@ -106,6 +106,9 @@ int pw_d3d9_channel_send(struct pw_d3d9_channel *c,const struct pw_d3d9_message 
     if(!m || overlap(m,sizeof(*m),c->memory,c->bytes) || overlap(m,sizeof(*m),c,sizeof(*c)) || !opcode(m->opcode) || m->sequence || (!!m->object != !!m->generation) ||
        (m->payload_bytes && !range(payload,m->payload_bytes)) || overlap(payload,m->payload_bytes,c->memory,c->bytes) ||
        m->payload_bytes>c->capacity[ring]-PW_D3D9_WIRE_HEADER)return PW_D3D9_INVALID;
+    if(m->opcode==PW_D3D9_STOP && state!=PW_D3D9_STOPPING)return PW_D3D9_INVALID;
+    if(c->role==PW_D3D9_CLIENT && c->next_send>1 &&
+       c->pending[(c->next_send-2)%PW_D3D9_WIRE_PENDING].opcode==PW_D3D9_STOP)return PW_D3D9_INVALID;
     if((state==PW_D3D9_STARTING && m->opcode!=PW_D3D9_HELLO) ||
        (state==PW_D3D9_STOPPING && c->role==PW_D3D9_CLIENT && m->opcode!=PW_D3D9_STOP))return PW_D3D9_CLOSED;
     if((c->next_send==1)!=(m->opcode==PW_D3D9_HELLO) ||
@@ -150,6 +153,10 @@ int pw_d3d9_channel_receive(struct pw_d3d9_channel *c,struct pw_d3d9_message *m,
        payload>total-PW_D3D9_WIRE_HEADER || total-PW_D3D9_WIRE_HEADER-payload>7 || get32(header+20)!=ring || get32(header+36)!=c->epoch || get32(header+60))return bad(c);
     record=(struct pw_d3d9_message){get32(header+12),get32(header+24),get32(header+28),get32(header+32),get64(header+40),get64(header+48),(int32_t)get32(header+56),payload};
     if((record.sequence==1)!=(record.opcode==PW_D3D9_HELLO) || (state==PW_D3D9_STARTING && record.opcode!=PW_D3D9_HELLO) || !opcode(record.opcode) || (!!record.object != !!record.generation) || record.sequence!=c->next_receive || record.sequence==UINT64_MAX || record.ticket!=record.sequence)return bad(c);
+    if(record.opcode==PW_D3D9_STOP && state!=PW_D3D9_STOPPING &&
+       !(c->role==PW_D3D9_CLIENT && state==PW_D3D9_STOPPED))return bad(c);
+    if(c->role==PW_D3D9_SERVICE && c->next_receive>1 &&
+       c->pending[(c->next_receive-2)%PW_D3D9_WIRE_PENDING].opcode==PW_D3D9_STOP)return bad(c);
     if(c->role==PW_D3D9_CLIENT) {
         if(!c->pending_count || !same(&record,&c->pending[(c->next_receive-1)%PW_D3D9_WIRE_PENDING]))return bad(c);
     } else {

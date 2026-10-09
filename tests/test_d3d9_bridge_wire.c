@@ -52,6 +52,8 @@ static void basic(void)
     assert(pw_d3d9_channel_open(&f.client,f.memory,f.bytes,8,PW_D3D9_CLIENT)==PW_D3D9_INVALID);
     assert(pw_d3d9_channel_receive(&f.client,&r,scratch,sizeof(scratch))==PW_D3D9_EMPTY);
     hello(&f);
+    m=(struct pw_d3d9_message){.opcode=PW_D3D9_STOP};
+    assert(pw_d3d9_channel_send(&f.client,&m,NULL)==PW_D3D9_INVALID);
     for(unsigned i=0;i<500;i++)roundtrip(&f,i);
     /* The positions are unsigned modular counters; simulate the 4GiB boundary. */
     for(unsigned i=0;i<4;i++)atomic_store((_Atomic uint32_t *)(f.memory+48+i*4),UINT32_MAX-63);
@@ -62,6 +64,7 @@ static void basic(void)
     assert(pw_d3d9_channel_stopped(&f.service)==PW_D3D9_FULL);
     m=(struct pw_d3d9_message){.opcode=PW_D3D9_STOP};
     assert(pw_d3d9_channel_send(&f.client,&m,NULL)==PW_D3D9_OK);
+    assert(pw_d3d9_channel_send(&f.client,&m,NULL)==PW_D3D9_INVALID);
     for(unsigned i=0;i<2;i++){
         assert(pw_d3d9_channel_receive(&f.service,&r,scratch,sizeof(scratch))==PW_D3D9_OK);
         r.sequence=0;assert(pw_d3d9_channel_send(&f.service,&r,NULL)==PW_D3D9_OK);
@@ -70,6 +73,16 @@ static void basic(void)
     for(unsigned i=0;i<2;i++)assert(pw_d3d9_channel_receive(&f.client,&r,scratch,sizeof(scratch))==PW_D3D9_OK);
     assert(pw_d3d9_channel_receive(&f.client,&r,scratch,sizeof(scratch))==PW_D3D9_CLOSED);
     assert(pw_d3d9_channel_send(&f.client,&m,NULL)==PW_D3D9_CLOSED);free(f.memory);
+}
+static void early_stop(void)
+{
+    struct fixture f;unsigned char scratch[128];struct pw_d3d9_message m=call(0),r;
+    init(&f,128);hello(&f);
+    assert(pw_d3d9_channel_send(&f.client,&m,NULL)==PW_D3D9_OK);
+    /* Rewrite the queued opcode into an otherwise valid premature STOP. */
+    f.memory[128+64+12]=PW_D3D9_STOP;
+    assert(pw_d3d9_channel_receive(&f.service,&r,scratch,sizeof(scratch))==PW_D3D9_INVALID);
+    assert(pw_d3d9_channel_error(&f.client));free(f.memory);
 }
 static void full_and_cancel(void)
 {
@@ -138,6 +151,6 @@ int main(void)
     assert(pw_d3d9_wire_slice(64,16,8,8,8)==PW_D3D9_INVALID);
     assert(pw_d3d9_wire_slice(64,16,16,UINT32_MAX,8)==PW_D3D9_INVALID);
     assert(pw_d3d9_wire_slice(64,16,16,0,8)==PW_D3D9_INVALID);
-    basic();full_and_cancel();corruption();concurrent();
+    basic();early_stop();full_and_cancel();corruption();concurrent();
     puts("D3D9 transport: framing, ownership, wrap, tickets, generations, backpressure, cancellation, stop and 20000 concurrent replies passed");return 0;
 }
