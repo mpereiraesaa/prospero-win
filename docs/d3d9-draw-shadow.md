@@ -38,3 +38,12 @@ executing a draw-containing batch. That check must release any temporary owned
 GetVertexDeclaration reference and must not consult guest pointers. A distinct
 negotiated draw-policy capability is required before activation; existing batch
 and constant-policy features alone do not authorize draw queueing.
+
+## Retained host evidence
+
+Portable normal and ASan/UBSan checks passed four commands. A separate native
+fixture extension passed204 declaration/recording/Reset comparisons per process
+in hardware, mixed and software creation modes, plus the existing real primitive
+and indexed draws with changed-pixel readback. Its receipt freezes93 inputs and
+nine successful commands. This supports the evidence model, without claiming
+queued-session integration or console acceptance.
