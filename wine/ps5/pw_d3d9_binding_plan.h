@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #ifndef PW_D3D9_BINDING_PLAN_H
 #define PW_D3D9_BINDING_PLAN_H
+/* Additional HELLO capability; scalar batch support alone never admits bindings. */
+#define PW_D3D9_BINDING_FEATURE 32768u
 #include "pw_d3d9_command_wire.h"
 enum pw_d3d9_binding_status {
     PW_D3D9_BINDING_OTHER, PW_D3D9_BINDING_READY,
