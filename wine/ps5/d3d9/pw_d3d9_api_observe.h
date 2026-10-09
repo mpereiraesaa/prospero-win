@@ -3,10 +3,36 @@
 #define PW_D3D9_API_OBSERVE_H
 #include <windows.h>
 #include <d3d9.h>
+#include <stdint.h>
 /* Opt-in once per process. Disabled publication returns the original table.
  * An enabled interface accepts exactly one immutable source table; a different
  * table returns NULL. Install after all typed slots have been populated. */
 int pw_d3d9_api_observe_enabled(void);
+int pw_d3d9_api_diagnostics_enabled(void);
+/* Entry origin, not nesting depth, separates guest calls from bridge pins.
+ * Every method count is atomic; a snapshot is not a global stop-the-world cut. */
+#define PW_D3D9_API_INTERFACES 17
+#define PW_D3D9_API_SLOTS 119
+struct pw_d3d9_api_profile_snapshot {
+ uint64_t entries[PW_D3D9_API_INTERFACES][PW_D3D9_API_SLOTS];
+ int enabled,classification_valid;
+};
+void pw_d3d9_api_profile_enter(unsigned,unsigned,const void *);
+void pw_d3d9_api_profile_snapshot(struct pw_d3d9_api_profile_snapshot *);
+/* Optional transport hook AFTER unlocking: epoch, original request sequence,
+ * object, generation, final HRESULT. Process-wide mixed-device counts; first
+ * boundary includes startup and failed Present attempts also delimit intervals.
+ * Local/reentrant rejections without a completed unlocked transport boundary
+ * count as API entries but do not invoke this emitter.
+ * Histograms emit at boundary 1 and every 120, with their own interval length.
+ * Only externally originated vtable calls into this DLL count. Factory exports
+ * and DLL-local helper/pin calls are excluded; guest callback reentry counts.
+ * PW_D3D9_PROFILE=1 requires the observer to be compiled/published. Diagnostics
+ * remains independently controlled by PW_D3D9_DIAGNOSTICS. Neither enabled means
+ * original vtables, zero entry hooks, and zero profiling clock reads. */
+void pw_d3d9_api_profile_present(uint32_t,uint64_t,uint32_t,uint32_t,HRESULT);
+/* Unlocked session teardown boundary, not a process-final or Present claim. */
+void pw_d3d9_api_profile_flush(uint32_t epoch);
 /* Identity-safe lookup; never calls COM or dereferences the supplied table. */
 const void *pw_d3d9_api_original_vtable(const void *);
 void pw_d3d9_api_failure(const char *,unsigned,const char *,HRESULT,void *,REFIID);

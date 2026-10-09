@@ -7,31 +7,44 @@ static IDirect3D9Vtbl raw_IDirect3D9;
 static const IDirect3D9Vtbl *source_IDirect3D9;
 static INIT_ONCE once_IDirect3D9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3D9_QueryInterface(IDirect3D9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(0,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3D9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3D9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3D9_AddRef(IDirect3D9 *self) {
- return raw_IDirect3D9.AddRef(self);
+ pw_d3d9_api_profile_enter(0,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3D9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3D9_Release(IDirect3D9 *self) {
- return raw_IDirect3D9.Release(self);
+ pw_d3d9_api_profile_enter(0,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3D9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_RegisterSoftwareDevice(IDirect3D9 *self, void* pInitializeFunction) {
+ pw_d3d9_api_profile_enter(0,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.RegisterSoftwareDevice(self, pInitializeFunction);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",3,"RegisterSoftwareDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",3,"RegisterSoftwareDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static UINT WINAPI observe_IDirect3D9_GetAdapterCount(IDirect3D9 *self) {
- return raw_IDirect3D9.GetAdapterCount(self);
+ pw_d3d9_api_profile_enter(0,4,__builtin_return_address(0));
+ UINT result=raw_IDirect3D9.GetAdapterCount(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_GetAdapterIdentifier(IDirect3D9 *self, UINT Adapter, DWORD Flags, D3DADAPTER_IDENTIFIER9* pIdentifier) {
+ pw_d3d9_api_profile_enter(0,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.GetAdapterIdentifier(self, Adapter, Flags, pIdentifier);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",5,"GetAdapterIdentifier",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",5,"GetAdapterIdentifier",result,__builtin_return_address(0),NULL);
  return result;
 }
 static UINT WINAPI observe_IDirect3D9_GetAdapterModeCount(IDirect3D9 *self, UINT Adapter, D3DFORMAT Format) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(0,6,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  UINT result=raw_IDirect3D9.GetAdapterModeCount(self, Adapter, Format);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Adapter",&Adapter,sizeof(Adapter),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -40,44 +53,52 @@ static UINT WINAPI observe_IDirect3D9_GetAdapterModeCount(IDirect3D9 *self, UINT
  return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_EnumAdapterModes(IDirect3D9 *self, UINT Adapter, D3DFORMAT Format, UINT Mode, D3DDISPLAYMODE* pMode) {
+ pw_d3d9_api_profile_enter(0,7,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.EnumAdapterModes(self, Adapter, Format, Mode, pMode);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",7,"EnumAdapterModes",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",7,"EnumAdapterModes",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_GetAdapterDisplayMode(IDirect3D9 *self, UINT Adapter, D3DDISPLAYMODE* pMode) {
+ pw_d3d9_api_profile_enter(0,8,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.GetAdapterDisplayMode(self, Adapter, pMode);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",8,"GetAdapterDisplayMode",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",8,"GetAdapterDisplayMode",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_CheckDeviceType(IDirect3D9 *self, UINT iAdapter, D3DDEVTYPE DevType, D3DFORMAT DisplayFormat, D3DFORMAT BackBufferFormat, BOOL bWindowed) {
+ pw_d3d9_api_profile_enter(0,9,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.CheckDeviceType(self, iAdapter, DevType, DisplayFormat, BackBufferFormat, bWindowed);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",9,"CheckDeviceType",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",9,"CheckDeviceType",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_CheckDeviceFormat(IDirect3D9 *self, UINT Adapter, D3DDEVTYPE DeviceType, D3DFORMAT AdapterFormat, DWORD Usage, D3DRESOURCETYPE RType, D3DFORMAT CheckFormat) {
+ pw_d3d9_api_profile_enter(0,10,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.CheckDeviceFormat(self, Adapter, DeviceType, AdapterFormat, Usage, RType, CheckFormat);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",10,"CheckDeviceFormat",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",10,"CheckDeviceFormat",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_CheckDeviceMultiSampleType(IDirect3D9 *self, UINT Adapter, D3DDEVTYPE DeviceType, D3DFORMAT SurfaceFormat, BOOL Windowed, D3DMULTISAMPLE_TYPE MultiSampleType, DWORD* pQualityLevels) {
+ pw_d3d9_api_profile_enter(0,11,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.CheckDeviceMultiSampleType(self, Adapter, DeviceType, SurfaceFormat, Windowed, MultiSampleType, pQualityLevels);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",11,"CheckDeviceMultiSampleType",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",11,"CheckDeviceMultiSampleType",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_CheckDepthStencilMatch(IDirect3D9 *self, UINT Adapter, D3DDEVTYPE DeviceType, D3DFORMAT AdapterFormat, D3DFORMAT RenderTargetFormat, D3DFORMAT DepthStencilFormat) {
+ pw_d3d9_api_profile_enter(0,12,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.CheckDepthStencilMatch(self, Adapter, DeviceType, AdapterFormat, RenderTargetFormat, DepthStencilFormat);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",12,"CheckDepthStencilMatch",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",12,"CheckDepthStencilMatch",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_CheckDeviceFormatConversion(IDirect3D9 *self, UINT Adapter, D3DDEVTYPE DeviceType, D3DFORMAT SourceFormat, D3DFORMAT TargetFormat) {
+ pw_d3d9_api_profile_enter(0,13,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.CheckDeviceFormatConversion(self, Adapter, DeviceType, SourceFormat, TargetFormat);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",13,"CheckDeviceFormatConversion",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",13,"CheckDeviceFormatConversion",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_GetDeviceCaps(IDirect3D9 *self, UINT Adapter, D3DDEVTYPE DeviceType, D3DCAPS9* pCaps) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(0,14,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3D9.GetDeviceCaps(self, Adapter, DeviceType, pCaps);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",14,"GetDeviceCaps",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",14,"GetDeviceCaps",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Adapter",&Adapter,sizeof(Adapter),PW_D3D9_API_WORDS},{"DeviceType",&DeviceType,sizeof(DeviceType),PW_D3D9_API_WORDS},{"pCaps.address",&pCaps,sizeof(pCaps),PW_D3D9_API_POINTER},{"pCaps",pCaps,sizeof(*pCaps),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3D9",14,"GetDeviceCaps",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -85,11 +106,15 @@ static HRESULT WINAPI observe_IDirect3D9_GetDeviceCaps(IDirect3D9 *self, UINT Ad
  return result;
 }
 static HMONITOR WINAPI observe_IDirect3D9_GetAdapterMonitor(IDirect3D9 *self, UINT Adapter) {
- return raw_IDirect3D9.GetAdapterMonitor(self, Adapter);
+ pw_d3d9_api_profile_enter(0,15,__builtin_return_address(0));
+ HMONITOR result=raw_IDirect3D9.GetAdapterMonitor(self, Adapter);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3D9_CreateDevice(IDirect3D9 *self, UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, DWORD BehaviorFlags, D3DPRESENT_PARAMETERS* pPresentationParameters, struct IDirect3DDevice9** ppReturnedDeviceInterface) {
+ pw_d3d9_api_profile_enter(0,16,__builtin_return_address(0));
  HRESULT result=raw_IDirect3D9.CreateDevice(self, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pPresentationParameters, ppReturnedDeviceInterface);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3D9",16,"CreateDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3D9",16,"CreateDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3D9Vtbl wrapped_IDirect3D9={observe_IDirect3D9_QueryInterface,observe_IDirect3D9_AddRef,observe_IDirect3D9_Release,observe_IDirect3D9_RegisterSoftwareDevice,observe_IDirect3D9_GetAdapterCount,observe_IDirect3D9_GetAdapterIdentifier,observe_IDirect3D9_GetAdapterModeCount,observe_IDirect3D9_EnumAdapterModes,observe_IDirect3D9_GetAdapterDisplayMode,observe_IDirect3D9_CheckDeviceType,observe_IDirect3D9_CheckDeviceFormat,observe_IDirect3D9_CheckDeviceMultiSampleType,observe_IDirect3D9_CheckDepthStencilMatch,observe_IDirect3D9_CheckDeviceFormatConversion,observe_IDirect3D9_GetDeviceCaps,observe_IDirect3D9_GetAdapterMonitor,observe_IDirect3D9_CreateDevice};
@@ -109,45 +134,58 @@ static IDirect3DVolume9Vtbl raw_IDirect3DVolume9;
 static const IDirect3DVolume9Vtbl *source_IDirect3DVolume9;
 static INIT_ONCE once_IDirect3DVolume9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DVolume9_QueryInterface(IDirect3DVolume9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(1,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolume9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DVolume9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DVolume9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DVolume9_AddRef(IDirect3DVolume9 *self) {
- return raw_IDirect3DVolume9.AddRef(self);
+ pw_d3d9_api_profile_enter(1,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVolume9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DVolume9_Release(IDirect3DVolume9 *self) {
- return raw_IDirect3DVolume9.Release(self);
+ pw_d3d9_api_profile_enter(1,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVolume9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolume9_GetDevice(IDirect3DVolume9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(1,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolume9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolume9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolume9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolume9_SetPrivateData(IDirect3DVolume9 *self, REFGUID guid, const void *data, DWORD data_size, DWORD flags) {
+ pw_d3d9_api_profile_enter(1,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolume9.SetPrivateData(self, guid, data, data_size, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolume9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolume9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolume9_GetPrivateData(IDirect3DVolume9 *self, REFGUID refguid, void* pData, DWORD* pSizeOfData) {
+ pw_d3d9_api_profile_enter(1,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolume9.GetPrivateData(self, refguid, pData, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolume9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolume9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolume9_FreePrivateData(IDirect3DVolume9 *self, REFGUID refguid) {
+ pw_d3d9_api_profile_enter(1,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolume9.FreePrivateData(self, refguid);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolume9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolume9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolume9_GetContainer(IDirect3DVolume9 *self, REFIID riid, void** ppContainer) {
+ pw_d3d9_api_profile_enter(1,7,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolume9.GetContainer(self, riid, ppContainer);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolume9",7,"GetContainer",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolume9",7,"GetContainer",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolume9_GetDesc(IDirect3DVolume9 *self, D3DVOLUME_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(1,8,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DVolume9.GetDesc(self, pDesc);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolume9",8,"GetDesc",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolume9",8,"GetDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DVolume9",8,"GetDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -155,13 +193,15 @@ static HRESULT WINAPI observe_IDirect3DVolume9_GetDesc(IDirect3DVolume9 *self, D
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolume9_LockBox(IDirect3DVolume9 *self, D3DLOCKED_BOX *locked_box, const D3DBOX *box, DWORD flags) {
+ pw_d3d9_api_profile_enter(1,9,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolume9.LockBox(self, locked_box, box, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolume9",9,"LockBox",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolume9",9,"LockBox",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolume9_UnlockBox(IDirect3DVolume9 *self) {
+ pw_d3d9_api_profile_enter(1,10,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolume9.UnlockBox(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolume9",10,"UnlockBox",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolume9",10,"UnlockBox",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DVolume9Vtbl wrapped_IDirect3DVolume9={observe_IDirect3DVolume9_QueryInterface,observe_IDirect3DVolume9_AddRef,observe_IDirect3DVolume9_Release,observe_IDirect3DVolume9_GetDevice,observe_IDirect3DVolume9_SetPrivateData,observe_IDirect3DVolume9_GetPrivateData,observe_IDirect3DVolume9_FreePrivateData,observe_IDirect3DVolume9_GetContainer,observe_IDirect3DVolume9_GetDesc,observe_IDirect3DVolume9_LockBox,observe_IDirect3DVolume9_UnlockBox};
@@ -181,30 +221,40 @@ static IDirect3DSwapChain9Vtbl raw_IDirect3DSwapChain9;
 static const IDirect3DSwapChain9Vtbl *source_IDirect3DSwapChain9;
 static INIT_ONCE once_IDirect3DSwapChain9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DSwapChain9_QueryInterface(IDirect3DSwapChain9 *self, REFIID riid, void **ppvObject) {
+ pw_d3d9_api_profile_enter(2,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSwapChain9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DSwapChain9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DSwapChain9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DSwapChain9_AddRef(IDirect3DSwapChain9 *self) {
- return raw_IDirect3DSwapChain9.AddRef(self);
+ pw_d3d9_api_profile_enter(2,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DSwapChain9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DSwapChain9_Release(IDirect3DSwapChain9 *self) {
- return raw_IDirect3DSwapChain9.Release(self);
+ pw_d3d9_api_profile_enter(2,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DSwapChain9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DSwapChain9_Present(IDirect3DSwapChain9 *self, const RECT *src_rect, const RECT *dst_rect, HWND dst_window_override, const RGNDATA *dirty_region, DWORD flags) {
+ pw_d3d9_api_profile_enter(2,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSwapChain9.Present(self, src_rect, dst_rect, dst_window_override, dirty_region, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSwapChain9",3,"Present",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSwapChain9",3,"Present",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSwapChain9_GetFrontBufferData(IDirect3DSwapChain9 *self, struct IDirect3DSurface9 *pDestSurface) {
+ pw_d3d9_api_profile_enter(2,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSwapChain9.GetFrontBufferData(self, pDestSurface);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSwapChain9",4,"GetFrontBufferData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSwapChain9",4,"GetFrontBufferData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSwapChain9_GetBackBuffer(IDirect3DSwapChain9 *self, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, struct IDirect3DSurface9 **ppBackBuffer) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(2,5,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DSwapChain9.GetBackBuffer(self, iBackBuffer, Type, ppBackBuffer);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSwapChain9",5,"GetBackBuffer",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSwapChain9",5,"GetBackBuffer",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"iBackBuffer",&iBackBuffer,sizeof(iBackBuffer),PW_D3D9_API_WORDS},{"Type",&Type,sizeof(Type),PW_D3D9_API_WORDS},{"ppBackBuffer.address",&ppBackBuffer,sizeof(ppBackBuffer),PW_D3D9_API_POINTER},{"ppBackBuffer",ppBackBuffer,sizeof(*ppBackBuffer),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DSwapChain9",5,"GetBackBuffer",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -212,23 +262,27 @@ static HRESULT WINAPI observe_IDirect3DSwapChain9_GetBackBuffer(IDirect3DSwapCha
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSwapChain9_GetRasterStatus(IDirect3DSwapChain9 *self, D3DRASTER_STATUS *pRasterStatus) {
+ pw_d3d9_api_profile_enter(2,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSwapChain9.GetRasterStatus(self, pRasterStatus);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSwapChain9",6,"GetRasterStatus",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSwapChain9",6,"GetRasterStatus",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSwapChain9_GetDisplayMode(IDirect3DSwapChain9 *self, D3DDISPLAYMODE *pMode) {
+ pw_d3d9_api_profile_enter(2,7,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSwapChain9.GetDisplayMode(self, pMode);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSwapChain9",7,"GetDisplayMode",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSwapChain9",7,"GetDisplayMode",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSwapChain9_GetDevice(IDirect3DSwapChain9 *self, struct IDirect3DDevice9 **ppDevice) {
+ pw_d3d9_api_profile_enter(2,8,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSwapChain9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSwapChain9",8,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSwapChain9",8,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSwapChain9_GetPresentParameters(IDirect3DSwapChain9 *self, D3DPRESENT_PARAMETERS *pPresentationParameters) {
+ pw_d3d9_api_profile_enter(2,9,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSwapChain9.GetPresentParameters(self, pPresentationParameters);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSwapChain9",9,"GetPresentParameters",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSwapChain9",9,"GetPresentParameters",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DSwapChain9Vtbl wrapped_IDirect3DSwapChain9={observe_IDirect3DSwapChain9_QueryInterface,observe_IDirect3DSwapChain9_AddRef,observe_IDirect3DSwapChain9_Release,observe_IDirect3DSwapChain9_Present,observe_IDirect3DSwapChain9_GetFrontBufferData,observe_IDirect3DSwapChain9_GetBackBuffer,observe_IDirect3DSwapChain9_GetRasterStatus,observe_IDirect3DSwapChain9_GetDisplayMode,observe_IDirect3DSwapChain9_GetDevice,observe_IDirect3DSwapChain9_GetPresentParameters};
@@ -248,47 +302,67 @@ static IDirect3DResource9Vtbl raw_IDirect3DResource9;
 static const IDirect3DResource9Vtbl *source_IDirect3DResource9;
 static INIT_ONCE once_IDirect3DResource9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DResource9_QueryInterface(IDirect3DResource9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(3,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DResource9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DResource9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DResource9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DResource9_AddRef(IDirect3DResource9 *self) {
- return raw_IDirect3DResource9.AddRef(self);
+ pw_d3d9_api_profile_enter(3,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DResource9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DResource9_Release(IDirect3DResource9 *self) {
- return raw_IDirect3DResource9.Release(self);
+ pw_d3d9_api_profile_enter(3,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DResource9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DResource9_GetDevice(IDirect3DResource9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(3,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DResource9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DResource9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DResource9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DResource9_SetPrivateData(IDirect3DResource9 *self, REFGUID guid, const void *data, DWORD data_size, DWORD flags) {
+ pw_d3d9_api_profile_enter(3,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DResource9.SetPrivateData(self, guid, data, data_size, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DResource9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DResource9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DResource9_GetPrivateData(IDirect3DResource9 *self, REFGUID refguid, void* pData, DWORD* pSizeOfData) {
+ pw_d3d9_api_profile_enter(3,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DResource9.GetPrivateData(self, refguid, pData, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DResource9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DResource9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DResource9_FreePrivateData(IDirect3DResource9 *self, REFGUID refguid) {
+ pw_d3d9_api_profile_enter(3,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DResource9.FreePrivateData(self, refguid);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DResource9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DResource9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static DWORD WINAPI observe_IDirect3DResource9_SetPriority(IDirect3DResource9 *self, DWORD PriorityNew) {
- return raw_IDirect3DResource9.SetPriority(self, PriorityNew);
+ pw_d3d9_api_profile_enter(3,7,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DResource9.SetPriority(self, PriorityNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DResource9_GetPriority(IDirect3DResource9 *self) {
- return raw_IDirect3DResource9.GetPriority(self);
+ pw_d3d9_api_profile_enter(3,8,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DResource9.GetPriority(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DResource9_PreLoad(IDirect3DResource9 *self) {
+ pw_d3d9_api_profile_enter(3,9,__builtin_return_address(0));
  raw_IDirect3DResource9.PreLoad(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DResource9_GetType(IDirect3DResource9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(3,10,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DResource9.GetType(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -313,47 +387,67 @@ static IDirect3DSurface9Vtbl raw_IDirect3DSurface9;
 static const IDirect3DSurface9Vtbl *source_IDirect3DSurface9;
 static INIT_ONCE once_IDirect3DSurface9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DSurface9_QueryInterface(IDirect3DSurface9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(4,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSurface9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DSurface9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DSurface9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DSurface9_AddRef(IDirect3DSurface9 *self) {
- return raw_IDirect3DSurface9.AddRef(self);
+ pw_d3d9_api_profile_enter(4,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DSurface9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DSurface9_Release(IDirect3DSurface9 *self) {
- return raw_IDirect3DSurface9.Release(self);
+ pw_d3d9_api_profile_enter(4,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DSurface9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_GetDevice(IDirect3DSurface9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(4,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSurface9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_SetPrivateData(IDirect3DSurface9 *self, REFGUID guid, const void *data, DWORD data_size, DWORD flags) {
+ pw_d3d9_api_profile_enter(4,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSurface9.SetPrivateData(self, guid, data, data_size, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_GetPrivateData(IDirect3DSurface9 *self, REFGUID refguid, void* pData, DWORD* pSizeOfData) {
+ pw_d3d9_api_profile_enter(4,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSurface9.GetPrivateData(self, refguid, pData, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_FreePrivateData(IDirect3DSurface9 *self, REFGUID refguid) {
+ pw_d3d9_api_profile_enter(4,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSurface9.FreePrivateData(self, refguid);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static DWORD WINAPI observe_IDirect3DSurface9_SetPriority(IDirect3DSurface9 *self, DWORD PriorityNew) {
- return raw_IDirect3DSurface9.SetPriority(self, PriorityNew);
+ pw_d3d9_api_profile_enter(4,7,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DSurface9.SetPriority(self, PriorityNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DSurface9_GetPriority(IDirect3DSurface9 *self) {
- return raw_IDirect3DSurface9.GetPriority(self);
+ pw_d3d9_api_profile_enter(4,8,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DSurface9.GetPriority(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DSurface9_PreLoad(IDirect3DSurface9 *self) {
+ pw_d3d9_api_profile_enter(4,9,__builtin_return_address(0));
  raw_IDirect3DSurface9.PreLoad(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DSurface9_GetType(IDirect3DSurface9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(4,10,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DSurface9.GetType(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -362,14 +456,16 @@ static D3DRESOURCETYPE WINAPI observe_IDirect3DSurface9_GetType(IDirect3DSurface
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_GetContainer(IDirect3DSurface9 *self, REFIID riid, void** ppContainer) {
+ pw_d3d9_api_profile_enter(4,11,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSurface9.GetContainer(self, riid, ppContainer);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",11,"GetContainer",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",11,"GetContainer",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_GetDesc(IDirect3DSurface9 *self, D3DSURFACE_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(4,12,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DSurface9.GetDesc(self, pDesc);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",12,"GetDesc",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",12,"GetDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DSurface9",12,"GetDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -377,10 +473,11 @@ static HRESULT WINAPI observe_IDirect3DSurface9_GetDesc(IDirect3DSurface9 *self,
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_LockRect(IDirect3DSurface9 *self, D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(4,13,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  RECT snapshot_rect;int valid_rect=sample&&pw_d3d9_api_read(&snapshot_rect,rect,sizeof(snapshot_rect));
  HRESULT result=raw_IDirect3DSurface9.LockRect(self, locked_rect, rect, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",13,"LockRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",13,"LockRect",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"locked_rect.address",&locked_rect,sizeof(locked_rect),PW_D3D9_API_POINTER},{"locked_rect",locked_rect,sizeof(*locked_rect),PW_D3D9_API_LOCKED_RECT},{"rect.address",&rect,sizeof(rect),PW_D3D9_API_POINTER},{"rect",valid_rect?&snapshot_rect:NULL,sizeof(snapshot_rect),PW_D3D9_API_WORDS},{"flags",&flags,sizeof(flags),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DSurface9",13,"LockRect",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -388,18 +485,21 @@ static HRESULT WINAPI observe_IDirect3DSurface9_LockRect(IDirect3DSurface9 *self
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_UnlockRect(IDirect3DSurface9 *self) {
+ pw_d3d9_api_profile_enter(4,14,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSurface9.UnlockRect(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",14,"UnlockRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",14,"UnlockRect",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_GetDC(IDirect3DSurface9 *self, HDC* phdc) {
+ pw_d3d9_api_profile_enter(4,15,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSurface9.GetDC(self, phdc);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",15,"GetDC",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",15,"GetDC",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DSurface9_ReleaseDC(IDirect3DSurface9 *self, HDC hdc) {
+ pw_d3d9_api_profile_enter(4,16,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DSurface9.ReleaseDC(self, hdc);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DSurface9",16,"ReleaseDC",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DSurface9",16,"ReleaseDC",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DSurface9Vtbl wrapped_IDirect3DSurface9={observe_IDirect3DSurface9_QueryInterface,observe_IDirect3DSurface9_AddRef,observe_IDirect3DSurface9_Release,observe_IDirect3DSurface9_GetDevice,observe_IDirect3DSurface9_SetPrivateData,observe_IDirect3DSurface9_GetPrivateData,observe_IDirect3DSurface9_FreePrivateData,observe_IDirect3DSurface9_SetPriority,observe_IDirect3DSurface9_GetPriority,observe_IDirect3DSurface9_PreLoad,observe_IDirect3DSurface9_GetType,observe_IDirect3DSurface9_GetContainer,observe_IDirect3DSurface9_GetDesc,observe_IDirect3DSurface9_LockRect,observe_IDirect3DSurface9_UnlockRect,observe_IDirect3DSurface9_GetDC,observe_IDirect3DSurface9_ReleaseDC};
@@ -419,47 +519,67 @@ static IDirect3DVertexBuffer9Vtbl raw_IDirect3DVertexBuffer9;
 static const IDirect3DVertexBuffer9Vtbl *source_IDirect3DVertexBuffer9;
 static INIT_ONCE once_IDirect3DVertexBuffer9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DVertexBuffer9_QueryInterface(IDirect3DVertexBuffer9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(5,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexBuffer9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DVertexBuffer9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DVertexBuffer9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DVertexBuffer9_AddRef(IDirect3DVertexBuffer9 *self) {
- return raw_IDirect3DVertexBuffer9.AddRef(self);
+ pw_d3d9_api_profile_enter(5,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVertexBuffer9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DVertexBuffer9_Release(IDirect3DVertexBuffer9 *self) {
- return raw_IDirect3DVertexBuffer9.Release(self);
+ pw_d3d9_api_profile_enter(5,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVertexBuffer9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexBuffer9_GetDevice(IDirect3DVertexBuffer9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(5,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexBuffer9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexBuffer9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexBuffer9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexBuffer9_SetPrivateData(IDirect3DVertexBuffer9 *self, REFGUID guid, const void *data, DWORD data_size, DWORD flags) {
+ pw_d3d9_api_profile_enter(5,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexBuffer9.SetPrivateData(self, guid, data, data_size, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexBuffer9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexBuffer9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexBuffer9_GetPrivateData(IDirect3DVertexBuffer9 *self, REFGUID refguid, void* pData, DWORD* pSizeOfData) {
+ pw_d3d9_api_profile_enter(5,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexBuffer9.GetPrivateData(self, refguid, pData, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexBuffer9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexBuffer9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexBuffer9_FreePrivateData(IDirect3DVertexBuffer9 *self, REFGUID refguid) {
+ pw_d3d9_api_profile_enter(5,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexBuffer9.FreePrivateData(self, refguid);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexBuffer9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexBuffer9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static DWORD WINAPI observe_IDirect3DVertexBuffer9_SetPriority(IDirect3DVertexBuffer9 *self, DWORD PriorityNew) {
- return raw_IDirect3DVertexBuffer9.SetPriority(self, PriorityNew);
+ pw_d3d9_api_profile_enter(5,7,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DVertexBuffer9.SetPriority(self, PriorityNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DVertexBuffer9_GetPriority(IDirect3DVertexBuffer9 *self) {
- return raw_IDirect3DVertexBuffer9.GetPriority(self);
+ pw_d3d9_api_profile_enter(5,8,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DVertexBuffer9.GetPriority(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DVertexBuffer9_PreLoad(IDirect3DVertexBuffer9 *self) {
+ pw_d3d9_api_profile_enter(5,9,__builtin_return_address(0));
  raw_IDirect3DVertexBuffer9.PreLoad(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DVertexBuffer9_GetType(IDirect3DVertexBuffer9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(5,10,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DVertexBuffer9.GetType(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -468,19 +588,22 @@ static D3DRESOURCETYPE WINAPI observe_IDirect3DVertexBuffer9_GetType(IDirect3DVe
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexBuffer9_Lock(IDirect3DVertexBuffer9 *self, UINT OffsetToLock, UINT SizeToLock, void** ppbData, DWORD Flags) {
+ pw_d3d9_api_profile_enter(5,11,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexBuffer9.Lock(self, OffsetToLock, SizeToLock, ppbData, Flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexBuffer9",11,"Lock",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexBuffer9",11,"Lock",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexBuffer9_Unlock(IDirect3DVertexBuffer9 *self) {
+ pw_d3d9_api_profile_enter(5,12,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexBuffer9.Unlock(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexBuffer9",12,"Unlock",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexBuffer9",12,"Unlock",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexBuffer9_GetDesc(IDirect3DVertexBuffer9 *self, D3DVERTEXBUFFER_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(5,13,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DVertexBuffer9.GetDesc(self, pDesc);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexBuffer9",13,"GetDesc",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexBuffer9",13,"GetDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DVertexBuffer9",13,"GetDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -504,47 +627,67 @@ static IDirect3DIndexBuffer9Vtbl raw_IDirect3DIndexBuffer9;
 static const IDirect3DIndexBuffer9Vtbl *source_IDirect3DIndexBuffer9;
 static INIT_ONCE once_IDirect3DIndexBuffer9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DIndexBuffer9_QueryInterface(IDirect3DIndexBuffer9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(6,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DIndexBuffer9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DIndexBuffer9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DIndexBuffer9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DIndexBuffer9_AddRef(IDirect3DIndexBuffer9 *self) {
- return raw_IDirect3DIndexBuffer9.AddRef(self);
+ pw_d3d9_api_profile_enter(6,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DIndexBuffer9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DIndexBuffer9_Release(IDirect3DIndexBuffer9 *self) {
- return raw_IDirect3DIndexBuffer9.Release(self);
+ pw_d3d9_api_profile_enter(6,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DIndexBuffer9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DIndexBuffer9_GetDevice(IDirect3DIndexBuffer9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(6,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DIndexBuffer9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DIndexBuffer9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DIndexBuffer9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DIndexBuffer9_SetPrivateData(IDirect3DIndexBuffer9 *self, REFGUID guid, const void *data, DWORD data_size, DWORD flags) {
+ pw_d3d9_api_profile_enter(6,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DIndexBuffer9.SetPrivateData(self, guid, data, data_size, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DIndexBuffer9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DIndexBuffer9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DIndexBuffer9_GetPrivateData(IDirect3DIndexBuffer9 *self, REFGUID refguid, void* pData, DWORD* pSizeOfData) {
+ pw_d3d9_api_profile_enter(6,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DIndexBuffer9.GetPrivateData(self, refguid, pData, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DIndexBuffer9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DIndexBuffer9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DIndexBuffer9_FreePrivateData(IDirect3DIndexBuffer9 *self, REFGUID refguid) {
+ pw_d3d9_api_profile_enter(6,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DIndexBuffer9.FreePrivateData(self, refguid);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DIndexBuffer9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DIndexBuffer9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static DWORD WINAPI observe_IDirect3DIndexBuffer9_SetPriority(IDirect3DIndexBuffer9 *self, DWORD PriorityNew) {
- return raw_IDirect3DIndexBuffer9.SetPriority(self, PriorityNew);
+ pw_d3d9_api_profile_enter(6,7,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DIndexBuffer9.SetPriority(self, PriorityNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DIndexBuffer9_GetPriority(IDirect3DIndexBuffer9 *self) {
- return raw_IDirect3DIndexBuffer9.GetPriority(self);
+ pw_d3d9_api_profile_enter(6,8,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DIndexBuffer9.GetPriority(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DIndexBuffer9_PreLoad(IDirect3DIndexBuffer9 *self) {
+ pw_d3d9_api_profile_enter(6,9,__builtin_return_address(0));
  raw_IDirect3DIndexBuffer9.PreLoad(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DIndexBuffer9_GetType(IDirect3DIndexBuffer9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(6,10,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DIndexBuffer9.GetType(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -553,19 +696,22 @@ static D3DRESOURCETYPE WINAPI observe_IDirect3DIndexBuffer9_GetType(IDirect3DInd
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DIndexBuffer9_Lock(IDirect3DIndexBuffer9 *self, UINT OffsetToLock, UINT SizeToLock, void** ppbData, DWORD Flags) {
+ pw_d3d9_api_profile_enter(6,11,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DIndexBuffer9.Lock(self, OffsetToLock, SizeToLock, ppbData, Flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DIndexBuffer9",11,"Lock",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DIndexBuffer9",11,"Lock",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DIndexBuffer9_Unlock(IDirect3DIndexBuffer9 *self) {
+ pw_d3d9_api_profile_enter(6,12,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DIndexBuffer9.Unlock(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DIndexBuffer9",12,"Unlock",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DIndexBuffer9",12,"Unlock",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DIndexBuffer9_GetDesc(IDirect3DIndexBuffer9 *self, D3DINDEXBUFFER_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(6,13,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DIndexBuffer9.GetDesc(self, pDesc);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DIndexBuffer9",13,"GetDesc",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DIndexBuffer9",13,"GetDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DIndexBuffer9",13,"GetDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -589,47 +735,67 @@ static IDirect3DBaseTexture9Vtbl raw_IDirect3DBaseTexture9;
 static const IDirect3DBaseTexture9Vtbl *source_IDirect3DBaseTexture9;
 static INIT_ONCE once_IDirect3DBaseTexture9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DBaseTexture9_QueryInterface(IDirect3DBaseTexture9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(7,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DBaseTexture9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DBaseTexture9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DBaseTexture9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DBaseTexture9_AddRef(IDirect3DBaseTexture9 *self) {
- return raw_IDirect3DBaseTexture9.AddRef(self);
+ pw_d3d9_api_profile_enter(7,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DBaseTexture9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DBaseTexture9_Release(IDirect3DBaseTexture9 *self) {
- return raw_IDirect3DBaseTexture9.Release(self);
+ pw_d3d9_api_profile_enter(7,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DBaseTexture9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DBaseTexture9_GetDevice(IDirect3DBaseTexture9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(7,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DBaseTexture9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DBaseTexture9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DBaseTexture9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DBaseTexture9_SetPrivateData(IDirect3DBaseTexture9 *self, REFGUID guid, const void *data, DWORD data_size, DWORD flags) {
+ pw_d3d9_api_profile_enter(7,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DBaseTexture9.SetPrivateData(self, guid, data, data_size, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DBaseTexture9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DBaseTexture9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DBaseTexture9_GetPrivateData(IDirect3DBaseTexture9 *self, REFGUID refguid, void* pData, DWORD* pSizeOfData) {
+ pw_d3d9_api_profile_enter(7,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DBaseTexture9.GetPrivateData(self, refguid, pData, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DBaseTexture9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DBaseTexture9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DBaseTexture9_FreePrivateData(IDirect3DBaseTexture9 *self, REFGUID refguid) {
+ pw_d3d9_api_profile_enter(7,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DBaseTexture9.FreePrivateData(self, refguid);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DBaseTexture9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DBaseTexture9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static DWORD WINAPI observe_IDirect3DBaseTexture9_SetPriority(IDirect3DBaseTexture9 *self, DWORD PriorityNew) {
- return raw_IDirect3DBaseTexture9.SetPriority(self, PriorityNew);
+ pw_d3d9_api_profile_enter(7,7,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DBaseTexture9.SetPriority(self, PriorityNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DBaseTexture9_GetPriority(IDirect3DBaseTexture9 *self) {
- return raw_IDirect3DBaseTexture9.GetPriority(self);
+ pw_d3d9_api_profile_enter(7,8,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DBaseTexture9.GetPriority(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DBaseTexture9_PreLoad(IDirect3DBaseTexture9 *self) {
+ pw_d3d9_api_profile_enter(7,9,__builtin_return_address(0));
  raw_IDirect3DBaseTexture9.PreLoad(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DBaseTexture9_GetType(IDirect3DBaseTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(7,10,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DBaseTexture9.GetType(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -638,13 +804,20 @@ static D3DRESOURCETYPE WINAPI observe_IDirect3DBaseTexture9_GetType(IDirect3DBas
  return result;
 }
 static DWORD WINAPI observe_IDirect3DBaseTexture9_SetLOD(IDirect3DBaseTexture9 *self, DWORD LODNew) {
- return raw_IDirect3DBaseTexture9.SetLOD(self, LODNew);
+ pw_d3d9_api_profile_enter(7,11,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DBaseTexture9.SetLOD(self, LODNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DBaseTexture9_GetLOD(IDirect3DBaseTexture9 *self) {
- return raw_IDirect3DBaseTexture9.GetLOD(self);
+ pw_d3d9_api_profile_enter(7,12,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DBaseTexture9.GetLOD(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DBaseTexture9_GetLevelCount(IDirect3DBaseTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(7,13,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  DWORD result=raw_IDirect3DBaseTexture9.GetLevelCount(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -653,15 +826,21 @@ static DWORD WINAPI observe_IDirect3DBaseTexture9_GetLevelCount(IDirect3DBaseTex
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DBaseTexture9_SetAutoGenFilterType(IDirect3DBaseTexture9 *self, D3DTEXTUREFILTERTYPE FilterType) {
+ pw_d3d9_api_profile_enter(7,14,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DBaseTexture9.SetAutoGenFilterType(self, FilterType);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DBaseTexture9",14,"SetAutoGenFilterType",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DBaseTexture9",14,"SetAutoGenFilterType",result,__builtin_return_address(0),NULL);
  return result;
 }
 static D3DTEXTUREFILTERTYPE WINAPI observe_IDirect3DBaseTexture9_GetAutoGenFilterType(IDirect3DBaseTexture9 *self) {
- return raw_IDirect3DBaseTexture9.GetAutoGenFilterType(self);
+ pw_d3d9_api_profile_enter(7,15,__builtin_return_address(0));
+ D3DTEXTUREFILTERTYPE result=raw_IDirect3DBaseTexture9.GetAutoGenFilterType(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DBaseTexture9_GenerateMipSubLevels(IDirect3DBaseTexture9 *self) {
+ pw_d3d9_api_profile_enter(7,16,__builtin_return_address(0));
  raw_IDirect3DBaseTexture9.GenerateMipSubLevels(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static const IDirect3DBaseTexture9Vtbl wrapped_IDirect3DBaseTexture9={observe_IDirect3DBaseTexture9_QueryInterface,observe_IDirect3DBaseTexture9_AddRef,observe_IDirect3DBaseTexture9_Release,observe_IDirect3DBaseTexture9_GetDevice,observe_IDirect3DBaseTexture9_SetPrivateData,observe_IDirect3DBaseTexture9_GetPrivateData,observe_IDirect3DBaseTexture9_FreePrivateData,observe_IDirect3DBaseTexture9_SetPriority,observe_IDirect3DBaseTexture9_GetPriority,observe_IDirect3DBaseTexture9_PreLoad,observe_IDirect3DBaseTexture9_GetType,observe_IDirect3DBaseTexture9_SetLOD,observe_IDirect3DBaseTexture9_GetLOD,observe_IDirect3DBaseTexture9_GetLevelCount,observe_IDirect3DBaseTexture9_SetAutoGenFilterType,observe_IDirect3DBaseTexture9_GetAutoGenFilterType,observe_IDirect3DBaseTexture9_GenerateMipSubLevels};
 static BOOL CALLBACK init_IDirect3DBaseTexture9(INIT_ONCE *once,void *parameter,void **context) {
@@ -680,47 +859,67 @@ static IDirect3DCubeTexture9Vtbl raw_IDirect3DCubeTexture9;
 static const IDirect3DCubeTexture9Vtbl *source_IDirect3DCubeTexture9;
 static INIT_ONCE once_IDirect3DCubeTexture9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_QueryInterface(IDirect3DCubeTexture9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(8,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DCubeTexture9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DCubeTexture9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DCubeTexture9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DCubeTexture9_AddRef(IDirect3DCubeTexture9 *self) {
- return raw_IDirect3DCubeTexture9.AddRef(self);
+ pw_d3d9_api_profile_enter(8,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DCubeTexture9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DCubeTexture9_Release(IDirect3DCubeTexture9 *self) {
- return raw_IDirect3DCubeTexture9.Release(self);
+ pw_d3d9_api_profile_enter(8,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DCubeTexture9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_GetDevice(IDirect3DCubeTexture9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(8,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DCubeTexture9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_SetPrivateData(IDirect3DCubeTexture9 *self, REFGUID guid, const void *data, DWORD data_size, DWORD flags) {
+ pw_d3d9_api_profile_enter(8,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DCubeTexture9.SetPrivateData(self, guid, data, data_size, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_GetPrivateData(IDirect3DCubeTexture9 *self, REFGUID refguid, void* pData, DWORD* pSizeOfData) {
+ pw_d3d9_api_profile_enter(8,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DCubeTexture9.GetPrivateData(self, refguid, pData, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_FreePrivateData(IDirect3DCubeTexture9 *self, REFGUID refguid) {
+ pw_d3d9_api_profile_enter(8,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DCubeTexture9.FreePrivateData(self, refguid);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static DWORD WINAPI observe_IDirect3DCubeTexture9_SetPriority(IDirect3DCubeTexture9 *self, DWORD PriorityNew) {
- return raw_IDirect3DCubeTexture9.SetPriority(self, PriorityNew);
+ pw_d3d9_api_profile_enter(8,7,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DCubeTexture9.SetPriority(self, PriorityNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DCubeTexture9_GetPriority(IDirect3DCubeTexture9 *self) {
- return raw_IDirect3DCubeTexture9.GetPriority(self);
+ pw_d3d9_api_profile_enter(8,8,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DCubeTexture9.GetPriority(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DCubeTexture9_PreLoad(IDirect3DCubeTexture9 *self) {
+ pw_d3d9_api_profile_enter(8,9,__builtin_return_address(0));
  raw_IDirect3DCubeTexture9.PreLoad(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DCubeTexture9_GetType(IDirect3DCubeTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(8,10,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DCubeTexture9.GetType(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -729,13 +928,20 @@ static D3DRESOURCETYPE WINAPI observe_IDirect3DCubeTexture9_GetType(IDirect3DCub
  return result;
 }
 static DWORD WINAPI observe_IDirect3DCubeTexture9_SetLOD(IDirect3DCubeTexture9 *self, DWORD LODNew) {
- return raw_IDirect3DCubeTexture9.SetLOD(self, LODNew);
+ pw_d3d9_api_profile_enter(8,11,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DCubeTexture9.SetLOD(self, LODNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DCubeTexture9_GetLOD(IDirect3DCubeTexture9 *self) {
- return raw_IDirect3DCubeTexture9.GetLOD(self);
+ pw_d3d9_api_profile_enter(8,12,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DCubeTexture9.GetLOD(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DCubeTexture9_GetLevelCount(IDirect3DCubeTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(8,13,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  DWORD result=raw_IDirect3DCubeTexture9.GetLevelCount(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -744,20 +950,27 @@ static DWORD WINAPI observe_IDirect3DCubeTexture9_GetLevelCount(IDirect3DCubeTex
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_SetAutoGenFilterType(IDirect3DCubeTexture9 *self, D3DTEXTUREFILTERTYPE FilterType) {
+ pw_d3d9_api_profile_enter(8,14,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DCubeTexture9.SetAutoGenFilterType(self, FilterType);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",14,"SetAutoGenFilterType",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",14,"SetAutoGenFilterType",result,__builtin_return_address(0),NULL);
  return result;
 }
 static D3DTEXTUREFILTERTYPE WINAPI observe_IDirect3DCubeTexture9_GetAutoGenFilterType(IDirect3DCubeTexture9 *self) {
- return raw_IDirect3DCubeTexture9.GetAutoGenFilterType(self);
+ pw_d3d9_api_profile_enter(8,15,__builtin_return_address(0));
+ D3DTEXTUREFILTERTYPE result=raw_IDirect3DCubeTexture9.GetAutoGenFilterType(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DCubeTexture9_GenerateMipSubLevels(IDirect3DCubeTexture9 *self) {
+ pw_d3d9_api_profile_enter(8,16,__builtin_return_address(0));
  raw_IDirect3DCubeTexture9.GenerateMipSubLevels(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_GetLevelDesc(IDirect3DCubeTexture9 *self, UINT Level, D3DSURFACE_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(8,17,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DCubeTexture9.GetLevelDesc(self, Level, pDesc);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Level",&Level,sizeof(Level),PW_D3D9_API_WORDS},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DCubeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -765,15 +978,17 @@ static HRESULT WINAPI observe_IDirect3DCubeTexture9_GetLevelDesc(IDirect3DCubeTe
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_GetCubeMapSurface(IDirect3DCubeTexture9 *self, D3DCUBEMAP_FACES FaceType, UINT Level, IDirect3DSurface9** ppCubeMapSurface) {
+ pw_d3d9_api_profile_enter(8,18,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DCubeTexture9.GetCubeMapSurface(self, FaceType, Level, ppCubeMapSurface);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",18,"GetCubeMapSurface",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",18,"GetCubeMapSurface",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_LockRect(IDirect3DCubeTexture9 *self, D3DCUBEMAP_FACES face, UINT level, D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(8,19,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  RECT snapshot_rect;int valid_rect=sample&&pw_d3d9_api_read(&snapshot_rect,rect,sizeof(snapshot_rect));
  HRESULT result=raw_IDirect3DCubeTexture9.LockRect(self, face, level, locked_rect, rect, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",19,"LockRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",19,"LockRect",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"face",&face,sizeof(face),PW_D3D9_API_WORDS},{"level",&level,sizeof(level),PW_D3D9_API_WORDS},{"locked_rect.address",&locked_rect,sizeof(locked_rect),PW_D3D9_API_POINTER},{"locked_rect",locked_rect,sizeof(*locked_rect),PW_D3D9_API_LOCKED_RECT},{"rect.address",&rect,sizeof(rect),PW_D3D9_API_POINTER},{"rect",valid_rect?&snapshot_rect:NULL,sizeof(snapshot_rect),PW_D3D9_API_WORDS},{"flags",&flags,sizeof(flags),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DCubeTexture9",19,"LockRect",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -781,13 +996,15 @@ static HRESULT WINAPI observe_IDirect3DCubeTexture9_LockRect(IDirect3DCubeTextur
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_UnlockRect(IDirect3DCubeTexture9 *self, D3DCUBEMAP_FACES FaceType, UINT Level) {
+ pw_d3d9_api_profile_enter(8,20,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DCubeTexture9.UnlockRect(self, FaceType, Level);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",20,"UnlockRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",20,"UnlockRect",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DCubeTexture9_AddDirtyRect(IDirect3DCubeTexture9 *self, D3DCUBEMAP_FACES face, const RECT *dirty_rect) {
+ pw_d3d9_api_profile_enter(8,21,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DCubeTexture9.AddDirtyRect(self, face, dirty_rect);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DCubeTexture9",21,"AddDirtyRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DCubeTexture9",21,"AddDirtyRect",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DCubeTexture9Vtbl wrapped_IDirect3DCubeTexture9={observe_IDirect3DCubeTexture9_QueryInterface,observe_IDirect3DCubeTexture9_AddRef,observe_IDirect3DCubeTexture9_Release,observe_IDirect3DCubeTexture9_GetDevice,observe_IDirect3DCubeTexture9_SetPrivateData,observe_IDirect3DCubeTexture9_GetPrivateData,observe_IDirect3DCubeTexture9_FreePrivateData,observe_IDirect3DCubeTexture9_SetPriority,observe_IDirect3DCubeTexture9_GetPriority,observe_IDirect3DCubeTexture9_PreLoad,observe_IDirect3DCubeTexture9_GetType,observe_IDirect3DCubeTexture9_SetLOD,observe_IDirect3DCubeTexture9_GetLOD,observe_IDirect3DCubeTexture9_GetLevelCount,observe_IDirect3DCubeTexture9_SetAutoGenFilterType,observe_IDirect3DCubeTexture9_GetAutoGenFilterType,observe_IDirect3DCubeTexture9_GenerateMipSubLevels,observe_IDirect3DCubeTexture9_GetLevelDesc,observe_IDirect3DCubeTexture9_GetCubeMapSurface,observe_IDirect3DCubeTexture9_LockRect,observe_IDirect3DCubeTexture9_UnlockRect,observe_IDirect3DCubeTexture9_AddDirtyRect};
@@ -807,47 +1024,67 @@ static IDirect3DTexture9Vtbl raw_IDirect3DTexture9;
 static const IDirect3DTexture9Vtbl *source_IDirect3DTexture9;
 static INIT_ONCE once_IDirect3DTexture9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DTexture9_QueryInterface(IDirect3DTexture9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(9,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DTexture9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DTexture9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DTexture9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DTexture9_AddRef(IDirect3DTexture9 *self) {
- return raw_IDirect3DTexture9.AddRef(self);
+ pw_d3d9_api_profile_enter(9,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DTexture9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DTexture9_Release(IDirect3DTexture9 *self) {
- return raw_IDirect3DTexture9.Release(self);
+ pw_d3d9_api_profile_enter(9,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DTexture9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_GetDevice(IDirect3DTexture9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(9,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DTexture9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_SetPrivateData(IDirect3DTexture9 *self, REFGUID guid, const void *data, DWORD data_size, DWORD flags) {
+ pw_d3d9_api_profile_enter(9,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DTexture9.SetPrivateData(self, guid, data, data_size, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_GetPrivateData(IDirect3DTexture9 *self, REFGUID refguid, void* pData, DWORD* pSizeOfData) {
+ pw_d3d9_api_profile_enter(9,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DTexture9.GetPrivateData(self, refguid, pData, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_FreePrivateData(IDirect3DTexture9 *self, REFGUID refguid) {
+ pw_d3d9_api_profile_enter(9,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DTexture9.FreePrivateData(self, refguid);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static DWORD WINAPI observe_IDirect3DTexture9_SetPriority(IDirect3DTexture9 *self, DWORD PriorityNew) {
- return raw_IDirect3DTexture9.SetPriority(self, PriorityNew);
+ pw_d3d9_api_profile_enter(9,7,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DTexture9.SetPriority(self, PriorityNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DTexture9_GetPriority(IDirect3DTexture9 *self) {
- return raw_IDirect3DTexture9.GetPriority(self);
+ pw_d3d9_api_profile_enter(9,8,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DTexture9.GetPriority(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DTexture9_PreLoad(IDirect3DTexture9 *self) {
+ pw_d3d9_api_profile_enter(9,9,__builtin_return_address(0));
  raw_IDirect3DTexture9.PreLoad(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DTexture9_GetType(IDirect3DTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(9,10,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DTexture9.GetType(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -856,13 +1093,20 @@ static D3DRESOURCETYPE WINAPI observe_IDirect3DTexture9_GetType(IDirect3DTexture
  return result;
 }
 static DWORD WINAPI observe_IDirect3DTexture9_SetLOD(IDirect3DTexture9 *self, DWORD LODNew) {
- return raw_IDirect3DTexture9.SetLOD(self, LODNew);
+ pw_d3d9_api_profile_enter(9,11,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DTexture9.SetLOD(self, LODNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DTexture9_GetLOD(IDirect3DTexture9 *self) {
- return raw_IDirect3DTexture9.GetLOD(self);
+ pw_d3d9_api_profile_enter(9,12,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DTexture9.GetLOD(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DTexture9_GetLevelCount(IDirect3DTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(9,13,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  DWORD result=raw_IDirect3DTexture9.GetLevelCount(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -871,20 +1115,27 @@ static DWORD WINAPI observe_IDirect3DTexture9_GetLevelCount(IDirect3DTexture9 *s
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_SetAutoGenFilterType(IDirect3DTexture9 *self, D3DTEXTUREFILTERTYPE FilterType) {
+ pw_d3d9_api_profile_enter(9,14,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DTexture9.SetAutoGenFilterType(self, FilterType);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",14,"SetAutoGenFilterType",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",14,"SetAutoGenFilterType",result,__builtin_return_address(0),NULL);
  return result;
 }
 static D3DTEXTUREFILTERTYPE WINAPI observe_IDirect3DTexture9_GetAutoGenFilterType(IDirect3DTexture9 *self) {
- return raw_IDirect3DTexture9.GetAutoGenFilterType(self);
+ pw_d3d9_api_profile_enter(9,15,__builtin_return_address(0));
+ D3DTEXTUREFILTERTYPE result=raw_IDirect3DTexture9.GetAutoGenFilterType(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DTexture9_GenerateMipSubLevels(IDirect3DTexture9 *self) {
+ pw_d3d9_api_profile_enter(9,16,__builtin_return_address(0));
  raw_IDirect3DTexture9.GenerateMipSubLevels(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_GetLevelDesc(IDirect3DTexture9 *self, UINT Level, D3DSURFACE_DESC* pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(9,17,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DTexture9.GetLevelDesc(self, Level, pDesc);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Level",&Level,sizeof(Level),PW_D3D9_API_WORDS},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -892,15 +1143,17 @@ static HRESULT WINAPI observe_IDirect3DTexture9_GetLevelDesc(IDirect3DTexture9 *
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_GetSurfaceLevel(IDirect3DTexture9 *self, UINT Level, IDirect3DSurface9** ppSurfaceLevel) {
+ pw_d3d9_api_profile_enter(9,18,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DTexture9.GetSurfaceLevel(self, Level, ppSurfaceLevel);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",18,"GetSurfaceLevel",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",18,"GetSurfaceLevel",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_LockRect(IDirect3DTexture9 *self, UINT level, D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(9,19,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  RECT snapshot_rect;int valid_rect=sample&&pw_d3d9_api_read(&snapshot_rect,rect,sizeof(snapshot_rect));
  HRESULT result=raw_IDirect3DTexture9.LockRect(self, level, locked_rect, rect, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",19,"LockRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",19,"LockRect",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"level",&level,sizeof(level),PW_D3D9_API_WORDS},{"locked_rect.address",&locked_rect,sizeof(locked_rect),PW_D3D9_API_POINTER},{"locked_rect",locked_rect,sizeof(*locked_rect),PW_D3D9_API_LOCKED_RECT},{"rect.address",&rect,sizeof(rect),PW_D3D9_API_POINTER},{"rect",valid_rect?&snapshot_rect:NULL,sizeof(snapshot_rect),PW_D3D9_API_WORDS},{"flags",&flags,sizeof(flags),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DTexture9",19,"LockRect",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -908,13 +1161,15 @@ static HRESULT WINAPI observe_IDirect3DTexture9_LockRect(IDirect3DTexture9 *self
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_UnlockRect(IDirect3DTexture9 *self, UINT Level) {
+ pw_d3d9_api_profile_enter(9,20,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DTexture9.UnlockRect(self, Level);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",20,"UnlockRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",20,"UnlockRect",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DTexture9_AddDirtyRect(IDirect3DTexture9 *self, const RECT *dirty_rect) {
+ pw_d3d9_api_profile_enter(9,21,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DTexture9.AddDirtyRect(self, dirty_rect);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DTexture9",21,"AddDirtyRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DTexture9",21,"AddDirtyRect",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DTexture9Vtbl wrapped_IDirect3DTexture9={observe_IDirect3DTexture9_QueryInterface,observe_IDirect3DTexture9_AddRef,observe_IDirect3DTexture9_Release,observe_IDirect3DTexture9_GetDevice,observe_IDirect3DTexture9_SetPrivateData,observe_IDirect3DTexture9_GetPrivateData,observe_IDirect3DTexture9_FreePrivateData,observe_IDirect3DTexture9_SetPriority,observe_IDirect3DTexture9_GetPriority,observe_IDirect3DTexture9_PreLoad,observe_IDirect3DTexture9_GetType,observe_IDirect3DTexture9_SetLOD,observe_IDirect3DTexture9_GetLOD,observe_IDirect3DTexture9_GetLevelCount,observe_IDirect3DTexture9_SetAutoGenFilterType,observe_IDirect3DTexture9_GetAutoGenFilterType,observe_IDirect3DTexture9_GenerateMipSubLevels,observe_IDirect3DTexture9_GetLevelDesc,observe_IDirect3DTexture9_GetSurfaceLevel,observe_IDirect3DTexture9_LockRect,observe_IDirect3DTexture9_UnlockRect,observe_IDirect3DTexture9_AddDirtyRect};
@@ -934,47 +1189,67 @@ static IDirect3DVolumeTexture9Vtbl raw_IDirect3DVolumeTexture9;
 static const IDirect3DVolumeTexture9Vtbl *source_IDirect3DVolumeTexture9;
 static INIT_ONCE once_IDirect3DVolumeTexture9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_QueryInterface(IDirect3DVolumeTexture9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(10,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DVolumeTexture9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DVolumeTexture9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DVolumeTexture9_AddRef(IDirect3DVolumeTexture9 *self) {
- return raw_IDirect3DVolumeTexture9.AddRef(self);
+ pw_d3d9_api_profile_enter(10,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVolumeTexture9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DVolumeTexture9_Release(IDirect3DVolumeTexture9 *self) {
- return raw_IDirect3DVolumeTexture9.Release(self);
+ pw_d3d9_api_profile_enter(10,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVolumeTexture9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_GetDevice(IDirect3DVolumeTexture9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(10,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_SetPrivateData(IDirect3DVolumeTexture9 *self, REFGUID guid, const void *data, DWORD data_size, DWORD flags) {
+ pw_d3d9_api_profile_enter(10,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.SetPrivateData(self, guid, data, data_size, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",4,"SetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_GetPrivateData(IDirect3DVolumeTexture9 *self, REFGUID refguid, void* pData, DWORD* pSizeOfData) {
+ pw_d3d9_api_profile_enter(10,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.GetPrivateData(self, refguid, pData, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",5,"GetPrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_FreePrivateData(IDirect3DVolumeTexture9 *self, REFGUID refguid) {
+ pw_d3d9_api_profile_enter(10,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.FreePrivateData(self, refguid);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",6,"FreePrivateData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static DWORD WINAPI observe_IDirect3DVolumeTexture9_SetPriority(IDirect3DVolumeTexture9 *self, DWORD PriorityNew) {
- return raw_IDirect3DVolumeTexture9.SetPriority(self, PriorityNew);
+ pw_d3d9_api_profile_enter(10,7,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DVolumeTexture9.SetPriority(self, PriorityNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DVolumeTexture9_GetPriority(IDirect3DVolumeTexture9 *self) {
- return raw_IDirect3DVolumeTexture9.GetPriority(self);
+ pw_d3d9_api_profile_enter(10,8,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DVolumeTexture9.GetPriority(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DVolumeTexture9_PreLoad(IDirect3DVolumeTexture9 *self) {
+ pw_d3d9_api_profile_enter(10,9,__builtin_return_address(0));
  raw_IDirect3DVolumeTexture9.PreLoad(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static D3DRESOURCETYPE WINAPI observe_IDirect3DVolumeTexture9_GetType(IDirect3DVolumeTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(10,10,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DRESOURCETYPE result=raw_IDirect3DVolumeTexture9.GetType(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -983,13 +1258,20 @@ static D3DRESOURCETYPE WINAPI observe_IDirect3DVolumeTexture9_GetType(IDirect3DV
  return result;
 }
 static DWORD WINAPI observe_IDirect3DVolumeTexture9_SetLOD(IDirect3DVolumeTexture9 *self, DWORD LODNew) {
- return raw_IDirect3DVolumeTexture9.SetLOD(self, LODNew);
+ pw_d3d9_api_profile_enter(10,11,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DVolumeTexture9.SetLOD(self, LODNew);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DVolumeTexture9_GetLOD(IDirect3DVolumeTexture9 *self) {
- return raw_IDirect3DVolumeTexture9.GetLOD(self);
+ pw_d3d9_api_profile_enter(10,12,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DVolumeTexture9.GetLOD(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static DWORD WINAPI observe_IDirect3DVolumeTexture9_GetLevelCount(IDirect3DVolumeTexture9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(10,13,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  DWORD result=raw_IDirect3DVolumeTexture9.GetLevelCount(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -998,20 +1280,27 @@ static DWORD WINAPI observe_IDirect3DVolumeTexture9_GetLevelCount(IDirect3DVolum
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_SetAutoGenFilterType(IDirect3DVolumeTexture9 *self, D3DTEXTUREFILTERTYPE FilterType) {
+ pw_d3d9_api_profile_enter(10,14,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.SetAutoGenFilterType(self, FilterType);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",14,"SetAutoGenFilterType",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",14,"SetAutoGenFilterType",result,__builtin_return_address(0),NULL);
  return result;
 }
 static D3DTEXTUREFILTERTYPE WINAPI observe_IDirect3DVolumeTexture9_GetAutoGenFilterType(IDirect3DVolumeTexture9 *self) {
- return raw_IDirect3DVolumeTexture9.GetAutoGenFilterType(self);
+ pw_d3d9_api_profile_enter(10,15,__builtin_return_address(0));
+ D3DTEXTUREFILTERTYPE result=raw_IDirect3DVolumeTexture9.GetAutoGenFilterType(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static void WINAPI observe_IDirect3DVolumeTexture9_GenerateMipSubLevels(IDirect3DVolumeTexture9 *self) {
+ pw_d3d9_api_profile_enter(10,16,__builtin_return_address(0));
  raw_IDirect3DVolumeTexture9.GenerateMipSubLevels(self);
+ __asm__ __volatile__("" ::: "memory");
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_GetLevelDesc(IDirect3DVolumeTexture9 *self, UINT Level, D3DVOLUME_DESC *pDesc) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(10,17,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DVolumeTexture9.GetLevelDesc(self, Level, pDesc);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Level",&Level,sizeof(Level),PW_D3D9_API_WORDS},{"pDesc.address",&pDesc,sizeof(pDesc),PW_D3D9_API_POINTER},{"pDesc",pDesc,sizeof(*pDesc),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DVolumeTexture9",17,"GetLevelDesc",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -1019,23 +1308,27 @@ static HRESULT WINAPI observe_IDirect3DVolumeTexture9_GetLevelDesc(IDirect3DVolu
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_GetVolumeLevel(IDirect3DVolumeTexture9 *self, UINT Level, IDirect3DVolume9** ppVolumeLevel) {
+ pw_d3d9_api_profile_enter(10,18,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.GetVolumeLevel(self, Level, ppVolumeLevel);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",18,"GetVolumeLevel",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",18,"GetVolumeLevel",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_LockBox(IDirect3DVolumeTexture9 *self, UINT level, D3DLOCKED_BOX *locked_box, const D3DBOX *box, DWORD flags) {
+ pw_d3d9_api_profile_enter(10,19,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.LockBox(self, level, locked_box, box, flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",19,"LockBox",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",19,"LockBox",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_UnlockBox(IDirect3DVolumeTexture9 *self, UINT Level) {
+ pw_d3d9_api_profile_enter(10,20,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.UnlockBox(self, Level);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",20,"UnlockBox",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",20,"UnlockBox",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVolumeTexture9_AddDirtyBox(IDirect3DVolumeTexture9 *self, const D3DBOX *dirty_box) {
+ pw_d3d9_api_profile_enter(10,21,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVolumeTexture9.AddDirtyBox(self, dirty_box);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVolumeTexture9",21,"AddDirtyBox",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVolumeTexture9",21,"AddDirtyBox",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DVolumeTexture9Vtbl wrapped_IDirect3DVolumeTexture9={observe_IDirect3DVolumeTexture9_QueryInterface,observe_IDirect3DVolumeTexture9_AddRef,observe_IDirect3DVolumeTexture9_Release,observe_IDirect3DVolumeTexture9_GetDevice,observe_IDirect3DVolumeTexture9_SetPrivateData,observe_IDirect3DVolumeTexture9_GetPrivateData,observe_IDirect3DVolumeTexture9_FreePrivateData,observe_IDirect3DVolumeTexture9_SetPriority,observe_IDirect3DVolumeTexture9_GetPriority,observe_IDirect3DVolumeTexture9_PreLoad,observe_IDirect3DVolumeTexture9_GetType,observe_IDirect3DVolumeTexture9_SetLOD,observe_IDirect3DVolumeTexture9_GetLOD,observe_IDirect3DVolumeTexture9_GetLevelCount,observe_IDirect3DVolumeTexture9_SetAutoGenFilterType,observe_IDirect3DVolumeTexture9_GetAutoGenFilterType,observe_IDirect3DVolumeTexture9_GenerateMipSubLevels,observe_IDirect3DVolumeTexture9_GetLevelDesc,observe_IDirect3DVolumeTexture9_GetVolumeLevel,observe_IDirect3DVolumeTexture9_LockBox,observe_IDirect3DVolumeTexture9_UnlockBox,observe_IDirect3DVolumeTexture9_AddDirtyBox};
@@ -1055,24 +1348,33 @@ static IDirect3DVertexDeclaration9Vtbl raw_IDirect3DVertexDeclaration9;
 static const IDirect3DVertexDeclaration9Vtbl *source_IDirect3DVertexDeclaration9;
 static INIT_ONCE once_IDirect3DVertexDeclaration9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DVertexDeclaration9_QueryInterface(IDirect3DVertexDeclaration9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(11,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexDeclaration9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DVertexDeclaration9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DVertexDeclaration9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DVertexDeclaration9_AddRef(IDirect3DVertexDeclaration9 *self) {
- return raw_IDirect3DVertexDeclaration9.AddRef(self);
+ pw_d3d9_api_profile_enter(11,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVertexDeclaration9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DVertexDeclaration9_Release(IDirect3DVertexDeclaration9 *self) {
- return raw_IDirect3DVertexDeclaration9.Release(self);
+ pw_d3d9_api_profile_enter(11,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVertexDeclaration9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexDeclaration9_GetDevice(IDirect3DVertexDeclaration9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(11,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexDeclaration9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexDeclaration9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexDeclaration9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexDeclaration9_GetDeclaration(IDirect3DVertexDeclaration9 *self, D3DVERTEXELEMENT9* argument0, UINT* pNumElements) {
+ pw_d3d9_api_profile_enter(11,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexDeclaration9.GetDeclaration(self, argument0, pNumElements);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexDeclaration9",4,"GetDeclaration",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexDeclaration9",4,"GetDeclaration",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DVertexDeclaration9Vtbl wrapped_IDirect3DVertexDeclaration9={observe_IDirect3DVertexDeclaration9_QueryInterface,observe_IDirect3DVertexDeclaration9_AddRef,observe_IDirect3DVertexDeclaration9_Release,observe_IDirect3DVertexDeclaration9_GetDevice,observe_IDirect3DVertexDeclaration9_GetDeclaration};
@@ -1092,24 +1394,33 @@ static IDirect3DVertexShader9Vtbl raw_IDirect3DVertexShader9;
 static const IDirect3DVertexShader9Vtbl *source_IDirect3DVertexShader9;
 static INIT_ONCE once_IDirect3DVertexShader9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DVertexShader9_QueryInterface(IDirect3DVertexShader9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(12,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexShader9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DVertexShader9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DVertexShader9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DVertexShader9_AddRef(IDirect3DVertexShader9 *self) {
- return raw_IDirect3DVertexShader9.AddRef(self);
+ pw_d3d9_api_profile_enter(12,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVertexShader9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DVertexShader9_Release(IDirect3DVertexShader9 *self) {
- return raw_IDirect3DVertexShader9.Release(self);
+ pw_d3d9_api_profile_enter(12,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DVertexShader9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexShader9_GetDevice(IDirect3DVertexShader9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(12,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexShader9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexShader9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexShader9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DVertexShader9_GetFunction(IDirect3DVertexShader9 *self, void* argument0, UINT* pSizeOfData) {
+ pw_d3d9_api_profile_enter(12,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DVertexShader9.GetFunction(self, argument0, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DVertexShader9",4,"GetFunction",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DVertexShader9",4,"GetFunction",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DVertexShader9Vtbl wrapped_IDirect3DVertexShader9={observe_IDirect3DVertexShader9_QueryInterface,observe_IDirect3DVertexShader9_AddRef,observe_IDirect3DVertexShader9_Release,observe_IDirect3DVertexShader9_GetDevice,observe_IDirect3DVertexShader9_GetFunction};
@@ -1129,24 +1440,33 @@ static IDirect3DPixelShader9Vtbl raw_IDirect3DPixelShader9;
 static const IDirect3DPixelShader9Vtbl *source_IDirect3DPixelShader9;
 static INIT_ONCE once_IDirect3DPixelShader9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DPixelShader9_QueryInterface(IDirect3DPixelShader9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(13,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DPixelShader9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DPixelShader9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DPixelShader9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DPixelShader9_AddRef(IDirect3DPixelShader9 *self) {
- return raw_IDirect3DPixelShader9.AddRef(self);
+ pw_d3d9_api_profile_enter(13,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DPixelShader9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DPixelShader9_Release(IDirect3DPixelShader9 *self) {
- return raw_IDirect3DPixelShader9.Release(self);
+ pw_d3d9_api_profile_enter(13,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DPixelShader9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DPixelShader9_GetDevice(IDirect3DPixelShader9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(13,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DPixelShader9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DPixelShader9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DPixelShader9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DPixelShader9_GetFunction(IDirect3DPixelShader9 *self, void* argument0, UINT* pSizeOfData) {
+ pw_d3d9_api_profile_enter(13,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DPixelShader9.GetFunction(self, argument0, pSizeOfData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DPixelShader9",4,"GetFunction",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DPixelShader9",4,"GetFunction",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DPixelShader9Vtbl wrapped_IDirect3DPixelShader9={observe_IDirect3DPixelShader9_QueryInterface,observe_IDirect3DPixelShader9_AddRef,observe_IDirect3DPixelShader9_Release,observe_IDirect3DPixelShader9_GetDevice,observe_IDirect3DPixelShader9_GetFunction};
@@ -1166,29 +1486,39 @@ static IDirect3DStateBlock9Vtbl raw_IDirect3DStateBlock9;
 static const IDirect3DStateBlock9Vtbl *source_IDirect3DStateBlock9;
 static INIT_ONCE once_IDirect3DStateBlock9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DStateBlock9_QueryInterface(IDirect3DStateBlock9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(14,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DStateBlock9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DStateBlock9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DStateBlock9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DStateBlock9_AddRef(IDirect3DStateBlock9 *self) {
- return raw_IDirect3DStateBlock9.AddRef(self);
+ pw_d3d9_api_profile_enter(14,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DStateBlock9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DStateBlock9_Release(IDirect3DStateBlock9 *self) {
- return raw_IDirect3DStateBlock9.Release(self);
+ pw_d3d9_api_profile_enter(14,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DStateBlock9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DStateBlock9_GetDevice(IDirect3DStateBlock9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(14,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DStateBlock9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DStateBlock9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DStateBlock9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DStateBlock9_Capture(IDirect3DStateBlock9 *self) {
+ pw_d3d9_api_profile_enter(14,4,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DStateBlock9.Capture(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DStateBlock9",4,"Capture",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DStateBlock9",4,"Capture",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DStateBlock9_Apply(IDirect3DStateBlock9 *self) {
+ pw_d3d9_api_profile_enter(14,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DStateBlock9.Apply(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DStateBlock9",5,"Apply",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DStateBlock9",5,"Apply",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DStateBlock9Vtbl wrapped_IDirect3DStateBlock9={observe_IDirect3DStateBlock9_QueryInterface,observe_IDirect3DStateBlock9_AddRef,observe_IDirect3DStateBlock9_Release,observe_IDirect3DStateBlock9_GetDevice,observe_IDirect3DStateBlock9_Capture,observe_IDirect3DStateBlock9_Apply};
@@ -1208,23 +1538,32 @@ static IDirect3DQuery9Vtbl raw_IDirect3DQuery9;
 static const IDirect3DQuery9Vtbl *source_IDirect3DQuery9;
 static INIT_ONCE once_IDirect3DQuery9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DQuery9_QueryInterface(IDirect3DQuery9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(15,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DQuery9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DQuery9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DQuery9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DQuery9_AddRef(IDirect3DQuery9 *self) {
- return raw_IDirect3DQuery9.AddRef(self);
+ pw_d3d9_api_profile_enter(15,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DQuery9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DQuery9_Release(IDirect3DQuery9 *self) {
- return raw_IDirect3DQuery9.Release(self);
+ pw_d3d9_api_profile_enter(15,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DQuery9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DQuery9_GetDevice(IDirect3DQuery9 *self, struct IDirect3DDevice9** ppDevice) {
+ pw_d3d9_api_profile_enter(15,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DQuery9.GetDevice(self, ppDevice);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DQuery9",3,"GetDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DQuery9",3,"GetDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static D3DQUERYTYPE WINAPI observe_IDirect3DQuery9_GetType(IDirect3DQuery9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(15,4,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  D3DQUERYTYPE result=raw_IDirect3DQuery9.GetType(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -1233,16 +1572,21 @@ static D3DQUERYTYPE WINAPI observe_IDirect3DQuery9_GetType(IDirect3DQuery9 *self
  return result;
 }
 static DWORD WINAPI observe_IDirect3DQuery9_GetDataSize(IDirect3DQuery9 *self) {
- return raw_IDirect3DQuery9.GetDataSize(self);
+ pw_d3d9_api_profile_enter(15,5,__builtin_return_address(0));
+ DWORD result=raw_IDirect3DQuery9.GetDataSize(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DQuery9_Issue(IDirect3DQuery9 *self, DWORD dwIssueFlags) {
+ pw_d3d9_api_profile_enter(15,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DQuery9.Issue(self, dwIssueFlags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DQuery9",6,"Issue",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DQuery9",6,"Issue",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DQuery9_GetData(IDirect3DQuery9 *self, void* pData, DWORD dwSize, DWORD dwGetDataFlags) {
+ pw_d3d9_api_profile_enter(15,7,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DQuery9.GetData(self, pData, dwSize, dwGetDataFlags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DQuery9",7,"GetData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DQuery9",7,"GetData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DQuery9Vtbl wrapped_IDirect3DQuery9={observe_IDirect3DQuery9_QueryInterface,observe_IDirect3DQuery9_AddRef,observe_IDirect3DQuery9_Release,observe_IDirect3DQuery9_GetDevice,observe_IDirect3DQuery9_GetType,observe_IDirect3DQuery9_GetDataSize,observe_IDirect3DQuery9_Issue,observe_IDirect3DQuery9_GetData};
@@ -1262,23 +1606,32 @@ static IDirect3DDevice9Vtbl raw_IDirect3DDevice9;
 static const IDirect3DDevice9Vtbl *source_IDirect3DDevice9;
 static INIT_ONCE once_IDirect3DDevice9=INIT_ONCE_STATIC_INIT;
 static HRESULT WINAPI observe_IDirect3DDevice9_QueryInterface(IDirect3DDevice9 *self, REFIID riid, void** ppvObject) {
+ pw_d3d9_api_profile_enter(16,0,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.QueryInterface(self, riid, ppvObject);
- if(result!=S_OK)pw_d3d9_api_failure("IDirect3DDevice9",0,"QueryInterface",result,__builtin_return_address(0),riid);
+ if(pw_d3d9_api_diagnostics_enabled()&&(result!=S_OK))pw_d3d9_api_failure("IDirect3DDevice9",0,"QueryInterface",result,__builtin_return_address(0),riid);
  return result;
 }
 static ULONG WINAPI observe_IDirect3DDevice9_AddRef(IDirect3DDevice9 *self) {
- return raw_IDirect3DDevice9.AddRef(self);
+ pw_d3d9_api_profile_enter(16,1,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DDevice9.AddRef(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static ULONG WINAPI observe_IDirect3DDevice9_Release(IDirect3DDevice9 *self) {
- return raw_IDirect3DDevice9.Release(self);
+ pw_d3d9_api_profile_enter(16,2,__builtin_return_address(0));
+ ULONG result=raw_IDirect3DDevice9.Release(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_TestCooperativeLevel(IDirect3DDevice9 *self) {
+ pw_d3d9_api_profile_enter(16,3,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.TestCooperativeLevel(self);
- if(1)pw_d3d9_api_failure("IDirect3DDevice9",3,"TestCooperativeLevel",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(1))pw_d3d9_api_failure("IDirect3DDevice9",3,"TestCooperativeLevel",result,__builtin_return_address(0),NULL);
  return result;
 }
 static UINT WINAPI observe_IDirect3DDevice9_GetAvailableTextureMem(IDirect3DDevice9 *self) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(16,4,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  UINT result=raw_IDirect3DDevice9.GetAvailableTextureMem(self);
  if(sample){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"result",&result,sizeof(result),PW_D3D9_API_WORDS}};
@@ -1287,19 +1640,22 @@ static UINT WINAPI observe_IDirect3DDevice9_GetAvailableTextureMem(IDirect3DDevi
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_EvictManagedResources(IDirect3DDevice9 *self) {
+ pw_d3d9_api_profile_enter(16,5,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.EvictManagedResources(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",5,"EvictManagedResources",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",5,"EvictManagedResources",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetDirect3D(IDirect3DDevice9 *self, IDirect3D9** ppD3D9) {
+ pw_d3d9_api_profile_enter(16,6,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetDirect3D(self, ppD3D9);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",6,"GetDirect3D",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",6,"GetDirect3D",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetDeviceCaps(IDirect3DDevice9 *self, D3DCAPS9* pCaps) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(16,7,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.GetDeviceCaps(self, pCaps);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",7,"GetDeviceCaps",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",7,"GetDeviceCaps",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"pCaps.address",&pCaps,sizeof(pCaps),PW_D3D9_API_POINTER},{"pCaps",pCaps,sizeof(*pCaps),PW_D3D9_API_WORDS}};
   pw_d3d9_api_output("IDirect3DDevice9",7,"GetDeviceCaps",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -1307,53 +1663,69 @@ static HRESULT WINAPI observe_IDirect3DDevice9_GetDeviceCaps(IDirect3DDevice9 *s
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetDisplayMode(IDirect3DDevice9 *self, UINT iSwapChain, D3DDISPLAYMODE* pMode) {
+ pw_d3d9_api_profile_enter(16,8,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetDisplayMode(self, iSwapChain, pMode);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",8,"GetDisplayMode",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",8,"GetDisplayMode",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetCreationParameters(IDirect3DDevice9 *self, D3DDEVICE_CREATION_PARAMETERS *pParameters) {
+ pw_d3d9_api_profile_enter(16,9,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetCreationParameters(self, pParameters);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",9,"GetCreationParameters",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",9,"GetCreationParameters",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetCursorProperties(IDirect3DDevice9 *self, UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) {
+ pw_d3d9_api_profile_enter(16,10,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetCursorProperties(self, XHotSpot, YHotSpot, pCursorBitmap);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",10,"SetCursorProperties",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",10,"SetCursorProperties",result,__builtin_return_address(0),NULL);
  return result;
 }
 static void WINAPI observe_IDirect3DDevice9_SetCursorPosition(IDirect3DDevice9 *self, int X, int Y, DWORD Flags) {
+ pw_d3d9_api_profile_enter(16,11,__builtin_return_address(0));
  raw_IDirect3DDevice9.SetCursorPosition(self, X, Y, Flags);
+ __asm__ __volatile__("" ::: "memory");
 }
 static BOOL WINAPI observe_IDirect3DDevice9_ShowCursor(IDirect3DDevice9 *self, BOOL bShow) {
- return raw_IDirect3DDevice9.ShowCursor(self, bShow);
+ pw_d3d9_api_profile_enter(16,12,__builtin_return_address(0));
+ BOOL result=raw_IDirect3DDevice9.ShowCursor(self, bShow);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateAdditionalSwapChain(IDirect3DDevice9 *self, D3DPRESENT_PARAMETERS* pPresentationParameters, IDirect3DSwapChain9** pSwapChain) {
+ pw_d3d9_api_profile_enter(16,13,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreateAdditionalSwapChain(self, pPresentationParameters, pSwapChain);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",13,"CreateAdditionalSwapChain",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",13,"CreateAdditionalSwapChain",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetSwapChain(IDirect3DDevice9 *self, UINT iSwapChain, IDirect3DSwapChain9** pSwapChain) {
+ pw_d3d9_api_profile_enter(16,14,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetSwapChain(self, iSwapChain, pSwapChain);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",14,"GetSwapChain",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",14,"GetSwapChain",result,__builtin_return_address(0),NULL);
  return result;
 }
 static UINT WINAPI observe_IDirect3DDevice9_GetNumberOfSwapChains(IDirect3DDevice9 *self) {
- return raw_IDirect3DDevice9.GetNumberOfSwapChains(self);
+ pw_d3d9_api_profile_enter(16,15,__builtin_return_address(0));
+ UINT result=raw_IDirect3DDevice9.GetNumberOfSwapChains(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_Reset(IDirect3DDevice9 *self, D3DPRESENT_PARAMETERS* pPresentationParameters) {
+ pw_d3d9_api_profile_enter(16,16,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.Reset(self, pPresentationParameters);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",16,"Reset",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",16,"Reset",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_Present(IDirect3DDevice9 *self, const RECT *src_rect, const RECT *dst_rect, HWND dst_window_override, const RGNDATA *dirty_region) {
+ pw_d3d9_api_profile_enter(16,17,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.Present(self, src_rect, dst_rect, dst_window_override, dirty_region);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",17,"Present",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",17,"Present",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetBackBuffer(IDirect3DDevice9 *self, UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(16,18,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.GetBackBuffer(self, iSwapChain, iBackBuffer, Type, ppBackBuffer);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",18,"GetBackBuffer",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",18,"GetBackBuffer",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"iSwapChain",&iSwapChain,sizeof(iSwapChain),PW_D3D9_API_WORDS},{"iBackBuffer",&iBackBuffer,sizeof(iBackBuffer),PW_D3D9_API_WORDS},{"Type",&Type,sizeof(Type),PW_D3D9_API_WORDS},{"ppBackBuffer.address",&ppBackBuffer,sizeof(ppBackBuffer),PW_D3D9_API_POINTER},{"ppBackBuffer",ppBackBuffer,sizeof(*ppBackBuffer),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",18,"GetBackBuffer",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -1361,25 +1733,32 @@ static HRESULT WINAPI observe_IDirect3DDevice9_GetBackBuffer(IDirect3DDevice9 *s
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetRasterStatus(IDirect3DDevice9 *self, UINT iSwapChain, D3DRASTER_STATUS* pRasterStatus) {
+ pw_d3d9_api_profile_enter(16,19,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetRasterStatus(self, iSwapChain, pRasterStatus);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",19,"GetRasterStatus",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",19,"GetRasterStatus",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetDialogBoxMode(IDirect3DDevice9 *self, BOOL bEnableDialogs) {
+ pw_d3d9_api_profile_enter(16,20,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetDialogBoxMode(self, bEnableDialogs);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",20,"SetDialogBoxMode",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",20,"SetDialogBoxMode",result,__builtin_return_address(0),NULL);
  return result;
 }
 static void WINAPI observe_IDirect3DDevice9_SetGammaRamp(IDirect3DDevice9 *self, UINT swapchain_idx, DWORD flags, const D3DGAMMARAMP *ramp) {
+ pw_d3d9_api_profile_enter(16,21,__builtin_return_address(0));
  raw_IDirect3DDevice9.SetGammaRamp(self, swapchain_idx, flags, ramp);
+ __asm__ __volatile__("" ::: "memory");
 }
 static void WINAPI observe_IDirect3DDevice9_GetGammaRamp(IDirect3DDevice9 *self, UINT iSwapChain, D3DGAMMARAMP* pRamp) {
+ pw_d3d9_api_profile_enter(16,22,__builtin_return_address(0));
  raw_IDirect3DDevice9.GetGammaRamp(self, iSwapChain, pRamp);
+ __asm__ __volatile__("" ::: "memory");
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateTexture(IDirect3DDevice9 *self, UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(16,23,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.CreateTexture(self, Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",23,"CreateTexture",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",23,"CreateTexture",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Levels",&Levels,sizeof(Levels),PW_D3D9_API_WORDS},{"Usage",&Usage,sizeof(Usage),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"Pool",&Pool,sizeof(Pool),PW_D3D9_API_WORDS},{"ppTexture.address",&ppTexture,sizeof(ppTexture),PW_D3D9_API_POINTER},{"ppTexture",ppTexture,sizeof(*ppTexture),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",23,"CreateTexture",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -1387,29 +1766,34 @@ static HRESULT WINAPI observe_IDirect3DDevice9_CreateTexture(IDirect3DDevice9 *s
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateVolumeTexture(IDirect3DDevice9 *self, UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9** ppVolumeTexture, HANDLE* pSharedHandle) {
+ pw_d3d9_api_profile_enter(16,24,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreateVolumeTexture(self, Width, Height, Depth, Levels, Usage, Format, Pool, ppVolumeTexture, pSharedHandle);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",24,"CreateVolumeTexture",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",24,"CreateVolumeTexture",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateCubeTexture(IDirect3DDevice9 *self, UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9** ppCubeTexture, HANDLE* pSharedHandle) {
+ pw_d3d9_api_profile_enter(16,25,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreateCubeTexture(self, EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",25,"CreateCubeTexture",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",25,"CreateCubeTexture",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateVertexBuffer(IDirect3DDevice9 *self, UINT Length, DWORD Usage, DWORD FVF, D3DPOOL Pool, IDirect3DVertexBuffer9** ppVertexBuffer, HANDLE* pSharedHandle) {
+ pw_d3d9_api_profile_enter(16,26,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreateVertexBuffer(self, Length, Usage, FVF, Pool, ppVertexBuffer, pSharedHandle);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",26,"CreateVertexBuffer",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",26,"CreateVertexBuffer",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateIndexBuffer(IDirect3DDevice9 *self, UINT Length, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DIndexBuffer9** ppIndexBuffer, HANDLE* pSharedHandle) {
+ pw_d3d9_api_profile_enter(16,27,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreateIndexBuffer(self, Length, Usage, Format, Pool, ppIndexBuffer, pSharedHandle);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",27,"CreateIndexBuffer",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",27,"CreateIndexBuffer",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateRenderTarget(IDirect3DDevice9 *self, UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Lockable, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(16,28,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.CreateRenderTarget(self, Width, Height, Format, MultiSample, MultisampleQuality, Lockable, ppSurface, pSharedHandle);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",28,"CreateRenderTarget",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",28,"CreateRenderTarget",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"MultiSample",&MultiSample,sizeof(MultiSample),PW_D3D9_API_WORDS},{"MultisampleQuality",&MultisampleQuality,sizeof(MultisampleQuality),PW_D3D9_API_WORDS},{"Lockable",&Lockable,sizeof(Lockable),PW_D3D9_API_WORDS},{"ppSurface.address",&ppSurface,sizeof(ppSurface),PW_D3D9_API_POINTER},{"ppSurface",ppSurface,sizeof(*ppSurface),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",28,"CreateRenderTarget",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -1417,9 +1801,10 @@ static HRESULT WINAPI observe_IDirect3DDevice9_CreateRenderTarget(IDirect3DDevic
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateDepthStencilSurface(IDirect3DDevice9 *self, UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Discard, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(16,29,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.CreateDepthStencilSurface(self, Width, Height, Format, MultiSample, MultisampleQuality, Discard, ppSurface, pSharedHandle);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",29,"CreateDepthStencilSurface",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",29,"CreateDepthStencilSurface",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"MultiSample",&MultiSample,sizeof(MultiSample),PW_D3D9_API_WORDS},{"MultisampleQuality",&MultisampleQuality,sizeof(MultisampleQuality),PW_D3D9_API_WORDS},{"Discard",&Discard,sizeof(Discard),PW_D3D9_API_WORDS},{"ppSurface.address",&ppSurface,sizeof(ppSurface),PW_D3D9_API_POINTER},{"ppSurface",ppSurface,sizeof(*ppSurface),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",29,"CreateDepthStencilSurface",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -1427,39 +1812,46 @@ static HRESULT WINAPI observe_IDirect3DDevice9_CreateDepthStencilSurface(IDirect
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_UpdateSurface(IDirect3DDevice9 *self, IDirect3DSurface9 *src_surface, const RECT *src_rect, IDirect3DSurface9 *dst_surface, const POINT *dst_point) {
+ pw_d3d9_api_profile_enter(16,30,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.UpdateSurface(self, src_surface, src_rect, dst_surface, dst_point);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",30,"UpdateSurface",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",30,"UpdateSurface",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_UpdateTexture(IDirect3DDevice9 *self, IDirect3DBaseTexture9* pSourceTexture, IDirect3DBaseTexture9* pDestinationTexture) {
+ pw_d3d9_api_profile_enter(16,31,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.UpdateTexture(self, pSourceTexture, pDestinationTexture);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",31,"UpdateTexture",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",31,"UpdateTexture",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetRenderTargetData(IDirect3DDevice9 *self, IDirect3DSurface9* pRenderTarget, IDirect3DSurface9* pDestSurface) {
+ pw_d3d9_api_profile_enter(16,32,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetRenderTargetData(self, pRenderTarget, pDestSurface);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",32,"GetRenderTargetData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",32,"GetRenderTargetData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetFrontBufferData(IDirect3DDevice9 *self, UINT iSwapChain, IDirect3DSurface9* pDestSurface) {
+ pw_d3d9_api_profile_enter(16,33,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetFrontBufferData(self, iSwapChain, pDestSurface);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",33,"GetFrontBufferData",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",33,"GetFrontBufferData",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_StretchRect(IDirect3DDevice9 *self, IDirect3DSurface9 *src_surface, const RECT *src_rect, IDirect3DSurface9 *dst_surface, const RECT *dst_rect, D3DTEXTUREFILTERTYPE filter) {
+ pw_d3d9_api_profile_enter(16,34,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.StretchRect(self, src_surface, src_rect, dst_surface, dst_rect, filter);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",34,"StretchRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",34,"StretchRect",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_ColorFill(IDirect3DDevice9 *self, IDirect3DSurface9 *surface, const RECT *rect, D3DCOLOR color) {
+ pw_d3d9_api_profile_enter(16,35,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.ColorFill(self, surface, rect, color);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",35,"ColorFill",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",35,"ColorFill",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateOffscreenPlainSurface(IDirect3DDevice9 *self, UINT Width, UINT Height, D3DFORMAT Format, D3DPOOL Pool, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(16,36,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.CreateOffscreenPlainSurface(self, Width, Height, Format, Pool, ppSurface, pSharedHandle);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",36,"CreateOffscreenPlainSurface",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",36,"CreateOffscreenPlainSurface",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"Width",&Width,sizeof(Width),PW_D3D9_API_WORDS},{"Height",&Height,sizeof(Height),PW_D3D9_API_WORDS},{"Format",&Format,sizeof(Format),PW_D3D9_API_WORDS},{"Pool",&Pool,sizeof(Pool),PW_D3D9_API_WORDS},{"ppSurface.address",&ppSurface,sizeof(ppSurface),PW_D3D9_API_POINTER},{"ppSurface",ppSurface,sizeof(*ppSurface),PW_D3D9_API_POINTER},{"pSharedHandle.address",&pSharedHandle,sizeof(pSharedHandle),PW_D3D9_API_POINTER},{"pSharedHandle",pSharedHandle,sizeof(*pSharedHandle),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",36,"CreateOffscreenPlainSurface",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -1467,14 +1859,16 @@ static HRESULT WINAPI observe_IDirect3DDevice9_CreateOffscreenPlainSurface(IDire
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetRenderTarget(IDirect3DDevice9 *self, DWORD RenderTargetIndex, IDirect3DSurface9* pRenderTarget) {
+ pw_d3d9_api_profile_enter(16,37,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetRenderTarget(self, RenderTargetIndex, pRenderTarget);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",37,"SetRenderTarget",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",37,"SetRenderTarget",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetRenderTarget(IDirect3DDevice9 *self, DWORD RenderTargetIndex, IDirect3DSurface9** ppRenderTarget) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(16,38,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.GetRenderTarget(self, RenderTargetIndex, ppRenderTarget);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",38,"GetRenderTarget",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",38,"GetRenderTarget",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"RenderTargetIndex",&RenderTargetIndex,sizeof(RenderTargetIndex),PW_D3D9_API_WORDS},{"ppRenderTarget.address",&ppRenderTarget,sizeof(ppRenderTarget),PW_D3D9_API_POINTER},{"ppRenderTarget",ppRenderTarget,sizeof(*ppRenderTarget),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",38,"GetRenderTarget",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -1482,14 +1876,16 @@ static HRESULT WINAPI observe_IDirect3DDevice9_GetRenderTarget(IDirect3DDevice9 
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetDepthStencilSurface(IDirect3DDevice9 *self, IDirect3DSurface9* pNewZStencil) {
+ pw_d3d9_api_profile_enter(16,39,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetDepthStencilSurface(self, pNewZStencil);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",39,"SetDepthStencilSurface",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",39,"SetDepthStencilSurface",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetDepthStencilSurface(IDirect3DDevice9 *self, IDirect3DSurface9** ppZStencilSurface) {
- static LONG samples;int sample=pw_d3d9_api_sample(&samples);void *observed_self=self;
+ pw_d3d9_api_profile_enter(16,40,__builtin_return_address(0));
+ static LONG samples;int sample=pw_d3d9_api_diagnostics_enabled()&&pw_d3d9_api_sample(&samples);void *observed_self=self;
  HRESULT result=raw_IDirect3DDevice9.GetDepthStencilSurface(self, ppZStencilSurface);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",40,"GetDepthStencilSurface",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",40,"GetDepthStencilSurface",result,__builtin_return_address(0),NULL);
  if(sample&&SUCCEEDED(result)){
   const struct pw_d3d9_api_field fields[]={{"self.address",&observed_self,sizeof(observed_self),PW_D3D9_API_POINTER},{"ppZStencilSurface.address",&ppZStencilSurface,sizeof(ppZStencilSurface),PW_D3D9_API_POINTER},{"ppZStencilSurface",ppZStencilSurface,sizeof(*ppZStencilSurface),PW_D3D9_API_POINTER}};
   pw_d3d9_api_output("IDirect3DDevice9",40,"GetDepthStencilSurface",result,__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));
@@ -1497,389 +1893,471 @@ static HRESULT WINAPI observe_IDirect3DDevice9_GetDepthStencilSurface(IDirect3DD
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_BeginScene(IDirect3DDevice9 *self) {
+ pw_d3d9_api_profile_enter(16,41,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.BeginScene(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",41,"BeginScene",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",41,"BeginScene",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_EndScene(IDirect3DDevice9 *self) {
+ pw_d3d9_api_profile_enter(16,42,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.EndScene(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",42,"EndScene",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",42,"EndScene",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_Clear(IDirect3DDevice9 *self, DWORD rect_count, const D3DRECT *rects, DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
+ pw_d3d9_api_profile_enter(16,43,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.Clear(self, rect_count, rects, flags, color, z, stencil);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",43,"Clear",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",43,"Clear",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetTransform(IDirect3DDevice9 *self, D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix) {
+ pw_d3d9_api_profile_enter(16,44,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetTransform(self, state, matrix);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",44,"SetTransform",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",44,"SetTransform",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetTransform(IDirect3DDevice9 *self, D3DTRANSFORMSTATETYPE State, D3DMATRIX* pMatrix) {
+ pw_d3d9_api_profile_enter(16,45,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetTransform(self, State, pMatrix);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",45,"GetTransform",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",45,"GetTransform",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_MultiplyTransform(IDirect3DDevice9 *self, D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix) {
+ pw_d3d9_api_profile_enter(16,46,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.MultiplyTransform(self, state, matrix);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",46,"MultiplyTransform",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",46,"MultiplyTransform",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetViewport(IDirect3DDevice9 *self, const D3DVIEWPORT9 *viewport) {
+ pw_d3d9_api_profile_enter(16,47,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetViewport(self, viewport);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",47,"SetViewport",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",47,"SetViewport",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetViewport(IDirect3DDevice9 *self, D3DVIEWPORT9* pViewport) {
+ pw_d3d9_api_profile_enter(16,48,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetViewport(self, pViewport);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",48,"GetViewport",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",48,"GetViewport",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetMaterial(IDirect3DDevice9 *self, const D3DMATERIAL9 *material) {
+ pw_d3d9_api_profile_enter(16,49,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetMaterial(self, material);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",49,"SetMaterial",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",49,"SetMaterial",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetMaterial(IDirect3DDevice9 *self, D3DMATERIAL9* pMaterial) {
+ pw_d3d9_api_profile_enter(16,50,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetMaterial(self, pMaterial);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",50,"GetMaterial",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",50,"GetMaterial",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetLight(IDirect3DDevice9 *self, DWORD index, const D3DLIGHT9 *light) {
+ pw_d3d9_api_profile_enter(16,51,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetLight(self, index, light);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",51,"SetLight",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",51,"SetLight",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetLight(IDirect3DDevice9 *self, DWORD Index, D3DLIGHT9* argument1) {
+ pw_d3d9_api_profile_enter(16,52,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetLight(self, Index, argument1);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",52,"GetLight",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",52,"GetLight",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_LightEnable(IDirect3DDevice9 *self, DWORD Index, BOOL Enable) {
+ pw_d3d9_api_profile_enter(16,53,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.LightEnable(self, Index, Enable);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",53,"LightEnable",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",53,"LightEnable",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetLightEnable(IDirect3DDevice9 *self, DWORD Index, BOOL* pEnable) {
+ pw_d3d9_api_profile_enter(16,54,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetLightEnable(self, Index, pEnable);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",54,"GetLightEnable",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",54,"GetLightEnable",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetClipPlane(IDirect3DDevice9 *self, DWORD index, const float *plane) {
+ pw_d3d9_api_profile_enter(16,55,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetClipPlane(self, index, plane);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",55,"SetClipPlane",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",55,"SetClipPlane",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetClipPlane(IDirect3DDevice9 *self, DWORD Index, float* pPlane) {
+ pw_d3d9_api_profile_enter(16,56,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetClipPlane(self, Index, pPlane);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",56,"GetClipPlane",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",56,"GetClipPlane",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetRenderState(IDirect3DDevice9 *self, D3DRENDERSTATETYPE State, DWORD Value) {
+ pw_d3d9_api_profile_enter(16,57,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetRenderState(self, State, Value);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",57,"SetRenderState",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",57,"SetRenderState",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetRenderState(IDirect3DDevice9 *self, D3DRENDERSTATETYPE State, DWORD* pValue) {
+ pw_d3d9_api_profile_enter(16,58,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetRenderState(self, State, pValue);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",58,"GetRenderState",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",58,"GetRenderState",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateStateBlock(IDirect3DDevice9 *self, D3DSTATEBLOCKTYPE Type, IDirect3DStateBlock9** ppSB) {
+ pw_d3d9_api_profile_enter(16,59,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreateStateBlock(self, Type, ppSB);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",59,"CreateStateBlock",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",59,"CreateStateBlock",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_BeginStateBlock(IDirect3DDevice9 *self) {
+ pw_d3d9_api_profile_enter(16,60,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.BeginStateBlock(self);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",60,"BeginStateBlock",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",60,"BeginStateBlock",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_EndStateBlock(IDirect3DDevice9 *self, IDirect3DStateBlock9** ppSB) {
+ pw_d3d9_api_profile_enter(16,61,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.EndStateBlock(self, ppSB);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",61,"EndStateBlock",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",61,"EndStateBlock",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetClipStatus(IDirect3DDevice9 *self, const D3DCLIPSTATUS9 *clip_status) {
+ pw_d3d9_api_profile_enter(16,62,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetClipStatus(self, clip_status);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",62,"SetClipStatus",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",62,"SetClipStatus",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetClipStatus(IDirect3DDevice9 *self, D3DCLIPSTATUS9* pClipStatus) {
+ pw_d3d9_api_profile_enter(16,63,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetClipStatus(self, pClipStatus);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",63,"GetClipStatus",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",63,"GetClipStatus",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetTexture(IDirect3DDevice9 *self, DWORD Stage, IDirect3DBaseTexture9** ppTexture) {
+ pw_d3d9_api_profile_enter(16,64,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetTexture(self, Stage, ppTexture);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",64,"GetTexture",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",64,"GetTexture",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetTexture(IDirect3DDevice9 *self, DWORD Stage, IDirect3DBaseTexture9* pTexture) {
+ pw_d3d9_api_profile_enter(16,65,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetTexture(self, Stage, pTexture);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",65,"SetTexture",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",65,"SetTexture",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetTextureStageState(IDirect3DDevice9 *self, DWORD Stage, D3DTEXTURESTAGESTATETYPE Type, DWORD* pValue) {
+ pw_d3d9_api_profile_enter(16,66,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetTextureStageState(self, Stage, Type, pValue);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",66,"GetTextureStageState",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",66,"GetTextureStageState",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetTextureStageState(IDirect3DDevice9 *self, DWORD Stage, D3DTEXTURESTAGESTATETYPE Type, DWORD Value) {
+ pw_d3d9_api_profile_enter(16,67,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetTextureStageState(self, Stage, Type, Value);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",67,"SetTextureStageState",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",67,"SetTextureStageState",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetSamplerState(IDirect3DDevice9 *self, DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD* pValue) {
+ pw_d3d9_api_profile_enter(16,68,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetSamplerState(self, Sampler, Type, pValue);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",68,"GetSamplerState",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",68,"GetSamplerState",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetSamplerState(IDirect3DDevice9 *self, DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD Value) {
+ pw_d3d9_api_profile_enter(16,69,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetSamplerState(self, Sampler, Type, Value);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",69,"SetSamplerState",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",69,"SetSamplerState",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_ValidateDevice(IDirect3DDevice9 *self, DWORD* pNumPasses) {
+ pw_d3d9_api_profile_enter(16,70,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.ValidateDevice(self, pNumPasses);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",70,"ValidateDevice",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",70,"ValidateDevice",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetPaletteEntries(IDirect3DDevice9 *self, UINT palette_idx, const PALETTEENTRY *entries) {
+ pw_d3d9_api_profile_enter(16,71,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetPaletteEntries(self, palette_idx, entries);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",71,"SetPaletteEntries",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",71,"SetPaletteEntries",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetPaletteEntries(IDirect3DDevice9 *self, UINT PaletteNumber, PALETTEENTRY* pEntries) {
+ pw_d3d9_api_profile_enter(16,72,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetPaletteEntries(self, PaletteNumber, pEntries);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",72,"GetPaletteEntries",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",72,"GetPaletteEntries",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetCurrentTexturePalette(IDirect3DDevice9 *self, UINT PaletteNumber) {
+ pw_d3d9_api_profile_enter(16,73,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetCurrentTexturePalette(self, PaletteNumber);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",73,"SetCurrentTexturePalette",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",73,"SetCurrentTexturePalette",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetCurrentTexturePalette(IDirect3DDevice9 *self, UINT *PaletteNumber) {
+ pw_d3d9_api_profile_enter(16,74,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetCurrentTexturePalette(self, PaletteNumber);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",74,"GetCurrentTexturePalette",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",74,"GetCurrentTexturePalette",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetScissorRect(IDirect3DDevice9 *self, const RECT *rect) {
+ pw_d3d9_api_profile_enter(16,75,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetScissorRect(self, rect);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",75,"SetScissorRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",75,"SetScissorRect",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetScissorRect(IDirect3DDevice9 *self, RECT* pRect) {
+ pw_d3d9_api_profile_enter(16,76,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetScissorRect(self, pRect);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",76,"GetScissorRect",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",76,"GetScissorRect",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetSoftwareVertexProcessing(IDirect3DDevice9 *self, BOOL bSoftware) {
+ pw_d3d9_api_profile_enter(16,77,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetSoftwareVertexProcessing(self, bSoftware);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",77,"SetSoftwareVertexProcessing",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",77,"SetSoftwareVertexProcessing",result,__builtin_return_address(0),NULL);
  return result;
 }
 static BOOL WINAPI observe_IDirect3DDevice9_GetSoftwareVertexProcessing(IDirect3DDevice9 *self) {
- return raw_IDirect3DDevice9.GetSoftwareVertexProcessing(self);
+ pw_d3d9_api_profile_enter(16,78,__builtin_return_address(0));
+ BOOL result=raw_IDirect3DDevice9.GetSoftwareVertexProcessing(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetNPatchMode(IDirect3DDevice9 *self, float nSegments) {
+ pw_d3d9_api_profile_enter(16,79,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetNPatchMode(self, nSegments);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",79,"SetNPatchMode",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",79,"SetNPatchMode",result,__builtin_return_address(0),NULL);
  return result;
 }
 static float WINAPI observe_IDirect3DDevice9_GetNPatchMode(IDirect3DDevice9 *self) {
- return raw_IDirect3DDevice9.GetNPatchMode(self);
+ pw_d3d9_api_profile_enter(16,80,__builtin_return_address(0));
+ float result=raw_IDirect3DDevice9.GetNPatchMode(self);
+ __asm__ __volatile__("" : "+g"(result) :: "memory");
+ return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_DrawPrimitive(IDirect3DDevice9 *self, D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount) {
+ pw_d3d9_api_profile_enter(16,81,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.DrawPrimitive(self, PrimitiveType, StartVertex, PrimitiveCount);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",81,"DrawPrimitive",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",81,"DrawPrimitive",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_DrawIndexedPrimitive(IDirect3DDevice9 *self, D3DPRIMITIVETYPE argument0, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) {
+ pw_d3d9_api_profile_enter(16,82,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.DrawIndexedPrimitive(self, argument0, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",82,"DrawIndexedPrimitive",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",82,"DrawIndexedPrimitive",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_DrawPrimitiveUP(IDirect3DDevice9 *self, D3DPRIMITIVETYPE primitive_type, UINT primitive_count, const void *data, UINT stride) {
+ pw_d3d9_api_profile_enter(16,83,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.DrawPrimitiveUP(self, primitive_type, primitive_count, data, stride);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",83,"DrawPrimitiveUP",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",83,"DrawPrimitiveUP",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_DrawIndexedPrimitiveUP(IDirect3DDevice9 *self, D3DPRIMITIVETYPE primitive_type, UINT min_vertex_idx, UINT vertex_count, UINT primitive_count, const void *index_data, D3DFORMAT index_format, const void *data, UINT stride) {
+ pw_d3d9_api_profile_enter(16,84,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.DrawIndexedPrimitiveUP(self, primitive_type, min_vertex_idx, vertex_count, primitive_count, index_data, index_format, data, stride);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",84,"DrawIndexedPrimitiveUP",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",84,"DrawIndexedPrimitiveUP",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_ProcessVertices(IDirect3DDevice9 *self, UINT SrcStartIndex, UINT DestIndex, UINT VertexCount, IDirect3DVertexBuffer9* pDestBuffer, IDirect3DVertexDeclaration9* pVertexDecl, DWORD Flags) {
+ pw_d3d9_api_profile_enter(16,85,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.ProcessVertices(self, SrcStartIndex, DestIndex, VertexCount, pDestBuffer, pVertexDecl, Flags);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",85,"ProcessVertices",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",85,"ProcessVertices",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateVertexDeclaration(IDirect3DDevice9 *self, const D3DVERTEXELEMENT9 *elements, IDirect3DVertexDeclaration9 **declaration) {
+ pw_d3d9_api_profile_enter(16,86,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreateVertexDeclaration(self, elements, declaration);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",86,"CreateVertexDeclaration",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",86,"CreateVertexDeclaration",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetVertexDeclaration(IDirect3DDevice9 *self, IDirect3DVertexDeclaration9* pDecl) {
+ pw_d3d9_api_profile_enter(16,87,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetVertexDeclaration(self, pDecl);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",87,"SetVertexDeclaration",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",87,"SetVertexDeclaration",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetVertexDeclaration(IDirect3DDevice9 *self, IDirect3DVertexDeclaration9** ppDecl) {
+ pw_d3d9_api_profile_enter(16,88,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetVertexDeclaration(self, ppDecl);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",88,"GetVertexDeclaration",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",88,"GetVertexDeclaration",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetFVF(IDirect3DDevice9 *self, DWORD FVF) {
+ pw_d3d9_api_profile_enter(16,89,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetFVF(self, FVF);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",89,"SetFVF",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",89,"SetFVF",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetFVF(IDirect3DDevice9 *self, DWORD* pFVF) {
+ pw_d3d9_api_profile_enter(16,90,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetFVF(self, pFVF);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",90,"GetFVF",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",90,"GetFVF",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateVertexShader(IDirect3DDevice9 *self, const DWORD *byte_code, IDirect3DVertexShader9 **shader) {
+ pw_d3d9_api_profile_enter(16,91,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreateVertexShader(self, byte_code, shader);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",91,"CreateVertexShader",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",91,"CreateVertexShader",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetVertexShader(IDirect3DDevice9 *self, IDirect3DVertexShader9* pShader) {
+ pw_d3d9_api_profile_enter(16,92,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetVertexShader(self, pShader);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",92,"SetVertexShader",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",92,"SetVertexShader",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetVertexShader(IDirect3DDevice9 *self, IDirect3DVertexShader9** ppShader) {
+ pw_d3d9_api_profile_enter(16,93,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetVertexShader(self, ppShader);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",93,"GetVertexShader",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",93,"GetVertexShader",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetVertexShaderConstantF(IDirect3DDevice9 *self, UINT reg_idx, const float *data, UINT count) {
+ pw_d3d9_api_profile_enter(16,94,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetVertexShaderConstantF(self, reg_idx, data, count);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",94,"SetVertexShaderConstantF",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",94,"SetVertexShaderConstantF",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetVertexShaderConstantF(IDirect3DDevice9 *self, UINT StartRegister, float* pConstantData, UINT Vector4fCount) {
+ pw_d3d9_api_profile_enter(16,95,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetVertexShaderConstantF(self, StartRegister, pConstantData, Vector4fCount);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",95,"GetVertexShaderConstantF",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",95,"GetVertexShaderConstantF",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetVertexShaderConstantI(IDirect3DDevice9 *self, UINT reg_idx, const int *data, UINT count) {
+ pw_d3d9_api_profile_enter(16,96,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetVertexShaderConstantI(self, reg_idx, data, count);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",96,"SetVertexShaderConstantI",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",96,"SetVertexShaderConstantI",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetVertexShaderConstantI(IDirect3DDevice9 *self, UINT StartRegister, int* pConstantData, UINT Vector4iCount) {
+ pw_d3d9_api_profile_enter(16,97,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetVertexShaderConstantI(self, StartRegister, pConstantData, Vector4iCount);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",97,"GetVertexShaderConstantI",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",97,"GetVertexShaderConstantI",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetVertexShaderConstantB(IDirect3DDevice9 *self, UINT reg_idx, const BOOL *data, UINT count) {
+ pw_d3d9_api_profile_enter(16,98,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetVertexShaderConstantB(self, reg_idx, data, count);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",98,"SetVertexShaderConstantB",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",98,"SetVertexShaderConstantB",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetVertexShaderConstantB(IDirect3DDevice9 *self, UINT StartRegister, BOOL* pConstantData, UINT BoolCount) {
+ pw_d3d9_api_profile_enter(16,99,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetVertexShaderConstantB(self, StartRegister, pConstantData, BoolCount);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",99,"GetVertexShaderConstantB",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",99,"GetVertexShaderConstantB",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetStreamSource(IDirect3DDevice9 *self, UINT StreamNumber, IDirect3DVertexBuffer9* pStreamData, UINT OffsetInBytes, UINT Stride) {
+ pw_d3d9_api_profile_enter(16,100,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetStreamSource(self, StreamNumber, pStreamData, OffsetInBytes, Stride);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",100,"SetStreamSource",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",100,"SetStreamSource",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetStreamSource(IDirect3DDevice9 *self, UINT StreamNumber, IDirect3DVertexBuffer9** ppStreamData, UINT* OffsetInBytes, UINT* pStride) {
+ pw_d3d9_api_profile_enter(16,101,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetStreamSource(self, StreamNumber, ppStreamData, OffsetInBytes, pStride);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",101,"GetStreamSource",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",101,"GetStreamSource",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetStreamSourceFreq(IDirect3DDevice9 *self, UINT StreamNumber, UINT Divider) {
+ pw_d3d9_api_profile_enter(16,102,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetStreamSourceFreq(self, StreamNumber, Divider);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",102,"SetStreamSourceFreq",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",102,"SetStreamSourceFreq",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetStreamSourceFreq(IDirect3DDevice9 *self, UINT StreamNumber, UINT* Divider) {
+ pw_d3d9_api_profile_enter(16,103,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetStreamSourceFreq(self, StreamNumber, Divider);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",103,"GetStreamSourceFreq",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",103,"GetStreamSourceFreq",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetIndices(IDirect3DDevice9 *self, IDirect3DIndexBuffer9* pIndexData) {
+ pw_d3d9_api_profile_enter(16,104,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetIndices(self, pIndexData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",104,"SetIndices",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",104,"SetIndices",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetIndices(IDirect3DDevice9 *self, IDirect3DIndexBuffer9** ppIndexData) {
+ pw_d3d9_api_profile_enter(16,105,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetIndices(self, ppIndexData);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",105,"GetIndices",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",105,"GetIndices",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreatePixelShader(IDirect3DDevice9 *self, const DWORD *byte_code, IDirect3DPixelShader9 **shader) {
+ pw_d3d9_api_profile_enter(16,106,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreatePixelShader(self, byte_code, shader);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",106,"CreatePixelShader",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",106,"CreatePixelShader",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetPixelShader(IDirect3DDevice9 *self, IDirect3DPixelShader9* pShader) {
+ pw_d3d9_api_profile_enter(16,107,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetPixelShader(self, pShader);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",107,"SetPixelShader",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",107,"SetPixelShader",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetPixelShader(IDirect3DDevice9 *self, IDirect3DPixelShader9** ppShader) {
+ pw_d3d9_api_profile_enter(16,108,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetPixelShader(self, ppShader);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",108,"GetPixelShader",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",108,"GetPixelShader",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetPixelShaderConstantF(IDirect3DDevice9 *self, UINT reg_idx, const float *data, UINT count) {
+ pw_d3d9_api_profile_enter(16,109,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetPixelShaderConstantF(self, reg_idx, data, count);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",109,"SetPixelShaderConstantF",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",109,"SetPixelShaderConstantF",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetPixelShaderConstantF(IDirect3DDevice9 *self, UINT StartRegister, float* pConstantData, UINT Vector4fCount) {
+ pw_d3d9_api_profile_enter(16,110,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetPixelShaderConstantF(self, StartRegister, pConstantData, Vector4fCount);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",110,"GetPixelShaderConstantF",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",110,"GetPixelShaderConstantF",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetPixelShaderConstantI(IDirect3DDevice9 *self, UINT reg_idx, const int *data, UINT count) {
+ pw_d3d9_api_profile_enter(16,111,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetPixelShaderConstantI(self, reg_idx, data, count);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",111,"SetPixelShaderConstantI",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",111,"SetPixelShaderConstantI",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetPixelShaderConstantI(IDirect3DDevice9 *self, UINT StartRegister, int* pConstantData, UINT Vector4iCount) {
+ pw_d3d9_api_profile_enter(16,112,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetPixelShaderConstantI(self, StartRegister, pConstantData, Vector4iCount);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",112,"GetPixelShaderConstantI",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",112,"GetPixelShaderConstantI",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_SetPixelShaderConstantB(IDirect3DDevice9 *self, UINT reg_idx, const BOOL *data, UINT count) {
+ pw_d3d9_api_profile_enter(16,113,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.SetPixelShaderConstantB(self, reg_idx, data, count);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",113,"SetPixelShaderConstantB",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",113,"SetPixelShaderConstantB",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_GetPixelShaderConstantB(IDirect3DDevice9 *self, UINT StartRegister, BOOL* pConstantData, UINT BoolCount) {
+ pw_d3d9_api_profile_enter(16,114,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.GetPixelShaderConstantB(self, StartRegister, pConstantData, BoolCount);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",114,"GetPixelShaderConstantB",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",114,"GetPixelShaderConstantB",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_DrawRectPatch(IDirect3DDevice9 *self, UINT handle, const float *segment_count, const D3DRECTPATCH_INFO *patch_info) {
+ pw_d3d9_api_profile_enter(16,115,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.DrawRectPatch(self, handle, segment_count, patch_info);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",115,"DrawRectPatch",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",115,"DrawRectPatch",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_DrawTriPatch(IDirect3DDevice9 *self, UINT handle, const float *segment_count, const D3DTRIPATCH_INFO *patch_info) {
+ pw_d3d9_api_profile_enter(16,116,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.DrawTriPatch(self, handle, segment_count, patch_info);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",116,"DrawTriPatch",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",116,"DrawTriPatch",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_DeletePatch(IDirect3DDevice9 *self, UINT Handle) {
+ pw_d3d9_api_profile_enter(16,117,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.DeletePatch(self, Handle);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",117,"DeletePatch",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",117,"DeletePatch",result,__builtin_return_address(0),NULL);
  return result;
 }
 static HRESULT WINAPI observe_IDirect3DDevice9_CreateQuery(IDirect3DDevice9 *self, D3DQUERYTYPE Type, IDirect3DQuery9** ppQuery) {
+ pw_d3d9_api_profile_enter(16,118,__builtin_return_address(0));
  HRESULT result=raw_IDirect3DDevice9.CreateQuery(self, Type, ppQuery);
- if(FAILED(result))pw_d3d9_api_failure("IDirect3DDevice9",118,"CreateQuery",result,__builtin_return_address(0),NULL);
+ if(pw_d3d9_api_diagnostics_enabled()&&(FAILED(result)))pw_d3d9_api_failure("IDirect3DDevice9",118,"CreateQuery",result,__builtin_return_address(0),NULL);
  return result;
 }
 static const IDirect3DDevice9Vtbl wrapped_IDirect3DDevice9={observe_IDirect3DDevice9_QueryInterface,observe_IDirect3DDevice9_AddRef,observe_IDirect3DDevice9_Release,observe_IDirect3DDevice9_TestCooperativeLevel,observe_IDirect3DDevice9_GetAvailableTextureMem,observe_IDirect3DDevice9_EvictManagedResources,observe_IDirect3DDevice9_GetDirect3D,observe_IDirect3DDevice9_GetDeviceCaps,observe_IDirect3DDevice9_GetDisplayMode,observe_IDirect3DDevice9_GetCreationParameters,observe_IDirect3DDevice9_SetCursorProperties,observe_IDirect3DDevice9_SetCursorPosition,observe_IDirect3DDevice9_ShowCursor,observe_IDirect3DDevice9_CreateAdditionalSwapChain,observe_IDirect3DDevice9_GetSwapChain,observe_IDirect3DDevice9_GetNumberOfSwapChains,observe_IDirect3DDevice9_Reset,observe_IDirect3DDevice9_Present,observe_IDirect3DDevice9_GetBackBuffer,observe_IDirect3DDevice9_GetRasterStatus,observe_IDirect3DDevice9_SetDialogBoxMode,observe_IDirect3DDevice9_SetGammaRamp,observe_IDirect3DDevice9_GetGammaRamp,observe_IDirect3DDevice9_CreateTexture,observe_IDirect3DDevice9_CreateVolumeTexture,observe_IDirect3DDevice9_CreateCubeTexture,observe_IDirect3DDevice9_CreateVertexBuffer,observe_IDirect3DDevice9_CreateIndexBuffer,observe_IDirect3DDevice9_CreateRenderTarget,observe_IDirect3DDevice9_CreateDepthStencilSurface,observe_IDirect3DDevice9_UpdateSurface,observe_IDirect3DDevice9_UpdateTexture,observe_IDirect3DDevice9_GetRenderTargetData,observe_IDirect3DDevice9_GetFrontBufferData,observe_IDirect3DDevice9_StretchRect,observe_IDirect3DDevice9_ColorFill,observe_IDirect3DDevice9_CreateOffscreenPlainSurface,observe_IDirect3DDevice9_SetRenderTarget,observe_IDirect3DDevice9_GetRenderTarget,observe_IDirect3DDevice9_SetDepthStencilSurface,observe_IDirect3DDevice9_GetDepthStencilSurface,observe_IDirect3DDevice9_BeginScene,observe_IDirect3DDevice9_EndScene,observe_IDirect3DDevice9_Clear,observe_IDirect3DDevice9_SetTransform,observe_IDirect3DDevice9_GetTransform,observe_IDirect3DDevice9_MultiplyTransform,observe_IDirect3DDevice9_SetViewport,observe_IDirect3DDevice9_GetViewport,observe_IDirect3DDevice9_SetMaterial,observe_IDirect3DDevice9_GetMaterial,observe_IDirect3DDevice9_SetLight,observe_IDirect3DDevice9_GetLight,observe_IDirect3DDevice9_LightEnable,observe_IDirect3DDevice9_GetLightEnable,observe_IDirect3DDevice9_SetClipPlane,observe_IDirect3DDevice9_GetClipPlane,observe_IDirect3DDevice9_SetRenderState,observe_IDirect3DDevice9_GetRenderState,observe_IDirect3DDevice9_CreateStateBlock,observe_IDirect3DDevice9_BeginStateBlock,observe_IDirect3DDevice9_EndStateBlock,observe_IDirect3DDevice9_SetClipStatus,observe_IDirect3DDevice9_GetClipStatus,observe_IDirect3DDevice9_GetTexture,observe_IDirect3DDevice9_SetTexture,observe_IDirect3DDevice9_GetTextureStageState,observe_IDirect3DDevice9_SetTextureStageState,observe_IDirect3DDevice9_GetSamplerState,observe_IDirect3DDevice9_SetSamplerState,observe_IDirect3DDevice9_ValidateDevice,observe_IDirect3DDevice9_SetPaletteEntries,observe_IDirect3DDevice9_GetPaletteEntries,observe_IDirect3DDevice9_SetCurrentTexturePalette,observe_IDirect3DDevice9_GetCurrentTexturePalette,observe_IDirect3DDevice9_SetScissorRect,observe_IDirect3DDevice9_GetScissorRect,observe_IDirect3DDevice9_SetSoftwareVertexProcessing,observe_IDirect3DDevice9_GetSoftwareVertexProcessing,observe_IDirect3DDevice9_SetNPatchMode,observe_IDirect3DDevice9_GetNPatchMode,observe_IDirect3DDevice9_DrawPrimitive,observe_IDirect3DDevice9_DrawIndexedPrimitive,observe_IDirect3DDevice9_DrawPrimitiveUP,observe_IDirect3DDevice9_DrawIndexedPrimitiveUP,observe_IDirect3DDevice9_ProcessVertices,observe_IDirect3DDevice9_CreateVertexDeclaration,observe_IDirect3DDevice9_SetVertexDeclaration,observe_IDirect3DDevice9_GetVertexDeclaration,observe_IDirect3DDevice9_SetFVF,observe_IDirect3DDevice9_GetFVF,observe_IDirect3DDevice9_CreateVertexShader,observe_IDirect3DDevice9_SetVertexShader,observe_IDirect3DDevice9_GetVertexShader,observe_IDirect3DDevice9_SetVertexShaderConstantF,observe_IDirect3DDevice9_GetVertexShaderConstantF,observe_IDirect3DDevice9_SetVertexShaderConstantI,observe_IDirect3DDevice9_GetVertexShaderConstantI,observe_IDirect3DDevice9_SetVertexShaderConstantB,observe_IDirect3DDevice9_GetVertexShaderConstantB,observe_IDirect3DDevice9_SetStreamSource,observe_IDirect3DDevice9_GetStreamSource,observe_IDirect3DDevice9_SetStreamSourceFreq,observe_IDirect3DDevice9_GetStreamSourceFreq,observe_IDirect3DDevice9_SetIndices,observe_IDirect3DDevice9_GetIndices,observe_IDirect3DDevice9_CreatePixelShader,observe_IDirect3DDevice9_SetPixelShader,observe_IDirect3DDevice9_GetPixelShader,observe_IDirect3DDevice9_SetPixelShaderConstantF,observe_IDirect3DDevice9_GetPixelShaderConstantF,observe_IDirect3DDevice9_SetPixelShaderConstantI,observe_IDirect3DDevice9_GetPixelShaderConstantI,observe_IDirect3DDevice9_SetPixelShaderConstantB,observe_IDirect3DDevice9_GetPixelShaderConstantB,observe_IDirect3DDevice9_DrawRectPatch,observe_IDirect3DDevice9_DrawTriPatch,observe_IDirect3DDevice9_DeletePatch,observe_IDirect3DDevice9_CreateQuery};
@@ -1893,6 +2371,333 @@ const IDirect3DDevice9Vtbl *pw_d3d9_api_observe_IDirect3DDevice9(const IDirect3D
 }
 #endif
 #ifdef PW_D3D9_API_OBSERVE_IMPLEMENTATION
+static const struct pw_d3d9_api_method profile_methods[]={
+ {"IDirect3D9","QueryInterface",0,0},
+ {"IDirect3D9","AddRef",0,1},
+ {"IDirect3D9","Release",0,2},
+ {"IDirect3D9","RegisterSoftwareDevice",0,3},
+ {"IDirect3D9","GetAdapterCount",0,4},
+ {"IDirect3D9","GetAdapterIdentifier",0,5},
+ {"IDirect3D9","GetAdapterModeCount",0,6},
+ {"IDirect3D9","EnumAdapterModes",0,7},
+ {"IDirect3D9","GetAdapterDisplayMode",0,8},
+ {"IDirect3D9","CheckDeviceType",0,9},
+ {"IDirect3D9","CheckDeviceFormat",0,10},
+ {"IDirect3D9","CheckDeviceMultiSampleType",0,11},
+ {"IDirect3D9","CheckDepthStencilMatch",0,12},
+ {"IDirect3D9","CheckDeviceFormatConversion",0,13},
+ {"IDirect3D9","GetDeviceCaps",0,14},
+ {"IDirect3D9","GetAdapterMonitor",0,15},
+ {"IDirect3D9","CreateDevice",0,16},
+ {"IDirect3DVolume9","QueryInterface",1,0},
+ {"IDirect3DVolume9","AddRef",1,1},
+ {"IDirect3DVolume9","Release",1,2},
+ {"IDirect3DVolume9","GetDevice",1,3},
+ {"IDirect3DVolume9","SetPrivateData",1,4},
+ {"IDirect3DVolume9","GetPrivateData",1,5},
+ {"IDirect3DVolume9","FreePrivateData",1,6},
+ {"IDirect3DVolume9","GetContainer",1,7},
+ {"IDirect3DVolume9","GetDesc",1,8},
+ {"IDirect3DVolume9","LockBox",1,9},
+ {"IDirect3DVolume9","UnlockBox",1,10},
+ {"IDirect3DSwapChain9","QueryInterface",2,0},
+ {"IDirect3DSwapChain9","AddRef",2,1},
+ {"IDirect3DSwapChain9","Release",2,2},
+ {"IDirect3DSwapChain9","Present",2,3},
+ {"IDirect3DSwapChain9","GetFrontBufferData",2,4},
+ {"IDirect3DSwapChain9","GetBackBuffer",2,5},
+ {"IDirect3DSwapChain9","GetRasterStatus",2,6},
+ {"IDirect3DSwapChain9","GetDisplayMode",2,7},
+ {"IDirect3DSwapChain9","GetDevice",2,8},
+ {"IDirect3DSwapChain9","GetPresentParameters",2,9},
+ {"IDirect3DResource9","QueryInterface",3,0},
+ {"IDirect3DResource9","AddRef",3,1},
+ {"IDirect3DResource9","Release",3,2},
+ {"IDirect3DResource9","GetDevice",3,3},
+ {"IDirect3DResource9","SetPrivateData",3,4},
+ {"IDirect3DResource9","GetPrivateData",3,5},
+ {"IDirect3DResource9","FreePrivateData",3,6},
+ {"IDirect3DResource9","SetPriority",3,7},
+ {"IDirect3DResource9","GetPriority",3,8},
+ {"IDirect3DResource9","PreLoad",3,9},
+ {"IDirect3DResource9","GetType",3,10},
+ {"IDirect3DSurface9","QueryInterface",4,0},
+ {"IDirect3DSurface9","AddRef",4,1},
+ {"IDirect3DSurface9","Release",4,2},
+ {"IDirect3DSurface9","GetDevice",4,3},
+ {"IDirect3DSurface9","SetPrivateData",4,4},
+ {"IDirect3DSurface9","GetPrivateData",4,5},
+ {"IDirect3DSurface9","FreePrivateData",4,6},
+ {"IDirect3DSurface9","SetPriority",4,7},
+ {"IDirect3DSurface9","GetPriority",4,8},
+ {"IDirect3DSurface9","PreLoad",4,9},
+ {"IDirect3DSurface9","GetType",4,10},
+ {"IDirect3DSurface9","GetContainer",4,11},
+ {"IDirect3DSurface9","GetDesc",4,12},
+ {"IDirect3DSurface9","LockRect",4,13},
+ {"IDirect3DSurface9","UnlockRect",4,14},
+ {"IDirect3DSurface9","GetDC",4,15},
+ {"IDirect3DSurface9","ReleaseDC",4,16},
+ {"IDirect3DVertexBuffer9","QueryInterface",5,0},
+ {"IDirect3DVertexBuffer9","AddRef",5,1},
+ {"IDirect3DVertexBuffer9","Release",5,2},
+ {"IDirect3DVertexBuffer9","GetDevice",5,3},
+ {"IDirect3DVertexBuffer9","SetPrivateData",5,4},
+ {"IDirect3DVertexBuffer9","GetPrivateData",5,5},
+ {"IDirect3DVertexBuffer9","FreePrivateData",5,6},
+ {"IDirect3DVertexBuffer9","SetPriority",5,7},
+ {"IDirect3DVertexBuffer9","GetPriority",5,8},
+ {"IDirect3DVertexBuffer9","PreLoad",5,9},
+ {"IDirect3DVertexBuffer9","GetType",5,10},
+ {"IDirect3DVertexBuffer9","Lock",5,11},
+ {"IDirect3DVertexBuffer9","Unlock",5,12},
+ {"IDirect3DVertexBuffer9","GetDesc",5,13},
+ {"IDirect3DIndexBuffer9","QueryInterface",6,0},
+ {"IDirect3DIndexBuffer9","AddRef",6,1},
+ {"IDirect3DIndexBuffer9","Release",6,2},
+ {"IDirect3DIndexBuffer9","GetDevice",6,3},
+ {"IDirect3DIndexBuffer9","SetPrivateData",6,4},
+ {"IDirect3DIndexBuffer9","GetPrivateData",6,5},
+ {"IDirect3DIndexBuffer9","FreePrivateData",6,6},
+ {"IDirect3DIndexBuffer9","SetPriority",6,7},
+ {"IDirect3DIndexBuffer9","GetPriority",6,8},
+ {"IDirect3DIndexBuffer9","PreLoad",6,9},
+ {"IDirect3DIndexBuffer9","GetType",6,10},
+ {"IDirect3DIndexBuffer9","Lock",6,11},
+ {"IDirect3DIndexBuffer9","Unlock",6,12},
+ {"IDirect3DIndexBuffer9","GetDesc",6,13},
+ {"IDirect3DBaseTexture9","QueryInterface",7,0},
+ {"IDirect3DBaseTexture9","AddRef",7,1},
+ {"IDirect3DBaseTexture9","Release",7,2},
+ {"IDirect3DBaseTexture9","GetDevice",7,3},
+ {"IDirect3DBaseTexture9","SetPrivateData",7,4},
+ {"IDirect3DBaseTexture9","GetPrivateData",7,5},
+ {"IDirect3DBaseTexture9","FreePrivateData",7,6},
+ {"IDirect3DBaseTexture9","SetPriority",7,7},
+ {"IDirect3DBaseTexture9","GetPriority",7,8},
+ {"IDirect3DBaseTexture9","PreLoad",7,9},
+ {"IDirect3DBaseTexture9","GetType",7,10},
+ {"IDirect3DBaseTexture9","SetLOD",7,11},
+ {"IDirect3DBaseTexture9","GetLOD",7,12},
+ {"IDirect3DBaseTexture9","GetLevelCount",7,13},
+ {"IDirect3DBaseTexture9","SetAutoGenFilterType",7,14},
+ {"IDirect3DBaseTexture9","GetAutoGenFilterType",7,15},
+ {"IDirect3DBaseTexture9","GenerateMipSubLevels",7,16},
+ {"IDirect3DCubeTexture9","QueryInterface",8,0},
+ {"IDirect3DCubeTexture9","AddRef",8,1},
+ {"IDirect3DCubeTexture9","Release",8,2},
+ {"IDirect3DCubeTexture9","GetDevice",8,3},
+ {"IDirect3DCubeTexture9","SetPrivateData",8,4},
+ {"IDirect3DCubeTexture9","GetPrivateData",8,5},
+ {"IDirect3DCubeTexture9","FreePrivateData",8,6},
+ {"IDirect3DCubeTexture9","SetPriority",8,7},
+ {"IDirect3DCubeTexture9","GetPriority",8,8},
+ {"IDirect3DCubeTexture9","PreLoad",8,9},
+ {"IDirect3DCubeTexture9","GetType",8,10},
+ {"IDirect3DCubeTexture9","SetLOD",8,11},
+ {"IDirect3DCubeTexture9","GetLOD",8,12},
+ {"IDirect3DCubeTexture9","GetLevelCount",8,13},
+ {"IDirect3DCubeTexture9","SetAutoGenFilterType",8,14},
+ {"IDirect3DCubeTexture9","GetAutoGenFilterType",8,15},
+ {"IDirect3DCubeTexture9","GenerateMipSubLevels",8,16},
+ {"IDirect3DCubeTexture9","GetLevelDesc",8,17},
+ {"IDirect3DCubeTexture9","GetCubeMapSurface",8,18},
+ {"IDirect3DCubeTexture9","LockRect",8,19},
+ {"IDirect3DCubeTexture9","UnlockRect",8,20},
+ {"IDirect3DCubeTexture9","AddDirtyRect",8,21},
+ {"IDirect3DTexture9","QueryInterface",9,0},
+ {"IDirect3DTexture9","AddRef",9,1},
+ {"IDirect3DTexture9","Release",9,2},
+ {"IDirect3DTexture9","GetDevice",9,3},
+ {"IDirect3DTexture9","SetPrivateData",9,4},
+ {"IDirect3DTexture9","GetPrivateData",9,5},
+ {"IDirect3DTexture9","FreePrivateData",9,6},
+ {"IDirect3DTexture9","SetPriority",9,7},
+ {"IDirect3DTexture9","GetPriority",9,8},
+ {"IDirect3DTexture9","PreLoad",9,9},
+ {"IDirect3DTexture9","GetType",9,10},
+ {"IDirect3DTexture9","SetLOD",9,11},
+ {"IDirect3DTexture9","GetLOD",9,12},
+ {"IDirect3DTexture9","GetLevelCount",9,13},
+ {"IDirect3DTexture9","SetAutoGenFilterType",9,14},
+ {"IDirect3DTexture9","GetAutoGenFilterType",9,15},
+ {"IDirect3DTexture9","GenerateMipSubLevels",9,16},
+ {"IDirect3DTexture9","GetLevelDesc",9,17},
+ {"IDirect3DTexture9","GetSurfaceLevel",9,18},
+ {"IDirect3DTexture9","LockRect",9,19},
+ {"IDirect3DTexture9","UnlockRect",9,20},
+ {"IDirect3DTexture9","AddDirtyRect",9,21},
+ {"IDirect3DVolumeTexture9","QueryInterface",10,0},
+ {"IDirect3DVolumeTexture9","AddRef",10,1},
+ {"IDirect3DVolumeTexture9","Release",10,2},
+ {"IDirect3DVolumeTexture9","GetDevice",10,3},
+ {"IDirect3DVolumeTexture9","SetPrivateData",10,4},
+ {"IDirect3DVolumeTexture9","GetPrivateData",10,5},
+ {"IDirect3DVolumeTexture9","FreePrivateData",10,6},
+ {"IDirect3DVolumeTexture9","SetPriority",10,7},
+ {"IDirect3DVolumeTexture9","GetPriority",10,8},
+ {"IDirect3DVolumeTexture9","PreLoad",10,9},
+ {"IDirect3DVolumeTexture9","GetType",10,10},
+ {"IDirect3DVolumeTexture9","SetLOD",10,11},
+ {"IDirect3DVolumeTexture9","GetLOD",10,12},
+ {"IDirect3DVolumeTexture9","GetLevelCount",10,13},
+ {"IDirect3DVolumeTexture9","SetAutoGenFilterType",10,14},
+ {"IDirect3DVolumeTexture9","GetAutoGenFilterType",10,15},
+ {"IDirect3DVolumeTexture9","GenerateMipSubLevels",10,16},
+ {"IDirect3DVolumeTexture9","GetLevelDesc",10,17},
+ {"IDirect3DVolumeTexture9","GetVolumeLevel",10,18},
+ {"IDirect3DVolumeTexture9","LockBox",10,19},
+ {"IDirect3DVolumeTexture9","UnlockBox",10,20},
+ {"IDirect3DVolumeTexture9","AddDirtyBox",10,21},
+ {"IDirect3DVertexDeclaration9","QueryInterface",11,0},
+ {"IDirect3DVertexDeclaration9","AddRef",11,1},
+ {"IDirect3DVertexDeclaration9","Release",11,2},
+ {"IDirect3DVertexDeclaration9","GetDevice",11,3},
+ {"IDirect3DVertexDeclaration9","GetDeclaration",11,4},
+ {"IDirect3DVertexShader9","QueryInterface",12,0},
+ {"IDirect3DVertexShader9","AddRef",12,1},
+ {"IDirect3DVertexShader9","Release",12,2},
+ {"IDirect3DVertexShader9","GetDevice",12,3},
+ {"IDirect3DVertexShader9","GetFunction",12,4},
+ {"IDirect3DPixelShader9","QueryInterface",13,0},
+ {"IDirect3DPixelShader9","AddRef",13,1},
+ {"IDirect3DPixelShader9","Release",13,2},
+ {"IDirect3DPixelShader9","GetDevice",13,3},
+ {"IDirect3DPixelShader9","GetFunction",13,4},
+ {"IDirect3DStateBlock9","QueryInterface",14,0},
+ {"IDirect3DStateBlock9","AddRef",14,1},
+ {"IDirect3DStateBlock9","Release",14,2},
+ {"IDirect3DStateBlock9","GetDevice",14,3},
+ {"IDirect3DStateBlock9","Capture",14,4},
+ {"IDirect3DStateBlock9","Apply",14,5},
+ {"IDirect3DQuery9","QueryInterface",15,0},
+ {"IDirect3DQuery9","AddRef",15,1},
+ {"IDirect3DQuery9","Release",15,2},
+ {"IDirect3DQuery9","GetDevice",15,3},
+ {"IDirect3DQuery9","GetType",15,4},
+ {"IDirect3DQuery9","GetDataSize",15,5},
+ {"IDirect3DQuery9","Issue",15,6},
+ {"IDirect3DQuery9","GetData",15,7},
+ {"IDirect3DDevice9","QueryInterface",16,0},
+ {"IDirect3DDevice9","AddRef",16,1},
+ {"IDirect3DDevice9","Release",16,2},
+ {"IDirect3DDevice9","TestCooperativeLevel",16,3},
+ {"IDirect3DDevice9","GetAvailableTextureMem",16,4},
+ {"IDirect3DDevice9","EvictManagedResources",16,5},
+ {"IDirect3DDevice9","GetDirect3D",16,6},
+ {"IDirect3DDevice9","GetDeviceCaps",16,7},
+ {"IDirect3DDevice9","GetDisplayMode",16,8},
+ {"IDirect3DDevice9","GetCreationParameters",16,9},
+ {"IDirect3DDevice9","SetCursorProperties",16,10},
+ {"IDirect3DDevice9","SetCursorPosition",16,11},
+ {"IDirect3DDevice9","ShowCursor",16,12},
+ {"IDirect3DDevice9","CreateAdditionalSwapChain",16,13},
+ {"IDirect3DDevice9","GetSwapChain",16,14},
+ {"IDirect3DDevice9","GetNumberOfSwapChains",16,15},
+ {"IDirect3DDevice9","Reset",16,16},
+ {"IDirect3DDevice9","Present",16,17},
+ {"IDirect3DDevice9","GetBackBuffer",16,18},
+ {"IDirect3DDevice9","GetRasterStatus",16,19},
+ {"IDirect3DDevice9","SetDialogBoxMode",16,20},
+ {"IDirect3DDevice9","SetGammaRamp",16,21},
+ {"IDirect3DDevice9","GetGammaRamp",16,22},
+ {"IDirect3DDevice9","CreateTexture",16,23},
+ {"IDirect3DDevice9","CreateVolumeTexture",16,24},
+ {"IDirect3DDevice9","CreateCubeTexture",16,25},
+ {"IDirect3DDevice9","CreateVertexBuffer",16,26},
+ {"IDirect3DDevice9","CreateIndexBuffer",16,27},
+ {"IDirect3DDevice9","CreateRenderTarget",16,28},
+ {"IDirect3DDevice9","CreateDepthStencilSurface",16,29},
+ {"IDirect3DDevice9","UpdateSurface",16,30},
+ {"IDirect3DDevice9","UpdateTexture",16,31},
+ {"IDirect3DDevice9","GetRenderTargetData",16,32},
+ {"IDirect3DDevice9","GetFrontBufferData",16,33},
+ {"IDirect3DDevice9","StretchRect",16,34},
+ {"IDirect3DDevice9","ColorFill",16,35},
+ {"IDirect3DDevice9","CreateOffscreenPlainSurface",16,36},
+ {"IDirect3DDevice9","SetRenderTarget",16,37},
+ {"IDirect3DDevice9","GetRenderTarget",16,38},
+ {"IDirect3DDevice9","SetDepthStencilSurface",16,39},
+ {"IDirect3DDevice9","GetDepthStencilSurface",16,40},
+ {"IDirect3DDevice9","BeginScene",16,41},
+ {"IDirect3DDevice9","EndScene",16,42},
+ {"IDirect3DDevice9","Clear",16,43},
+ {"IDirect3DDevice9","SetTransform",16,44},
+ {"IDirect3DDevice9","GetTransform",16,45},
+ {"IDirect3DDevice9","MultiplyTransform",16,46},
+ {"IDirect3DDevice9","SetViewport",16,47},
+ {"IDirect3DDevice9","GetViewport",16,48},
+ {"IDirect3DDevice9","SetMaterial",16,49},
+ {"IDirect3DDevice9","GetMaterial",16,50},
+ {"IDirect3DDevice9","SetLight",16,51},
+ {"IDirect3DDevice9","GetLight",16,52},
+ {"IDirect3DDevice9","LightEnable",16,53},
+ {"IDirect3DDevice9","GetLightEnable",16,54},
+ {"IDirect3DDevice9","SetClipPlane",16,55},
+ {"IDirect3DDevice9","GetClipPlane",16,56},
+ {"IDirect3DDevice9","SetRenderState",16,57},
+ {"IDirect3DDevice9","GetRenderState",16,58},
+ {"IDirect3DDevice9","CreateStateBlock",16,59},
+ {"IDirect3DDevice9","BeginStateBlock",16,60},
+ {"IDirect3DDevice9","EndStateBlock",16,61},
+ {"IDirect3DDevice9","SetClipStatus",16,62},
+ {"IDirect3DDevice9","GetClipStatus",16,63},
+ {"IDirect3DDevice9","GetTexture",16,64},
+ {"IDirect3DDevice9","SetTexture",16,65},
+ {"IDirect3DDevice9","GetTextureStageState",16,66},
+ {"IDirect3DDevice9","SetTextureStageState",16,67},
+ {"IDirect3DDevice9","GetSamplerState",16,68},
+ {"IDirect3DDevice9","SetSamplerState",16,69},
+ {"IDirect3DDevice9","ValidateDevice",16,70},
+ {"IDirect3DDevice9","SetPaletteEntries",16,71},
+ {"IDirect3DDevice9","GetPaletteEntries",16,72},
+ {"IDirect3DDevice9","SetCurrentTexturePalette",16,73},
+ {"IDirect3DDevice9","GetCurrentTexturePalette",16,74},
+ {"IDirect3DDevice9","SetScissorRect",16,75},
+ {"IDirect3DDevice9","GetScissorRect",16,76},
+ {"IDirect3DDevice9","SetSoftwareVertexProcessing",16,77},
+ {"IDirect3DDevice9","GetSoftwareVertexProcessing",16,78},
+ {"IDirect3DDevice9","SetNPatchMode",16,79},
+ {"IDirect3DDevice9","GetNPatchMode",16,80},
+ {"IDirect3DDevice9","DrawPrimitive",16,81},
+ {"IDirect3DDevice9","DrawIndexedPrimitive",16,82},
+ {"IDirect3DDevice9","DrawPrimitiveUP",16,83},
+ {"IDirect3DDevice9","DrawIndexedPrimitiveUP",16,84},
+ {"IDirect3DDevice9","ProcessVertices",16,85},
+ {"IDirect3DDevice9","CreateVertexDeclaration",16,86},
+ {"IDirect3DDevice9","SetVertexDeclaration",16,87},
+ {"IDirect3DDevice9","GetVertexDeclaration",16,88},
+ {"IDirect3DDevice9","SetFVF",16,89},
+ {"IDirect3DDevice9","GetFVF",16,90},
+ {"IDirect3DDevice9","CreateVertexShader",16,91},
+ {"IDirect3DDevice9","SetVertexShader",16,92},
+ {"IDirect3DDevice9","GetVertexShader",16,93},
+ {"IDirect3DDevice9","SetVertexShaderConstantF",16,94},
+ {"IDirect3DDevice9","GetVertexShaderConstantF",16,95},
+ {"IDirect3DDevice9","SetVertexShaderConstantI",16,96},
+ {"IDirect3DDevice9","GetVertexShaderConstantI",16,97},
+ {"IDirect3DDevice9","SetVertexShaderConstantB",16,98},
+ {"IDirect3DDevice9","GetVertexShaderConstantB",16,99},
+ {"IDirect3DDevice9","SetStreamSource",16,100},
+ {"IDirect3DDevice9","GetStreamSource",16,101},
+ {"IDirect3DDevice9","SetStreamSourceFreq",16,102},
+ {"IDirect3DDevice9","GetStreamSourceFreq",16,103},
+ {"IDirect3DDevice9","SetIndices",16,104},
+ {"IDirect3DDevice9","GetIndices",16,105},
+ {"IDirect3DDevice9","CreatePixelShader",16,106},
+ {"IDirect3DDevice9","SetPixelShader",16,107},
+ {"IDirect3DDevice9","GetPixelShader",16,108},
+ {"IDirect3DDevice9","SetPixelShaderConstantF",16,109},
+ {"IDirect3DDevice9","GetPixelShaderConstantF",16,110},
+ {"IDirect3DDevice9","SetPixelShaderConstantI",16,111},
+ {"IDirect3DDevice9","GetPixelShaderConstantI",16,112},
+ {"IDirect3DDevice9","SetPixelShaderConstantB",16,113},
+ {"IDirect3DDevice9","GetPixelShaderConstantB",16,114},
+ {"IDirect3DDevice9","DrawRectPatch",16,115},
+ {"IDirect3DDevice9","DrawTriPatch",16,116},
+ {"IDirect3DDevice9","DeletePatch",16,117},
+ {"IDirect3DDevice9","CreateQuery",16,118},
+};
 const void *pw_d3d9_api_original_vtable(const void *table) {
  if(table==&wrapped_IDirect3D9)return source_IDirect3D9;
  if(table==&wrapped_IDirect3DVolume9)return source_IDirect3DVolume9;
