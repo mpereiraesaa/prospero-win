@@ -9,7 +9,7 @@
 #define NOTICE (WM_APP + 0x31)
 struct window_state {
  uint32_t magic,epoch,window_id,generation;
- volatile LONG guest_calls,native_calls,guest_keys,error,guest_exceptions,native_exceptions,native_child_calls,guest_nulls;
+ volatile LONG guest_calls,native_calls,guest_keys,error,guest_exceptions,native_exceptions,native_child_calls,guest_nulls,guest_builtins,native_builtins;
  uint32_t width,height,create_hr,reset_hr,present_hr;
 };
 static struct window_state *state;
@@ -21,6 +21,19 @@ static void names(const WCHAR *session)
  swprintf(service_name,96,L"PW-Service64-%ls",session);
  swprintf(mapping_name,96,L"Local\\PW-Window-%ls",session);
  swprintf(event_name,96,L"Local\\PW-WindowAck-%ls",session);
+}
+/* Exercise Wine's builtin procedure handles without subclassing. A builtin
+ * created before native user32 must remain callable afterwards. */
+static int builtin_roundtrip(HWND window)
+{
+ WCHAR text[32];
+ if(!window || !SetWindowTextW(window,L"domain-builtin"))return 0;
+ if(GetWindowTextW(window,text,32)!=14 || lstrcmpW(text,L"domain-builtin"))return 0;
+ SendMessageW(window,WM_NULL,0,0);return 1;
+}
+static HWND builtin_create(HWND parent)
+{
+ return CreateWindowExW(0,L"STATIC",L"",WS_CHILD,0,0,16,16,parent,NULL,GetModuleHandleW(NULL),NULL);
 }
 #ifdef _WIN64
 static void checkpoint(const char *stage){fprintf(stderr,"PW_WINDOW_NATIVE stage=%s tid=%lu guest=%ld native=%ld\n",stage,GetCurrentThreadId(),state?state->guest_calls:0,state?state->native_calls:0);fflush(stderr);}
@@ -41,6 +54,8 @@ static DWORD WINAPI native_window_child(void *unused)
  HWND window;(void)unused;if(!native_domain())return 1;
  window=CreateWindowExW(WS_EX_NOACTIVATE,service_name,L"native-child",WS_POPUP,0,0,16,16,NULL,NULL,NULL,NULL);
  if(!window)return 2;
+ {HWND builtin=builtin_create(window);if(!builtin_roundtrip(builtin))return 3;
+ DestroyWindow(builtin);InterlockedIncrement(&state->native_builtins);}
  SendMessageW(window,WM_NULL,0,0);InterlockedIncrement(&state->native_child_calls);
  RaiseException(0xe0425750,0,0,NULL);DestroyWindow(window);return 0;
 }
@@ -75,6 +90,8 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
  if(!RegisterClassW(&cls)){error=14;goto done;}
  window=CreateWindowExW(WS_EX_NOACTIVATE,service_name,service_name,WS_POPUP,360,20,state->width,state->height,NULL,NULL,cls.hInstance,NULL);
  if(!window){error=15;goto done;}
+ {HWND builtin=builtin_create(window);if(!builtin_roundtrip(builtin)){error=32;goto done;}
+ DestroyWindow(builtin);InterlockedIncrement(&state->native_builtins);}
  ShowWindow(window,SW_SHOWNOACTIVATE);
  result[0]=(uintptr_t)NtCurrentTeb();result[1]=(uintptr_t)service_proc;
  handler=AddVectoredExceptionHandler(1,native_exception);if(!handler){error=27;goto done;}
@@ -132,6 +149,7 @@ static struct request request;
 static LONG query_status;
 static DWORD guest_thread;
 static WNDPROC original_proc;
+static HWND guest_builtin;
 static LONG CALLBACK guest_exception(EXCEPTION_POINTERS *p)
 {
  if(p->ExceptionRecord->ExceptionCode!=0xe0425751)return EXCEPTION_CONTINUE_SEARCH;
@@ -146,7 +164,12 @@ static LRESULT CALLBACK guest_proc(HWND window,UINT message,WPARAM wp,LPARAM lp)
  if(message==NOTICE){
   if((uint32_t)lp!=state->generation || GetWindowLongPtrW(window,GWLP_WNDPROC)!=(LONG_PTR)original_proc)InterlockedExchange(&state->error,81);
   InterlockedIncrement(&state->guest_calls);
-  if(wp==1)PostMessageW(window,WM_KEYDOWN,VK_F9,1);
+  if(wp==1){
+   HWND during=builtin_create(window);
+   if(!builtin_roundtrip(guest_builtin) || !builtin_roundtrip(during))InterlockedExchange(&state->error,83);
+   if(during)DestroyWindow(during);
+   InterlockedIncrement(&state->guest_builtins);PostMessageW(window,WM_KEYDOWN,VK_F9,1);
+  }
   if(wp==2){RaiseException(0xe0425751,0,0,NULL);state->width=640;state->height=480;SetWindowPos(window,NULL,20,20,640,480,SWP_NOZORDER|SWP_NOACTIVATE);}
   if(wp==3)SetFocus(window);
   SetEvent(acknowledge);return 0;
@@ -178,9 +201,11 @@ int main(int argc,char **argv)
  handler=AddVectoredExceptionHandler(1,guest_exception);if(!handler)return 11;
  for(unsigned iteration=0;iteration<3;iteration++){
  state->guest_calls=state->native_calls=state->guest_keys=state->error=0;
- state->guest_exceptions=state->native_exceptions=state->native_child_calls=state->guest_nulls=0;
+ state->guest_exceptions=state->native_exceptions=state->native_child_calls=state->guest_nulls=state->guest_builtins=state->native_builtins=0;
  state->generation=iteration+1;
  state->width=320;state->height=240;state->create_hr=state->reset_hr=state->present_hr=0xdeadbeef;
+ guest_builtin=builtin_create(window);if(!builtin_roundtrip(guest_builtin))return 12;
+ InterlockedIncrement(&state->guest_builtins);
  SendMessageW(window,WM_NULL,0,0);RaiseException(0xe0425751,0,0,NULL);start=GetTickCount();
  memset(&request,0,sizeof(request));request.version=1;request.size=sizeof(request);MultiByteToWideChar(CP_UTF8,0,argv[1],-1,request.path,260);
  thread=CreateThread(NULL,0,broker,NULL,0,NULL);if(!thread)return 7;
@@ -191,9 +216,14 @@ int main(int argc,char **argv)
  }
  if(WaitForSingleObject(thread,0)!=WAIT_OBJECT_0)return 8;
  GetExitCodeThread(thread,&code);CloseHandle(thread);
+ {HWND after=builtin_create(window);
+ if(!builtin_roundtrip(guest_builtin) || !builtin_roundtrip(after))InterlockedExchange(&state->error,84);
+ if(after)DestroyWindow(after);
+ DestroyWindow(guest_builtin);guest_builtin=NULL;
+ InterlockedIncrement(&state->guest_builtins);}
  SendMessageW(window,WM_NULL,0,0);RaiseException(0xe0425751,0,0,NULL);
- printf("PW_BRIDGE_WINDOW iteration=%u status=%08lx error=%ld guest=%ld native=%ld keys=%ld proc64=%llx create=%08x reset=%08x present=%08x guest_exceptions=%ld native_exceptions=%ld native_child=%ld guest_nulls=%ld\n",iteration,query_status,state->error,state->guest_calls,state->native_calls,state->guest_keys,request.result[1],state->create_hr,state->reset_hr,state->present_hr,state->guest_exceptions,state->native_exceptions,state->native_child_calls,state->guest_nulls);fflush(stdout);
- code=code || state->error || state->guest_calls!=4 || !state->native_calls || state->guest_keys!=1 || request.result[1]<=UINT32_MAX || state->guest_exceptions!=3 || state->native_exceptions!=2 || state->native_child_calls!=1 || state->guest_nulls<2;
+ printf("PW_BRIDGE_WINDOW iteration=%u status=%08lx error=%ld guest=%ld native=%ld keys=%ld proc64=%llx create=%08x reset=%08x present=%08x guest_exceptions=%ld native_exceptions=%ld native_child=%ld guest_nulls=%ld guest_builtins=%ld native_builtins=%ld\n",iteration,query_status,state->error,state->guest_calls,state->native_calls,state->guest_keys,request.result[1],state->create_hr,state->reset_hr,state->present_hr,state->guest_exceptions,state->native_exceptions,state->native_child_calls,state->guest_nulls,state->guest_builtins,state->native_builtins);fflush(stdout);
+ code=code || state->error || state->guest_calls!=4 || !state->native_calls || state->guest_keys!=1 || request.result[1]<=UINT32_MAX || state->guest_exceptions!=3 || state->native_exceptions!=2 || state->native_child_calls!=1 || state->guest_nulls<2 || state->guest_builtins!=3 || state->native_builtins!=2;
  if(GetWindowLongPtrW(window,GWLP_WNDPROC)!=(LONG_PTR)original_proc)code=9;
  if(code)break;
  }

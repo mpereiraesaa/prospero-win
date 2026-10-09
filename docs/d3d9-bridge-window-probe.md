@@ -81,3 +81,14 @@ follow-up adds explicit unsubclassed builtin windows before/during/after native
 service execution; that expanded UI-only fixture reproduces a guest execute
 fault in `SetWindowTextW` on host. Its fix and regression evidence are separate
 from this initial fixture and the PEB callback-dispatch fix.
+## Builtin window procedures
+
+The follow-up fixture also keeps an unsubclassed PE32 `STATIC` child alive
+across native user32 loading, calls it before/during/after each service cycle,
+and creates and destroys additional guest builtin windows during and after.
+The native parent and native child thread each create, call, and destroy a
+`STATIC` child. Each roundtrip sets and reads text through the real builtin
+procedure; expected counters are `guest_builtins=3 native_builtins=2`. This
+exercises Wine's builtin procedure table separately from custom WNDPROCs.
+Failed runner receipts now preserve the exact source and compiled binary
+hashes. The earlier immutable console package is not changed by this fixture.
