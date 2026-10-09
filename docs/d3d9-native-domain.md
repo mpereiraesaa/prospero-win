@@ -70,6 +70,11 @@ iteration. It never substitutes Wine D3D9 or a 32-bit DLL.
 On 2026-10-09 the host proof passed ten native and ten DXVK cycles. The tested
 backend was the pinned `2.6.2-prospero1` x64 DLL, SHA-256
 `1d626ff743d93f78e1369c1f28daf5bb3b7c0832eef2876a6f352ec48f575710`.
+Ordinary DXVK factory allocations were still below 4 GiB (for example,
+`0x1350c70`). The explicit 8 GiB allocation proves addressability; it does not
+prove that ordinary native heaps have moved out of guest address space. A later
+memory policy and low-address usage measurement are required for that claim.
+
 The native import closure included kernelbase, user32, gdi32, setupapi, and
 winevulkan; the factory enumerated the host NVIDIA adapter. This establishes
 factory creation and teardown only. Device creation, guest/service window
