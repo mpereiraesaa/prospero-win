@@ -682,6 +682,9 @@ wine/ps5/d3d9/pw_d3d9_service_resource.c
 wine/ps5/d3d9/pw_d3d9_service_resource.h
 wine/ps5/d3d9/pw_d3d9_service_texture.c
 wine/ps5/d3d9/pw_d3d9_service_texture.h
+wine/ps5/d3d9/pw_d3d9_service_object_getter.c
+wine/ps5/d3d9/pw_d3d9_service_object_getter.h
+tests/lab/d3d9_service_object_getter.c
 tests/lab/d3d9_service_texture.c
 tests/lab/d3d9_service_resource.c
 wine/ps5/pw_d3d9_texture_wire.h
