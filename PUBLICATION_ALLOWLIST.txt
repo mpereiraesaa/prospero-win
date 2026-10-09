@@ -895,3 +895,6 @@ wine/ps5/pw_d3d9_command_policy.c
 wine/ps5/pw_d3d9_command_policy.h
 tests/test_d3d9_command_policy.c
 docs/d3d9-command-policy.md
+tests/lab/d3d9_batch_service.c
+tests/lab/d3d9_batch_service.py
+docs/d3d9-batch-service.md

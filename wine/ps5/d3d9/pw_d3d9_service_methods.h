@@ -7,4 +7,17 @@
  * targets are ordinary outer HRESULT failures with zero payload. */
 int pw_d3d9_service_methods(struct pw_d3d9_objects *,struct pw_d3d9_object_ref,
  uint32_t,const void *,size_t,void *,size_t,size_t *,HRESULT *);
+#ifdef PW_D3D9_ENABLE_BATCH
+/* One serialized command-sequence stream per session. A sticky failure forbids
+ * further execution, including records after the first failing command. */
+struct pw_d3d9_service_batch_state {
+    uint64_t next_sequence,failed_sequence;
+    uint32_t failed_result,unexpected_result;
+    int exhausted;
+};
+void pw_d3d9_service_batch_init(struct pw_d3d9_service_batch_state *);
+int pw_d3d9_service_batch(struct pw_d3d9_service_batch_state *,
+ struct pw_d3d9_objects *,struct pw_d3d9_object_ref,
+ const void *,size_t,void *,size_t,size_t *,HRESULT *);
+#endif
 #endif

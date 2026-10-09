@@ -17,6 +17,11 @@
 #include "pw_d3d9_cursor.h"
 #endif
 #include "../pw_d3d9_bridge_wire.h"
+#ifdef PW_D3D9_ENABLE_BATCH
+#include "../pw_d3d9_command_batch.h"
+#include "../pw_d3d9_command_policy.h"
+#include <string.h>
+#endif
 static HRESULT acquire(void *context,uint32_t id,uint32_t generation,uint32_t kind,IDirect3DDevice9 *device,void **out)
 {
 #ifdef PW_D3D9_ENABLE_PROGRAM
@@ -76,3 +81,62 @@ int pw_d3d9_service_methods(struct pw_d3d9_objects *objects,struct pw_d3d9_objec
     if(!pw_d3d9_object_complete(objects,ref))return 0;
     return valid;
 }
+#ifdef PW_D3D9_ENABLE_BATCH
+void pw_d3d9_service_batch_init(struct pw_d3d9_service_batch_state *state)
+{
+    memset(state,0,sizeof(*state));state->next_sequence=1;
+}
+static void batch_fail(struct pw_d3d9_service_batch_state *s,uint64_t sequence,uint32_t hr)
+{
+    if(!s->failed_result){s->failed_sequence=sequence;s->failed_result=hr;}
+}
+int pw_d3d9_service_batch(struct pw_d3d9_service_batch_state *state,
+ struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref ref,
+ const void *input,size_t input_bytes,void *output,size_t capacity,size_t *bytes,HRESULT *hr)
+{
+    struct pw_d3d9_command_batch batch;struct pw_d3d9_command command;
+    struct pw_d3d9_batch_reply reply;IDirect3DDevice9 *device=NULL;int pinned=0,valid=0;
+    if(!bytes||!hr)return 0;
+    *bytes=0;*hr=E_FAIL;
+    if(!state||!objects||state->failed_result||state->exhausted)return 0;
+    if(!output||capacity<PW_D3D9_BATCH_REPLY||
+       pw_d3d9_batch_decode(&batch,input,input_bytes)||batch.first_sequence!=state->next_sequence)
+        goto protocol_failure;
+    /* Validate eligibility for every record before the first native call. */
+    for(uint32_t n=0;n<batch.count;n++){
+        if(pw_d3d9_batch_command(&command,&batch,n)||!pw_d3d9_command_can_queue(&command))
+            goto protocol_failure;
+    }
+    reply=(struct pw_d3d9_batch_reply){batch.first_sequence,batch.count,0,UINT32_MAX,0};
+    const struct pw_d3d9_object_slot *slot=pw_d3d9_object_lookup(objects,objects->device,objects->epoch,ref);
+    if(slot&&slot->kind==PW_D3D9_KIND_DEVICE&&pw_d3d9_object_queue(objects,ref)){
+        pinned=1;device=pw_d3d9_native_device_backend((void *)slot->context);
+    }
+    for(uint32_t n=0;n<batch.count;n++){
+        uint64_t sequence=batch.first_sequence+n;
+        /* The owned batch was fully checked above; this cannot inspect caller
+         * or shared memory again while native execution is in progress. */
+        if(pw_d3d9_batch_command(&command,&batch,n))goto protocol_failure;
+        HRESULT result=device?pw_d3d9_native_command_dispatch(device,&command,acquire,objects):D3DERR_INVALIDCALL;
+        reply.attempted=n+1;
+        if(sequence==UINT64_MAX)state->exhausted=1;
+        else state->next_sequence=sequence+1;
+        if(result!=S_OK){
+            if(SUCCEEDED(result)){
+                state->unexpected_result=(uint32_t)result;
+                batch_fail(state,sequence,(uint32_t)E_FAIL);goto protocol_failure;
+            }
+            reply.failed_index=n;reply.hresult=(uint32_t)result;
+            batch_fail(state,sequence,(uint32_t)result);break;
+        }
+    }
+    if(pinned){pinned=0;if(!pw_d3d9_object_complete(objects,ref))goto protocol_failure;}
+    if(pw_d3d9_batch_reply_encode(output,capacity,&reply))goto protocol_failure;
+    *bytes=PW_D3D9_BATCH_REPLY;*hr=(HRESULT)reply.hresult;valid=1;
+    return valid;
+ protocol_failure:
+    if(pinned)pw_d3d9_object_complete(objects,ref);
+    batch_fail(state,state->next_sequence,(uint32_t)E_FAIL);
+    return 0;
+}
+#endif
