@@ -14,7 +14,11 @@ QueryInterface or reads a foreign pointer. No RPC or parent COM call runs under
 that lock. Each active transport method pins its proxy; an overlapping operation
 on that same proxy returns the reentrancy error. Final Release removes the cache
 entry before contacting the service. If called during a pumped callback it queues
-an embedded node and retains its parent until the outer RPC completes. Remote
+an embedded node and retains its parent until the outer RPC completes. If enqueue
+fails, fail marks the session cancelled without joining, while the shell, staging
+and parent remain retained: cleanup must not nest
+session cancellation or final parent Release inside the active RPC callback.
+A deferred callback that still sees the reentrancy error requeues itself. Remote
 context destruction releases any native lock; local staging is then freed.
 
 Lock/Unlock use the bounded copied buffer client, preserving untouched bytes and

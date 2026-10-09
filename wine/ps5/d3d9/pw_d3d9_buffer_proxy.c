@@ -38,20 +38,18 @@ static void free_local(struct buffer *p)
 static void dispose(void *context)
 {
  struct buffer *p=context;HRESULT hr=ops.release(p->parent,p->remote);
- if(FAILED(hr))ops.fail(p->parent,hr);
- free_local(p);
-}
-static void cleanup(struct buffer *p)
-{
- HRESULT hr=ops.release(p->parent,p->remote);
  if(hr==RPC_E_CANTCALLOUT_ININPUTSYNCCALL){
   p->cleanup.function=dispose;p->cleanup.context=p;
+  /* A failed enqueue cannot justify destroying parent/session from inside an
+   * active RPC callback. Retain the shell, mapping and parent on that path. */
   hr=ops.defer(p->parent,&p->cleanup);
-  if(SUCCEEDED(hr))return;
+  if(FAILED(hr))ops.fail(p->parent,hr);
+  return;
  }
  if(FAILED(hr))ops.fail(p->parent,hr);
  free_local(p);
 }
+static void cleanup(struct buffer *p){dispose(p);}
 static ULONG release(struct buffer *p)
 {
  struct buffer **link;AcquireSRWLockExclusive(&cache_lock);ULONG n=--p->references;

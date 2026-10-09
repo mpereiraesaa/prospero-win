@@ -7,7 +7,8 @@
 #include <string.h>
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"line %u: %s\n",__LINE__,#x);return 1;}}while(0)
 static ULONG parent_refs=1;
-static unsigned releases,failed,blocked,next_id,release_in_call;
+static unsigned releases,failed,blocked,next_id,release_in_call,defer_failure;
+static struct pw_d3d9_deferred *rejected;
 static IDirect3DVertexBuffer9 *reentrant;
 static struct pw_d3d9_deferred *pending;
 static unsigned char bytes[16384];
@@ -17,7 +18,7 @@ static ULONG WINAPI parent_drop(IDirect3DDevice9 *p){(void)p;return --parent_ref
 static HRESULT remote_release(IDirect3DDevice9 *p,struct pw_d3d9_object_ref ref)
 {(void)p;(void)ref;if(blocked)return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;releases++;return S_OK;}
 static HRESULT defer(IDirect3DDevice9 *p,struct pw_d3d9_deferred *item)
-{(void)p;if(pending)return E_FAIL;pending=item;return S_OK;}
+{(void)p;if(defer_failure){rejected=item;return E_OUTOFMEMORY;}if(pending)return E_FAIL;pending=item;return S_OK;}
 static void fail(IDirect3DDevice9 *p,HRESULT hr){(void)p;(void)hr;failed++;}
 static HRESULT resource(IDirect3DDevice9 *p,struct pw_d3d9_object_ref ref,const struct pw_d3d9_resource_request *q,struct pw_d3d9_resource_reply *r)
 {
@@ -74,6 +75,13 @@ int main(void)
   * pin keeps proxy+parent alive until outputs are committed. */
  reentrant=vb;release_in_call=1;CHECK(SUCCEEDED(IDirect3DVertexBuffer9_GetDesc(vb,&vd))&&vd.Size==12000);
  CHECK(parent_refs==1&&releases==3&&!failed&&!pending);
+ CHECK(SUCCEEDED(IDirect3DDevice9_CreateVertexBuffer(&parent,1024,0,0,D3DPOOL_DEFAULT,&vb,NULL)));
+ blocked=defer_failure=1;CHECK(!IDirect3DVertexBuffer9_Release(vb)&&rejected&&parent_refs==2&&failed==1);
+ /* Failed enqueue retained everything. A later safe retry can enqueue again;
+  * an unexpectedly still-blocked deferred invocation must also retain/requeue. */
+ task=rejected;rejected=NULL;defer_failure=0;task->function(task->context);CHECK(pending==task&&parent_refs==2);
+ pending=NULL;task->function(task->context);CHECK(pending==task&&parent_refs==2&&failed==1);
+ pending=NULL;blocked=0;task->function(task->context);CHECK(parent_refs==1&&releases==4&&failed==1);
  CHECK(FAILED(IDirect3DDevice9_CreateVertexBuffer(&parent,0,0,0,D3DPOOL_DEFAULT,&vb,NULL))&&!vb&&parent_refs==1);
  puts("PW_BUFFER_PROXY PASS identity=1 low32=1 copied=1 deferred=1 callback_pin=1 foreign_rejected=1");return 0;
 }

@@ -8,6 +8,7 @@ struct pw_d3d9_buffer_proxy_ops {
  HRESULT (*resource)(IDirect3DDevice9 *,struct pw_d3d9_object_ref,const struct pw_d3d9_resource_request *,struct pw_d3d9_resource_reply *);
  HRESULT (*release)(IDirect3DDevice9 *,struct pw_d3d9_object_ref);
  HRESULT (*defer)(IDirect3DDevice9 *,struct pw_d3d9_deferred *);
+ /* Marks cancellation without blocking/joining inside pumped callbacks. */
  void (*fail)(IDirect3DDevice9 *,HRESULT);
 };
 /* Install once before publishing the device vtable. Callbacks are immutable. */
