@@ -231,9 +231,15 @@ static void callback_enter(void)
 static void callback_leave(void)
 {TlsSetValue(callback_tls,(void *)(uintptr_t)(callback_depth()-1));}
 /* GetQueueStatus reads the shared queue bits without a server call when
- * nothing changed; PeekMessage would find nothing to dispatch either way. */
+ * nothing changed; PeekMessage would find nothing to dispatch either way.
+ * It may still process driver events, so guard callbacks like the waits. */
 static int client_input_pending(void)
-{return HIWORD(GetQueueStatus(QS_ALLINPUT))!=0;}
+{
+    callback_enter();
+    DWORD status=GetQueueStatus(QS_ALLINPUT);
+    callback_leave();
+    return HIWORD(status)!=0;
+}
 static void client_pump(void)
 {
     MSG message;

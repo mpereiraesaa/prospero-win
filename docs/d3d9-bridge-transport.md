@@ -91,7 +91,8 @@ sees the record or the sender sees the flag, so no wakeup is lost. A stale
 signal costs one extra empty pass. Cancellation still signals every event.
 
 The PE32 client dispatches its message queue around a call only when
-`GetQueueStatus(QS_ALLINPUT)` reports pending input, and wakes the session's
+`GetQueueStatus(QS_ALLINPUT)` reports pending input (that query runs under
+the callback guard, because Wine may process driver events inside it), and wakes the session's
 serialization event only when another caller is waiting for the lock. Callback
 guards, `WM_QUIT` capture, peer-death handles and 30-second timeouts are
 unchanged.
@@ -137,7 +138,8 @@ wine/ps5/pw_d3d9_objects.c -luuid -ldxguid` and run it under Wine with `fast`,
 `slow-service`, `slow-client`, `contended` or `cancel` and an optional call
 count. It prints nanoseconds per synchronous call and the `SetEvent`,
 `PeekMessageW`, `GetQueueStatus` and `MsgWaitForMultipleObjects` calls per
-call. On the Alder Lake host with Wine 11.17, the fast mode went from about
+call. Every mode also asserts that each `GetQueueStatus` call runs under the
+callback guard and that a D3D9 call re-entered from it is refused. On the Alder Lake host with Wine 11.17, the fast mode went from about
 17.6-19.7 us and three `SetEvent` calls per call to 0.6-0.9 us and none. The
 in-process responder is a stand-in for the PE64 service, not a console result.
 

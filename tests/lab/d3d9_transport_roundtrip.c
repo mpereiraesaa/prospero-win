@@ -10,7 +10,19 @@
 static volatile LONG set_events,peeks,queue_polls,waits;
 static BOOL WINAPI counted_set_event(HANDLE h){InterlockedIncrement(&set_events);return SetEvent(h);}
 static BOOL WINAPI counted_peek(MSG *m,HWND w,UINT a,UINT b,UINT f){InterlockedIncrement(&peeks);return PeekMessageW(m,w,a,b,f);}
-__attribute__((unused)) static DWORD WINAPI counted_queue_status(UINT f){InterlockedIncrement(&queue_polls);return GetQueueStatus(f);}
+/* Stand-in for a callback that Wine event processing runs inside
+ * GetQueueStatus: it must observe the guard and be refused re-entry. */
+struct pw_d3d9_session;
+static unsigned callback_depth(void);
+static HRESULT queue_status_reentry(void);
+static volatile LONG guarded_polls,unguarded_polls,reentry_refused;
+__attribute__((unused)) static DWORD WINAPI counted_queue_status(UINT f)
+{
+    InterlockedIncrement(&queue_polls);
+    if(!callback_depth())InterlockedIncrement(&unguarded_polls);
+    else{InterlockedIncrement(&guarded_polls);if(queue_status_reentry()==RPC_E_CANTCALLOUT_ININPUTSYNCCALL)InterlockedIncrement(&reentry_refused);}
+    return GetQueueStatus(f);
+}
 static DWORD WINAPI counted_msg_wait(DWORD n,const HANDLE *h,BOOL all,DWORD t,DWORD mask)
 {InterlockedIncrement(&waits);return MsgWaitForMultipleObjects(n,h,all,t,mask);}
 #define SetEvent counted_set_event
@@ -23,6 +35,12 @@ static DWORD WINAPI counted_msg_wait(DWORD n,const HANDLE *h,BOOL all,DWORD t,DW
 #undef GetQueueStatus
 #undef MsgWaitForMultipleObjects
 #define RING 8192u
+static struct pw_d3d9_session *reentry_session;
+static HRESULT queue_status_reentry(void)
+{
+    struct pw_d3d9_message reply,q={.opcode=PW_D3D9_FACTORY_CALL,.device=1,.object=1,.generation=1};
+    return reentry_session?transact(reentry_session,&q,NULL,NULL,0,&reply):RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+}
 #define PAYLOAD 32u
 enum { MODE_FAST, MODE_SLOW_SERVICE, MODE_SLOW_CLIENT, MODE_CONTENDED, MODE_CANCEL };
 #define CALLERS 4u
@@ -73,7 +91,7 @@ int main(int argc,char **argv)
          !strcmp(argv[1],"slow-client")?MODE_SLOW_CLIENT:!strcmp(argv[1],"contended")?MODE_CONTENDED:!strcmp(argv[1],"cancel")?MODE_CANCEL:-1;
     if(mode<0||!calls)return 2;
     assert(InitOnceExecuteOnce(&tls_once,init_tls,NULL,NULL));
-    struct pw_d3d9_session s={0};InitializeCriticalSection(&s.lock);InitializeSRWLock(&s.deferred_lock);
+    struct pw_d3d9_session s={0};InitializeCriticalSection(&s.lock);InitializeSRWLock(&s.deferred_lock);reentry_session=&s;
     s.serial_event=CreateEventW(NULL,FALSE,FALSE,NULL);
     s.ipc.request=CreateEventW(NULL,FALSE,FALSE,NULL);s.ipc.reply=CreateEventW(NULL,FALSE,FALSE,NULL);
     s.ipc.cancel=CreateEventW(NULL,TRUE,FALSE,NULL);
@@ -119,6 +137,9 @@ int main(int argc,char **argv)
     }else call_loop(&s,calls,0);
     QueryPerformanceCounter(&b);
     uint64_t ns=(uint64_t)(b.QuadPart-a.QuadPart)*1000000000u/(uint64_t)f.QuadPart;
+    /* Every queue poll ran under the callback guard and refused re-entry. */
+    assert(queue_polls&&!unguarded_polls&&guarded_polls==queue_polls&&reentry_refused==guarded_polls);
+    printf("PW_TRANSPORT_ROUNDTRIP queue_status_guarded=%ld reentry_refused=%ld unguarded=%ld\n",guarded_polls,reentry_refused,unguarded_polls);
     printf("PW_TRANSPORT_ROUNDTRIP mode=%s calls=%u ns_per_call=%llu set_event=%.3f peek=%.3f queue_status=%.3f msg_wait=%.3f per_call\n",
            argv[1],calls,(unsigned long long)(ns/calls),(double)(set_events-e0)/calls,(double)(peeks-p0)/calls,
            (double)(queue_polls-g0)/calls,(double)(waits-w0)/calls);
