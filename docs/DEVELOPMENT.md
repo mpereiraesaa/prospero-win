@@ -224,8 +224,3 @@ publication audit.
 - Give every new capacity a compiled-in bound and a fail-closed overflow.
 - Add the unit test in the same commit, and prefer asserting exact values
   over presence.
-
-## Designs under review
-
-[D3D9 bridge design](d3d9-bridge-design.md) describes the proposed PE32 client
-and PE64 DXVK service, platform proof gates, and validation before a prototype.

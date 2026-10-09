@@ -452,13 +452,13 @@ static void test_debug_env(void)
     /* A value may itself hold '=': only the first one splits. */
     assert(parse(APP "[debug]\nenv = DXVK_CONFIG=d3d9.maxFrameRate=60\n", &p) == PW_OK);
     assert(!strcmp(p.debug_env[0].name, "DXVK_CONFIG") && !strcmp(p.debug_env[0].value, "d3d9.maxFrameRate=60"));
-    /* The bridge retains both profiler and timing diagnostics with its paths. */
-    assert(parse(APP "[debug]\nenv = PW_D3D9_SERVICE64=Z:/win/service.dll\n"
-                 "env = PW_D3D9_BACKEND64=Z:/win/backend.dll\nenv = DXVK_CONFIG_FILE=C:/Games/GTASA/dxvk.conf\n"
+    /* Five lines fit at once: a config file path beside the profiler and timing diagnostics. */
+    assert(parse(APP "[debug]\nenv = DXVK_LOG_LEVEL=info\n"
+                 "env = DXVK_LOG_PATH=Z:/logs\nenv = DXVK_CONFIG_FILE=C:/Games/GTASA/dxvk.conf\n"
                  "env = PW_VK_BATCH_STATS=1\nenv = PW_NATIVE_PROFILE=1\n", &p) == PW_OK);
     assert(pw_game_debug_env(&p, env) == 5);
-    assert(!strcmp(env[0].name, "PW_D3D9_SERVICE64") && !strcmp(env[0].value, "Z:/win/service.dll"));
-    assert(!strcmp(env[1].name, "PW_D3D9_BACKEND64") && !strcmp(env[1].value, "Z:/win/backend.dll"));
+    assert(!strcmp(env[0].name, "DXVK_LOG_LEVEL") && !strcmp(env[0].value, "info"));
+    assert(!strcmp(env[1].name, "DXVK_LOG_PATH") && !strcmp(env[1].value, "Z:/logs"));
     assert(!strcmp(env[2].name, "DXVK_CONFIG_FILE") && !strcmp(env[2].value, "C:/Games/GTASA/dxvk.conf"));
     assert(!strcmp(env[3].name, "PW_VK_BATCH_STATS") && !strcmp(env[3].value, "1"));
     assert(!strcmp(env[4].name, "PW_NATIVE_PROFILE") && !strcmp(env[4].value, "1"));

@@ -924,9 +924,7 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     `PW_QPC_TSC_*`, `GALLIUM_DRIVER`, and `DXVK_HUD` or `GALLIUM_HUD` while
     `show_fps` is on (set `show_fps = false` to choose the HUD). The log
     names them (`PW_WINE64 debug_env=`).
-    Five entries allow the bridge service/backend paths, `DXVK_CONFIG_FILE`,
-    `PW_VK_BATCH_STATS` and `PW_NATIVE_PROFILE` in the same profile. This
-    requires a title rebuilt with the five-entry parser; older titles accept four.
+    Titles built before the limit went up to five accept four lines.
   - `[runtime]` sets runtime behavior for that game only:
     - `thread_scheduling = true` sets `WINE_PS5_SCHED=1` (Wine patch 0882):
       the game's threads take turns on the CPUs, and threads the game raises

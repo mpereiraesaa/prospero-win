@@ -1,8 +1,8 @@
 # Shared PE32 and PE64 Present timing
 
 `PW_VK_BATCH_STATS=1` enables the same CPU queue-return interval accumulator in
-both Wine Vulkan PE architectures. The PE64 path is used by the native D3D9 bridge;
-the PE32 path remains available for matched baseline captures. Other PE64 Vulkan
+both Wine Vulkan PE architectures, so 32-bit and 64-bit games report the same
+measurement and can be compared directly. Other PE64 Vulkan
 calls retain their direct Unix thunk. The wrapper forwards the original arguments
 and status exactly once, captures QPC immediately after Present returns, then
 updates diagnostic state under a separate lock.

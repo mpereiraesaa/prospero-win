@@ -135,14 +135,6 @@ def check_vk_runtime_staging() -> None:
             target = source / f'dlls/{module}/{name}'
             target.parent.mkdir(parents=True)
             headers.append((original, target))
-        for name in ('pw_d3d9_window.c', 'pw_d3d9_window.h',
-                     'pw_d3d9_window_driver.c', 'pw_d3d9_window_driver.h'):
-            original = base / 'wine/ps5' / name
-            original.parent.mkdir(parents=True, exist_ok=True)
-            original.write_text(f'{name} bridge adapter fixture\n')
-            target = source / 'dlls/win32u' / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            headers.append((original, target))
         helper = base / 'tools/stage_vk_batch.py'
         helper.write_text('import sys, pathlib\nassert sys.argv[1:] == ["--source", '
                           + repr(str(source)) + ', "--repo", ' + repr(str(base))
@@ -154,12 +146,6 @@ def check_vk_runtime_staging() -> None:
         assert (source / 'staged').read_text() == 'paired'
         for original, target in headers:
             assert target.read_bytes() == original.read_bytes()
-        missing = base / 'wine/ps5/pw_d3d9_window_driver.c'
-        saved = missing.read_bytes()
-        missing.unlink()
-        result = subprocess.run(['sh'], input=setup + block, env=env, capture_output=True, text=True)
-        assert result.returncode == 29, result.stderr
-        missing.write_bytes(saved)
         helper.write_text('raise SystemExit(9)\n')
         result = subprocess.run(['sh'], input=setup + block, env=env, capture_output=True, text=True)
         assert result.returncode == 29, result.stderr
@@ -170,7 +156,6 @@ def check_vk_runtime_staging() -> None:
     assert '"$root/tools/generate_vk_codecs.py"' in stamp
     assert '"$root"/wine/ps5/pw_vk_*.[ch]' in stamp
     assert '"$root"/wine/ps5/vulkan/*.[ch]' in stamp
-    assert '"$root"/wine/ps5/pw_d3d9_window*.[ch]' in stamp
 
 
 if __name__ == "__main__":
