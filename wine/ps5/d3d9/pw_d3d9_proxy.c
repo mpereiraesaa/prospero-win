@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_session.h"
+#ifdef PW_D3D9_ENABLE_DEVICE
+#include "pw_d3d9_device_proxy.h"
+#endif
 #include <d3d9.h>
 #include <string.h>
 
@@ -157,9 +160,16 @@ static HMONITOR WINAPI proxy_monitor(IDirect3D9 *iface,UINT adapter)
 {(void)iface;(void)adapter;return NULL;}
 static HRESULT WINAPI proxy_device(IDirect3D9 *iface,UINT adapter,D3DDEVTYPE type,HWND focus,DWORD flags,D3DPRESENT_PARAMETERS *parameters,IDirect3DDevice9 **out)
 {
+#ifdef PW_D3D9_ENABLE_DEVICE
+    proxy_addref(iface);
+    AcquireSRWLockExclusive(&lock);struct pw_d3d9_session *owned=session;users++;ReleaseSRWLockExclusive(&lock);
+    HRESULT hr=pw_d3d9_device_proxy_create(iface,owned,object(iface)->remote,adapter,type,focus,flags,parameters,out);
+    put_session(owned);proxy_release(iface);return hr;
+#else
     (void)iface;(void)adapter;(void)type;(void)focus;(void)flags;(void)parameters;
     if(out)*out=NULL;
     return D3DERR_NOTAVAILABLE;
+#endif
 }
 static IDirect3D9Vtbl vtable={proxy_query,proxy_addref,proxy_release,proxy_software,
     proxy_count,proxy_identifier,proxy_mode_count,proxy_enum,proxy_mode,proxy_type,
@@ -200,6 +210,11 @@ __declspec(dllexport) HRESULT WINAPI Direct3DCreate9Ex(UINT sdk,IDirect3D9Ex **o
 BOOL WINAPI DllMain(HINSTANCE module,DWORD reason,void *reserved)
 {
     (void)module;(void)reserved;
-    if(reason==DLL_PROCESS_DETACH)pw_d3d9_session_process_detach();
+    if(reason==DLL_PROCESS_DETACH){
+#ifdef PW_D3D9_ENABLE_DEVICE
+        pw_d3d9_device_proxy_detach();
+#endif
+        pw_d3d9_session_process_detach();
+    }
     return TRUE;
 }

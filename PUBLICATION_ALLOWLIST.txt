@@ -575,6 +575,11 @@ wine/ps5/pw_d3d9_bridge_wire.c
 tests/test_d3d9_bridge_wire.c
 tests/lab/d3d9_bridge_wire.c
 docs/d3d9-bridge-transport.md
+wine/ps5/d3d9/pw_d3d9_device_proxy.c
+wine/ps5/d3d9/pw_d3d9_device_proxy.h
+tests/lab/d3d9_device_proxy.c
+tests/lab/d3d9_device_proxy.py
+docs/d3d9-device-proxy.md
 wine/ps5/d3d9/pw_d3d9_proxy.c
 tests/lab/d3d9_factory_proxy.c
 tests/lab/d3d9_factory_proxy.py
