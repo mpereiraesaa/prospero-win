@@ -501,3 +501,8 @@ tests/test_vk_generated_stage.py
 tests/lab/vk_generated_replay.c
 
 tests/lab/vk_batch_owned.c
+
+wine/ps5/pw_vk_spsc.c
+wine/ps5/pw_vk_spsc.h
+tests/test_vk_spsc.c
+docs/vulkan-spsc-append.md
