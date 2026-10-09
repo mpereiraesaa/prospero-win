@@ -3,9 +3,15 @@
 #include "pw_d3d9_program_proxy.h"
 #include "pw_d3d9_api_observe.h"
 #include <string.h>
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+#include "pw_d3d9_queue_ticket.h"
+#endif
 struct program_proxy {
     const void *vtable;
     LONG references;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+    unsigned queue_refs,closed,finishing,remote_done;
+#endif
     IDirect3DDevice9 *parent;
     uint32_t kind;
     struct pw_d3d9_object_ref remote;
@@ -30,13 +36,41 @@ static void final_release(void *context)
         return;
     }
     if(FAILED(hr))ops.fail(p->parent,hr);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+    AcquireSRWLockExclusive(&lock);
+    p->remote_done=1;p->finishing=0;int dead=!p->queue_refs;
+    ReleaseSRWLockExclusive(&lock);
+    if(dead)destroy_local(p);
+#else
     destroy_local(p);
+#endif
 }
-static ULONG addref(struct program_proxy *p){return (ULONG)InterlockedIncrement(&p->references);}
+static ULONG addref_locked(struct program_proxy *p)
+{
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+    if(p->closed)return 0;
+#endif
+    return (ULONG)InterlockedIncrement(&p->references);
+}
+static ULONG addref(struct program_proxy *p)
+{
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+    AcquireSRWLockExclusive(&lock);ULONG n=addref_locked(p);ReleaseSRWLockExclusive(&lock);return n;
+#else
+    return addref_locked(p);
+#endif
+}
 static ULONG release(struct program_proxy *p)
 {
-    AcquireSRWLockExclusive(&lock);ULONG refs=(ULONG)InterlockedDecrement(&p->references);
+    AcquireSRWLockExclusive(&lock);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+    if(p->closed){ReleaseSRWLockExclusive(&lock);return 0;}
+#endif
+    ULONG refs=(ULONG)InterlockedDecrement(&p->references);
     if(!refs){struct program_proxy **link=&programs;while(*link!=p)link=&(*link)->next;*link=p->next;}
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+    if(!refs){p->closed=1;p->finishing=1;}
+#endif
     ReleaseSRWLockExclusive(&lock);
     if(!refs)final_release(p);
     return refs;
@@ -46,7 +80,8 @@ static HRESULT query(struct program_proxy *p,REFIID iid,void **out)
     if(!out)return E_POINTER;
     *out=NULL;const GUID *typed=p->kind==7?&IID_IDirect3DVertexDeclaration9:p->kind==8?&IID_IDirect3DVertexShader9:&IID_IDirect3DPixelShader9;
     if(!IsEqualGUID(iid,&IID_IUnknown)&&!IsEqualGUID(iid,typed))return E_NOINTERFACE;
-    addref(p);*out=p;return S_OK;
+    if(!addref(p))return D3DERR_INVALIDCALL;
+    *out=p;return S_OK;
 }
 static HRESULT get_device(struct program_proxy *p,IDirect3DDevice9 **out)
 {if(!out)return D3DERR_INVALIDCALL;*out=p->parent;IDirect3DDevice9_AddRef(*out);return S_OK;}
@@ -90,7 +125,7 @@ static HRESULT publish_shell(struct program_proxy *shell,struct pw_d3d9_object_r
     struct program_proxy *p;
     AcquireSRWLockExclusive(&lock);
     for(p=programs;p;p=p->next)
-        if(p->parent==shell->parent&&p->kind==shell->kind&&p->remote.id==ref.id&&p->remote.generation==ref.generation){addref(p);break;}
+        if(p->parent==shell->parent&&p->kind==shell->kind&&p->remote.id==ref.id&&p->remote.generation==ref.generation){addref_locked(p);break;}
     if(!p){p=shell;p->next=programs;programs=p;}
     ReleaseSRWLockExclusive(&lock);
     if(p!=shell)final_release(shell);
@@ -164,3 +199,28 @@ static HRESULT WINAPI create_vs(IDirect3DDevice9 *d,const DWORD *data,IDirect3DV
 static HRESULT WINAPI create_ps(IDirect3DDevice9 *d,const DWORD *data,IDirect3DPixelShader9 **out){return create(d,9,data,(void **)out);}
 void pw_d3d9_program_proxy_install(IDirect3DDevice9Vtbl *vtable,const struct pw_d3d9_program_proxy_ops *callbacks)
 {ops=*callbacks;vtable->CreateVertexDeclaration=create_decl;vtable->CreateVertexShader=create_vs;vtable->CreatePixelShader=create_ps;}
+
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+static void ticket_drop(void *context)
+{
+    struct program_proxy *p=context;int dead;
+    AcquireSRWLockExclusive(&lock);
+    --p->queue_refs;dead=!p->queue_refs&&p->closed&&p->remote_done&&!p->finishing;
+    ReleaseSRWLockExclusive(&lock);if(dead)destroy_local(p);
+}
+HRESULT pw_d3d9_program_proxy_ticket(IDirect3DDevice9 *parent,IUnknown *local,uint32_t kind,
+    struct pw_d3d9_object_ref *out,struct pw_d3d9_queue_ticket *ticket)
+{
+    if(!out||!ticket)return E_POINTER;
+    if(ticket->drop)return D3DERR_INVALIDCALL;
+    if(kind<7||kind>9)return D3DERR_INVALIDCALL;
+    *out=(struct pw_d3d9_object_ref){0};if(!local)return S_OK;
+    HRESULT hr=D3DERR_INVALIDCALL;AcquireSRWLockExclusive(&lock);
+    for(struct program_proxy *p=programs;p;p=p->next)
+        if((void *)p==(void *)local&&p->parent==parent&&p->kind==kind&&!p->closed&&p->references>0){
+            if(p->queue_refs==UINT32_MAX){hr=E_OUTOFMEMORY;break;}
+            ++p->queue_refs;*out=p->remote;ticket->context=p;ticket->drop=ticket_drop;hr=S_OK;break;
+        }
+    ReleaseSRWLockExclusive(&lock);return hr;
+}
+#endif

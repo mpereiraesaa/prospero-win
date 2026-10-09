@@ -15,4 +15,10 @@ void pw_d3d9_program_proxy_install(IDirect3DDevice9Vtbl *,const struct pw_d3d9_p
 HRESULT pw_d3d9_program_proxy_resolve(IDirect3DDevice9 *,IUnknown *,uint32_t,struct pw_d3d9_object_ref *);
 /* Consumes one returned remote guest reference on every path. */
 HRESULT pw_d3d9_program_proxy_wrap(IDirect3DDevice9 *,uint32_t,struct pw_d3d9_object_ref,void **);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+#include "pw_d3d9_queue_ticket.h"
+/* Caller holds admission gate. Zero-initialize ticket; drop after gate unlock. */
+HRESULT pw_d3d9_program_proxy_ticket(IDirect3DDevice9 *,IUnknown *,uint32_t,
+    struct pw_d3d9_object_ref *,struct pw_d3d9_queue_ticket *);
+#endif
 #endif
