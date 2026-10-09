@@ -565,6 +565,11 @@ wine/ps5/pw_d3d9_object_getter.h
 wine/ps5/pw_d3d9_object_getter.c
 tests/test_d3d9_object_getter.c
 docs/d3d9-object-getter.md
+wine/ps5/d3d9/pw_d3d9_native_object_getter.h
+wine/ps5/d3d9/pw_d3d9_native_object_getter.c
+tests/lab/d3d9_native_object_getter.c
+tests/lab/d3d9_native_object_getter.py
+docs/d3d9-native-object-getter.md
 wine/ps5/pw_d3d9_program_wire.h
 wine/ps5/pw_d3d9_program_wire.c
 tests/test_d3d9_program_wire.c
