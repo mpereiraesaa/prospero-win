@@ -864,6 +864,10 @@ wine/ps5/d3d9/pw_d3d9_guest_fullscreen.h
 tests/lab/d3d9_guest_fullscreen.c
 tests/lab/d3d9_guest_fullscreen.py
 docs/d3d9-guest-fullscreen.md
+wine/ps5/pw_d3d9_transport_stats.h
+tests/test_d3d9_transport_stats.c
+tests/lab/d3d9_transport_profile.c
+docs/d3d9-transport-profile.md
 wine/ps5/pw_d3d9_implicit_wire.c
 wine/ps5/pw_d3d9_implicit_wire.h
 tests/test_d3d9_implicit_wire.c

@@ -28,6 +28,7 @@
 #include "pw_d3d9_service_resource.h"
 #endif
 #include "../pw_d3d9_bridge_wire.h"
+#include "../pw_d3d9_transport_stats.h"
 #include <d3d9.h>
 #include <stdio.h>
 #include <string.h>
@@ -91,7 +92,78 @@ struct ipc {
     struct descriptor *descriptor;
     void *memory;
     struct pw_d3d9_channel channel;
+    SRWLOCK stats_lock;
+    struct pw_d3d9_transport_stats stats,interval;
+    uint64_t presents;
 };
+/* PW_D3D9_PROFILE is independent of verbose API diagnostics. No clocks when off. */
+static INIT_ONCE profile_once=INIT_ONCE_STATIC_INIT;
+static int profile_on;
+static uint64_t profile_frequency;
+static BOOL CALLBACK profile_init(INIT_ONCE *once,void *parameter,void **context)
+{
+    char value[8];LARGE_INTEGER frequency;(void)once;(void)parameter;(void)context;
+    profile_on=GetEnvironmentVariableA("PW_D3D9_PROFILE",value,sizeof(value))==1&&value[0]=='1';
+    if(profile_on&&QueryPerformanceFrequency(&frequency)&&frequency.QuadPart>0)profile_frequency=(uint64_t)frequency.QuadPart;
+    return TRUE;
+}
+static int profile_enabled(void)
+{InitOnceExecuteOnce(&profile_once,profile_init,NULL,NULL);return profile_on;}
+static uint64_t profile_now(void)
+{
+    LARGE_INTEGER t;
+    if(!profile_frequency||!QueryPerformanceCounter(&t)||t.QuadPart<=0)return 0;
+    uint64_t ticks=(uint64_t)t.QuadPart,seconds=ticks/profile_frequency;
+    if(seconds>UINT64_MAX/1000000u||profile_frequency>UINT64_MAX/1000000u)return 0;
+    return seconds*1000000u+(ticks%profile_frequency)*1000000u/profile_frequency;
+}
+struct profile_record {
+    struct pw_d3d9_transport_stats total,delta;
+    uint64_t frame,sequence;
+    uint32_t epoch,object,generation,status;
+    int emit,reply_valid,final,startup;
+};
+static void profile_capture(struct ipc *i,const struct pw_d3d9_transport_stats *sample,
+                            const struct pw_d3d9_message *m,uint64_t sequence,HRESULT hr,
+                            int present,int reply_valid,int final,struct profile_record *out)
+{
+    memset(out,0,sizeof(*out));if(!profile_enabled())return;
+    AcquireSRWLockExclusive(&i->stats_lock);
+    pw_d3d9_stats_add(&i->stats,sample);pw_d3d9_stats_add(&i->interval,sample);
+    if(present||final){
+        out->startup=i->presents==0;
+        if(present)i->presents++;
+        out->total=i->stats;out->delta=i->interval;memset(&i->interval,0,sizeof(i->interval));
+        out->frame=i->presents;out->sequence=sequence;out->epoch=i->channel.epoch;
+        out->object=m?m->object:0;out->generation=m?m->generation:0;out->status=(uint32_t)hr;
+        out->reply_valid=reply_valid;out->final=final;out->emit=1;
+    }
+    ReleaseSRWLockExclusive(&i->stats_lock);
+}
+static void profile_emit(const struct profile_record *r)
+{
+    if(!r->emit)return;
+    const struct pw_d3d9_transport_stats *d=&r->delta,*t=&r->total;
+    char line[4096];
+    int used=snprintf(line,sizeof(line),"PW_D3D9_PROFILE transport role=%s pid=%lu tid=%lu domain=%s scope=session_interval epoch=%u frame=%llu seq=%llu object=%u generation=%u hr=%08x reply_valid=%d final=%d startup=%d clock_valid=%d saturated=%llu attempts=%llu sync_published=%llu replies=%llu failures=%llu rejected_present=%llu async_queued=0 request_bytes=%llu reply_bytes=%llu serial_wait_wall_us=%llu guest_wait_wall_us=%llu roundtrip_wall_us=%llu service_dispatch_wall_us=%llu total_attempts=%llu total_sync_published=%llu total_replies=%llu",
+#ifdef _WIN64
+        "service",GetCurrentProcessId(),GetCurrentThreadId(),"native64",
+#else
+        "client",GetCurrentProcessId(),GetCurrentThreadId(),"guest32",
+#endif
+        r->epoch,(unsigned long long)r->frame,(unsigned long long)r->sequence,r->object,r->generation,r->status,r->reply_valid,r->final,r->startup,
+        !d->clock_invalid,(unsigned long long)t->saturated,(unsigned long long)d->attempts,(unsigned long long)d->published,(unsigned long long)d->replies,(unsigned long long)d->failures,(unsigned long long)d->rejected_present,
+        (unsigned long long)d->request_bytes,(unsigned long long)d->reply_bytes,(unsigned long long)d->serial_wait_wall_us,(unsigned long long)d->guest_wait_wall_us,(unsigned long long)d->roundtrip_wall_us,(unsigned long long)d->service_dispatch_wall_us,
+        (unsigned long long)t->attempts,(unsigned long long)t->published,(unsigned long long)t->replies);
+    for(unsigned n=0;n<PW_D3D9_STATS_OPS&&used>0&&(size_t)used<sizeof(line)-64;n++)
+        if(d->opcode[n])used+=snprintf(line+used,sizeof(line)-(size_t)used," op%u=%llu",n,(unsigned long long)d->opcode[n]);
+    if(used>0)fprintf(stderr,"%s\n",line);
+}
+static int profile_present(const struct pw_d3d9_message *m,const void *payload)
+{
+    const unsigned char *p=payload;
+    return m->opcode==PW_D3D9_DEVICE_CALL&&m->payload_bytes>=8&&p&&p[4]==3&&!p[5]&&!p[6]&&!p[7];
+}
 static void put32(unsigned char *p,uint32_t n)
 { for(unsigned i=0;i<4;i++)p[i]=(unsigned char)(n>>(i*8)); }
 static uint32_t get32(const unsigned char *p)
@@ -102,6 +174,8 @@ static void name(WCHAR *out,const WCHAR *kind,DWORD pid,DWORD epoch)
 { swprintf(out,96,L"Local\\PW_D3D9_%ls_%08lx_%08lx",kind,pid,epoch); }
 static void close_ipc(struct ipc *i)
 {
+    if(profile_enabled()){struct profile_record record;struct pw_d3d9_transport_stats empty={0};
+        profile_capture(i,&empty,NULL,0,E_FAIL,0,0,1,&record);profile_emit(&record);}
     if(i->memory)UnmapViewOfFile(i->memory);
     if(i->descriptor)UnmapViewOfFile(i->descriptor);
     HANDLE handles[]={i->request,i->reply,i->opened,i->cancel,i->wire_mapping,i->descriptor_mapping};
@@ -254,8 +328,12 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
                         unsigned char *output,size_t capacity,struct pw_d3d9_message *reply)
 {
     HRESULT result=E_FAIL;unsigned char scratch[RING_BYTES];const char *phase="send";
+    int prof=profile_enabled(),present=profile_present(m,payload),locked=0,cleanup=0;
+    uint64_t begin=prof?profile_now():0,serial_begin=begin,sequence=0;
+    struct pw_d3d9_transport_stats sample={0};struct profile_record record;
+    if(prof){sample.attempts=1;if(m->opcode<PW_D3D9_STATS_OPS)sample.opcode[m->opcode]=1;}
     memset(reply,0,sizeof(*reply));
-    if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+    if(callback_depth()){result=RPC_E_CANTCALLOUT_ININPUTSYNCCALL;goto metric_done;}
     while(!TryEnterCriticalSection(&s->lock)){
         DWORD wait;
 #ifdef PW_D3D9_SESSION_TEST_CALLBACK
@@ -264,26 +342,39 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
         else
 #endif
         wait=client_wait(1,&s->serial_event,30000);
-        if(wait!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
+        if(wait!=WAIT_OBJECT_0){cleanup=1;if(prof)sample.serial_wait_wall_us=pw_d3d9_stats_elapsed(serial_begin,profile_now(),&sample.clock_invalid);goto metric_done;}
     }
-    if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
+    if(prof)sample.serial_wait_wall_us=pw_d3d9_stats_elapsed(serial_begin,profile_now(),&sample.clock_invalid);
+    if(s->active_thread){LeaveCriticalSection(&s->lock);result=RPC_E_CANTCALLOUT_ININPUTSYNCCALL;goto metric_done;}
+    locked=cleanup=1;
     s->active_thread=GetCurrentThreadId();
-    if(send_wake(&s->ipc,m,payload)!=PW_D3D9_OK)goto done;
+    sequence=s->ipc.channel.next_send;
+    int sent=send_wake(&s->ipc,m,payload);
+    if(prof&&s->ipc.channel.next_send!=sequence){sample.published=1;sample.request_bytes=64u+m->payload_bytes;}
+    if(sent!=PW_D3D9_OK)goto done;
 #ifdef PW_D3D9_SESSION_TEST_CALLBACK
     extern void pw_d3d9_session_test_callback(void);
     pw_d3d9_session_test_callback();
 #endif
     client_pump();
     phase="receive";
-    if(receive_wait(&s->ipc,reply,scratch,sizeof(scratch),s->broker)!=PW_D3D9_OK)goto done;
+    uint64_t wait_begin=prof?profile_now():0;
+    int received=receive_wait(&s->ipc,reply,scratch,sizeof(scratch),s->broker);
+    if(prof){sample.guest_wait_wall_us=pw_d3d9_stats_elapsed(wait_begin,profile_now(),&sample.clock_invalid);
+        if(received==PW_D3D9_OK){sample.replies=1;sample.reply_bytes=64u+reply->payload_bytes;}}
+    if(received!=PW_D3D9_OK)goto done;
     phase="reply_capacity";
     if(reply->payload_bytes>capacity){cancel_ipc(&s->ipc);goto done;}
     if(reply->payload_bytes)memcpy(output,scratch+64,reply->payload_bytes);
     phase="backend_result";result=(HRESULT)reply->result;
  done:
     if(FAILED(result))fprintf(stderr,"PW_D3D9 transaction opcode=%u phase=%s hr=%08lx reply_bytes=%u\n",m->opcode,phase,(DWORD)result,reply->payload_bytes);
-    s->active_thread=0;LeaveCriticalSection(&s->lock);SetEvent(s->serial_event);
-    restore_quit();drain_deferred(s);return result;
+ metric_done:
+    if(prof){sample.rejected_present=present&&!sample.published;sample.failures=FAILED(result);sample.roundtrip_wall_us=pw_d3d9_stats_elapsed(begin,profile_now(),&sample.clock_invalid);}
+    profile_capture(&s->ipc,&sample,m,sample.published?sequence:0,result,present&&sample.published,(int)sample.replies,0,&record);
+    if(locked){s->active_thread=0;LeaveCriticalSection(&s->lock);SetEvent(s->serial_event);}
+    profile_emit(&record);
+    if(cleanup){restore_quit();drain_deferred(s);}return result;
 }
 static void destroy_session(struct pw_d3d9_session *s)
 {
@@ -733,6 +824,8 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
 {
     struct ipc ipc={0};struct descriptor desc;WCHAR object_name[96];DWORD error=1,pid=GetCurrentProcessId();
     uint32_t last_opcode=0;const char *phase="startup";
+    int prof=profile_enabled(),profile_pending=0,profile_is_present=0;
+    uint64_t dispatch_begin=0;struct pw_d3d9_message profile_message={0};
     HMODULE backend=NULL;IDirect3D9 *(WINAPI *factory)(UINT)=NULL;
     struct pw_d3d9_object_slot *slots=NULL;struct pw_d3d9_objects objects;BOOL objects_ready=FALSE;
     unsigned char scratch[RING_BYTES],output[RING_BYTES],hello[32];
@@ -765,6 +858,8 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
         phase="receive";
         if(receive_wait(&ipc,&m,scratch,sizeof(scratch),NULL)!=PW_D3D9_OK)goto done;
         last_opcode=m.opcode;phase="dispatch_or_encode";
+        if(prof){profile_pending=1;profile_message=m;dispatch_begin=profile_now();
+            profile_is_present=profile_present(&m,scratch+64);}
         const unsigned char *payload=scratch+64;HRESULT hr=S_OK;
         struct pw_d3d9_object_ref ref={m.object,m.generation};
         if(m.opcode==PW_D3D9_HELLO){
@@ -936,11 +1031,24 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
         }else goto done;
         m.sequence=0;m.result=hr;m.payload_bytes=(uint32_t)bytes;
         phase="send_reply";
-        if(send_wake(&ipc,&m,output)!=PW_D3D9_OK)goto done;
+        int reply_sent=send_wake(&ipc,&m,output);
+        if(prof){struct pw_d3d9_transport_stats sample={0};struct profile_record record;
+            sample.attempts=sample.published=1;sample.request_bytes=64u+profile_message.payload_bytes;
+            sample.opcode[profile_message.opcode]=1;sample.replies=reply_sent==PW_D3D9_OK;
+            sample.reply_bytes=sample.replies?64u+bytes:0;sample.failures=FAILED(hr)||!sample.replies;
+            sample.service_dispatch_wall_us=pw_d3d9_stats_elapsed(dispatch_begin,profile_now(),&sample.clock_invalid);
+            profile_capture(&ipc,&sample,&profile_message,profile_message.sequence,reply_sent==PW_D3D9_OK?hr:E_FAIL,profile_is_present,(int)sample.replies,0,&record);
+            profile_pending=0;profile_emit(&record);}
+        if(reply_sent!=PW_D3D9_OK)goto done;
         result[0]++;
         if(stop){if(pw_d3d9_channel_stopped(&ipc.channel)!=PW_D3D9_OK)goto done;error=0;break;}
     }
  done:
+    if(prof&&profile_pending){struct pw_d3d9_transport_stats sample={0};struct profile_record record;
+        sample.attempts=sample.published=sample.failures=1;sample.request_bytes=64u+profile_message.payload_bytes;
+        if(profile_message.opcode<PW_D3D9_STATS_OPS)sample.opcode[profile_message.opcode]=1;
+        sample.service_dispatch_wall_us=pw_d3d9_stats_elapsed(dispatch_begin,profile_now(),&sample.clock_invalid);
+        profile_capture(&ipc,&sample,&profile_message,profile_message.sequence,E_FAIL,profile_is_present,0,0,&record);profile_emit(&record);}
     if(error){fprintf(stderr,"PW_D3D9 service opcode=%u phase=%s error=%lu\n",last_opcode,phase,error);cancel_ipc(&ipc);}
     if(objects_ready){
 #ifdef PW_D3D9_ENABLE_PROGRAM
