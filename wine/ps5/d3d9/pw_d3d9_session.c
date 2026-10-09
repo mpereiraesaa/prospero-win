@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
+#include "pw_d3d9_kinds.h"
 #ifdef PW_D3D9_ENABLE_QUERY
 #include "pw_d3d9_service_query.h"
 #endif
