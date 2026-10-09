@@ -614,6 +614,10 @@ docs/d3d9-resource-wire.md
 wine/ps5/d3d9/pw_d3d9_service_resource.c
 wine/ps5/d3d9/pw_d3d9_service_resource.h
 tests/lab/d3d9_service_resource.c
+wine/ps5/pw_d3d9_texture_wire.h
+wine/ps5/pw_d3d9_texture_wire.c
+tests/test_d3d9_texture_wire.c
+docs/d3d9-texture-wire.md
 wine/ps5/d3d9/pw_d3d9_native_resource.c
 wine/ps5/d3d9/pw_d3d9_native_resource.h
 wine/ps5/d3d9/pw_d3d9_kinds.h
