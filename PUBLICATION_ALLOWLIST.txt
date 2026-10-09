@@ -574,6 +574,10 @@ wine/ps5/d3d9/pw_d3d9_native_program.c
 tests/lab/d3d9_native_program.c
 tests/lab/d3d9_native_program.py
 docs/d3d9-native-program.md
+wine/ps5/pw_d3d9_getter_wire.h
+wine/ps5/pw_d3d9_getter_wire.c
+tests/test_d3d9_getter_wire.c
+docs/d3d9-getter-wire.md
 
 wine/ps5/pw_d3d9_factory_wire.h
 wine/ps5/pw_d3d9_factory_wire.c

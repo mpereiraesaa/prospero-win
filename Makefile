@@ -66,6 +66,8 @@ $(eval $(call test_rule,test_d3d9_factory_wire,tests/test_d3d9_factory_wire.c wi
 $(eval $(call test_rule,test_d3d9_resource_wire,tests/test_d3d9_resource_wire.c wine/ps5/pw_d3d9_resource_wire.c,-Iwine/ps5))
 $(BUILD)/test_d3d9_resource_wire: wine/ps5/pw_d3d9_resource_wire.h wine/ps5/pw_d3d9_objects.h
 $(BUILD)/test_d3d9_factory_wire: wine/ps5/pw_d3d9_factory_wire.h
+$(eval $(call test_rule,test_d3d9_getter_wire,tests/test_d3d9_getter_wire.c wine/ps5/pw_d3d9_getter_wire.c,-Iwine/ps5))
+$(BUILD)/test_d3d9_getter_wire: wine/ps5/pw_d3d9_getter_wire.h
 $(eval $(call test_rule,test_d3d9_device_wire,tests/test_d3d9_device_wire.c wine/ps5/pw_d3d9_device_wire.c,-I.))
 $(BUILD)/test_d3d9_device_wire: wine/ps5/pw_d3d9_device_wire.h wine/ps5/pw_d3d9_window.h wine/ps5/pw_d3d9_objects.h
 $(eval $(call test_rule,test_d3d9_command_wire,tests/test_d3d9_command_wire.c wine/ps5/pw_d3d9_command_wire.c,-I.))
@@ -167,7 +169,7 @@ TESTS := test_d3d9_object_getter test_pw_qpc_clock test_pw_key_shared test_pw_di
 	test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_global_residency test_pw_x86_reencode test_pw_x86_smc test_pw_x86_fault_markers test_pw_x86_lazyflags \
 	test_pw_guest_call test_pw_x87 test_pw_x87_native test_pw_audio_ps5 test_pw_audio_mix test_pw_agc_submit_lifecycle \
 	test_pw_videoout_layout test_pw_videoout_tile test_pw_pad_ps5 test_pw_data_mount \
-	test_pw_data_mount_native test_pw_lapy_elevation test_d3d9_device_wire test_d3d9_command_wire
+	test_d3d9_getter_wire test_pw_data_mount_native test_pw_lapy_elevation test_d3d9_device_wire test_d3d9_command_wire
 
 # The Python suites drive the built DBT tools and check the contracts the
 # host compiler cannot.
