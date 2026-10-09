@@ -21,6 +21,10 @@ HRESULT pw_d3d9_session_getter(struct pw_d3d9_session *,struct pw_d3d9_object_re
 HRESULT pw_d3d9_session_program_query(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_program_query_request *,struct pw_d3d9_program_query_reply *);
 HRESULT pw_d3d9_session_program(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_program_request *,struct pw_d3d9_program_reply *);
 #endif
+#ifdef PW_D3D9_ENABLE_STATEBLOCK
+#include "../pw_d3d9_stateblock_wire.h"
+HRESULT pw_d3d9_session_stateblock(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_stateblock_request *,struct pw_d3d9_stateblock_reply *);
+#endif
 /* Local PE32 ownership only: no member pointer or Windows handle is wire data.
  * Calls are serialized internally. Close requires all API callers to finish;
  * it cancels/joins before releasing mappings, including on startup failure. */
