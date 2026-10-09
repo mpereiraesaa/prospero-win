@@ -35,7 +35,7 @@ static void roundtrip(struct fixture *f,unsigned value)
     unsigned char payload[35],scratch[128];struct pw_d3d9_message m=call(sizeof(payload)),r;
     const unsigned operations[]={PW_D3D9_FACTORY_CALL,PW_D3D9_DEVICE_CALL,PW_D3D9_RESOURCE_CALL,
         PW_D3D9_COMMAND_CALL,PW_D3D9_PROGRAM_CALL,PW_D3D9_TEXTURE_CALL,PW_D3D9_GETTER_CALL,PW_D3D9_OBJECT_GETTER_CALL,PW_D3D9_STATEBLOCK_CALL,PW_D3D9_PROGRAM_QUERY_CALL,PW_D3D9_UP_DRAW_CALL,PW_D3D9_QUERY_CALL,PW_D3D9_CURSOR_CALL,PW_D3D9_GAMMA_CALL};
-    m.opcode=operations[value%10];
+    m.opcode=operations[value % (sizeof(operations)/sizeof(operations[0]))];
     memset(payload,(int)value,sizeof(payload));
     assert(pw_d3d9_channel_send(&f->client,&m,payload)==PW_D3D9_OK);
     memset(payload,0,sizeof(payload));
