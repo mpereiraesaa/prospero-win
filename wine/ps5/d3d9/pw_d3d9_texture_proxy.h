@@ -34,4 +34,10 @@ HRESULT pw_d3d9_texture_proxy_owners_dispose(IDirect3DDevice9 *);
 /* On final decrement, closes owner admission and retains one internal teardown
  * sentinel while returning zero. Final cleanup frees the device directly. */
 ULONG pw_d3d9_texture_proxy_parent_release(IDirect3DDevice9 *,LONG *);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+#include "pw_d3d9_queue_ticket.h"
+/* Texture2D binding only; implicit surfaces are deliberately ineligible. */
+HRESULT pw_d3d9_texture_proxy_ticket(IDirect3DDevice9 *,IUnknown *,uint32_t,
+ struct pw_d3d9_object_ref *,struct pw_d3d9_queue_ticket *);
+#endif
 #endif

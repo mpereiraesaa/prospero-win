@@ -3,6 +3,9 @@
 #include "pw_d3d9_texture_proxy.h"
 #include "pw_d3d9_api_observe.h"
 #include "pw_d3d9_private_data.h"
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+#include "pw_d3d9_queue_ticket.h"
+#endif
 /* Texture descriptions are immutable for one native object generation. Keep
  * surfaces uncached: implicit surfaces can be reconciled across Reset. */
 #define DESC_LEVELS 32u
@@ -11,6 +14,9 @@ struct proxy {
  IUnknown iface;ULONG refs;uint32_t kind,levels,lock_level;LONG busy;unsigned owner,frozen,closed,parent_pin;IDirect3DDevice9 *parent;
  struct pw_d3d9_private_data private_data;struct pw_d3d9_texture_client client;struct pw_d3d9_deferred cleanup;struct proxy *next;
  struct descriptions *descriptions;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ unsigned queue_refs,finishing,remote_done;
+#endif
 };
 static struct pw_d3d9_texture_proxy_ops ops;
 static SRWLOCK cache_lock=SRWLOCK_INIT;
@@ -52,7 +58,12 @@ static void finish(void *context)
  struct proxy *p=context;HRESULT hr=ops.release(p->parent,p->client.object);
  if(hr==RPC_E_CANTCALLOUT_ININPUTSYNCCALL){p->cleanup.function=finish;p->cleanup.context=p;hr=ops.defer(p->parent,&p->cleanup);if(FAILED(hr))ops.fail(p->parent,hr);return;}
  if(FAILED(hr))ops.fail(p->parent,hr);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ AcquireSRWLockExclusive(&cache_lock);p->remote_done=1;p->finishing=0;int dead=!p->queue_refs;ReleaseSRWLockExclusive(&cache_lock);
+ if(dead)free_local(p);
+#else
  free_local(p);
+#endif
 }
 static ULONG release(void *iface)
 {
@@ -64,6 +75,9 @@ static ULONG release(void *iface)
   if(p->owner){drop_parent=p->parent_pin;p->parent_pin=0;}
   else{struct proxy **link=&cache;while(*link&&*link!=p)link=&(*link)->next;if(*link)*link=p->next;retire=1;}
  }
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ if(retire){p->closed=1;p->finishing=1;}
+#endif
  ReleaseSRWLockExclusive(&cache_lock);
  if(retire)finish(p);else if(drop_parent)IDirect3DDevice9_Release(parent);
  return n;
@@ -399,3 +413,26 @@ HRESULT pw_d3d9_texture_proxy_owners_dispose(IDirect3DDevice9 *parent)
  }
  return result;
 }
+
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+static void ticket_drop(void *context)
+{
+ struct proxy *p=context;int dead;AcquireSRWLockExclusive(&cache_lock);
+ --p->queue_refs;dead=!p->queue_refs&&p->closed&&p->remote_done&&!p->finishing;
+ ReleaseSRWLockExclusive(&cache_lock);if(dead)free_local(p);
+}
+HRESULT pw_d3d9_texture_proxy_ticket(IDirect3DDevice9 *parent,IUnknown *local,uint32_t kind,
+ struct pw_d3d9_object_ref *out,struct pw_d3d9_queue_ticket *ticket)
+{
+ if(!out||!ticket)return E_POINTER;
+ if(ticket->drop||kind!=PW_D3D9_KIND_TEXTURE_2D)return D3DERR_INVALIDCALL;
+ *out=(struct pw_d3d9_object_ref){0};if(!local)return S_OK;
+ HRESULT hr=D3DERR_INVALIDCALL;AcquireSRWLockExclusive(&cache_lock);
+ for(struct proxy *p=cache;p;p=p->next)
+  if((void *)p==(void *)local&&p->parent==parent&&p->kind==kind&&!p->closed&&!p->frozen&&!p->owner&&p->refs){
+   if(p->queue_refs==UINT32_MAX){hr=E_OUTOFMEMORY;break;}
+   ++p->queue_refs;*out=p->client.object;ticket->context=p;ticket->drop=ticket_drop;hr=S_OK;break;
+  }
+ ReleaseSRWLockExclusive(&cache_lock);return hr;
+}
+#endif
