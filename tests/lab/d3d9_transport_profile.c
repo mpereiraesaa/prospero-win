@@ -58,6 +58,8 @@ int main(int argc,char **argv)
  assert(WaitForSingleObject(thread,1000)==WAIT_OBJECT_0);CloseHandle(thread);
  CloseHandle(s.ipc.opened);CloseHandle(s.ipc.request);CloseHandle(s.ipc.reply);CloseHandle(s.ipc.cancel);CloseHandle(s.serial_event);HeapFree(GetProcessHeap(),0,s.ipc.memory);DeleteCriticalSection(&s.lock);
 #endif
+ if(enabled){uint64_t saved=profile_frequency;struct pw_d3d9_transport_stats empty={0};profile_frequency=0;
+  profile_capture(&i,&empty,NULL,0,E_FAIL,0,0,1,&r);assert(!r.clock_valid);profile_emit(&r);profile_frequency=saved;}
  if(!enabled)assert(clock_calls==initial_clocks);
  printf("TRANSPORT_PROFILE PASS enabled=%d clocks=%u\n",enabled,clock_calls);return 0;
 }

@@ -113,21 +113,19 @@ static uint64_t profile_now(void)
 {
     LARGE_INTEGER t;
     if(!profile_frequency||!QueryPerformanceCounter(&t)||t.QuadPart<=0)return 0;
-    uint64_t ticks=(uint64_t)t.QuadPart,seconds=ticks/profile_frequency;
-    if(seconds>UINT64_MAX/1000000u||profile_frequency>UINT64_MAX/1000000u)return 0;
-    return seconds*1000000u+(ticks%profile_frequency)*1000000u/profile_frequency;
+    return pw_d3d9_stats_ticks_us((uint64_t)t.QuadPart,profile_frequency);
 }
 struct profile_record {
     struct pw_d3d9_transport_stats total,delta;
     uint64_t frame,sequence;
     uint32_t epoch,object,generation,status;
-    int emit,reply_valid,final,startup;
+    int emit,reply_valid,final,startup,clock_valid;
 };
 static void profile_capture(struct ipc *i,const struct pw_d3d9_transport_stats *sample,
                             const struct pw_d3d9_message *m,uint64_t sequence,HRESULT hr,
                             int present,int reply_valid,int final,struct profile_record *out)
 {
-    memset(out,0,sizeof(*out));if(!profile_enabled())return;
+    out->emit=0;if(!profile_enabled())return;
     AcquireSRWLockExclusive(&i->stats_lock);
     pw_d3d9_stats_add(&i->stats,sample);pw_d3d9_stats_add(&i->interval,sample);
     if(present||final){
@@ -136,7 +134,7 @@ static void profile_capture(struct ipc *i,const struct pw_d3d9_transport_stats *
         out->total=i->stats;out->delta=i->interval;memset(&i->interval,0,sizeof(i->interval));
         out->frame=i->presents;out->sequence=sequence;out->epoch=i->channel.epoch;
         out->object=m?m->object:0;out->generation=m?m->generation:0;out->status=(uint32_t)hr;
-        out->reply_valid=reply_valid;out->final=final;out->emit=1;
+        out->reply_valid=reply_valid;out->final=final;out->clock_valid=profile_frequency!=0&&!out->delta.clock_invalid;out->emit=1;
     }
     ReleaseSRWLockExclusive(&i->stats_lock);
 }
@@ -152,7 +150,7 @@ static void profile_emit(const struct profile_record *r)
         "client",GetCurrentProcessId(),GetCurrentThreadId(),"guest32",
 #endif
         r->epoch,(unsigned long long)r->frame,(unsigned long long)r->sequence,r->object,r->generation,r->status,r->reply_valid,r->final,r->startup,
-        !d->clock_invalid,(unsigned long long)t->saturated,(unsigned long long)d->attempts,(unsigned long long)d->published,(unsigned long long)d->replies,(unsigned long long)d->failures,(unsigned long long)d->rejected_present,
+        r->clock_valid,(unsigned long long)t->saturated,(unsigned long long)d->attempts,(unsigned long long)d->published,(unsigned long long)d->replies,(unsigned long long)d->failures,(unsigned long long)d->rejected_present,
         (unsigned long long)d->request_bytes,(unsigned long long)d->reply_bytes,(unsigned long long)d->serial_wait_wall_us,(unsigned long long)d->guest_wait_wall_us,(unsigned long long)d->roundtrip_wall_us,(unsigned long long)d->service_dispatch_wall_us,
         (unsigned long long)t->attempts,(unsigned long long)t->published,(unsigned long long)t->replies);
     for(unsigned n=0;n<PW_D3D9_STATS_OPS&&used>0&&(size_t)used<sizeof(line)-64;n++)
@@ -328,10 +326,10 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
                         unsigned char *output,size_t capacity,struct pw_d3d9_message *reply)
 {
     HRESULT result=E_FAIL;unsigned char scratch[RING_BYTES];const char *phase="send";
-    int prof=profile_enabled(),present=profile_present(m,payload),locked=0,cleanup=0;
+    int prof=profile_enabled(),present=prof?profile_present(m,payload):0,locked=0,cleanup=0;
     uint64_t begin=prof?profile_now():0,serial_begin=begin,sequence=0;
-    struct pw_d3d9_transport_stats sample={0};struct profile_record record;
-    if(prof){sample.attempts=1;if(m->opcode<PW_D3D9_STATS_OPS)sample.opcode[m->opcode]=1;}
+    struct pw_d3d9_transport_stats sample;struct profile_record record;
+    if(prof){memset(&sample,0,sizeof(sample));sample.attempts=1;if(m->opcode<PW_D3D9_STATS_OPS)sample.opcode[m->opcode]=1;}
     memset(reply,0,sizeof(*reply));
     if(callback_depth()){result=RPC_E_CANTCALLOUT_ININPUTSYNCCALL;goto metric_done;}
     while(!TryEnterCriticalSection(&s->lock)){
@@ -371,9 +369,9 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
     if(FAILED(result))fprintf(stderr,"PW_D3D9 transaction opcode=%u phase=%s hr=%08lx reply_bytes=%u\n",m->opcode,phase,(DWORD)result,reply->payload_bytes);
  metric_done:
     if(prof){sample.rejected_present=present&&!sample.published;sample.failures=FAILED(result);sample.roundtrip_wall_us=pw_d3d9_stats_elapsed(begin,profile_now(),&sample.clock_invalid);}
-    profile_capture(&s->ipc,&sample,m,sample.published?sequence:0,result,present&&sample.published,(int)sample.replies,0,&record);
+    if(prof)profile_capture(&s->ipc,&sample,m,sample.published?sequence:0,result,present&&sample.published,(int)sample.replies,0,&record);
     if(locked){s->active_thread=0;LeaveCriticalSection(&s->lock);SetEvent(s->serial_event);}
-    profile_emit(&record);
+    if(prof)profile_emit(&record);
     if(cleanup){restore_quit();drain_deferred(s);}return result;
 }
 static void destroy_session(struct pw_d3d9_session *s)
@@ -1034,7 +1032,8 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
         int reply_sent=send_wake(&ipc,&m,output);
         if(prof){struct pw_d3d9_transport_stats sample={0};struct profile_record record;
             sample.attempts=sample.published=1;sample.request_bytes=64u+profile_message.payload_bytes;
-            sample.opcode[profile_message.opcode]=1;sample.replies=reply_sent==PW_D3D9_OK;
+            if(profile_message.opcode<PW_D3D9_STATS_OPS)sample.opcode[profile_message.opcode]=1;
+            sample.replies=reply_sent==PW_D3D9_OK;
             sample.reply_bytes=sample.replies?64u+bytes:0;sample.failures=FAILED(hr)||!sample.replies;
             sample.service_dispatch_wall_us=pw_d3d9_stats_elapsed(dispatch_begin,profile_now(),&sample.clock_invalid);
             profile_capture(&ipc,&sample,&profile_message,profile_message.sequence,reply_sent==PW_D3D9_OK?hr:E_FAIL,profile_is_present,(int)sample.replies,0,&record);

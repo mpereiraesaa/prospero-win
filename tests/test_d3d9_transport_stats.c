@@ -14,5 +14,9 @@ int main(void){
  assert(!pw_d3d9_stats_elapsed(10,0,&total.clock_invalid)&&total.clock_invalid==3);
  assert(!pw_d3d9_stats_elapsed(10,10,&total.clock_invalid)&&total.clock_invalid==3);
  total.published=UINT64_MAX;pw_d3d9_stats_add(&total,&sample);assert(total.published==UINT64_MAX&&total.saturated);
+ assert(pw_d3d9_stats_ticks_us(3,2)==1500000);
+ assert(!pw_d3d9_stats_ticks_us(3,0));
+ assert(!pw_d3d9_stats_ticks_us((UINT64_MAX/1000000u)*3+2,3));
+ assert(pw_d3d9_stats_ticks_us(UINT64_MAX,1000000)==UINT64_MAX);
  puts("transport stats PASS");return 0;
 }

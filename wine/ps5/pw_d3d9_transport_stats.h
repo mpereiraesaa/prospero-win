@@ -22,6 +22,14 @@ static inline void pw_d3d9_stats_add(struct pw_d3d9_transport_stats *a,const str
  a->saturated|=b->saturated;
 #undef ADD
 }
+static inline uint64_t pw_d3d9_stats_ticks_us(uint64_t ticks,uint64_t frequency)
+{
+ if(!frequency||frequency>UINT64_MAX/1000000u)return 0;
+ uint64_t seconds=ticks/frequency;
+ if(seconds>UINT64_MAX/1000000u)return 0;
+ uint64_t whole=seconds*1000000u,fraction=(ticks%frequency)*1000000u/frequency;
+ return fraction>UINT64_MAX-whole?0:whole+fraction;
+}
 static inline uint64_t pw_d3d9_stats_elapsed(uint64_t begin,uint64_t end,uint64_t *invalid)
 {if(!begin||!end||end<begin){(*invalid)++;return 0;}return end-begin;}
 #endif
