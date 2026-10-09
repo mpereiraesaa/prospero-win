@@ -72,3 +72,12 @@ window callbacks, handled three guest and two native vectored exceptions, and
 completed native-child and normal teardown checks. Both pre/post guest callback
 checks ran in each cycle. This is host evidence for the inspected backend and
 callback fix; PS5 window/display/input acceptance remains separate.
+
+The subsequent console run exposed a guest IME builtin-procedure teardown
+exception after native user32 had initialized. Therefore the passing host cycle
+markers do not establish clean console teardown. Wine's process-global builtin
+window-procedure table is a second, independent domain-routing issue. A focused
+follow-up adds explicit unsubclassed builtin windows before/during/after native
+service execution; that expanded UI-only fixture reproduces a guest execute
+fault in `SetWindowTextW` on host. Its fix and regression evidence are separate
+from this initial fixture and the PEB callback-dispatch fix.
