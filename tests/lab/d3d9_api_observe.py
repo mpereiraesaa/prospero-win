@@ -31,9 +31,15 @@ for arch in ('i686','x86_64'):
     runlabel=label+'-'+str(enabled)
     text=run([a.wine_build.resolve()/'loader/wine',binary,*(['on'] if enabled else [])],runlabel,env)
     assert f'enabled={enabled} calls=12 logs={8 if enabled and sink=="controlled" else 0}' in text,text
+    assert f'outputs={83 if enabled and sink=="controlled" else 0} bounded=1 snapshot=1 status=0' in text,text
     diagnostic=(out/(runlabel+'.stderr')).read_text()
     expected=enabled and sink=='stderr'
     assert diagnostic.count('PW_D3D9_API_FAIL ')==(6 if expected else 0),diagnostic
     assert diagnostic.count('PW_D3D9_API_RESULT ')==(2 if expected else 0),diagnostic
+    assert diagnostic.count('PW_D3D9_API_OUTPUT ')==(83 if expected else 0),diagnostic
+    if expected:
+     assert diagnostic.count('method=GetAvailableTextureMem ')==64
+     assert 'Pitch=-64,pBits=' in diagnostic and 'rect=00000001,00000002,00000003,00000004' in diagnostic
+     assert 'a000004b' in diagnostic and 'pCaps=unreadable' in diagnostic
 assert r['sources']=={str(f):sha(f) for f in files}
 r.update(status='pass' if a.wine_build else 'compile-pass',artifacts={str(x):sha(x) for x in out.glob('*.exe')});save();print(str(out/'receipt.json'))

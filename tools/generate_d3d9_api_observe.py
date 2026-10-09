@@ -5,6 +5,26 @@ import argparse,hashlib,re
 from pathlib import Path
 from generate_d3d9_inventory import parse,COUNTS,HEADER_SHA256
 
+OUTPUT_METHODS={'CreateTexture','CreateRenderTarget','CreateDepthStencilSurface',
+ 'CreateOffscreenPlainSurface','LockRect','GetDesc','GetLevelDesc','GetDeviceCaps',
+ 'GetRenderTarget','GetDepthStencilSurface','GetBackBuffer','GetAvailableTextureMem',
+ 'GetLevelCount','GetType','GetAdapterModeCount'}
+
+def output_fields(declarations,names):
+ before=[' static LONG samples;int sample=pw_d3d9_api_sample(&samples);'];fields=[]
+ for declaration,name in zip(declarations,names):
+  if '*' not in declaration:
+   fields.append(f'{{"{name}",&{name},sizeof({name}),PW_D3D9_API_WORDS}}')
+   continue
+  fields.append(f'{{"{name}.address",&{name},sizeof({name}),PW_D3D9_API_POINTER}}')
+  if re.search(r'\bconst RECT\s*\*',declaration):
+   before.append(f' RECT snapshot_{name};int valid_{name}=sample&&pw_d3d9_api_read(&snapshot_{name},{name},sizeof(snapshot_{name}));')
+   fields.append(f'{{"{name}",valid_{name}?&snapshot_{name}:NULL,sizeof(snapshot_{name}),PW_D3D9_API_WORDS}}')
+  else:
+   kind='PW_D3D9_API_LOCKED_RECT' if 'D3DLOCKED_RECT' in declaration else ('PW_D3D9_API_POINTER' if declaration.count('*')==2 or 'HANDLE' in declaration else 'PW_D3D9_API_WORDS')
+   fields.append(f'{{"{name}",{name},sizeof(*{name}),{kind}}}')
+ return before,fields
+
 def render(raw):
  if hashlib.sha256(raw).hexdigest()!=HEADER_SHA256:raise ValueError('header differs from pinned Wine d3d9.h')
  interfaces=parse(raw.decode())
@@ -24,11 +44,21 @@ def render(raw):
    params=interface+' *self'+(', '+', '.join(declarations) if declarations else '')
    call=f'raw_{interface}.{name}('+', '.join(names)+')'
    lines.append(f'static {ret} WINAPI observe_{interface}_{name}({params})'+' {')
+   selected=name in OUTPUT_METHODS
+   if selected:
+    before,fields=output_fields(declarations,names[1:]);lines+=before
    if ret=='HRESULT':
     iid=names[1] if name=='QueryInterface' else 'NULL'
     condition='result!=S_OK' if name=='QueryInterface' else ('1' if name=='TestCooperativeLevel' else 'FAILED(result)')
-    lines += [f' HRESULT result={call};',f' if({condition})pw_d3d9_api_failure("{interface}",{slot},"{name}",result,__builtin_return_address(0),{iid});',' return result;']
+    lines += [f' HRESULT result={call};',f' if({condition})pw_d3d9_api_failure("{interface}",{slot},"{name}",result,__builtin_return_address(0),{iid});']
+   elif selected:lines.append(f' {ret} result={call};')
    else:lines.append(' '+('' if ret=='void' else 'return ')+call+';')
+   if selected:
+    if ret!='HRESULT':fields.append('{"result",&result,sizeof(result),PW_D3D9_API_WORDS}')
+    lines += [' if(sample'+('&&SUCCEEDED(result)' if ret=='HRESULT' else '')+'){',
+     '  const struct pw_d3d9_api_field fields[]={'+','.join(fields)+'};',
+     f'  pw_d3d9_api_output("{interface}",{slot},"{name}",'+('result' if ret=='HRESULT' else 'S_OK')+',__builtin_return_address(0),fields,sizeof(fields)/sizeof(*fields));',' }']
+   if ret=='HRESULT' or selected:lines.append(' return result;')
    lines.append('}')
   lines += [f'static const {interface}Vtbl wrapped_{interface}={{'+','.join(f'observe_{interface}_{m[0]}' for m in methods)+'};',f'static BOOL CALLBACK init_{interface}(INIT_ONCE *once,void *parameter,void **context)'+' {',f' (void)once;(void)context;source_{interface}=parameter;raw_{interface}=*source_{interface};return TRUE;','}',f'const {interface}Vtbl *pw_d3d9_api_observe_{interface}(const {interface}Vtbl *table)'+' {', ' if(!table||!pw_d3d9_api_observe_enabled())return table;',f' if(!InitOnceExecuteOnce(&once_{interface},init_{interface},(void *)table,NULL)||source_{interface}!=table)return NULL;',f' return &wrapped_{interface};','}','#endif']
  lines+=['#ifdef PW_D3D9_API_OBSERVE_IMPLEMENTATION','const void *pw_d3d9_api_original_vtable(const void *table) {']

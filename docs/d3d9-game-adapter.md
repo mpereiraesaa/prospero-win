@@ -42,3 +42,23 @@ original tables. Object addresses, canonical cache keys and ownership stay
 unchanged. This logging is diagnostic evidence, not a total API-call counter
 or a performance measurement. In a four-entry debug environment profile,
 replace an optional statistics entry rather than exceeding parser capacity.
+
+The same opt-in flag also records successful outputs for the first 64 calls per
+typed method for texture/render-target/depth/offscreen creation, LockRect,
+GetDesc/GetLevelDesc, GetDeviceCaps, and render-target/depth/backbuffer getters.
+Selected scalar returns include available texture memory, level count, resource
+type and adapter mode count. The counter saturates and is shared by objects of
+the same interface; failed HRESULT calls consume a sample but never read output
+storage. Existing failure records remain independent of the sample limit.
+
+Records include copied parameters and output values. Descriptors and the complete
+D3DCAPS9 are hexadecimal 32-bit words in native structure order; floating-point
+fields retain their original bits. LockRect prints signed Pitch and pBits without
+reading pixel memory. Requested rectangles are safely copied before the target
+call, so an aliased or modified input cannot change the recorded request.
+Pointer arguments include their address and safely read value; NULL or invalid
+output storage is marked `unreadable`. Logging never calls COM or reads the
+object after dispatch, and preserves errno and GetLastError. Disabled builds and
+runtime-disabled diagnostics publish the original tables, adding no per-call
+observer work. The controlled PE32/PE64 fixture covers these properties; it is
+not a GPU or console acceptance test.
