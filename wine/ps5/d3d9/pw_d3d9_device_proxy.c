@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_device_proxy.h"
+#include "pw_d3d9_guest_fullscreen.h"
 #include "pw_d3d9_api_observe.h"
 #ifdef PW_D3D9_ENABLE_METHODS
 #include "pw_d3d9_device_methods.h"
@@ -45,7 +46,8 @@ struct guest_window {
 };
 struct device_proxy {
     IDirect3DDevice9 iface;
-    LONG references,failed;
+    LONG references,failed,window_transition;
+    struct pw_d3d9_guest_fullscreen fullscreen;
     IDirect3D9 *parent;
     struct pw_d3d9_session *session;
     struct pw_d3d9_object_ref remote;
@@ -218,11 +220,18 @@ static HRESULT WINAPI reset(IDirect3DDevice9 *iface,D3DPRESENT_PARAMETERS *param
     struct device_proxy *d=device(iface);struct pw_d3d9_device_request q={.operation=PW_D3D9_DEVICE_RESET};struct pw_d3d9_device_reply r={0};
     if(d->failed)return D3DERR_NOTAVAILABLE;
     if(!parameters_to_wire(&q.parameters,parameters,d->window))return D3DERR_NOTAVAILABLE;
-    addref(iface);HRESULT hr=pw_d3d9_session_device(d->session,d->remote,&q,&r);
+    if(GetWindowThreadProcessId(d->window->guest,NULL)!=GetCurrentThreadId())return D3DERR_INVALIDCALL;
+    addref(iface);
+    if(InterlockedCompareExchange(&d->window_transition,1,0)){release(iface);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
+    HRESULT hr=pw_d3d9_session_device(d->session,d->remote,&q,&r);
     if(r.operation==q.operation&&!parameters_from_wire(parameters,&r.parameters,d->window)){
         hr=E_FAIL;pw_d3d9_session_cancel(d->session);pw_d3d9_session_join(d->session);
     }
-    release(iface);return hr;
+    if(SUCCEEDED(hr)){
+        HRESULT applied=pw_d3d9_guest_fullscreen_update(&d->fullscreen,d->window->guest,parameters->Windowed);
+        if(FAILED(applied)){hr=applied;InterlockedExchange(&d->failed,1);pw_d3d9_session_cancel(d->session);}
+    }
+    InterlockedExchange(&d->window_transition,0);release(iface);return hr;
 }
 static HRESULT WINAPI present(IDirect3DDevice9 *iface,const RECT *source,const RECT *destination,HWND override,const RGNDATA *dirty)
 {
@@ -446,6 +455,10 @@ HRESULT pw_d3d9_device_proxy_create(IDirect3D9 *parent,struct pw_d3d9_session *s
     hr=pw_d3d9_session_device(session,parent_ref,&q,&r);
     if(r.operation==q.operation&&!parameters_from_wire(parameters,&r.parameters,d->window)){
         hr=E_FAIL;pw_d3d9_session_cancel(d->session);pw_d3d9_session_join(d->session);
+    }
+    if(SUCCEEDED(hr)){
+        HRESULT applied=pw_d3d9_guest_fullscreen_update(&d->fullscreen,guest,parameters->Windowed);
+        if(FAILED(applied)){hr=applied;pw_d3d9_session_cancel(session);pw_d3d9_session_join(session);}
     }
     if(FAILED(hr)){
         if(!release_window(d->window,session)){OutputDebugStringA("PW_D3D9: retaining failed creation cleanup\n");return hr;}

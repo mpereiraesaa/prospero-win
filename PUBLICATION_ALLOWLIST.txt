@@ -856,3 +856,7 @@ wine/ps5/d3d9/pw_d3d9_api_observe.h
 wine/ps5/d3d9/pw_d3d9_api_observe_generated.h
 tests/lab/d3d9_api_observe.c
 tests/lab/d3d9_api_observe.py
+wine/ps5/d3d9/pw_d3d9_guest_fullscreen.h
+tests/lab/d3d9_guest_fullscreen.c
+tests/lab/d3d9_guest_fullscreen.py
+docs/d3d9-guest-fullscreen.md
