@@ -130,6 +130,18 @@ int main(void)
     assert(pw_d3d9_object_complete(&t, a));
     assert(pw_d3d9_object_take_destroy(&t, a, &context));
     assert(pw_d3d9_object_finish_destroy(&t, a));
+    /* Last owner at public zero needs no queued completion to retire. */
+    assert(pw_d3d9_objects_init(&t, slots, 1, 7, 12));
+    assert(pw_d3d9_object_reserve(&t, &a));
+    assert(pw_d3d9_object_commit(&t, a, 100, high, 6));
+    assert(pw_d3d9_object_owner_hold(&t, a));
+    assert(pw_d3d9_object_release(&t, a));
+    assert(pw_d3d9_object_owner_drop(&t, a));
+    assert(!pw_d3d9_object_lookup(&t, 7, 12, a));
+    assert(pw_d3d9_object_take_destroy(&t, a, &context));
+    assert(context == high);
+    assert(!pw_d3d9_object_take_destroy(&t, a, &context));
+    assert(pw_d3d9_object_finish_destroy(&t, a));
     puts("D3D9 identity/lifetime registry: PASS");
     return 0;
 }
