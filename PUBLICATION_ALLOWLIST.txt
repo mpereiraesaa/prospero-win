@@ -563,6 +563,10 @@ wine/ps5/d3d9/pw_d3d9_up_client.c
 tests/lab/d3d9_up_client.c
 tests/lab/d3d9_up_client.py
 docs/d3d9-up-client.md
+wine/ps5/pw_d3d9_cursor_wire.h
+wine/ps5/pw_d3d9_cursor_wire.c
+tests/test_d3d9_cursor_wire.c
+docs/d3d9-cursor-wire.md
 tests/test_d3d9_objects.c
 docs/d3d9-object-lifetime.md
 wine/ps5/pw_d3d9_window.c
