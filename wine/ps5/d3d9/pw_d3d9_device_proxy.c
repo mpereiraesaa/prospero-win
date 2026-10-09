@@ -120,9 +120,32 @@ void pw_d3d9_device_proxy_detach(void)
 {if(helper_class&&!windows)UnregisterClassW(helper_name,module);}
 static struct device_proxy *device(IDirect3DDevice9 *iface){return (struct device_proxy *)iface;}
 static ULONG WINAPI addref(IDirect3DDevice9 *iface){return (ULONG)InterlockedIncrement(&device(iface)->references);}
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+static void implicit_failure(struct device_proxy *d)
+{InterlockedExchange(&d->failed,1);pw_d3d9_session_cancel(d->session);}
+static HRESULT implicit_call(struct device_proxy *d,const struct pw_d3d9_implicit_request *q,struct pw_d3d9_implicit_reply *r)
+{
+    HRESULT hr=pw_d3d9_session_implicit(d->session,d->remote,q,r);
+    if(r->operation!=q->operation||r->hresult!=(uint32_t)hr){implicit_failure(d);return E_FAIL;}
+    return hr;
+}
+#endif
 static void cleanup_device(void *parameter)
 {
     struct device_proxy *d=parameter;
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+    /* The private reference sentinel stays alive through all child callbacks. */
+    if(pw_d3d9_session_in_callback()){
+        d->cleanup.function=cleanup_device;d->cleanup.context=d;
+        if(FAILED(pw_d3d9_session_defer(d->session,&d->cleanup)))implicit_failure(d);
+        return;
+    }
+    HRESULT disposed=pw_d3d9_texture_proxy_owners_dispose(&d->iface);
+    struct pw_d3d9_implicit_request q={.operation=PW_D3D9_IMPLICIT_DRAIN};
+    struct pw_d3d9_implicit_reply r={0};
+    HRESULT drained=implicit_call(d,&q,&r);
+    if(FAILED(disposed)||FAILED(drained)){implicit_failure(d);pw_d3d9_session_join(d->session);}
+#endif
     if(FAILED(pw_d3d9_session_release(d->session,d->remote))){pw_d3d9_session_cancel(d->session);pw_d3d9_session_join(d->session);}
     if(!release_window(d->window,d->session)){
         OutputDebugStringA("PW_D3D9: guest registration cleanup failed; retaining proxy ownership\n");return;
@@ -131,7 +154,12 @@ static void cleanup_device(void *parameter)
 }
 static ULONG WINAPI release(IDirect3DDevice9 *iface)
 {
-    struct device_proxy *d=device(iface);ULONG refs=(ULONG)InterlockedDecrement(&d->references);
+    struct device_proxy *d=device(iface);
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+    ULONG refs=pw_d3d9_texture_proxy_parent_release(iface,&d->references);
+    if(!refs){cleanup_device(d);return 0;}
+#else
+    ULONG refs=(ULONG)InterlockedDecrement(&d->references);
     if(!refs){
         HRESULT hr=pw_d3d9_session_release(d->session,d->remote);
         if(hr==RPC_E_CANTCALLOUT_ININPUTSYNCCALL){
@@ -142,6 +170,7 @@ static ULONG WINAPI release(IDirect3DDevice9 *iface)
         if(!release_window(d->window,d->session)){OutputDebugStringA("PW_D3D9: retaining failed owner cleanup\n");return 0;}
         IDirect3D9 *parent=d->parent;HeapFree(GetProcessHeap(),0,d);IDirect3D9_Release(parent);
     }
+    #endif
     return refs;
 }
 static HRESULT WINAPI query(IDirect3DDevice9 *iface,REFIID iid,void **out)
@@ -223,14 +252,48 @@ static HRESULT WINAPI reset(IDirect3DDevice9 *iface,D3DPRESENT_PARAMETERS *param
     if(GetWindowThreadProcessId(d->window->guest,NULL)!=GetCurrentThreadId())return D3DERR_INVALIDCALL;
     addref(iface);
     if(InterlockedCompareExchange(&d->window_transition,1,0)){release(iface);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+    HRESULT hr;
+    if(pw_d3d9_session_in_callback()){hr=RPC_E_CANTCALLOUT_ININPUTSYNCCALL;goto reset_done;}
+    struct pw_d3d9_implicit_request prepare={.operation=PW_D3D9_IMPLICIT_PREPARE};
+    struct pw_d3d9_implicit_reply control={0};UINT count=0;
+    hr=pw_d3d9_texture_proxy_owners_prepare_reset(iface,prepare.objects,PW_D3D9_IMPLICIT_MAX,&count);
+    if(FAILED(hr))goto reset_done;
+    prepare.count=count;hr=implicit_call(d,&prepare,&control);
+    if(FAILED(hr)){pw_d3d9_texture_proxy_owners_finish_reset(iface,TRUE);goto reset_done;}
+    hr=pw_d3d9_session_device(d->session,d->remote,&q,&r);
+    if(r.operation!=q.operation||r.hresult!=(uint32_t)hr||!parameters_from_wire(parameters,&r.parameters,d->window)){
+        pw_d3d9_texture_proxy_owners_finish_reset(iface,TRUE);implicit_failure(d);hr=E_FAIL;goto reset_done;
+    }
+    struct pw_d3d9_implicit_request finish={.operation=PW_D3D9_IMPLICIT_FINISH};
+    memset(&control,0,sizeof(control));HRESULT finished=implicit_call(d,&finish,&control);
+    if(FAILED(finished)){
+        pw_d3d9_texture_proxy_owners_finish_reset(iface,TRUE);implicit_failure(d);
+        if(SUCCEEDED(hr))hr=finished;
+        goto reset_done;
+    }
+    BOOL restored=control.disposition==PW_D3D9_IMPLICIT_RESTORED;
+    if(!restored&&control.disposition!=PW_D3D9_IMPLICIT_RETIRED){
+        pw_d3d9_texture_proxy_owners_finish_reset(iface,TRUE);implicit_failure(d);hr=E_FAIL;goto reset_done;
+    }
+    pw_d3d9_texture_proxy_owners_finish_reset(iface,restored);
+    if(!restored){
+        HRESULT installed=pw_d3d9_texture_proxy_owners_install(iface,control.objects,control.count);
+        if(FAILED(installed)){implicit_failure(d);if(SUCCEEDED(hr))hr=installed;goto reset_done;}
+    }
+#else
     HRESULT hr=pw_d3d9_session_device(d->session,d->remote,&q,&r);
     if(r.operation==q.operation&&!parameters_from_wire(parameters,&r.parameters,d->window)){
         hr=E_FAIL;pw_d3d9_session_cancel(d->session);pw_d3d9_session_join(d->session);
     }
+#endif
     if(SUCCEEDED(hr)){
         HRESULT applied=pw_d3d9_guest_fullscreen_update(&d->fullscreen,d->window->guest,parameters->Windowed);
         if(FAILED(applied)){hr=applied;InterlockedExchange(&d->failed,1);pw_d3d9_session_cancel(d->session);}
     }
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+reset_done:
+#endif
     InterlockedExchange(&d->window_transition,0);release(iface);return hr;
 }
 static HRESULT WINAPI present(IDirect3DDevice9 *iface,const RECT *source,const RECT *destination,HWND override,const RGNDATA *dirty)
@@ -456,11 +519,24 @@ HRESULT pw_d3d9_device_proxy_create(IDirect3D9 *parent,struct pw_d3d9_session *s
     if(r.operation==q.operation&&!parameters_from_wire(parameters,&r.parameters,d->window)){
         hr=E_FAIL;pw_d3d9_session_cancel(d->session);pw_d3d9_session_join(d->session);
     }
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+    if(SUCCEEDED(hr)){
+        d->iface.lpVtbl=(IDirect3DDevice9Vtbl *)observed_vtable;d->references=1;d->remote=r.object;
+        struct pw_d3d9_implicit_request list={.operation=PW_D3D9_IMPLICIT_LIST};
+        struct pw_d3d9_implicit_reply owners={0};HRESULT listed=implicit_call(d,&list,&owners);
+        if(SUCCEEDED(listed))listed=pw_d3d9_texture_proxy_owners_install(&d->iface,owners.objects,owners.count);
+        if(FAILED(listed)){hr=listed;implicit_failure(d);pw_d3d9_session_join(session);}
+    }
+#endif
     if(SUCCEEDED(hr)){
         HRESULT applied=pw_d3d9_guest_fullscreen_update(&d->fullscreen,guest,parameters->Windowed);
         if(FAILED(applied)){hr=applied;pw_d3d9_session_cancel(session);pw_d3d9_session_join(session);}
     }
     if(FAILED(hr)){
+#ifdef PW_D3D9_ENABLE_IMPLICIT
+        /* No published shell exists, but a successful LIST may have installed owners. */
+        if(FAILED(pw_d3d9_texture_proxy_owners_dispose(&d->iface))){implicit_failure(d);pw_d3d9_session_join(session);}
+#endif
         if(!release_window(d->window,session)){OutputDebugStringA("PW_D3D9: retaining failed creation cleanup\n");return hr;}
         IDirect3D9_Release(parent);HeapFree(GetProcessHeap(),0,d);return hr;
     }

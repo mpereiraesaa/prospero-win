@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""Controlled lifecycle proof through the shipping device frontend."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+
+p=argparse.ArgumentParser(description=__doc__)
+p.add_argument('--wine-build',type=Path,required=True)
+p.add_argument('--prefix',type=Path,required=True)
+p.add_argument('--output',type=Path,required=True)
+a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
+root=Path(__file__).resolve().parents[2];source=Path(__file__).with_suffix('.c')
+r={'status':'running','scope':'Actual PE32/PE64 shipping device frontend with controlled session/owner callbacks and real USER windows; no native backend acceptance','commands':[],'sources':{}}
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+for f in [source,Path(__file__),root/'wine/ps5/d3d9/pw_d3d9_device_proxy.c',*sorted((root/'wine/ps5').rglob('*.h'))]:r['sources'][str(f)]=sha(f)
+try:
+ for arch in ['i686','x86_64']:
+  exe=out/(arch+'.exe');commands=[['%s-w64-mingw32-gcc'%arch,'-std=c11','-O2','-Wall','-Wextra','-Werror','-Wno-cast-function-type',str(source),'-luser32','-luuid','-ldxguid','-o',str(exe)],[str(a.wine_build.resolve()/'loader/wine'),str(exe)]]
+  for i,cmd in enumerate(commands):
+   env=os.environ.copy();env.update(WINEPREFIX=str(a.prefix.resolve()),WINEDEBUG='-all',WINEDLLOVERRIDES='mscoree,mshtml=')
+   with (out/(arch+'-'+str(i)+'.log')).open('w') as log:result=subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT,env=env,timeout=90)
+   r['commands'].append({'command':cmd,'exit':result.returncode})
+   if result.returncode:raise RuntimeError(arch+' phase '+str(i)+' exit '+str(result.returncode))
+  assert 'PW_IMPLICIT_FRONTEND PASS' in (out/(arch+'-1.log')).read_text()
+  r[arch]=sha(exe)
+ for f,h in r['sources'].items():assert sha(Path(f))==h,f
+ r['status']='pass'
+except BaseException as e:
+ r['status']='timeout' if isinstance(e,subprocess.TimeoutExpired) else 'failed';r['error']=str(e);raise
+finally:(out/'receipt.json').write_text(json.dumps(r,indent=2)+'\n')

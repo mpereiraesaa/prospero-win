@@ -868,3 +868,6 @@ wine/ps5/pw_d3d9_implicit_wire.c
 wine/ps5/pw_d3d9_implicit_wire.h
 tests/test_d3d9_implicit_wire.c
 docs/d3d9-implicit-wire.md
+docs/d3d9-implicit-frontend.md
+tests/lab/d3d9_implicit_frontend.c
+tests/lab/d3d9_implicit_frontend.py
