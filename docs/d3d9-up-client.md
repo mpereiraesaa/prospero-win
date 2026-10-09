@@ -1,0 +1,9 @@
+# Typed copied UP draw frontend
+
+The module installs DrawPrimitiveUP and DrawIndexedPrimitiveUP with exact COM signatures. It validates bounded arithmetic, snapshots all vertex/index bytes before the first callback and holds a device reference until completion or abort. An atomic process-wide 64 MiB budget bounds simultaneous snapshots. Native-side storage is independently bounded by the upload assembler. There are no pointers in the transport.
+
+A successful BEGIN assigns a transfer ID. Ordered writes carry at most 4096 bytes each. Failed writes trigger ABORT; failed cleanup reports nonblocking sticky session cancellation so native teardown owns abandoned storage. COMMIT consumes the transfer even when native drawing fails. Every successful reply is matched to operation, exact HRESULT and transfer ID; malformed replies cancel the session. The frontend always frees its snapshot and device pin after the final callback. Zero primitives still invoke the backend through an empty committed transfer.
+
+## Validation
+
+`/tmp/prospero-d3d9-up-client-r2/receipt.json` passed actual PE32 and PE64 controlled-callback fixtures. Tests mutate guest input at BEGIN to prove snapshot independence, upload multiple chunks and an indexed prefix, preserve backend failures, abort partial transfers, reject overflow/null payloads, detect malformed replies and retain the device across reentrant last-reference release. The first runner stopped after a successful PE32 execution because its expected-output label was copied from a prior fixture; corrected r2 completed both architectures. This is frontend evidence; production session and console integration remain separate.
