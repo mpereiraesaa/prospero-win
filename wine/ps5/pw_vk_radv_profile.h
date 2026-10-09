@@ -34,7 +34,7 @@ enum {
     PW_VK_RADV_PROFILE_VERSION = 1,
     PW_VK_RADV_PROFILE_TOP = 12,       /* entries named in a frame line */
     PW_VK_RADV_PROFILE_LINE = 1000,    /* a ps5log record holds 1024 bytes */
-    PW_VK_RADV_PROFILE_DETAIL = 160,
+    PW_VK_RADV_PROFILE_DETAIL = 200,
 };
 
 extern const char *const pw_vk_radv_profile_names[PW_VK_RADV_FUNCTION_COUNT];
