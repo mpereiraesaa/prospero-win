@@ -13,6 +13,9 @@
 #ifdef PW_D3D9_ENABLE_TEXTURE
 #include "pw_d3d9_texture_proxy.h"
 #endif
+#ifdef PW_D3D9_ENABLE_CURSOR
+#include "pw_d3d9_cursor.h"
+#endif
 #ifdef PW_D3D9_ENABLE_QUERY
 #include "pw_d3d9_query_proxy.h"
 #endif
@@ -247,6 +250,13 @@ static HRESULT texture_call(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref re
     release(iface);return hr;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_CURSOR
+static HRESULT cursor_call(IDirect3DDevice9 *iface,const struct pw_d3d9_cursor_request *q,struct pw_d3d9_cursor_reply *r)
+{
+    struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
+    addref(iface);HRESULT hr=pw_d3d9_session_cursor(d->session,d->remote,q,r);release(iface);return hr;
+}
+#endif
 #ifdef PW_D3D9_ENABLE_QUERY
 static HRESULT query_call(IDirect3DDevice9 *iface,struct pw_d3d9_object_ref ref,const struct pw_d3d9_query_request *q,struct pw_d3d9_query_reply *r)
 {
@@ -367,6 +377,9 @@ static BOOL CALLBACK init_vtable(INIT_ONCE *once,void *parameter,void **context)
 #endif
 #ifdef PW_D3D9_ENABLE_TEXTURE
     const struct pw_d3d9_texture_proxy_ops textures={texture_call,release_object,defer_object,fail_device};pw_d3d9_texture_proxy_install(&vtable,&textures);
+#endif
+#ifdef PW_D3D9_ENABLE_CURSOR
+    const struct pw_d3d9_cursor_ops cursor={cursor_call,resolve_object,fail_device};pw_d3d9_cursor_install(&vtable,&cursor);
 #endif
 #ifdef PW_D3D9_ENABLE_QUERY
     const struct pw_d3d9_query_proxy_ops queries={query_call,release_object,defer_object,fail_device};pw_d3d9_query_proxy_install(&vtable,&queries);

@@ -70,6 +70,9 @@ static uint32_t compiled_features(void)
 #ifdef PW_D3D9_ENABLE_QUERY
     mask|=256u;
 #endif
+#ifdef PW_D3D9_ENABLE_CURSOR
+    mask|=512u;
+#endif
     return mask;
 }
 struct descriptor {
@@ -452,6 +455,19 @@ HRESULT pw_d3d9_session_program(struct pw_d3d9_session *s,struct pw_d3d9_object_
     *reply=decoded;return hr;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_CURSOR
+HRESULT pw_d3d9_session_cursor(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_cursor_request *request,struct pw_d3d9_cursor_reply *reply)
+{
+    unsigned char in[32],out[16];size_t bytes;struct pw_d3d9_cursor_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_CURSOR_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_cursor_encode(in,sizeof(in),&bytes,request))return D3DERR_INVALIDCALL;
+    m.payload_bytes=(uint32_t)bytes;HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_cursor_reply_decode(&decoded,out,r.payload_bytes)||decoded.method!=request->method||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
+#endif
 #ifdef PW_D3D9_ENABLE_QUERY
 HRESULT pw_d3d9_session_query(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_query_request *request,struct pw_d3d9_query_reply *reply)
 {
@@ -764,7 +780,11 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             if(pw_d3d9_texture_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_RESOURCE_OK)goto done;
 #endif
 #ifdef PW_D3D9_ENABLE_METHODS
-        }else if(m.opcode==PW_D3D9_COMMAND_CALL||m.opcode==PW_D3D9_GETTER_CALL){
+        }else if(m.opcode==PW_D3D9_COMMAND_CALL||m.opcode==PW_D3D9_GETTER_CALL
+#ifdef PW_D3D9_ENABLE_CURSOR
+                  ||m.opcode==PW_D3D9_CURSOR_CALL
+#endif
+){
             if(m.device!=objects.device||!pw_d3d9_service_methods(&objects,ref,m.opcode,payload,m.payload_bytes,output,sizeof(output),&bytes,&hr))goto done;
 #endif
 #ifdef PW_D3D9_ENABLE_PROGRAM

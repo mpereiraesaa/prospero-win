@@ -24,6 +24,10 @@ HRESULT pw_d3d9_session_getter(struct pw_d3d9_session *,struct pw_d3d9_object_re
 HRESULT pw_d3d9_session_program_query(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_program_query_request *,struct pw_d3d9_program_query_reply *);
 HRESULT pw_d3d9_session_program(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_program_request *,struct pw_d3d9_program_reply *);
 #endif
+#ifdef PW_D3D9_ENABLE_CURSOR
+#include "../pw_d3d9_cursor_wire.h"
+HRESULT pw_d3d9_session_cursor(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_cursor_request *,struct pw_d3d9_cursor_reply *);
+#endif
 #ifdef PW_D3D9_ENABLE_QUERY
 #include "../pw_d3d9_query_wire.h"
 HRESULT pw_d3d9_session_query(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_query_request *,struct pw_d3d9_query_reply *);
