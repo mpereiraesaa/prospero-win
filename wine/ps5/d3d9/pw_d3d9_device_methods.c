@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_device_methods.h"
+#include "../pw_d3d9_command_policy.h"
 #include <string.h>
 /* All copied structures are pointer-free sequences of four-byte fields (palette
  * entries are four individual bytes). These native ABI bounds are checked in
  * both actual PE32 and PE64 builds. */
+_Static_assert((D3DCREATE_SOFTWARE_VERTEXPROCESSING|D3DCREATE_MIXED_VERTEXPROCESSING)==0xa0u,"creation flag normalization");
 _Static_assert(sizeof(float)==4,"float wire layout");
 _Static_assert(sizeof(int)==4,"int wire layout");
 _Static_assert(sizeof(BOOL)==4,"BOOL wire layout");
@@ -30,6 +32,23 @@ static HRESULT get(IDirect3DDevice9 *device,const struct pw_d3d9_getter_request 
  if(r.method!=q->method || r.hresult!=(uint32_t)hr || r.bytes!=bytes){ops.fail(device,E_FAIL);hr=E_FAIL;goto done;}
  if(bytes)memcpy(out,r.data.bytes,bytes);
  done:IDirect3DDevice9_Release(device);return hr;
+}
+/* Creation parameters are the proxy's immutable local snapshot, not a remote
+ * getter. Normalize before touching caller data, as the pinned backend does. */
+static HRESULT set_constants(IDirect3DDevice9 *device,uint32_t method,UINT start,const void *data,UINT count)
+{
+ D3DDEVICE_CREATION_PARAMETERS creation;struct pw_d3d9_command c={0};UINT effective;
+ HRESULT hr=IDirect3DDevice9_GetCreationParameters(device,&creation);
+ if(FAILED(hr))return hr;
+ if(pw_d3d9_command_constant_count(method,start,count,creation.BehaviorFlags,data!=NULL,&effective)!=1)
+  return D3DERR_INVALIDCALL;
+ UINT stride=(method==98||method==113)?4:16;
+ /* Existing bounded transport limitation for large software-mode uploads. */
+ if(effective>PW_D3D9_COMMAND_DATA/stride)return D3DERR_INVALIDCALL;
+ c.method=method;c.args[0]=start;c.args[1]=effective;c.data_bytes=effective*stride;
+ if(stride==4){const BOOL *values=data;for(UINT i=0;i<effective;i++)c.data.words[i]=!!values[i];}
+ else if(c.data_bytes)memcpy(c.data.bytes,data,c.data_bytes);
+ return ops.command(device,&c);
 }
 static HRESULT WINAPI method_TestCooperativeLevel(IDirect3DDevice9 *device)
 {
@@ -85,8 +104,9 @@ static HRESULT WINAPI method_Clear(IDirect3DDevice9 *device, DWORD p0, const D3D
 static HRESULT WINAPI method_SetTransform(IDirect3DDevice9 *device, D3DTRANSFORMSTATETYPE p0, const D3DMATRIX * p1)
 {
  struct pw_d3d9_command c={0};c.method=44;
- if(!p1)return D3DERR_INVALIDCALL;
- c.data_bytes=64;memcpy(c.data.bytes,p1,64);
+ c.data_bytes=64;
+ if(p1)memcpy(c.data.bytes,p1,64);
+ else for(unsigned i=0;i<4;i++)c.data.words[5*i]=0x3f800000u;
  c.args[0]=(uint32_t)p0;
  return ops.command(device,&c);
 }
@@ -250,27 +270,15 @@ static HRESULT WINAPI method_SetVertexShader(IDirect3DDevice9 *device, IDirect3D
 }
 static HRESULT WINAPI method_SetVertexShaderConstantF(IDirect3DDevice9 *device, UINT p0, const float * p1, UINT p2)
 {
- struct pw_d3d9_command c={0};c.method=94;
- if(!p1 || p2>256)return D3DERR_INVALIDCALL;
- c.args[0]=p0;c.args[1]=p2;c.data_bytes=p2*16;
- if(c.data_bytes)memcpy(c.data.bytes,p1,c.data_bytes);
- return ops.command(device,&c);
+ return set_constants(device,94,p0,p1,p2);
 }
 static HRESULT WINAPI method_SetVertexShaderConstantI(IDirect3DDevice9 *device, UINT p0, const int * p1, UINT p2)
 {
- struct pw_d3d9_command c={0};c.method=96;
- if(!p1 || p2>256)return D3DERR_INVALIDCALL;
- c.args[0]=p0;c.args[1]=p2;c.data_bytes=p2*16;
- if(c.data_bytes)memcpy(c.data.bytes,p1,c.data_bytes);
- return ops.command(device,&c);
+ return set_constants(device,96,p0,p1,p2);
 }
 static HRESULT WINAPI method_SetVertexShaderConstantB(IDirect3DDevice9 *device, UINT p0, const BOOL * p1, UINT p2)
 {
- struct pw_d3d9_command c={0};c.method=98;
- if(!p1 || p2>1024)return D3DERR_INVALIDCALL;
- c.args[0]=p0;c.args[1]=p2;c.data_bytes=p2*4;
- for(UINT i=0;i<p2;i++)c.data.words[i]=!!p1[i];
- return ops.command(device,&c);
+ return set_constants(device,98,p0,p1,p2);
 }
 static HRESULT WINAPI method_SetStreamSource(IDirect3DDevice9 *device, UINT p0, IDirect3DVertexBuffer9* p1, UINT p2, UINT p3)
 {
@@ -308,27 +316,15 @@ static HRESULT WINAPI method_SetPixelShader(IDirect3DDevice9 *device, IDirect3DP
 }
 static HRESULT WINAPI method_SetPixelShaderConstantF(IDirect3DDevice9 *device, UINT p0, const float * p1, UINT p2)
 {
- struct pw_d3d9_command c={0};c.method=109;
- if(!p1 || p2>256)return D3DERR_INVALIDCALL;
- c.args[0]=p0;c.args[1]=p2;c.data_bytes=p2*16;
- if(c.data_bytes)memcpy(c.data.bytes,p1,c.data_bytes);
- return ops.command(device,&c);
+ return set_constants(device,109,p0,p1,p2);
 }
 static HRESULT WINAPI method_SetPixelShaderConstantI(IDirect3DDevice9 *device, UINT p0, const int * p1, UINT p2)
 {
- struct pw_d3d9_command c={0};c.method=111;
- if(!p1 || p2>256)return D3DERR_INVALIDCALL;
- c.args[0]=p0;c.args[1]=p2;c.data_bytes=p2*16;
- if(c.data_bytes)memcpy(c.data.bytes,p1,c.data_bytes);
- return ops.command(device,&c);
+ return set_constants(device,111,p0,p1,p2);
 }
 static HRESULT WINAPI method_SetPixelShaderConstantB(IDirect3DDevice9 *device, UINT p0, const BOOL * p1, UINT p2)
 {
- struct pw_d3d9_command c={0};c.method=113;
- if(!p1 || p2>1024)return D3DERR_INVALIDCALL;
- c.args[0]=p0;c.args[1]=p2;c.data_bytes=p2*4;
- for(UINT i=0;i<p2;i++)c.data.words[i]=!!p1[i];
- return ops.command(device,&c);
+ return set_constants(device,113,p0,p1,p2);
 }
 static UINT WINAPI method_GetAvailableTextureMem(IDirect3DDevice9 *device)
 {

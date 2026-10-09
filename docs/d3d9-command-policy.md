@@ -102,3 +102,12 @@ and software creation modes. Live and state-block recording paths both run.
 The native receipt freezes91 inputs and9 successful commands; frontend staged
 copy has a separate90-input,8-command normal/sanitized/PE32/PE64 proof. No
 queued-session or console acceptance is claimed by these family proofs.
+
+The frontend now uses its local GetCreationParameters snapshot to normalize
+constant counts before copying. Effective-zero calls still enter the normal
+command path, preserving ordering and session failure checks; they are not
+local success stubs. BOOL data remains canonicalized. NULL SetTransform input
+becomes the identity matrix, matching pinned ConvertMatrix in live and recorded
+paths. MultiplyTransform and getters are unchanged by this correction.
+The controlled frontend fixture covers all three creation modes, poisoned
+non-NULL pointers with zero effective count and short buffers after clamping.

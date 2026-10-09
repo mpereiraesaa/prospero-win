@@ -4,6 +4,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+static DWORD creation_flags=D3DCREATE_HARDWARE_VERTEXPROCESSING;
+static HRESULT creation_result=S_OK;
+static HRESULT WINAPI local_creation(IDirect3DDevice9 *d,D3DDEVICE_CREATION_PARAMETERS *p)
+{(void)d;memset(p,0,sizeof(*p));p->BehaviorFlags=creation_flags;return creation_result;}
 static unsigned calls,resolves,failures,mode;static LONG device_refs=1;
 static ULONG WINAPI self_addref(IDirect3DDevice9 *d){(void)d;return ++device_refs;}
 static ULONG WINAPI self_release(IDirect3DDevice9 *d){(void)d;return --device_refs;}static uint32_t method,args[6],expected_bytes;
@@ -36,11 +40,22 @@ static HRESULT resolve(IDirect3DDevice9 *device,IUnknown *local,uint32_t kind,st
 }
 static void fail(IDirect3DDevice9 *device,HRESULT hr){assert(device==owner && hr==E_FAIL);failures++;}
 static void setup(unsigned slot){method=slot;memset(args,0,sizeof(args));expected_bytes=0;memset(payload,0xa5,sizeof(payload));}
+static HRESULT invoke_constant(IDirect3DDevice9 *d,unsigned slot,UINT start,const void *data,UINT count)
+{
+ switch(slot){
+ case 94:return IDirect3DDevice9_SetVertexShaderConstantF(d,start,data,count);
+ case 96:return IDirect3DDevice9_SetVertexShaderConstantI(d,start,data,count);
+ case 98:return IDirect3DDevice9_SetVertexShaderConstantB(d,start,data,count);
+ case 109:return IDirect3DDevice9_SetPixelShaderConstantF(d,start,data,count);
+ case 111:return IDirect3DDevice9_SetPixelShaderConstantI(d,start,data,count);
+ default:return IDirect3DDevice9_SetPixelShaderConstantB(d,start,data,count);
+ }
+}
 int main(void)
 {
  IDirect3DDevice9Vtbl table={0};IDirect3DDevice9 device={&table};
  struct pw_d3d9_device_methods_ops callbacks={command,getter,fail,resolve};owner=&device;
- table.AddRef=self_addref;table.Release=self_release;pw_d3d9_device_methods_install(&table,&callbacks);
+ table.AddRef=self_addref;table.Release=self_release;table.GetCreationParameters=local_creation;pw_d3d9_device_methods_install(&table,&callbacks);
  assert(!table.QueryInterface && !table.Reset && !table.Present && !table.CreateTexture);
  {setup(3);
  assert(IDirect3DDevice9_TestCooperativeLevel(&device)==0x1234);
@@ -85,7 +100,8 @@ int main(void)
  expected_bytes=64;
  args[0]=2;
  assert(IDirect3DDevice9_SetTransform(&device,2,v1)==0x1234);
- assert(IDirect3DDevice9_SetTransform(&device,2,NULL)==D3DERR_INVALIDCALL);
+ memset(payload,0,64);for(unsigned i=0;i<4;i++){uint32_t one=0x3f800000;memcpy(payload+20*i,&one,4);}
+ assert(IDirect3DDevice9_SetTransform(&device,2,NULL)==0x1234);
  }
  {setup(46);
  D3DMATRIX v1[1];memset(v1,0xa5,sizeof(v1));
@@ -224,7 +240,7 @@ int main(void)
  assert(IDirect3DDevice9_SetVertexShaderConstantF(&device,2,NULL,2)==D3DERR_INVALIDCALL);
  args[1]=0;expected_bytes=0;
  assert(IDirect3DDevice9_SetVertexShaderConstantF(&device,2,v1,0)==0x1234);
- assert(IDirect3DDevice9_SetVertexShaderConstantF(&device,2,v1,257)==D3DERR_INVALIDCALL);
+ assert(IDirect3DDevice9_SetVertexShaderConstantF(&device,2,v1,8193)==D3DERR_INVALIDCALL);
  }
  {setup(96);
  int v1[1024];memset(v1,0xa5,sizeof(v1));
@@ -233,7 +249,7 @@ int main(void)
  assert(IDirect3DDevice9_SetVertexShaderConstantI(&device,2,NULL,2)==D3DERR_INVALIDCALL);
  args[1]=0;expected_bytes=0;
  assert(IDirect3DDevice9_SetVertexShaderConstantI(&device,2,v1,0)==0x1234);
- assert(IDirect3DDevice9_SetVertexShaderConstantI(&device,2,v1,257)==D3DERR_INVALIDCALL);
+ assert(IDirect3DDevice9_SetVertexShaderConstantI(&device,2,v1,2049)==D3DERR_INVALIDCALL);
  }
  {setup(98);
  BOOL v1[1024];memset(v1,0xa5,sizeof(v1));
@@ -243,7 +259,7 @@ int main(void)
  assert(IDirect3DDevice9_SetVertexShaderConstantB(&device,2,NULL,2)==D3DERR_INVALIDCALL);
  args[1]=0;expected_bytes=0;
  assert(IDirect3DDevice9_SetVertexShaderConstantB(&device,2,v1,0)==0x1234);
- assert(IDirect3DDevice9_SetVertexShaderConstantB(&device,2,v1,1025)==D3DERR_INVALIDCALL);
+ assert(IDirect3DDevice9_SetVertexShaderConstantB(&device,2,v1,2049)==D3DERR_INVALIDCALL);
  }
  {setup(100);
  expected_kind=PW_D3D9_KIND_VERTEX_BUFFER;args[1]=77;args[2]=88;
@@ -492,20 +508,34 @@ int main(void)
  {float out=123;setup(95);args[0]=2;args[1]=0;assert(IDirect3DDevice9_GetVertexShaderConstantF(&device,2,&out,0)==0x1234);assert(out==123);}
  {unsigned before=calls;assert(IDirect3DDevice9_Clear(&device,257,NULL,0,0,0,0)==D3DERR_INVALIDCALL);assert(calls==before);}
  setup(43);assert(IDirect3DDevice9_Clear(&device,0,NULL,0,0,0,0)==0x1234);
- { float values[1024];memset(values,0xa5,sizeof(values));setup(94);args[0]=2;args[1]=256;expected_bytes=4096;
- assert(IDirect3DDevice9_SetVertexShaderConstantF(&device,2,values,256)==0x1234);assert(IDirect3DDevice9_SetVertexShaderConstantF(&device,2,NULL,0)==D3DERR_INVALIDCALL);}
- { int values[1024];memset(values,0xa5,sizeof(values));setup(96);args[0]=2;args[1]=256;expected_bytes=4096;
- assert(IDirect3DDevice9_SetVertexShaderConstantI(&device,2,values,256)==0x1234);assert(IDirect3DDevice9_SetVertexShaderConstantI(&device,2,NULL,0)==D3DERR_INVALIDCALL);}
- { BOOL values[1024];memset(values,0xa5,sizeof(values));setup(98);args[0]=2;args[1]=1024;expected_bytes=4096;
- for(unsigned i=0;i<1024;i++)((uint32_t *)payload)[i]=1;
- assert(IDirect3DDevice9_SetVertexShaderConstantB(&device,2,values,1024)==0x1234);assert(IDirect3DDevice9_SetVertexShaderConstantB(&device,2,NULL,0)==D3DERR_INVALIDCALL);}
- { float values[1024];memset(values,0xa5,sizeof(values));setup(109);args[0]=2;args[1]=256;expected_bytes=4096;
- assert(IDirect3DDevice9_SetPixelShaderConstantF(&device,2,values,256)==0x1234);assert(IDirect3DDevice9_SetPixelShaderConstantF(&device,2,NULL,0)==D3DERR_INVALIDCALL);}
- { int values[1024];memset(values,0xa5,sizeof(values));setup(111);args[0]=2;args[1]=256;expected_bytes=4096;
- assert(IDirect3DDevice9_SetPixelShaderConstantI(&device,2,values,256)==0x1234);assert(IDirect3DDevice9_SetPixelShaderConstantI(&device,2,NULL,0)==D3DERR_INVALIDCALL);}
- { BOOL values[1024];memset(values,0xa5,sizeof(values));setup(113);args[0]=2;args[1]=1024;expected_bytes=4096;
- for(unsigned i=0;i<1024;i++)((uint32_t *)payload)[i]=1;
- assert(IDirect3DDevice9_SetPixelShaderConstantB(&device,2,values,1024)==0x1234);assert(IDirect3DDevice9_SetPixelShaderConstantB(&device,2,NULL,0)==D3DERR_INVALIDCALL);}
+ /* Count normalization runs before reading any caller bytes. */
+ {const unsigned methods[]={94,96,98,109,111,113};const DWORD modes[]={0x40,0x80,0x20};
+ for(unsigned f=0;f<3;f++)for(unsigned m=0;m<6;m++){
+  uint32_t values[1024];memset(values,0xa5,sizeof(values));creation_flags=modes[f];
+  unsigned vertex=m<3,floating=m==0||m==3,stride=(m==2||m==5)?4:16;
+  UINT software=vertex?(floating?8192u:2048u):(floating?224u:16u);
+  UINT hardware=vertex&&f==0?(floating?256u:16u):software;
+  setup(methods[m]);args[0]=software;args[1]=0;
+  assert(invoke_constant(&device,methods[m],software,NULL,0)==0x1234);
+  unsigned before=calls;
+  assert(invoke_constant(&device,methods[m],software+1,NULL,0)==D3DERR_INVALIDCALL);
+  assert(invoke_constant(&device,methods[m],UINT32_MAX,values,1)==D3DERR_INVALIDCALL);
+  assert(invoke_constant(&device,methods[m],0,NULL,1)==D3DERR_INVALIDCALL);assert(calls==before);
+  setup(methods[m]);args[0]=hardware;args[1]=0;
+  /* A poisoned non-NULL address cannot be read when effective count is zero. */
+  assert(invoke_constant(&device,methods[m],hardware,(void *)(uintptr_t)1,software-hardware)==0x1234);
+  setup(methods[m]);args[0]=hardware-1;args[1]=1;expected_bytes=stride;
+  uint32_t one[4]={0xa5a5a5a5,0xa5a5a5a5,0xa5a5a5a5,0xa5a5a5a5};
+  if(stride==4){uint32_t truth=1;memcpy(payload,&truth,4);}
+  assert(invoke_constant(&device,methods[m],hardware-1,one,software-hardware+1)==0x1234);
+  setup(methods[m]);args[0]=0;args[1]=hardware<PW_D3D9_COMMAND_DATA/stride?hardware:PW_D3D9_COMMAND_DATA/stride;expected_bytes=args[1]*stride;
+  if(stride==4)for(unsigned i=0;i<args[1];i++){uint32_t truth=1;memcpy(payload+4*i,&truth,4);}
+  assert(invoke_constant(&device,methods[m],0,values,args[1])==0x1234);
+  if(vertex&&f){before=calls;assert(invoke_constant(&device,methods[m],0,values,PW_D3D9_COMMAND_DATA/stride+1)==D3DERR_INVALIDCALL);assert(calls==before);}
+ }
+ creation_flags=D3DCREATE_HARDWARE_VERTEXPROCESSING;
+ creation_result=E_FAIL;unsigned before=calls;assert(IDirect3DDevice9_SetVertexShaderConstantF(&device,0,NULL,0)==E_FAIL&&calls==before);creation_result=S_OK;
+ }
  { float values[1024];setup(95);args[0]=2;args[1]=256;assert(IDirect3DDevice9_GetVertexShaderConstantF(&device,2,values,256)==0x1234);assert(!memcmp(values,payload,4096));args[1]=0;assert(IDirect3DDevice9_GetVertexShaderConstantF(&device,2,values,0)==0x1234);assert(IDirect3DDevice9_GetVertexShaderConstantF(&device,2,NULL,0)==D3DERR_INVALIDCALL);assert(IDirect3DDevice9_GetVertexShaderConstantF(&device,2,values,257)==D3DERR_INVALIDCALL);}
  { int values[1024];setup(97);args[0]=2;args[1]=256;assert(IDirect3DDevice9_GetVertexShaderConstantI(&device,2,values,256)==0x1234);assert(!memcmp(values,payload,4096));args[1]=0;assert(IDirect3DDevice9_GetVertexShaderConstantI(&device,2,values,0)==0x1234);assert(IDirect3DDevice9_GetVertexShaderConstantI(&device,2,NULL,0)==D3DERR_INVALIDCALL);assert(IDirect3DDevice9_GetVertexShaderConstantI(&device,2,values,257)==D3DERR_INVALIDCALL);}
  { BOOL values[1024];setup(99);args[0]=2;args[1]=1024;assert(IDirect3DDevice9_GetVertexShaderConstantB(&device,2,values,1024)==0x1234);assert(!memcmp(values,payload,4096));args[1]=0;assert(IDirect3DDevice9_GetVertexShaderConstantB(&device,2,values,0)==0x1234);assert(IDirect3DDevice9_GetVertexShaderConstantB(&device,2,NULL,0)==D3DERR_INVALIDCALL);assert(IDirect3DDevice9_GetVertexShaderConstantB(&device,2,values,1025)==D3DERR_INVALIDCALL);}
