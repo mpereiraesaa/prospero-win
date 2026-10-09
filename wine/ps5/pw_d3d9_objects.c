@@ -86,7 +86,22 @@ int pw_d3d9_object_release(struct pw_d3d9_objects *t, struct pw_d3d9_object_ref 
 {
     struct pw_d3d9_object_slot *s = slot(t, r);
     if (!s || s->state != PW_D3D9_LIVE || !s->guest_refs) return 0;
-    if (!--s->guest_refs) s->state = PW_D3D9_RETIRING;
+    if (!--s->guest_refs && !s->owner_refs) s->state = PW_D3D9_RETIRING;
+    return 1;
+}
+int pw_d3d9_object_owner_hold(struct pw_d3d9_objects *t, struct pw_d3d9_object_ref r)
+{
+    struct pw_d3d9_object_slot *s = slot(t, r);
+    if (t->cancelled || !s || s->state != PW_D3D9_LIVE || s->owner_refs == UINT32_MAX)
+        return 0;
+    ++s->owner_refs;
+    return 1;
+}
+int pw_d3d9_object_owner_drop(struct pw_d3d9_objects *t, struct pw_d3d9_object_ref r)
+{
+    struct pw_d3d9_object_slot *s = slot(t, r);
+    if (t->cancelled || !s || s->state != PW_D3D9_LIVE || !s->owner_refs) return 0;
+    if (!--s->owner_refs && !s->guest_refs) s->state = PW_D3D9_RETIRING;
     return 1;
 }
 int pw_d3d9_object_queue(struct pw_d3d9_objects *t, struct pw_d3d9_object_ref r)
@@ -107,7 +122,7 @@ int pw_d3d9_object_take_destroy(struct pw_d3d9_objects *t, struct pw_d3d9_object
                                uintptr_t *context)
 {
     struct pw_d3d9_object_slot *s = slot(t, r);
-    if (!s || !context || s->state != PW_D3D9_RETIRING || s->queued_refs) return 0;
+    if (!s || !context || s->state != PW_D3D9_RETIRING || s->queued_refs || s->owner_refs) return 0;
     *context = s->context; s->state = PW_D3D9_DESTROYING; return 1;
 }
 int pw_d3d9_object_finish_destroy(struct pw_d3d9_objects *t, struct pw_d3d9_object_ref r)
@@ -124,7 +139,7 @@ void pw_d3d9_objects_cancel(struct pw_d3d9_objects *t)
         struct pw_d3d9_object_slot *s = &t->slots[i];
         if (s->state == PW_D3D9_RESERVED) recycle(s);
         else if (s->state == PW_D3D9_LIVE) {
-            s->guest_refs = 0; s->state = PW_D3D9_RETIRING;
+            s->guest_refs = 0; s->owner_refs = 0; s->state = PW_D3D9_RETIRING;
         }
     }
 }

@@ -10,7 +10,7 @@ struct pw_d3d9_object_ref { uint32_t id, generation; };
 enum pw_d3d9_object_state { PW_D3D9_FREE, PW_D3D9_RESERVED, PW_D3D9_LIVE,
     PW_D3D9_RETIRING, PW_D3D9_DESTROYING, PW_D3D9_EXHAUSTED };
 struct pw_d3d9_object_slot {
-    uint32_t generation, guest_refs, kind;
+    uint32_t generation, guest_refs, owner_refs, kind;
     uint64_t queued_refs;
     uintptr_t identity, context;
     enum pw_d3d9_object_state state;
@@ -34,6 +34,12 @@ int pw_d3d9_object_find(const struct pw_d3d9_objects *, uintptr_t identity,
 int pw_d3d9_object_addref(struct pw_d3d9_objects *, struct pw_d3d9_object_ref,
     int returned_reference);
 int pw_d3d9_object_release(struct pw_d3d9_objects *, struct pw_d3d9_object_ref);
+/* Explicit backend owner leases keep an identity callable at guest_refs == 0.
+ * They do not acquire COM refs or parent ownership. The adapter must prove the
+ * backend owner remains alive and release each lease at its actual boundary.
+ * Cancellation consumes all owner leases; do not drop them again afterward. */
+int pw_d3d9_object_owner_hold(struct pw_d3d9_objects *, struct pw_d3d9_object_ref);
+int pw_d3d9_object_owner_drop(struct pw_d3d9_objects *, struct pw_d3d9_object_ref);
 int pw_d3d9_object_queue(struct pw_d3d9_objects *, struct pw_d3d9_object_ref);
 int pw_d3d9_object_complete(struct pw_d3d9_objects *, struct pw_d3d9_object_ref);
 /* take_destroy transfers the local backend-release obligation to the caller.

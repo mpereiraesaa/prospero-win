@@ -26,15 +26,15 @@ failure leaves the reservation for explicit abort and the backend reference
 with the caller. Cancellation invalidates reservations, so late creation cannot
 publish into a stopped session.
 
-Guest and queued-work references are separate. Acquire queued references before
+Guest, explicit backend-owner, and queued-work references are separate. Acquire queued references before
 publishing a command, rolling them back if publication fails. Release each once
-on completion or cancellation. Zero guest references retires the object; queued
-work keeps its backend alive. A newly returned COM reference can revive a
+on completion or cancellation. Zero guest references retires the object only when no backend-owner leases remain;
+queued work keeps a retiring backend alive. A newly returned COM reference can revive a
 retiring object, but ordinary AddRef cannot. The adapter must retain at least one
 owning backend COM reference for the entire registered lifetime and balance
 additional references returned by backend methods.
 
-Once both counts are zero, take_destroy transfers the backend-release obligation
+Once all three counts are zero, take_destroy transfers the backend-release obligation
 exactly once. Perform COM Release outside the registry lock, then finish_destroy
 under the lock. Only finish_destroy or abort recycles an ID. Generations never
 wrap: a slot reaching UINT32_MAX is permanently exhausted after retirement.
@@ -50,3 +50,29 @@ canonical identity, stale targets, reservation failure, reference overflow,
 queued-work retirement, explicit revival, destruction handoff, late creation
 following cancellation, high pointer values, and generation exhaustion. The
 fixture also participates in `make all` and `make sanitize`.
+
+## Explicit backend-owner leases
+
+`pw_d3d9_object_owner_hold` and `pw_d3d9_object_owner_drop` record a proven
+backend ownership relationship. They require a live generation and the adapter
+lock. Holds are bounded by `UINT32_MAX`; a lease cannot revive a retiring or
+destroying entry. A live entry with owner leases remains discoverable and
+queueable at zero guest references, and ordinary AddRef may reacquire a guest
+reference. Dropping the last owner retires an entry only if its guest count is
+also zero. Queued work still delays the destruction handoff. Cancellation
+consumes all owner leases and guest references; callers must not drop those
+leases again. Generation checks reject stale operations even if a later object
+reuses the same backend address.
+
+A lease is registry accounting, not a COM AddRef, a device reference, or proof
+that a native pointer remains valid. The adapter must establish and maintain
+that proof, balance backend storage ownership, and revoke the lease at the
+actual owner boundary. In particular, implicit default surfaces, currently
+bound resources, and texture-owned subresources have distinct ownership rules.
+This change does not install any of those leases in the production adapter or
+implement a Reset transaction. It does not change existing adapters' behavior
+when their owner count remains zero.
+
+The focused fixture covers public-zero lookup and queue admission, public
+reacquisition, owner overflow and underflow, retirement, queued destruction,
+address reuse with a new generation, and cancellation with outstanding work.
