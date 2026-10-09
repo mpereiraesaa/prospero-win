@@ -23,6 +23,17 @@ HRESULT pw_d3d9_session_implicit(struct pw_d3d9_session *,struct pw_d3d9_object_
 #ifdef PW_D3D9_ENABLE_METHODS
 #include "../pw_d3d9_command_wire.h"
 #include "../pw_d3d9_getter_wire.h"
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+#include "pw_d3d9_queue_ticket.h"
+#if !defined(PW_D3D9_ENABLE_BATCH)
+#error Binding tickets require ordered batches
+#endif
+/* Cache-only acquisition while the session admission gate is held. No RPC,
+ * native COM, guest callback or public AddRef. Writes exact typed object words. */
+typedef HRESULT (*pw_d3d9_binding_acquire_fn)(void *,struct pw_d3d9_command *,struct pw_d3d9_queue_ticket *);
+HRESULT pw_d3d9_session_binding(struct pw_d3d9_session *,struct pw_d3d9_object_ref,
+ struct pw_d3d9_command *,pw_d3d9_binding_acquire_fn,void *);
+#endif
 HRESULT pw_d3d9_session_command(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_command *);
 HRESULT pw_d3d9_session_getter(struct pw_d3d9_session *,struct pw_d3d9_object_ref,const struct pw_d3d9_getter_request *,struct pw_d3d9_getter_reply *);
 #endif

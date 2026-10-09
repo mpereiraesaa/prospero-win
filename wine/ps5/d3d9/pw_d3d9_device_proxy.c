@@ -414,6 +414,29 @@ static HRESULT command_call(IDirect3DDevice9 *iface,const struct pw_d3d9_command
     struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
     addref(iface);HRESULT hr=pw_d3d9_session_command(d->session,d->remote,q);release(iface);return hr;
 }
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+struct binding_context {IDirect3DDevice9 *parent;IUnknown *local;uint32_t kind,word;};
+static HRESULT binding_acquire(void *opaque,struct pw_d3d9_command *q,struct pw_d3d9_queue_ticket *ticket)
+{
+    struct binding_context *c=opaque;struct pw_d3d9_object_ref ref={0};HRESULT hr=S_OK;
+    if(c->word>=PW_D3D9_COMMAND_WORDS-1)return D3DERR_INVALIDCALL;
+    if(c->local){
+        if(c->kind==3||c->kind==4)hr=pw_d3d9_buffer_proxy_ticket(c->parent,c->local,c->kind,&ref,ticket);
+        else if(c->kind==5)hr=pw_d3d9_texture_proxy_ticket(c->parent,c->local,c->kind,&ref,ticket);
+        else if(c->kind>=7&&c->kind<=9)hr=pw_d3d9_program_proxy_ticket(c->parent,c->local,c->kind,&ref,ticket);
+        else return D3DERR_INVALIDCALL;
+        if(hr!=S_OK)return hr;
+        if(!ref.id||!ref.generation||!ticket->drop)return E_FAIL;
+    }
+    q->args[c->word]=ref.id;q->args[c->word+1]=ref.generation;return S_OK;
+}
+static HRESULT binding_call(IDirect3DDevice9 *iface,struct pw_d3d9_command *q,IUnknown *local,uint32_t kind,uint32_t word)
+{
+    struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
+    struct binding_context context={iface,local,kind,word};
+    addref(iface);HRESULT hr=pw_d3d9_session_binding(d->session,d->remote,q,binding_acquire,&context);release(iface);return hr;
+}
+#endif
 static HRESULT getter_call(IDirect3DDevice9 *iface,const struct pw_d3d9_getter_request *q,struct pw_d3d9_getter_reply *r)
 {
     struct device_proxy *d=device(iface);if(d->failed)return D3DERR_NOTAVAILABLE;
@@ -470,6 +493,9 @@ static BOOL CALLBACK init_vtable(INIT_ONCE *once,void *parameter,void **context)
     vtable.Reset=reset;vtable.Present=present;
 #ifdef PW_D3D9_ENABLE_METHODS
     const struct pw_d3d9_device_methods_ops methods={command_call,getter_call,fail_device,resolve_object};pw_d3d9_device_methods_install(&vtable,&methods);
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+    pw_d3d9_device_methods_binding_install(binding_call);
+#endif
 #endif
 #ifdef PW_D3D9_ENABLE_RESOURCE
     const struct pw_d3d9_buffer_proxy_ops buffers={resource_call,release_object,defer_object,fail_device};
