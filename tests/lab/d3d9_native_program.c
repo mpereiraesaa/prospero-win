@@ -45,6 +45,13 @@ static void program(IDirect3DDevice9 *device,uint32_t kind,const unsigned char *
   }
   assert(size==count);for(i=0;i<count/4;i++){unsigned char value[4];put(value,copied[i]);assert(!memcmp(value,bytes+4*i,4));}
  }
+ {
+  struct pw_d3d9_native_program *adopted=NULL;IUnknown *owned=pw_d3d9_native_program_backend(p);
+  IUnknown_AddRef(owned);assert(pw_d3d9_native_program_adopt(device,kind,owned,&adopted)==S_OK&&adopted);
+  assert(pw_d3d9_native_program_identity(adopted)==pw_d3d9_native_program_identity(p));
+  pw_d3d9_native_program_destroy(adopted);
+  IUnknown_AddRef(owned);assert(pw_d3d9_native_program_adopt(device,999,owned,&adopted)==(uint32_t)D3DERR_INVALIDCALL&&!adopted);
+ }
  pw_d3d9_native_program_destroy(p);printf("PW_NATIVE_PROGRAM kind=%u bytes=%u pass=1\n",kind,(unsigned)count);
 }
 int wmain(int argc,WCHAR **argv)

@@ -29,3 +29,11 @@ The fixture also rejects a truncated program before backend creation. Receipts
 record source, executable and backend hashes. This proves the native helper and
 copied payload path; production PE32 COM proxies and console game compatibility
 are separate integration gates.
+
+Object-returning getters may expose implicit FVF declarations or objects kept
+alive by native bindings after the last guest reference. The adopt entry point
+consumes one owned backend reference on every path, queries the exact interface,
+and verifies the actual GetDevice result before publishing a local context.
+It retains the GetDevice reference as parent ownership. The registry must still
+deduplicate canonical identity. The real fixture checks adoption, canonical
+identity equality and rejection of an unsupported kind for each object type.
