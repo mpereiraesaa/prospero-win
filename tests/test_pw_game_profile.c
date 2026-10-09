@@ -486,7 +486,7 @@ static void test_debug_env(void)
     }
     /* The title's environment has room for every profile variable at once. */
     assert(PW_GAME_DEBUG_ENV_MAX == 5);
-    assert(6 + 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX +
+    assert(7 + 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX +
            PW_GAME_CPU_ENV_MAX + PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX == PW_WINE_START_MAX_ENV);
 }
 

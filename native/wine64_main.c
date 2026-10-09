@@ -895,7 +895,8 @@ static int start_thread(void (*entry)(void *), void *arg, size_t stack_bytes)
 int main(int argc, char **argv)
 {
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
-    enum { WINE64_FIXED_ENV_COUNT = 6,
+    static char radv_cache[PW_WINE_LIBRARY_PATH + 16];
+    enum { WINE64_FIXED_ENV_COUNT = 7,
            WINE64_PROFILE_ENV_CAPACITY = 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX + PW_GAME_CPU_ENV_MAX +
                                          PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
@@ -907,6 +908,13 @@ int main(int argc, char **argv)
         { "USER", "prospero" },
         { "WINE_PS5_TRACE_STARTUP", "1" },  /* patch 0560: name startup steps */
         { "WINE_PS5_VIEW", view },          /* patch 0430: the game's windows, or the desktop */
+        /* RADV's shader cache. The driver's PS5 layer would put it under
+         * /app0, which this title cannot write, and then run without one:
+         * every launch compiled every pipeline again (2 s of compiles in
+         * the first 100 s of GTA San Andreas, in 25-50 ms frames). The
+         * driver keeps the first value, so this must be set before it
+         * starts; a profile's [debug] env line still overrides it. */
+        { "MESA_SHADER_CACHE_DIR", radv_cache },
         { NULL, NULL }, { NULL, NULL }, { NULL, NULL }, { NULL, NULL }, /* profile-specific environment */
     };
     _Static_assert(sizeof(extra) / sizeof(extra[0]) ==
@@ -974,6 +982,7 @@ int main(int argc, char **argv)
         snprintf(prefix, sizeof(prefix), "%s/prefixes/%s", library_root, game->app.prefix);
     else
         snprintf(prefix, sizeof(prefix), "%s/prefix", library_root);
+    snprintf(radv_cache, sizeof(radv_cache), "%s/cache/radv", library_root);
     if (game) {
         int input_status = pw_wine_library_input(game, library_root, &game_input);
         scaling = (int)game->display.scaling;
