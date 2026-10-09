@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_session.h"
+#ifdef PW_D3D9_ENABLE_PROGRAM
+#include "pw_d3d9_service_program.h"
+#endif
 #ifdef PW_D3D9_ENABLE_METHODS
 #include "pw_d3d9_service_methods.h"
 #endif
@@ -361,6 +364,19 @@ HRESULT pw_d3d9_session_getter(struct pw_d3d9_session *s,struct pw_d3d9_object_r
     *reply=decoded;return hr;
 }
 #endif
+#ifdef PW_D3D9_ENABLE_PROGRAM
+HRESULT pw_d3d9_session_program(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_program_request *request,struct pw_d3d9_program_reply *reply)
+{
+    unsigned char in[PW_D3D9_PROGRAM_WIRE_MAX],out[32];size_t bytes;struct pw_d3d9_program_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_PROGRAM_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_program_encode(in,sizeof(in),&bytes,request)!=PW_D3D9_PROGRAM_OK)return D3DERR_INVALIDCALL;
+    m.payload_bytes=(uint32_t)bytes;HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_program_reply_decode(&decoded,out,r.payload_bytes)!=PW_D3D9_PROGRAM_OK||decoded.operation!=request->operation||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
+#endif
 HRESULT pw_d3d9_session_release(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref)
 {
     struct pw_d3d9_message m={.opcode=PW_D3D9_RELEASE,.device=1,.object=ref.id,.generation=ref.generation},r;
@@ -418,8 +434,15 @@ static int destroy_objects(struct pw_d3d9_objects *objects)
 #ifdef PW_D3D9_ENABLE_RESOURCE
             else if(objects->slots[n].kind==PW_D3D9_KIND_VERTEX_BUFFER||objects->slots[n].kind==PW_D3D9_KIND_INDEX_BUFFER){if(FAILED(pw_d3d9_service_resource_destroy(objects,context)))okay=0;}
 #endif
+#ifdef PW_D3D9_ENABLE_PROGRAM
+            else if(objects->slots[n].kind>=7&&objects->slots[n].kind<=9){if(FAILED(pw_d3d9_service_program_destroy(objects,context)))okay=0;}
+#endif
 #ifdef PW_D3D9_ENABLE_DEVICE
-            else if(objects->slots[n].kind==2){if(!pw_d3d9_native_device_destroy((void *)context))okay=0;}
+            else if(objects->slots[n].kind==2){
+#ifdef PW_D3D9_ENABLE_PROGRAM
+                pw_d3d9_service_program_retire(objects,ref);
+#endif
+                if(!pw_d3d9_native_device_destroy((void *)context))okay=0;}
             else okay=0;
 #endif
             pw_d3d9_object_finish_destroy(objects,ref);
@@ -522,6 +545,9 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             memcpy(output,hello,32);bytes=32;
         }else if(m.opcode==PW_D3D9_STOP){
             if(m.device||m.object||m.payload_bytes)goto done;
+#ifdef PW_D3D9_ENABLE_PROGRAM
+            pw_d3d9_service_program_shutdown(&objects);
+#endif
             pw_d3d9_objects_cancel(&objects);
             if(!destroy_objects(&objects))goto done;
 #ifdef PW_D3D9_ENABLE_DEVICE
@@ -586,6 +612,13 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
         }else if(m.opcode==PW_D3D9_COMMAND_CALL||m.opcode==PW_D3D9_GETTER_CALL){
             if(m.device!=objects.device||!pw_d3d9_service_methods(&objects,ref,m.opcode,payload,m.payload_bytes,output,sizeof(output),&bytes,&hr))goto done;
 #endif
+#ifdef PW_D3D9_ENABLE_PROGRAM
+        }else if(m.opcode==PW_D3D9_PROGRAM_CALL){
+            struct pw_d3d9_program_request request;struct pw_d3d9_program_reply reply;
+            if(m.device!=objects.device||pw_d3d9_program_decode(&request,payload,m.payload_bytes)!=PW_D3D9_PROGRAM_OK)goto done;
+            pw_d3d9_service_program_call(&objects,ref,&request,&reply);hr=(HRESULT)reply.hresult;
+            if(pw_d3d9_program_reply_encode(output,sizeof(output),&bytes,&reply)!=PW_D3D9_PROGRAM_OK)goto done;
+#endif
         }else goto done;
         m.sequence=0;m.result=hr;m.payload_bytes=(uint32_t)bytes;
         if(send_wake(&ipc,&m,output)!=PW_D3D9_OK)goto done;
@@ -594,7 +627,12 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
     }
  done:
     if(error)cancel_ipc(&ipc);
-    if(objects_ready){pw_d3d9_objects_cancel(&objects);destroy_objects(&objects);}
+    if(objects_ready){
+#ifdef PW_D3D9_ENABLE_PROGRAM
+        pw_d3d9_service_program_shutdown(&objects);
+#endif
+        pw_d3d9_objects_cancel(&objects);destroy_objects(&objects);
+    }
 #ifdef PW_D3D9_ENABLE_DEVICE
     if(!pw_d3d9_native_device_shutdown())error=3;
 #endif

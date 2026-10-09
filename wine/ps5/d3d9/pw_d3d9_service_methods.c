@@ -1,12 +1,20 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_d3d9_service_methods.h"
+#ifdef PW_D3D9_ENABLE_PROGRAM
+#include "pw_d3d9_service_program.h"
+#endif
 #include "pw_d3d9_service_resource.h"
 #include "pw_d3d9_session.h"
 #include "pw_d3d9_native_command.h"
 #include "pw_d3d9_native_getter.h"
 #include "../pw_d3d9_bridge_wire.h"
 static HRESULT acquire(void *context,uint32_t id,uint32_t generation,uint32_t kind,IDirect3DDevice9 *device,void **out)
-{return pw_d3d9_service_resource_acquire(context,(struct pw_d3d9_object_ref){id,generation},kind,device,out);}
+{
+#ifdef PW_D3D9_ENABLE_PROGRAM
+ if(kind>=7&&kind<=9)return pw_d3d9_service_program_acquire(context,(struct pw_d3d9_object_ref){id,generation},kind,device,out);
+#endif
+ return pw_d3d9_service_resource_acquire(context,(struct pw_d3d9_object_ref){id,generation},kind,device,out);
+}
 int pw_d3d9_service_methods(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref ref,
  uint32_t opcode,const void *input,size_t input_bytes,void *output,size_t capacity,size_t *bytes,HRESULT *hr)
 {

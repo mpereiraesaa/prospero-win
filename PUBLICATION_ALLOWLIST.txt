@@ -646,6 +646,9 @@ wine/ps5/pw_d3d9_resource_wire.h
 wine/ps5/pw_d3d9_resource_wire.c
 tests/test_d3d9_resource_wire.c
 docs/d3d9-resource-wire.md
+wine/ps5/d3d9/pw_d3d9_service_program.c
+wine/ps5/d3d9/pw_d3d9_service_program.h
+tests/lab/d3d9_service_program.c
 wine/ps5/d3d9/pw_d3d9_service_methods.c
 wine/ps5/d3d9/pw_d3d9_service_methods.h
 tests/lab/d3d9_service_methods.c
