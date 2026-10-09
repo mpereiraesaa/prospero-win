@@ -719,6 +719,11 @@ wine/ps5/d3d9/pw_d3d9_staging.c
 wine/ps5/d3d9/pw_d3d9_staging.h
 wine/ps5/d3d9/pw_d3d9_texture_client.c
 wine/ps5/d3d9/pw_d3d9_texture_client.h
+wine/ps5/d3d9/pw_d3d9_texture_proxy.h
+wine/ps5/d3d9/pw_d3d9_texture_proxy.c
+tests/lab/d3d9_texture_proxy.c
+tests/lab/d3d9_texture_proxy.py
+docs/d3d9-texture-proxy.md
 tests/lab/d3d9_texture_client.c
 tests/lab/d3d9_texture_client.py
 docs/d3d9-texture-client.md
