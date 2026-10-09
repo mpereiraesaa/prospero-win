@@ -30,7 +30,7 @@ static HRESULT exchange(IDirect3DDevice9 *d,struct pw_d3d9_object_ref ref,const 
   else if(id==9 && (q->value==PW_D3D9_CONTAINER_UNKNOWN || q->value==PW_D3D9_CONTAINER_DEVICE)){r->container_kind=PW_D3D9_KIND_DEVICE;id=2;r->levels=0;}
   else {r->hresult=E_NOINTERFACE;return E_NOINTERFACE;}
   refs[id]++;r->object=(struct pw_d3d9_object_ref){id,9};break;
- case PW_D3D9_TEXTURE_DESC:r->levels=id==7?6:1;break;
+ case PW_D3D9_TEXTURE_DESC:r->levels=id==7?6:1;if(q->level>=r->levels){r->hresult=D3DERR_INVALIDCALL;return D3DERR_INVALIDCALL;}break;
  case PW_D3D9_TEXTURE_LOCK:assert(!active[id]);active[id]=1;generation++;r->lock_generation=generation;r->pitch=negative?-16:16;r->rows=2;r->row_bytes=8;r->length=24;break;
  case PW_D3D9_TEXTURE_READ:assert(active[id] && q->lock_generation==generation && !q->offset && q->count==24);r->lock_generation=generation;r->count=24;memcpy(r->data,contents,24);break;
  case PW_D3D9_TEXTURE_WRITE:assert(active[id] && q->lock_generation==generation && !q->offset && q->count==24);memcpy(contents,q->data,24);writes++;break;
@@ -73,9 +73,19 @@ int main(void)
  assert(pw_d3d9_texture_proxy_resolve(&parent,(IUnknown *)t,PW_D3D9_KIND_SURFACE,&resolved)==D3DERR_INVALIDCALL);
  assert(pw_d3d9_texture_proxy_resolve(&parent,(IUnknown *)t,PW_D3D9_KIND_TEXTURE_2D,&resolved)==S_OK && resolved.id==7);
  refs[7]++;assert(pw_d3d9_texture_proxy_wrap(&parent,PW_D3D9_KIND_TEXTURE_2D,resolved,0,(void **)&alias)==S_OK && alias==t && refs[7]==1);IDirect3DTexture9_Release(alias);
- assert(IDirect3DTexture9_GetLevelDesc(t,0,&desc)==S_OK && desc.Width==16 && desc.Height==8);
+ {unsigned before=calls;D3DSURFACE_DESC again;
+  assert(IDirect3DTexture9_GetLevelDesc(t,0,&desc)==S_OK && desc.Width==16 && desc.Height==8 && calls==before+1);
+  assert(IDirect3DTexture9_GetLevelDesc(t,0,&again)==S_OK && !memcmp(&desc,&again,sizeof(desc)) && calls==before+1);
+  assert(IDirect3DTexture9_GetLevelDesc(t,1,&again)==S_OK && calls==before+2);
+  assert(IDirect3DTexture9_GetLevelDesc(t,1,&again)==S_OK && calls==before+2);
+  assert(IDirect3DTexture9_GetLevelDesc(t,0,NULL)==D3DERR_INVALIDCALL && calls==before+2);
+  memset(&again,0xa5,sizeof(again));
+  assert(IDirect3DTexture9_GetLevelDesc(t,6,&again)==D3DERR_INVALIDCALL && again.Width==0xa5a5a5a5 && calls==before+3);
+  assert(IDirect3DTexture9_GetLevelDesc(t,6,&again)==D3DERR_INVALIDCALL && calls==before+4);
+ }
  assert(IDirect3DTexture9_GetSurfaceLevel(t,2,&s)==S_OK && IDirect3DSurface9_GetType(s)==D3DRTYPE_SURFACE);
  assert(IDirect3DSurface9_GetDesc(s,&desc)==S_OK && desc.Format==D3DFMT_A8R8G8B8);
+ {unsigned before=calls;assert(IDirect3DSurface9_GetDesc(s,&desc)==S_OK && calls==before+1);}
  assert(IDirect3DSurface9_GetContainer(s,&IID_IDirect3DTexture9,(void **)&alias)==S_OK && alias==t && refs[7]==1);IDirect3DTexture9_Release(alias);
  assert(IDirect3DSurface9_GetContainer(s,&IID_IUnknown,(void **)&u)==S_OK && u==(IUnknown *)t);IUnknown_Release(u);
  assert(IDirect3DSurface9_GetContainer(s,&IID_IDirect3DDevice9,(void **)&owner)==E_NOINTERFACE && !owner);
@@ -98,7 +108,9 @@ int main(void)
   assert(IDirect3DTexture9_UnlockRect(t,2)==S_OK && contents[(negative?16:0)+2]==0x77 && writes==1 && !pw_d3d9_staging_bytes());
   assert(IDirect3DSurface9_LockRect(s,&lock,NULL,D3DLOCK_READONLY)==S_OK);assert(IDirect3DSurface9_UnlockRect(s)==S_OK && writes==1);
  }
- fail_operation=PW_D3D9_TEXTURE_DESC;memset(&desc,0xa5,sizeof(desc));assert(IDirect3DTexture9_GetLevelDesc(t,0,&desc)==D3DERR_INVALIDCALL && desc.Width==0xa5a5a5a5);fail_operation=0;
+ fail_operation=PW_D3D9_TEXTURE_DESC;memset(&desc,0xa5,sizeof(desc));assert(IDirect3DTexture9_GetLevelDesc(t,3,&desc)==D3DERR_INVALIDCALL && desc.Width==0xa5a5a5a5);fail_operation=0;
+ {unsigned before=calls;assert(IDirect3DTexture9_GetLevelDesc(t,3,&desc)==S_OK && calls==before+1);
+  assert(IDirect3DTexture9_GetLevelDesc(t,3,&desc)==S_OK && calls==before+1);}
  assert(IDirect3DTexture9_AddDirtyRect(t,&rect)==S_OK);
  {DWORD data=0x12345678,read=0,n=4;assert(IDirect3DTexture9_SetPrivateData(t,&IID_IUnknown,&data,4,0)==S_OK);assert(IDirect3DTexture9_GetPrivateData(t,&IID_IUnknown,&read,&n)==S_OK && read==data);assert(IDirect3DTexture9_FreePrivateData(t,&IID_IUnknown)==S_OK);}
  assert(IDirect3DDevice9_CreateOffscreenPlainSurface(&parent,16,8,D3DFMT_A8R8G8B8,D3DPOOL_SYSTEMMEM,&off,NULL)==S_OK);

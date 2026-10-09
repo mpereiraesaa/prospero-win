@@ -908,3 +908,4 @@ wine/ps5/d3d9/pw_d3d9_binding_leases.h
 tests/lab/d3d9_binding_leases.c
 tests/lab/d3d9_binding_leases.py
 docs/d3d9-binding-leases.md
+docs/d3d9-description-cache.md

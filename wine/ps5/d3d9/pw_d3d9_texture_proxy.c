@@ -3,9 +3,14 @@
 #include "pw_d3d9_texture_proxy.h"
 #include "pw_d3d9_api_observe.h"
 #include "pw_d3d9_private_data.h"
+/* Texture descriptions are immutable for one native object generation. Keep
+ * surfaces uncached: implicit surfaces can be reconciled across Reset. */
+#define DESC_LEVELS 32u
+struct descriptions {uint32_t valid;struct pw_d3d9_surface_desc level[DESC_LEVELS];};
 struct proxy {
  IUnknown iface;ULONG refs;uint32_t kind,levels,lock_level;LONG busy;unsigned owner,frozen,closed,parent_pin;IDirect3DDevice9 *parent;
  struct pw_d3d9_private_data private_data;struct pw_d3d9_texture_client client;struct pw_d3d9_deferred cleanup;struct proxy *next;
+ struct descriptions *descriptions;
 };
 static struct pw_d3d9_texture_proxy_ops ops;
 static SRWLOCK cache_lock=SRWLOCK_INIT;
@@ -39,6 +44,7 @@ static void free_local(struct proxy *p)
  /* Native retirement/session cancellation already owns the backend unlock. */
  p->client.generation=0;pw_d3d9_texture_client_cancel(&p->client);
  pw_d3d9_private_dispose(&p->private_data);
+ if(p->descriptions)HeapFree(GetProcessHeap(),0,p->descriptions);
  unsigned parent_pin=p->parent_pin;HeapFree(GetProcessHeap(),0,p);if(parent_pin)IDirect3DDevice9_Release(parent);
 }
 static void finish(void *context)
@@ -135,7 +141,29 @@ static HRESULT get_desc(void *iface,UINT level,D3DSURFACE_DESC *out)
  struct proxy *p=impl(iface);struct pw_d3d9_texture_request q={0};struct pw_d3d9_texture_reply r={0};HRESULT hr;
  if(!out)return D3DERR_INVALIDCALL;
  if(!addref(iface))return D3DERR_INVALIDCALL;
- q.operation=PW_D3D9_TEXTURE_DESC;q.level=level;hr=invoke(p,&q,&r);if(SUCCEEDED(hr))describe(out,&r.desc);release(iface);return hr;
+ int cached=0,eligible=p->kind==PW_D3D9_KIND_TEXTURE_2D&&level<DESC_LEVELS;
+ if(eligible){
+  AcquireSRWLockShared(&cache_lock);
+  if(p->descriptions&&(p->descriptions->valid&(1u<<level))){r.desc=p->descriptions->level[level];cached=1;}
+  ReleaseSRWLockShared(&cache_lock);
+ }
+ if(cached){describe(out,&r.desc);release(iface);return S_OK;}
+ q.operation=PW_D3D9_TEXTURE_DESC;q.level=level;hr=invoke(p,&q,&r);
+ if(SUCCEEDED(hr)){
+  if(eligible){
+   /* Allocation failure merely skips caching. No cache lock crosses an RPC,
+    * guest output write or reference retirement. Concurrent misses may query
+    * twice but publish the same immutable native description. */
+   struct descriptions *fresh=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*fresh));
+   AcquireSRWLockExclusive(&cache_lock);
+   if(!p->descriptions){p->descriptions=fresh;fresh=NULL;}
+   if(p->descriptions){p->descriptions->level[level]=r.desc;p->descriptions->valid|=1u<<level;}
+   ReleaseSRWLockExclusive(&cache_lock);
+   if(fresh)HeapFree(GetProcessHeap(),0,fresh);
+  }
+  describe(out,&r.desc);
+ }
+ release(iface);return hr;
 }
 static void rect(struct pw_d3d9_texture_request *q,const RECT *r)
 {if(r){q->has_rect=1;q->left=r->left;q->top=r->top;q->right=r->right;q->bottom=r->bottom;}}
