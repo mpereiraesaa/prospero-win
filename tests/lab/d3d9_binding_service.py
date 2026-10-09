@@ -5,9 +5,11 @@ import argparse,hashlib,json,os,subprocess
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
 for name in ('wine-source','wine-build','prefix','output'):p.add_argument('--'+name,type=Path,required=True)
+p.add_argument('--draws',action='store_true')
 a=p.parse_args();root=Path(__file__).resolve().parents[2];out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
 sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
 names=['tests/lab/d3d9_binding_service.c','wine/ps5/d3d9/pw_d3d9_service_methods.c','wine/ps5/pw_d3d9_getter_wire.c','wine/ps5/d3d9/pw_d3d9_binding_leases.c','wine/ps5/d3d9/pw_d3d9_native_command.c','wine/ps5/pw_d3d9_objects.c','wine/ps5/pw_d3d9_command_batch.c','wine/ps5/pw_d3d9_binding_plan.c','wine/ps5/pw_d3d9_command_policy.c','wine/ps5/pw_d3d9_command_wire.c']
+if a.draws:names.append('wine/ps5/pw_d3d9_draw_shadow.c')
 inputs=[root/n for n in names]+[Path(__file__),root/'tests/lab/d3d9_binding_leases.c']+sorted((root/'wine/ps5').rglob('*.h'))
 r={'status':'running','scope':'Real service batch, lease helper, registry, codecs, policy and native dispatcher with controlled COM objects; no DXVK, session activation or console','sources':{str(f):sha(f) for f in inputs},'commands':[],'artifacts':{}}
 def save():(out/'receipt.json').write_text(json.dumps(r,indent=2)+'\n')
@@ -19,6 +21,7 @@ def run(cmd,label,env=None):
  entry['exit_code']=result.returncode;save();assert result.returncode==0,label
 try:
  flags=['-std=gnu11','-O2','-Wall','-Wextra','-Werror','-DPW_D3D9_ENABLE_BATCH','-DPW_D3D9_ENABLE_BINDING_TICKETS'];files=[root/n for n in names]
+ if a.draws:flags.append('-DPW_D3D9_ENABLE_DRAW_BATCH')
  for mode,extra in [('normal',[]),('sanitize',['-fsanitize=address,undefined','-fno-omit-frame-pointer','-no-pie'])]:
   binary=out/mode
   run(['cc',*flags,*extra,'-D_WIN64','-D__WINESRC__','-I'+str(a.wine_build.resolve()/'include'),'-I'+str(a.wine_source.resolve()/'include'),*files,'-o',binary],mode+'-build')

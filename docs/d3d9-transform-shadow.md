@@ -58,6 +58,17 @@ allocate, lock or make a call. Callback reentry must be rejected before any
 shadow access, and a failed device or session keeps its existing failure
 result instead of a local answer. The feature stays behind `PW_D3D9_ASYNC=1`.
 
+## Proxy pieces
+
+`d3d9/pw_d3d9_transform_observer.{c,h}` map validated command, getter,
+state block and Reset outcomes to the shadow and fill an owned reply for a
+known `GetTransform`. Each state block shell carries its transform evidence in
+`pw_d3d9_stateblock_evidence`: storage for `D3DSBT_ALL` and recorded blocks is
+prepared before the Create or End call, outside the gate, and freed when the
+shell itself is destroyed. The commit invalidator clears it when Create or End
+returns a block that already has a shell. The session and device wiring that
+calls these adapters lands with the draw client.
+
 ## Evidence
 
 `tests/test_d3d9_transform_shadow.c` runs in `make test` and under the

@@ -3,12 +3,18 @@
 #include "pw_d3d9_binding_leases.h"
 #include "../pw_d3d9_command_policy.h"
 #include <string.h>
-int pw_d3d9_binding_leases_prepare(struct pw_d3d9_binding_leases *leases,
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+#include "../pw_d3d9_draw_shadow.h"
+#endif
+int pw_d3d9_binding_leases_prepare_draws(struct pw_d3d9_binding_leases *leases,
     struct pw_d3d9_objects *objects,IDirect3DDevice9 *device,const void *input,size_t bytes,
-    pw_d3d9_command_acquire_fn acquire,void *context)
+    pw_d3d9_command_acquire_fn acquire,void *context,int draws)
 {
     struct pw_d3d9_command command;
     if(!leases||leases->prepared||!objects||!device||objects->cancelled)return 0;
+#ifndef PW_D3D9_ENABLE_DRAW_BATCH
+    if(draws)return 0;
+#endif
     memset(leases,0,sizeof(*leases));
     if(pw_d3d9_batch_decode(&leases->batch,input,bytes))return 0;
     /* An ineligible suffix cannot leave partial pins or execute a prefix. */
@@ -16,8 +22,13 @@ int pw_d3d9_binding_leases_prepare(struct pw_d3d9_binding_leases *leases,
         struct pw_d3d9_binding_lease *l=leases->records+n;
         if(pw_d3d9_batch_command(&command,&leases->batch,n))return 0;
         int status=pw_d3d9_binding_plan(&command,&l->binding);
+        int eligible=pw_d3d9_command_can_queue(&command);
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+        const struct pw_d3d9_draw_shadow shape={.active=PW_D3D9_DECL_PRESENT};
+        if(draws&&!eligible)eligible=pw_d3d9_draw_can_queue(&shape,&command);
+#endif
         if(status!=PW_D3D9_BINDING_READY&&
-           (status!=PW_D3D9_BINDING_OTHER||!pw_d3d9_command_can_queue(&command)))return 0;
+           (status!=PW_D3D9_BINDING_OTHER||!eligible))return 0;
         l->device=device;l->result=S_OK;
     }
     leases->objects=objects;leases->prepared=1;
@@ -47,6 +58,10 @@ int pw_d3d9_binding_leases_prepare(struct pw_d3d9_binding_leases *leases,
     }
     return 1;
 }
+int pw_d3d9_binding_leases_prepare(struct pw_d3d9_binding_leases *leases,
+    struct pw_d3d9_objects *objects,IDirect3DDevice9 *device,const void *input,size_t bytes,
+    pw_d3d9_command_acquire_fn acquire,void *context)
+{return pw_d3d9_binding_leases_prepare_draws(leases,objects,device,input,bytes,acquire,context,0);}
 HRESULT pw_d3d9_binding_lease_acquire(void *context,uint32_t id,uint32_t generation,
     uint32_t kind,IDirect3DDevice9 *device,void **out)
 {

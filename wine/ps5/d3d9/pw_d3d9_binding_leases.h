@@ -31,6 +31,12 @@ struct pw_d3d9_binding_leases {
 int pw_d3d9_binding_leases_prepare(struct pw_d3d9_binding_leases *,
     struct pw_d3d9_objects *,IDirect3DDevice9 *,const void *,size_t,
     pw_d3d9_command_acquire_fn,void *);
+/* Draw support is separately negotiated. This variant admits only structurally
+ * valid draw records; the caller must prove ordered native declaration state
+ * after all leases are prepared and before executing the first command. */
+int pw_d3d9_binding_leases_prepare_draws(struct pw_d3d9_binding_leases *,
+    struct pw_d3d9_objects *,IDirect3DDevice9 *,const void *,size_t,
+    pw_d3d9_command_acquire_fn,void *,int);
 /* Pass &leases.records[command_index] to native_command_dispatch's acquire.
  * Returns one owned typed COM reference, as its existing contract requires. */
 HRESULT pw_d3d9_binding_lease_acquire(void *,uint32_t,uint32_t,uint32_t,IDirect3DDevice9 *,void **);

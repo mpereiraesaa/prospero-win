@@ -4,6 +4,9 @@
 #include "pw_d3d9_native_stateblock.h"
 #include "pw_d3d9_session.h"
 #include "pw_d3d9_kinds.h"
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+#include "pw_d3d9_native_draw_state.h"
+#endif
 struct block_owner {IDirect3DStateBlock9 *native;struct pw_d3d9_object_ref parent;};
 static HRESULT publish(struct pw_d3d9_objects *objects,struct pw_d3d9_object_ref parent,IDirect3DStateBlock9 *block,struct pw_d3d9_object_ref *out)
 {
@@ -38,6 +41,14 @@ void pw_d3d9_service_stateblock_call(struct pw_d3d9_objects *objects,struct pw_d
     IDirect3DDevice9 *device=kind==PW_D3D9_KIND_DEVICE?pw_d3d9_native_device_backend((void *)slot->context):NULL;
     IDirect3DStateBlock9 *block=kind==PW_D3D9_KIND_STATE_BLOCK?((struct block_owner *)slot->context)->native:NULL,*created=NULL;
     r->hresult=pw_d3d9_native_stateblock_dispatch(device,block,q,&created);
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    if(kind==PW_D3D9_KIND_DEVICE&&(q->method==60u||q->method==61u)){
+        /* Capture the backend transition before publication can fail. Reset
+         * deliberately leaves this state unchanged on the pinned backend. */
+        pw_d3d9_native_device_recording_outcome((void *)slot->context,q->method,r->hresult);
+        if(r->hresult!=S_OK&&SUCCEEDED((HRESULT)r->hresult))r->hresult=E_FAIL;
+    }
+#endif
     if(SUCCEEDED((HRESULT)r->hresult)&&(q->method==59||q->method==61)){
         if(!created)r->hresult=E_FAIL;
         else {HRESULT hr=publish(objects,ref,created,&r->object);created=NULL;if(FAILED(hr))r->hresult=hr;}

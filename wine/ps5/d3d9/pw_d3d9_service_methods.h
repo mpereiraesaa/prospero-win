@@ -16,6 +16,9 @@ struct pw_d3d9_service_batch_state {
     int exhausted;
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
     int bindings;
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    int draws;
+#endif
 #endif
 };
 void pw_d3d9_service_batch_init(struct pw_d3d9_service_batch_state *);
@@ -23,6 +26,9 @@ void pw_d3d9_service_batch_init(struct pw_d3d9_service_batch_state *);
 /* Set once after HELLO negotiation, before the first batch. Both peers must
  * advertise PW_D3D9_BINDING_FEATURE; compiled support alone is insufficient. */
 int pw_d3d9_service_batch_bindings(struct pw_d3d9_service_batch_state *,int);
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+int pw_d3d9_service_batch_draws(struct pw_d3d9_service_batch_state *,int);
+#endif
 #endif
 int pw_d3d9_service_batch(struct pw_d3d9_service_batch_state *,
  struct pw_d3d9_objects *,struct pw_d3d9_object_ref,

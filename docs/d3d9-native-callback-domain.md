@@ -69,6 +69,21 @@ unsubclassed STATIC windows on both sides. With only the first routing patch,
 guest SetWindowTextW faults during the first native service cycle. A clean
 console teardown result remains required before acceptance.
 
+The builtin IME UI class is not a builtin (fnid) class, so 0904 does not cover
+it. Guest and native imm32 each register "Wine IME" from `ImeInquire`. Upstream
+registers it with `CS_GLOBALCLASS`, and the server and win32u match a global
+class for any instance. In GTA SA teardown the guest registered first, the
+native registration failed silently, and a native service thread created the
+IME UI window with the guest procedure. It then executed 32-bit guest imm32 code in
+64-bit mode (r8 and r7b: fault in guest imm32 with a truncated stack pointer).
+Patch `0911-imm32-domain-local-ime-ui-class.patch` drops `CS_GLOBALCLASS`.
+imm32 always creates this window with its own module as the instance, so each
+domain resolves its own instance-local class, and imm32 is now built from the
+patched source for both architectures. `tests/lab/wine_ime_domain.py` loads
+the guest IME first, then resolves and creates the class on a native service
+thread: without 0911 the native lookup returns the guest procedure and forced
+creation crashes; with 0911 each domain gets its own procedure.
+
 With both patches, the expanded host UI-only and real-DXVK modes each pass
 three cycles, including three guest builtin-window checks and two native
 builtin-window checks per cycle. CreateDevice, Reset and Present remain S_OK

@@ -5,9 +5,10 @@
 #include "pw_d3d9_session.h"
 #include "../pw_d3d9_stateblock_wire.h"
 #include "../pw_d3d9_draw_shadow.h"
+#include "../pw_d3d9_transform_shadow.h"
 /* Owned by the preallocated COM shell. Extend this aggregate for additional
  * state families; it is local metadata, never a wire object or an ID registry. */
-struct pw_d3d9_stateblock_evidence {struct pw_d3d9_draw_block draw;};
+struct pw_d3d9_stateblock_evidence {struct pw_d3d9_draw_block draw;struct pw_d3d9_transform_block transform;};
 struct pw_d3d9_stateblock_client_ops {
  HRESULT (*call)(IDirect3DDevice9 *,struct pw_d3d9_object_ref,const struct pw_d3d9_stateblock_request *,struct pw_d3d9_stateblock_reply *);
  HRESULT (*release)(IDirect3DDevice9 *,struct pw_d3d9_object_ref);
