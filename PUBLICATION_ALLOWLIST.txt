@@ -898,3 +898,4 @@ docs/d3d9-command-policy.md
 tests/lab/d3d9_batch_service.c
 tests/lab/d3d9_batch_service.py
 docs/d3d9-batch-service.md
+tests/lab/d3d9_transport_roundtrip.c

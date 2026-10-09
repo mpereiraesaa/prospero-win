@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define PW_D3D9_WIRE_VERSION 1u
+#define PW_D3D9_WIRE_VERSION 2u
 #define PW_D3D9_WIRE_HEADER 64u
 #define PW_D3D9_WIRE_MAX_RING (1u << 20)
 #define PW_D3D9_WIRE_PENDING 32u
@@ -57,6 +57,12 @@ int pw_d3d9_channel_stop(struct pw_d3d9_channel *);
 int pw_d3d9_channel_stopped(struct pw_d3d9_channel *);
 /* Nonzero 31-bit transport reason; backend HRESULTs belong in replies. */
 void pw_d3d9_channel_cancel(struct pw_d3d9_channel *, uint32_t error);
+/* Conditional wakeups. A receiver that is about to block calls sleep(1), then
+ * MUST receive once more before waiting, and calls sleep(0) after it wakes.
+ * After a successful send, the sender signals the peer's wake event only when
+ * peer_sleeping() is true. Cancellation must still signal unconditionally. */
+void pw_d3d9_channel_sleep(struct pw_d3d9_channel *, int sleeping);
+int pw_d3d9_channel_peer_sleeping(const struct pw_d3d9_channel *);
 int pw_d3d9_channel_send(struct pw_d3d9_channel *, const struct pw_d3d9_message *, const void *payload);
 /* scratch owns a complete copied record on success. Metadata and payload are
  * validated before capacity is released. SMALL/FULL leave the record queued. */

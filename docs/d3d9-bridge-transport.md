@@ -13,9 +13,10 @@ endpoint opens its view. Both endpoints must open before either publishes.
 The shared section contains fixed-width integers and byte storage only. Mapped
 addresses, `size_t`, COM pointers and callback pointers stay in local views.
 
-A 128-byte prefix contains an 80-byte fixed structure and zero reserved bytes.
-The structure's `uint32_t` atomic read/write positions begin at offset 48 and
-its atomic state is at offset 64. All endpoints must support lock-free 32-bit
+A 128-byte prefix contains an 88-byte fixed structure and zero reserved bytes.
+The structure's `uint32_t` atomic read/write positions begin at offset 48, its
+atomic state is at offset 64 and two atomic sleeping flags (client, service)
+are at offset 80. Protocol version 2 introduced the sleeping flags. All endpoints must support lock-free 32-bit
 atomics and little-endian storage. PE32 and PE64 use the same offsets. Each
 endpoint is called by one broker/service thread; client API callers must be
 serialized by the future client adapter. Neither ring uses the Vulkan opcode
@@ -78,6 +79,23 @@ join native children, release backend objects and only then allow bootstrap to
 return/unload. No pointer borrowed from a guest API stack is a descriptor or
 reply target. This Windows adapter remains subsequent work.
 
+## Wakeups
+
+Calls stay synchronous; only how each side waits changed. A receiver first
+polls its ring for a bounded `PW_D3D9_SPIN_POLLS` pause loop. If it is still
+empty, the receiver sets its own sleeping flag (with a full fence), checks the
+ring once more and only then blocks on its wake event; it clears the flag after
+waking. A sender publishes the record, issues a full fence and signals the
+peer's event only when the peer's flag is set. Either the sleeper's re-check
+sees the record or the sender sees the flag, so no wakeup is lost. A stale
+signal costs one extra empty pass. Cancellation still signals every event.
+
+The PE32 client dispatches its message queue around a call only when
+`GetQueueStatus(QS_ALLINPUT)` reports pending input, and wakes the session's
+serialization event only when another caller is waiting for the lock. Callback
+guards, `WM_QUIT` capture, peer-death handles and 30-second timeouts are
+unchanged.
+
 ## IDirect3D9 factory coverage policy
 
 No methods below are implemented by this transport PR. The inventory accounts
@@ -107,7 +125,21 @@ own inventory and codecs. A smoke launch cannot replace that work.
 `test_d3d9_bridge_wire` covers wrapped copying, 32-bit counter wrap, exact HRESULT
 bits, bounded ring/ledger backpressure, malformed framing, wrong reply generation,
 first-error cancellation, stop ordering, ownership after caller overwrite and
-20,000 concurrent request/reply pairs. It runs in the host and sanitizer suites.
+20,000 concurrent request/reply pairs, plus 20,000 round trips that always take
+the sleeping-flag path (a lost wakeup fails a 5-second wait). It runs in the
+host and sanitizer suites.
+
+`tests/lab/d3d9_transport_roundtrip.c` includes the real session code in a PE32
+program with an in-process responder thread. Build it with
+`i686-w64-mingw32-gcc -std=c11 -O2 -I. tests/lab/d3d9_transport_roundtrip.c
+wine/ps5/pw_d3d9_bridge_wire.c wine/ps5/pw_d3d9_factory_wire.c
+wine/ps5/pw_d3d9_objects.c -luuid -ldxguid` and run it under Wine with `fast`,
+`slow-service`, `slow-client`, `contended` or `cancel` and an optional call
+count. It prints nanoseconds per synchronous call and the `SetEvent`,
+`PeekMessageW`, `GetQueueStatus` and `MsgWaitForMultipleObjects` calls per
+call. On the Alder Lake host with Wine 11.17, the fast mode went from about
+17.6-19.7 us and three `SetEvent` calls per call to 0.6-0.9 us and none. The
+in-process responder is a stand-in for the PE64 service, not a console result.
 
 The optional `tests/lab/d3d9_bridge_wire.c` fixture builds unchanged as PE32 and
 native Unix64. Run its `produce request.bin` in PE32, `consume request.bin

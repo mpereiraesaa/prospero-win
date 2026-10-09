@@ -11,9 +11,13 @@ struct shared {
     _Atomic uint32_t read[2], write[2];
     _Atomic uint32_t state;
     uint32_t padding[3];
+    /* Indexed by role: set only while that endpoint is about to block or is
+     * blocked on its wake event. Senders signal only a sleeping peer. */
+    _Atomic uint32_t sleeping[2];
 };
 /* Fixed offsets, identical in PE32 and PE64; no pointer/size_t/COM layout. */
-_Static_assert(sizeof(struct shared) == 80, "shared wire size");
+_Static_assert(sizeof(struct shared) == 88, "shared wire size");
+_Static_assert(offsetof(struct shared, sleeping) == 80, "shared sleeping offset");
 _Static_assert(offsetof(struct shared, read) == 48, "shared read offset");
 _Static_assert(offsetof(struct shared, state) == 64, "shared state offset");
 _Static_assert(sizeof(_Atomic uint32_t) == 4, "shared atomics");
@@ -48,6 +52,7 @@ int pw_d3d9_channel_init(void *memory,size_t bytes,uint32_t epoch,uint32_t reque
     memset(memory,0,bytes);s->magic=MAGIC;s->version=PW_D3D9_WIRE_VERSION;s->header=128;s->bytes=(uint32_t)bytes;s->epoch=epoch;
     s->offset[0]=128;s->offset[1]=128+request;s->capacity[0]=request;s->capacity[1]=reply;
     atomic_init(&s->read[0],0);atomic_init(&s->read[1],0);atomic_init(&s->write[0],0);atomic_init(&s->write[1],0);atomic_init(&s->state,PW_D3D9_STARTING);
+    atomic_init(&s->sleeping[0],0);atomic_init(&s->sleeping[1],0);
     return atomic_is_lock_free(&s->state)&&atomic_is_lock_free(&s->read[0]) ? PW_D3D9_OK : PW_D3D9_INVALID;
 }
 int pw_d3d9_channel_open(struct pw_d3d9_channel *c,void *memory,size_t bytes,uint32_t epoch,enum pw_d3d9_wire_role role)
@@ -62,7 +67,7 @@ int pw_d3d9_channel_open(struct pw_d3d9_channel *c,void *memory,size_t bytes,uin
     for(i=0;i<3;i++)if(s->reserved[i] || s->padding[i])return PW_D3D9_INVALID;
     for(i=sizeof(*s);i<128;i++)if(((unsigned char *)memory)[i])return PW_D3D9_INVALID;
     if(atomic_load_explicit(&s->state,memory_order_acquire)!=PW_D3D9_STARTING)return PW_D3D9_INVALID;
-    for(i=0;i<2;i++)if(atomic_load(&s->read[i]) || atomic_load(&s->write[i]))return PW_D3D9_INVALID;
+    for(i=0;i<2;i++)if(atomic_load(&s->read[i]) || atomic_load(&s->write[i]) || atomic_load(&s->sleeping[i]))return PW_D3D9_INVALID;
     memset(c,0,sizeof(*c));c->memory=memory;c->bytes=bytes;c->epoch=epoch;c->role=role;c->next_send=c->next_receive=1;
     for(i=0;i<2;i++){c->offset[i]=s->offset[i];c->capacity[i]=s->capacity[i];}
     return PW_D3D9_OK;
@@ -96,6 +101,19 @@ int pw_d3d9_channel_stopped(struct pw_d3d9_channel *c)
     return transition(c,PW_D3D9_STOPPING,PW_D3D9_STOPPED,PW_D3D9_SERVICE);
 }
 static int bad(struct pw_d3d9_channel *c) { pw_d3d9_channel_cancel(c,MALFORMED);return PW_D3D9_INVALID; }
+/* Dekker pairing with pw_d3d9_channel_peer_sleeping: the sleeper's flag store
+ * and the sender's write-index store are each followed by a full fence before
+ * the other side's load, so at least one side observes the other. */
+void pw_d3d9_channel_sleep(struct pw_d3d9_channel *c,int sleeping)
+{
+    atomic_store_explicit(&shared(c)->sleeping[c->role],sleeping?1u:0u,memory_order_seq_cst);
+    atomic_thread_fence(memory_order_seq_cst);
+}
+int pw_d3d9_channel_peer_sleeping(const struct pw_d3d9_channel *c)
+{
+    atomic_thread_fence(memory_order_seq_cst);
+    return atomic_load_explicit(&shared(c)->sleeping[1-c->role],memory_order_seq_cst)!=0;
+}
 int pw_d3d9_channel_send(struct pw_d3d9_channel *c,const struct pw_d3d9_message *m,const void *payload)
 {
     unsigned char header[PW_D3D9_WIRE_HEADER]={0},padding[8]={0};

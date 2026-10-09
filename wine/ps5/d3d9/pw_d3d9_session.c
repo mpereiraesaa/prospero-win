@@ -43,6 +43,12 @@
 #define BACKEND_CRC 0x6d86db72u
 #define FACTORY_METHODS 0x00007ff0u /* slots 4 through 14 */
 #define TRANSPORT_ERROR 0x100u
+/* Bounded receive spin before blocking on the wake event. Back-to-back D3D9
+ * calls usually answer within a few microseconds, below one wineserver
+ * wait/signal round trip; a peer that stays idle costs at most this spin.
+ * 512 pause-polls measured 28-48 us on an Alder Lake host (long PAUSE); Zen 2
+ * PAUSE is shorter, so the console budget should be lower (not yet measured). */
+#define PW_D3D9_SPIN_POLLS 512u
 /* This mask is part of the checked HELLO payload: reject differently built
  * proxy/service pairs before any object publication or method dispatch. */
 static uint32_t compiled_features(void)
@@ -224,6 +230,10 @@ static void callback_enter(void)
 {TlsSetValue(callback_tls,(void *)(uintptr_t)(callback_depth()+1));}
 static void callback_leave(void)
 {TlsSetValue(callback_tls,(void *)(uintptr_t)(callback_depth()-1));}
+/* GetQueueStatus reads the shared queue bits without a server call when
+ * nothing changed; PeekMessage would find nothing to dispatch either way. */
+static int client_input_pending(void)
+{return HIWORD(GetQueueStatus(QS_ALLINPUT))!=0;}
 static void client_pump(void)
 {
     MSG message;
@@ -255,17 +265,27 @@ static DWORD client_wait(DWORD count,const HANDLE *handles,DWORD timeout)
 static int receive_wait(struct ipc *i,struct pw_d3d9_message *m,unsigned char *scratch,size_t bytes,HANDLE peer)
 {
     HANDLE waits[]={i->channel.role==PW_D3D9_CLIENT?i->reply:i->request,i->cancel,peer};
+    unsigned spin=0;
     for(;;){
         int status=pw_d3d9_channel_receive(&i->channel,m,scratch,bytes);
         if(status!=PW_D3D9_EMPTY)return status;
+        if(spin<PW_D3D9_SPIN_POLLS){spin++;YieldProcessor();continue;}
+        /* Publish the sleeping flag, then re-check: a send published before
+         * the flag became visible is received here; any later one signals. */
+        pw_d3d9_channel_sleep(&i->channel,1);
+        status=pw_d3d9_channel_receive(&i->channel,m,scratch,bytes);
+        if(status!=PW_D3D9_EMPTY){pw_d3d9_channel_sleep(&i->channel,0);return status;}
         DWORD wait;
 #if defined(_WIN64) && defined(PW_D3D9_ENABLE_DEVICE)
         wait=MsgWaitForMultipleObjects(2,waits,FALSE,INFINITE,QS_ALLINPUT);
+        pw_d3d9_channel_sleep(&i->channel,0);
         if(wait==WAIT_OBJECT_0+2){MSG message;while(PeekMessageW(&message,NULL,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}continue;}
 #elif defined(_WIN64)
         wait=WaitForMultipleObjects(peer?3:2,waits,FALSE,peer?30000:INFINITE);
+        pw_d3d9_channel_sleep(&i->channel,0);
 #else
         wait=client_wait(peer?3:2,waits,peer?30000:INFINITE);
+        pw_d3d9_channel_sleep(&i->channel,0);
 #endif
         if(wait!=WAIT_OBJECT_0){cancel_ipc(i);return PW_D3D9_CLOSED;}
     }
@@ -273,7 +293,7 @@ static int receive_wait(struct ipc *i,struct pw_d3d9_message *m,unsigned char *s
 static int send_wake(struct ipc *i,struct pw_d3d9_message *m,const void *payload)
 {
     int status=pw_d3d9_channel_send(&i->channel,m,payload);
-    if(status==PW_D3D9_OK && !SetEvent(i->channel.role==PW_D3D9_CLIENT?i->request:i->reply)){
+    if(status==PW_D3D9_OK && pw_d3d9_channel_peer_sleeping(&i->channel) && !SetEvent(i->channel.role==PW_D3D9_CLIENT?i->request:i->reply)){
         cancel_ipc(i);return PW_D3D9_CLOSED;
     }
     return status;
@@ -284,6 +304,7 @@ struct bootstrap { ULONG version,size;WCHAR path[260];uint64_t result[8]; };
 struct pw_d3d9_session {
     struct ipc ipc;
     HANDLE broker,serial_event;
+    LONG serial_waiters;
     DWORD active_thread;
     CRITICAL_SECTION lock;
     SRWLOCK deferred_lock;
@@ -346,7 +367,14 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
         if(pw_d3d9_session_test_serial_failure()){client_pump();wait=WAIT_FAILED;}
         else
 #endif
-        wait=client_wait(1,&s->serial_event,30000);
+        {
+            /* Count before the final retry so a release that saw no waiters
+             * left the lock free for this TryEnterCriticalSection. */
+            InterlockedIncrement(&s->serial_waiters);
+            if(TryEnterCriticalSection(&s->lock)){InterlockedDecrement(&s->serial_waiters);break;}
+            wait=client_wait(1,&s->serial_event,30000);
+            InterlockedDecrement(&s->serial_waiters);
+        }
         if(wait!=WAIT_OBJECT_0){cleanup=1;if(prof)sample.serial_wait_wall_us=pw_d3d9_stats_elapsed(serial_begin,profile_now(),&sample.clock_invalid);goto metric_done;}
     }
     if(prof)sample.serial_wait_wall_us=pw_d3d9_stats_elapsed(serial_begin,profile_now(),&sample.clock_invalid);
@@ -361,7 +389,7 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
     extern void pw_d3d9_session_test_callback(void);
     pw_d3d9_session_test_callback();
 #endif
-    client_pump();
+    if(client_input_pending())client_pump();
     phase="receive";
     uint64_t wait_begin=prof?profile_now():0;
     int received=receive_wait(&s->ipc,reply,scratch,sizeof(scratch),s->broker);
@@ -377,7 +405,11 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
  metric_done:
     if(prof){sample.rejected_present=present&&!sample.published;sample.failures=FAILED(result);sample.roundtrip_wall_us=pw_d3d9_stats_elapsed(begin,profile_now(),&sample.clock_invalid);}
     if(prof)profile_capture(&s->ipc,&sample,m,sample.published?sequence:0,result,present&&sample.published,(int)sample.replies,0,&record);
-    if(locked){s->active_thread=0;LeaveCriticalSection(&s->lock);SetEvent(s->serial_event);}
+    if(locked){
+        s->active_thread=0;LeaveCriticalSection(&s->lock);
+        /* Interlocked read: full barrier after the lock release (see the waiter). */
+        if(InterlockedCompareExchange(&s->serial_waiters,0,0))SetEvent(s->serial_event);
+    }
     if(prof)profile_emit(&record);
 #ifdef PW_D3D9_ENABLE_API_OBSERVE
     if(prof&&present&&sample.published)
