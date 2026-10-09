@@ -61,7 +61,7 @@ The optional `--baseline-wine /path/to/original/loader/wine` verifies that the
 unmodified runtime rejects the extension. The output directory must be new.
 
 The fixture checks native service and child TEBs, Win32 and CRT TLS isolation,
-a read/write allocation at 8 GiB, vectored exception handling on both native
+a read/write allocation constrained above 4 GiB, vectored exception handling on both native
 threads, ordinary PE32 child startup before and after, and malformed request
 version/length rejection, and a missing-DLL failure followed by successful bootstrap. With `--backend64`, it loads the specified PE64 DXVK
 DLL, calls `Direct3DCreate9`, and releases the returned real interface on every
@@ -71,7 +71,7 @@ On 2026-10-09 the host proof passed ten native and ten DXVK cycles. The tested
 backend was the pinned `2.6.2-prospero1` x64 DLL, SHA-256
 `1d626ff743d93f78e1369c1f28daf5bb3b7c0832eef2876a6f352ec48f575710`.
 Ordinary DXVK factory allocations were still below 4 GiB (for example,
-`0x1350c70`). The explicit 8 GiB allocation proves addressability; it does not
+`0x1350c70`). The explicit high allocation proves addressability; it does not
 prove that ordinary native heaps have moved out of guest address space. A later
 memory policy and low-address usage measurement are required for that claim.
 
@@ -84,3 +84,13 @@ Console checks must use the designated operator with an immutable package,
 matching ntdll PRX/PE and wow64 DLLs, the PE32 fixture, PE64 service, and pinned
 backend. Capture `PW_NATIVE_DOMAIN` records and restore the original runtime
 and title configuration. Do not run a game using this probe entry point.
+
+The first console probe correctly loaded the native service, then returned its
+allocation failure code: the fixture had required exactly 8 GiB, outside this
+port's reserved native region starting at 64 GiB. The fixture now requests
+`VirtualAlloc2` with a 4 GiB lower bound and no fixed base, then verifies the
+actual returned address and data. It also requires an inverted address range
+to fail with `ERROR_INVALID_PARAMETER`, so ignored constraints cannot pass.
+This preserves the high-address requirement
+while allowing the platform allocator to choose available storage. Console
+thread/TLS/exception and DXVK factory acceptance remain pending a rerun.

@@ -4,6 +4,7 @@
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
+#include <stdio.h>
 #include <stdint.h>
 static __thread unsigned tls_value = 7;
 static DWORD tls_index;
@@ -31,8 +32,22 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
     HANDLE thread; DWORD code; void *memory,*handler;
     if (!native_teb() || tls_value != 7) return 10;
     result[0]=(uintptr_t)NtCurrentTeb();
-    memory=VirtualAlloc((void *)(uintptr_t)0x200000000,65536,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
-    if (!memory) return 11;
+    {
+        typedef void *(WINAPI *alloc2_fn)(HANDLE,void *,SIZE_T,ULONG,ULONG,MEM_EXTENDED_PARAMETER *,ULONG);
+        alloc2_fn alloc2=(void *)GetProcAddress(GetModuleHandleW(L"kernelbase.dll"),"VirtualAlloc2");
+        MEM_ADDRESS_REQUIREMENTS address={0};MEM_EXTENDED_PARAMETER parameter={0};
+        address.LowestStartingAddress=(void *)(uintptr_t)0x100000000;
+        address.Alignment=65536;
+        parameter.Type=MemExtendedParameterAddressRequirements;parameter.Pointer=&address;
+        if(!alloc2)return 11;
+        address.HighestEndingAddress=(void *)(uintptr_t)UINT32_MAX;
+        memory=alloc2(GetCurrentProcess(),NULL,65536,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE,&parameter,1);
+        if(memory){VirtualFree(memory,0,MEM_RELEASE);return 20;}
+        if(GetLastError()!=ERROR_INVALID_PARAMETER)return 21;
+        address.HighestEndingAddress=NULL;
+        memory=alloc2(GetCurrentProcess(),NULL,65536,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE,&parameter,1);
+        if(!memory){printf("PW_NATIVE_DOMAIN_ALLOC_FAILED error=%lu lowest=100000000\n",GetLastError());fflush(stdout);return 11;}
+    }
     *(uint64_t *)memory=0x123456789abcdef0ULL;result[2]=(uintptr_t)memory;
     if ((uintptr_t)memory<=UINT32_MAX || *(uint64_t *)memory != 0x123456789abcdef0ULL) return 12;
     VirtualFree(memory,0,MEM_RELEASE);
