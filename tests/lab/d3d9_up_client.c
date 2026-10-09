@@ -13,7 +13,9 @@ static HRESULT up(IDirect3DDevice9 *d,const struct pw_d3d9_up_request *q,struct 
  unsigned char wire[PW_D3D9_UP_WIRE_MAX];struct pw_d3d9_up_request decoded;size_t n;uint64_t token;HRESULT hr=S_OK;
  assert(d==&device&&refs);calls++;assert(!pw_d3d9_up_encode(wire,sizeof(wire),&n,q));assert(!pw_d3d9_up_decode(&decoded,wire,n));
  if(q->operation==PW_D3D9_UP_BEGIN){memset(source,0xee,sizeof(source));if(mode==4){assert(refs==2);release(d);}}
- if(mode==1&&q->operation==PW_D3D9_UP_WRITE)return D3DERR_DEVICELOST;
+ if((mode==1||mode==7)&&q->operation==PW_D3D9_UP_WRITE)return D3DERR_DEVICELOST;
+ if(mode==6&&q->operation==PW_D3D9_UP_COMMIT)return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+ if(mode==7&&q->operation==PW_D3D9_UP_ABORT)return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
  assert(!pw_d3d9_up_upload_apply(&upload,&decoded,&token));
  if(q->operation==PW_D3D9_UP_COMMIT){assert(upload.ready&&!memcmp(upload.storage,expected,upload.total));draws++;pw_d3d9_up_upload_finish(&upload);if(mode==2)return D3DERR_INVALIDCALL;hr=0x1234;}
  if(q->operation==PW_D3D9_UP_ABORT)aborts++;
@@ -33,6 +35,8 @@ int main(void)
  mode=1;memcpy(source,expected,sizeof(source));assert(table.DrawPrimitiveUP(&device,D3DPT_TRIANGLELIST,1,source,20)==D3DERR_DEVICELOST&&aborts==1&&!upload.transfer);
  mode=2;memcpy(source,expected,sizeof(source));assert(table.DrawPrimitiveUP(&device,D3DPT_TRIANGLELIST,1,source,20)==D3DERR_INVALIDCALL&&!upload.transfer&&aborts==1);
  mode=3;assert(table.DrawPrimitiveUP(&device,D3DPT_TRIANGLELIST,0,NULL,20)==E_FAIL&&failures==1);pw_d3d9_up_upload_finish(&upload);
+ mode=6;before=draws;assert(table.DrawPrimitiveUP(&device,D3DPT_TRIANGLELIST,0,NULL,20)==RPC_E_CANTCALLOUT_ININPUTSYNCCALL&&draws==before&&upload.transfer&&failures==2&&refs==1);pw_d3d9_up_upload_finish(&upload);
+ mode=7;memcpy(source,expected,sizeof(source));assert(table.DrawPrimitiveUP(&device,D3DPT_TRIANGLELIST,1,source,20)==D3DERR_DEVICELOST&&upload.transfer&&failures==3&&refs==1);pw_d3d9_up_upload_finish(&upload);
  mode=4;assert(table.DrawPrimitiveUP(&device,D3DPT_TRIANGLELIST,0,NULL,20)==0x1234&&refs==0);
  puts("PASS UP frontend: owned snapshot before callbacks, multi-chunk/prefix, exact HRESULT, abort, zero draw, overflow/null, protocol failure, device pin");return 0;
 }

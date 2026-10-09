@@ -39,8 +39,10 @@ static HRESULT submit(IDirect3DDevice9 *device,struct pw_d3d9_up_draw draw,const
   }
  }
  memset(&q,0,sizeof(q));q.operation=PW_D3D9_UP_COMMIT;q.transfer=token;
- /* Service consumes committed upload even when native draw fails. */
+ /* Service consumes dispatched COMMIT even when native draw fails. A
+  * callback reentry rejection happens before dispatch and needs cancellation. */
  hr=call(device,&q,&ignored);
+ if(hr==RPC_E_CANTCALLOUT_ININPUTSYNCCALL)ops.fail(device,hr);
  done:
  if(snapshot){HeapFree(GetProcessHeap(),0,snapshot);InterlockedExchangeAdd(&owned_bytes,-(LONG)total);}
  IDirect3DDevice9_Release(device);return hr;
