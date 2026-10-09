@@ -527,3 +527,8 @@ wine/patches/0902-ntdll-native-service-domain.patch
 tests/lab/d3d9_native_domain.c
 tests/lab/d3d9_native_domain.py
 docs/d3d9-native-domain.md
+
+wine/ps5/pw_d3d9_objects.c
+wine/ps5/pw_d3d9_objects.h
+tests/test_d3d9_objects.c
+docs/d3d9-object-lifetime.md
