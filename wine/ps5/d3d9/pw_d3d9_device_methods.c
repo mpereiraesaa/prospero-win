@@ -20,6 +20,10 @@ _Static_assert(sizeof(PALETTEENTRY)==4,"PALETTEENTRY wire layout");
 _Static_assert(sizeof(D3DDISPLAYMODE)==16,"D3DDISPLAYMODE wire layout");
 _Static_assert(sizeof(D3DRASTER_STATUS)==8,"D3DRASTER_STATUS wire layout");
 static struct pw_d3d9_device_methods_ops ops;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+static pw_d3d9_device_binding_fn binding;
+void pw_d3d9_device_methods_binding_install(pw_d3d9_device_binding_fn fn){binding=fn;}
+#endif
 static uint32_t float_bits(float f){uint32_t bits;memcpy(&bits,&f,4);return bits;}
 static HRESULT get(IDirect3DDevice9 *device,const struct pw_d3d9_getter_request *q,void *out)
 {
@@ -152,6 +156,10 @@ static HRESULT WINAPI method_SetClipStatus(IDirect3DDevice9 *device, const D3DCL
 static HRESULT WINAPI method_SetTexture(IDirect3DDevice9 *device, DWORD p0, IDirect3DBaseTexture9* p1)
 {
  struct pw_d3d9_command c={0};c.method=65;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ c.args[0]=(uint32_t)p0;
+ if(binding)return binding(device,&c,(IUnknown *)p1,PW_D3D9_KIND_TEXTURE_2D,1);
+#endif
  struct pw_d3d9_object_ref ref={0};HRESULT hr;
  if(p1){hr=ops.resolve(device,(IUnknown *)p1,PW_D3D9_KIND_TEXTURE_2D,&ref);if(FAILED(hr))return hr;if(!ref.id || !ref.generation)return D3DERR_INVALIDCALL;}
  c.args[0]=(uint32_t)p0;
@@ -229,6 +237,10 @@ static HRESULT WINAPI method_DrawIndexedPrimitive(IDirect3DDevice9 *device, D3DP
 static HRESULT WINAPI method_SetVertexDeclaration(IDirect3DDevice9 *device, IDirect3DVertexDeclaration9* p0)
 {
  struct pw_d3d9_command c={0};c.method=87;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+
+ if(binding)return binding(device,&c,(IUnknown *)p0,PW_D3D9_KIND_VERTEX_DECLARATION,0);
+#endif
  struct pw_d3d9_object_ref ref={0};HRESULT hr;
  if(p0){hr=ops.resolve(device,(IUnknown *)p0,PW_D3D9_KIND_VERTEX_DECLARATION,&ref);if(FAILED(hr))return hr;if(!ref.id || !ref.generation)return D3DERR_INVALIDCALL;}
  c.args[0]=ref.id;c.args[1]=ref.generation;
@@ -243,6 +255,10 @@ static HRESULT WINAPI method_SetFVF(IDirect3DDevice9 *device, DWORD p0)
 static HRESULT WINAPI method_SetVertexShader(IDirect3DDevice9 *device, IDirect3DVertexShader9* p0)
 {
  struct pw_d3d9_command c={0};c.method=92;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+
+ if(binding)return binding(device,&c,(IUnknown *)p0,PW_D3D9_KIND_VERTEX_SHADER,0);
+#endif
  struct pw_d3d9_object_ref ref={0};HRESULT hr;
  if(p0){hr=ops.resolve(device,(IUnknown *)p0,PW_D3D9_KIND_VERTEX_SHADER,&ref);if(FAILED(hr))return hr;if(!ref.id || !ref.generation)return D3DERR_INVALIDCALL;}
  c.args[0]=ref.id;c.args[1]=ref.generation;
@@ -275,6 +291,10 @@ static HRESULT WINAPI method_SetVertexShaderConstantB(IDirect3DDevice9 *device, 
 static HRESULT WINAPI method_SetStreamSource(IDirect3DDevice9 *device, UINT p0, IDirect3DVertexBuffer9* p1, UINT p2, UINT p3)
 {
  struct pw_d3d9_command c={0};c.method=100;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+ c.args[0]=(uint32_t)p0;c.args[3]=(uint32_t)p2;c.args[4]=(uint32_t)p3;
+ if(binding)return binding(device,&c,(IUnknown *)p1,PW_D3D9_KIND_VERTEX_BUFFER,1);
+#endif
  struct pw_d3d9_object_ref ref={0};HRESULT hr;
  if(p1){hr=ops.resolve(device,(IUnknown *)p1,PW_D3D9_KIND_VERTEX_BUFFER,&ref);if(FAILED(hr))return hr;if(!ref.id || !ref.generation)return D3DERR_INVALIDCALL;}
  c.args[0]=(uint32_t)p0;
@@ -293,6 +313,10 @@ static HRESULT WINAPI method_SetStreamSourceFreq(IDirect3DDevice9 *device, UINT 
 static HRESULT WINAPI method_SetIndices(IDirect3DDevice9 *device, IDirect3DIndexBuffer9* p0)
 {
  struct pw_d3d9_command c={0};c.method=104;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+
+ if(binding)return binding(device,&c,(IUnknown *)p0,PW_D3D9_KIND_INDEX_BUFFER,0);
+#endif
  struct pw_d3d9_object_ref ref={0};HRESULT hr;
  if(p0){hr=ops.resolve(device,(IUnknown *)p0,PW_D3D9_KIND_INDEX_BUFFER,&ref);if(FAILED(hr))return hr;if(!ref.id || !ref.generation)return D3DERR_INVALIDCALL;}
  c.args[0]=ref.id;c.args[1]=ref.generation;
@@ -301,6 +325,10 @@ static HRESULT WINAPI method_SetIndices(IDirect3DDevice9 *device, IDirect3DIndex
 static HRESULT WINAPI method_SetPixelShader(IDirect3DDevice9 *device, IDirect3DPixelShader9* p0)
 {
  struct pw_d3d9_command c={0};c.method=107;
+#ifdef PW_D3D9_ENABLE_BINDING_TICKETS
+
+ if(binding)return binding(device,&c,(IUnknown *)p0,PW_D3D9_KIND_PIXEL_SHADER,0);
+#endif
  struct pw_d3d9_object_ref ref={0};HRESULT hr;
  if(p0){hr=ops.resolve(device,(IUnknown *)p0,PW_D3D9_KIND_PIXEL_SHADER,&ref);if(FAILED(hr))return hr;if(!ref.id || !ref.generation)return D3DERR_INVALIDCALL;}
  c.args[0]=ref.id;c.args[1]=ref.generation;
