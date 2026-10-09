@@ -580,6 +580,10 @@ tests/lab/d3d9_cursor.c
 tests/lab/d3d9_cursor.py
 tests/lab/d3d9_cursor_pe.c
 docs/d3d9-cursor.md
+tests/lab/d3d9_cursor_transport.c
+tests/lab/d3d9_cursor_transport_device.c
+tests/lab/d3d9_cursor_transport.py
+docs/d3d9-cursor-transport.md
 tests/test_d3d9_objects.c
 docs/d3d9-object-lifetime.md
 wine/ps5/pw_d3d9_window.c
