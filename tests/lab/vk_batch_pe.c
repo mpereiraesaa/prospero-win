@@ -31,7 +31,7 @@ static NTSTATUS original(unsigned int code,void *args)
  if(code==unix_is_available_instance_function){struct is_available_instance_function_params *p=args;if(!strcmp(p->name,PW_VK_BATCH_ASYNC_NAME))return async_support?PW_VK_BATCH_ASYNC_CAPABILITY:0;if(!strcmp(p->name,PW_VK_BATCH_NAME))return support?PW_VK_BATCH_CAPABILITY:0;}
  if(code==unix_vkCmdDrawIndexed)draw_raw++;
  if(async_support&&code==unix_vkQueuePresentKHR)assert(!depth&&async_pending);
- if(async_support&&(code==unix_vkDestroyBuffer||code==unix_vkCreateDebugUtilsMessengerEXT))assert(!async_pending);
+ if(async_support&&(code==unix_vkResetDescriptorPool||code==unix_vkCreateDebugUtilsMessengerEXT))assert(!async_pending);
  if(code==unix_vkCreateDebugUtilsMessengerEXT){struct is_available_instance_function_params p={(VkInstance)(uintptr_t)7,"vkDummy"};assert(pw_vk_batch_call(unix_is_available_instance_function,&p)==STATUS_SUCCESS);}
  return STATUS_SUCCESS;
 }
@@ -81,7 +81,7 @@ int main(int argc,char **argv)
    puts("PASS async empty completion before sticky callback disable and raw reentry");return 0;
   }
   assert(!strcmp(argv[1],"async-lifetime"));
-  {struct vkDestroyBuffer_params p={0};assert(!pw_vk_batch_call(unix_vkDestroyBuffer,&p));}
+  {struct vkResetDescriptorPool_params p={0};assert(!pw_vk_batch_call(unix_vkResetDescriptorPool,&p));}
   assert(!async_pending&&completions==1&&empty_batches==2&&batches==3&&!depth);
   assert(piggyback_total==1); /* Admission sentinels are not piggybacks. */
   puts("PASS async capability, empty admission, unlocked progress and empty resource barrier");return 0;
