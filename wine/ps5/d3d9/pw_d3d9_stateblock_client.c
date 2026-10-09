@@ -42,7 +42,13 @@ static struct proxy *impl(IDirect3DStateBlock9 *iface){return (struct proxy *)if
 static ULONG WINAPI addref(IDirect3DStateBlock9 *iface)
 {struct proxy *p=impl(iface);ULONG refs;AcquireSRWLockExclusive(&cache_lock);refs=++p->refs;ReleaseSRWLockExclusive(&cache_lock);return refs;}
 static void destroy_local(struct proxy *p)
-{IDirect3DDevice9 *parent=p->parent;HeapFree(GetProcessHeap(),0,p);IDirect3DDevice9_Release(parent);}
+{
+ IDirect3DDevice9 *parent=p->parent;
+#ifdef PW_D3D9_ENABLE_STATE_EVIDENCE
+ pw_d3d9_transform_block_free(&p->evidence.transform); /* final local retirement only */
+#endif
+ HeapFree(GetProcessHeap(),0,p);IDirect3DDevice9_Release(parent);
+}
 static void finish(void *context)
 {
  struct proxy *p=context;HRESULT hr=ops.release(p->parent,p->remote);
@@ -104,6 +110,10 @@ static HRESULT create_block(IDirect3DDevice9 *parent,uint32_t method,D3DSTATEBLO
  /* Allocate before RPC so OOM cannot strand an acquired remote reference. */
  p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*p));if(!p)return E_OUTOFMEMORY;
  p->iface.lpVtbl=(IDirect3DStateBlock9Vtbl *)observed;p->refs=1;p->parent=parent;IDirect3DDevice9_AddRef(parent);
+#ifdef PW_D3D9_ENABLE_STATE_EVIDENCE
+ /* Snapshot storage outside the gate; failure only leaves the block unknown. */
+ if(method==PW_D3D9_SB_END||type==D3DSBT_ALL)pw_d3d9_transform_block_prepare(&p->evidence.transform);
+#endif
  hr=invoke(parent,(struct pw_d3d9_object_ref){0},&q,&r,EVIDENCE(p));
 #ifdef PW_D3D9_ENABLE_STATE_EVIDENCE
  if(SUCCEEDED(hr) && (!p->committed || p->remote.id!=r.object.id || p->remote.generation!=r.object.generation)){

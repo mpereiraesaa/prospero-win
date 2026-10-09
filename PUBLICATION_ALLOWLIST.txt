@@ -932,6 +932,8 @@ wine/ps5/pw_d3d9_draw_shadow.h
 tests/test_d3d9_draw_shadow.c
 wine/ps5/pw_d3d9_transform_shadow.c
 wine/ps5/pw_d3d9_transform_shadow.h
+wine/ps5/d3d9/pw_d3d9_transform_observer.c
+wine/ps5/d3d9/pw_d3d9_transform_observer.h
 tests/test_d3d9_transform_shadow.c
 docs/d3d9-transform-shadow.md
 docs/d3d9-draw-shadow.md

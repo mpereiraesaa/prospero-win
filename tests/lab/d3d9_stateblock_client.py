@@ -5,7 +5,7 @@ from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
 for n in ('wine-build','prefix','output'):p.add_argument('--'+n,type=Path,required=True)
 a=p.parse_args();root=Path(__file__).resolve().parents[2];out=a.output.resolve();out.mkdir(parents=True,exist_ok=False);a.prefix.resolve().mkdir(parents=True,exist_ok=True)
-files=[root/'tests/lab/d3d9_stateblock_client.c',root/'wine/ps5/d3d9/pw_d3d9_stateblock_client.c',root/'wine/ps5/pw_d3d9_stateblock_wire.c',root/'wine/ps5/pw_d3d9_draw_shadow.c']
+files=[root/'tests/lab/d3d9_stateblock_client.c',root/'wine/ps5/d3d9/pw_d3d9_stateblock_client.c',root/'wine/ps5/pw_d3d9_stateblock_wire.c',root/'wine/ps5/pw_d3d9_draw_shadow.c',root/'wine/ps5/pw_d3d9_transform_shadow.c']
 inputs=[*files,Path(__file__),*sorted((root/'wine/ps5').rglob('*.h'))];frozen={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
 r={'status':'running','sources':frozen,'console_accessed':False,'production_session_integration':False,'commands':[]}
 def run(cmd,label,env=None):
