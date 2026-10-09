@@ -543,3 +543,8 @@ wine/patches/0903-ntdll-native-callback-domain.patch
 docs/d3d9-native-callback-domain.md
 
 wine/patches/0904-win32u-native-builtin-procs.patch
+
+wine/ps5/pw_d3d9_factory_wire.h
+wine/ps5/pw_d3d9_factory_wire.c
+tests/test_d3d9_factory_wire.c
+docs/d3d9-factory-wire.md
