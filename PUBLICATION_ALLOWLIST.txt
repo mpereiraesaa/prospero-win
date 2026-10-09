@@ -653,6 +653,8 @@ tests/lab/d3d9_program_proxy.py
 docs/d3d9-program-proxy.md
 docs/d3d9-game-adapter.md
 tests/lab/d3d9_game_build.py
+tests/lab/d3d9_pipeline_build_metadata.py
+docs/d3d9-pipeline-build.md
 wine/ps5/d3d9/pw_d3d9_device_proxy.c
 wine/ps5/d3d9/pw_d3d9_device_proxy.h
 tests/lab/d3d9_device_proxy.c
