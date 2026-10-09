@@ -759,6 +759,7 @@ tests/lab/d3d9_native_command.py
 tests/lab/d3d9_native_command_pe.c
 wine/ps5/d3d9/pw_d3d9_native_command.c
 wine/ps5/d3d9/pw_d3d9_native_command.h
+wine/ps5/d3d9/pw_d3d9_native_draw_state.h
 wine/ps5/d3d9/pw_d3d9_device_methods.h
 wine/ps5/d3d9/pw_d3d9_device_methods.c
 tests/lab/d3d9_device_methods.c
@@ -944,3 +945,6 @@ docs/d3d9-program-tickets.md
 tests/lab/d3d9_buffer_tickets.c
 tests/lab/d3d9_buffer_tickets.py
 docs/d3d9-buffer-tickets.md
+wine/patches/0911-imm32-domain-local-ime-ui-class.patch
+tests/lab/wine_ime_domain.c
+tests/lab/wine_ime_domain.py

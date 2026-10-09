@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define COBJMACROS
 #include "pw_d3d9_session.h"
+#include "pw_d3d9_native_draw_state.h"
 #include "../pw_d3d9_window_driver.h"
 #include <d3d9.h>
 #include <string.h>
@@ -11,7 +12,7 @@ struct pw_d3d9_native_device {
     struct pw_d3d9_window_id guest,association;
     uint64_t sequence;
     int closed,destroyed,fullscreen,log_geometry,reset_preserved,reset_succeeded;
-    unsigned implicit_phase;
+    unsigned implicit_phase,recording;
     struct pw_d3d9_native_device *next;
 };
 static struct pw_d3d9_native_device *devices;
@@ -112,6 +113,10 @@ int pw_d3d9_native_device_shutdown(void)
     }
     return !cleanup_failed;
 }
+unsigned pw_d3d9_native_device_recording(struct pw_d3d9_native_device *d)
+{return d?d->recording:PW_D3D9_RECORDING_UNKNOWN;}
+void pw_d3d9_native_device_recording_outcome(struct pw_d3d9_native_device *d,uint32_t method,uint32_t hr)
+{if(d)pw_d3d9_native_recording_outcome(&d->recording,method,hr);}
 void *pw_d3d9_native_device_backend(struct pw_d3d9_native_device *d)
 {return d?d->device:NULL;}
 unsigned pw_d3d9_native_device_implicit_phase(struct pw_d3d9_native_device *d)
@@ -161,6 +166,7 @@ void pw_d3d9_native_device_call(void *factory,struct pw_d3d9_native_device *devi
         if(p.hDeviceWindow&&p.hDeviceWindow!=d->window)r->hresult=E_FAIL;
         reply_parameters(&r->parameters,&p,guest);
         if(FAILED((HRESULT)r->hresult)){pw_d3d9_native_device_destroy(d);return;}
+        if(r->hresult==S_OK)d->recording=PW_D3D9_RECORDING_LIVE;
         d->fullscreen=!p.Windowed;d->log_geometry=1;
         if(!mirror(d,0)){r->hresult=D3DERR_DEVICELOST;pw_d3d9_native_device_destroy(d);return;}
         *created=d;return;
