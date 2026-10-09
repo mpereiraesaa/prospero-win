@@ -8,10 +8,13 @@ struct bridge_window_owner
 {
     HWND hwnd;
     DWORD tid;
+    uint32_t guest_generation, guest_epoch;
     uint64_t token;
     BOOL guest, destroyed;
 };
 static struct bridge_window_owner bridge_owners[256];
+static uint32_t bridge_guest_generations[256];
+static uint32_t bridge_guest_epoch;
 static struct pw_d3d9_windows bridge_windows;
 static uint64_t bridge_token;
 static uint32_t bridge_epoch;
@@ -30,6 +33,60 @@ static struct bridge_window_owner *bridge_owner( HWND hwnd )
     for (i = 0; i < ARRAY_SIZE(bridge_owners); ++i)
         if (bridge_owners[i].hwnd == hwnd) return &bridge_owners[i];
     return NULL;
+}
+
+static struct bridge_window_owner *bridge_guest_owner( struct pw_d3d9_window_id id )
+{
+    struct bridge_window_owner *owner;
+    if (!id.epoch || !id.id || id.id > ARRAY_SIZE(bridge_owners) || !id.generation) return NULL;
+    owner = &bridge_owners[id.id - 1];
+    return owner->hwnd && owner->guest && owner->guest_generation == id.generation && owner->guest_epoch == id.epoch ? owner : NULL;
+}
+
+ULONG_PTR ps5_bridge_guest_window_call( HWND hwnd, void *ptr )
+{
+    struct pw_d3d9_guest_window_request q;
+    struct pw_d3d9_window_id association;
+    struct bridge_window_owner *owner;
+    DWORD pid = 0, tid;
+    unsigned index;
+    int result = PW_D3D9_WINDOW_INVALID;
+
+    if (!NtCurrentTeb()->WowTebOffset || !hwnd || !ptr) return result;
+    memcpy( &q, ptr, sizeof(q) );
+    if (q.version != PW_D3D9_GUEST_WINDOW_VERSION || q.size != sizeof(q) ||
+        q.reserved || q.reserved2) return result;
+    tid = get_window_thread( hwnd, &pid );
+    if (!tid || tid != GetCurrentThreadId() || pid != GetCurrentProcessId()) return result;
+    pthread_mutex_lock( &screen_lock );
+    owner = bridge_owner( hwnd );
+    if (!owner || !owner->guest || owner->destroyed || owner->token || owner->tid != tid) goto done;
+    index = owner - bridge_owners;
+    if (q.operation == PW_D3D9_GUEST_REGISTER)
+    {
+        if (q.id.epoch || q.id.id || q.id.generation) goto done;
+        if (!owner->guest_generation)
+        {
+            if (bridge_guest_generations[index] == UINT32_MAX || bridge_guest_epoch == UINT32_MAX) { result = PW_D3D9_WINDOW_EXHAUSTED; goto done; }
+            owner->guest_generation = ++bridge_guest_generations[index];
+            owner->guest_epoch = ++bridge_guest_epoch;
+        }
+        q.id = (struct pw_d3d9_window_id){owner->guest_epoch, index+1, owner->guest_generation};
+        result = PW_D3D9_WINDOW_OK;
+    }
+    else if (q.operation == PW_D3D9_GUEST_UNREGISTER)
+    {
+        if (bridge_guest_owner( q.id ) != owner) { result = PW_D3D9_WINDOW_STALE; goto done; }
+        if (!pw_d3d9_window_find( &bridge_windows, (UINT_PTR)hwnd, &association ))
+        { result = PW_D3D9_WINDOW_BUSY; goto done; }
+        owner->guest_generation = owner->guest_epoch = 0;
+        q.id = (struct pw_d3d9_window_id){0};
+        result = PW_D3D9_WINDOW_OK;
+    }
+done:
+    pthread_mutex_unlock( &screen_lock );
+    if (!result) memcpy( ptr, &q, sizeof(q) );
+    return result;
 }
 
 static BOOL bridge_owner_full(void)
@@ -74,6 +131,7 @@ ULONG_PTR ps5_bridge_window_call( void *ptr, ULONG_PTR size )
     struct bridge_window_owner *guest, *service;
     struct pw_d3d9_window_entry e;
     uint64_t token = bridge_current_token();
+    HWND guest_hwnd;
     DWORD guest_pid = 0, service_pid = 0, guest_tid, service_tid;
     unsigned i;
     int result = PW_D3D9_WINDOW_INVALID;
@@ -82,17 +140,22 @@ ULONG_PTR ps5_bridge_window_call( void *ptr, ULONG_PTR size )
     memcpy( &q, ptr, sizeof(q) );
     if (q.version != PW_D3D9_WINDOW_DRIVER_VERSION || q.size != sizeof(q) || q.reserved || q.reserved2)
         return result;
-    /* Resolve actual Wine server owners before taking our non-reentrant lock. */
-    guest_tid = get_window_thread( (HWND)(UINT_PTR)q.guest, &guest_pid );
+    /* Resolve opaque ID under our lock, then query Wine outside it. */
+    pthread_mutex_lock( &screen_lock );
+    guest = bridge_guest_owner( q.guest );
+    guest_hwnd = guest ? guest->hwnd : NULL;
+    pthread_mutex_unlock( &screen_lock );
+    if (!guest_hwnd) return PW_D3D9_WINDOW_STALE;
+    guest_tid = get_window_thread( guest_hwnd, &guest_pid );
     service_tid = get_window_thread( (HWND)(UINT_PTR)q.service, &service_pid );
     if ((q.operation == PW_D3D9_WINDOW_ATTACH || q.operation == PW_D3D9_WINDOW_BEGIN) &&
         (!guest_tid || !service_tid || guest_pid != GetCurrentProcessId() ||
          service_pid != GetCurrentProcessId() || service_tid != GetCurrentThreadId())) return result;
 
     pthread_mutex_lock( &screen_lock );
-    guest = bridge_owner( (HWND)(UINT_PTR)q.guest );
+    guest = bridge_guest_owner( q.guest );
     service = bridge_owner( (HWND)(UINT_PTR)q.service );
-    if (!guest || !service || !guest->guest || guest->token || service->guest ||
+    if (!guest || guest->hwnd != guest_hwnd || !service || !guest->guest || guest->token || service->guest ||
         service->token != token || service->tid != GetCurrentThreadId()) goto done;
     if ((q.operation == PW_D3D9_WINDOW_ATTACH || q.operation == PW_D3D9_WINDOW_BEGIN) &&
         (guest->destroyed || service->destroyed || guest->tid != guest_tid || service->tid != service_tid)) goto done;
@@ -109,12 +172,12 @@ ULONG_PTR ps5_bridge_window_call( void *ptr, ULONG_PTR size )
             pw_d3d9_windows_init( &bridge_windows, ++bridge_epoch );
             bridge_token = token;
         }
-        result = pw_d3d9_window_attach( &bridge_windows, q.guest, q.service, &q.id );
+        result = pw_d3d9_window_attach( &bridge_windows, (UINT_PTR)guest_hwnd, q.service, &q.id );
     }
     else
     {
         if (bridge_token != token || pw_d3d9_window_get( &bridge_windows, q.id, &e ) ||
-            e.guest != q.guest || e.service != q.service) { result = PW_D3D9_WINDOW_STALE; goto done; }
+            e.guest != (UINT_PTR)guest_hwnd || e.service != q.service) { result = PW_D3D9_WINDOW_STALE; goto done; }
         switch (q.operation)
         {
         case PW_D3D9_WINDOW_BEGIN: result = pw_d3d9_window_begin( &bridge_windows, q.id, q.sequence, &q.state ); break;
@@ -146,7 +209,7 @@ static int bridge_window_created( HWND hwnd )
     pthread_mutex_lock( &screen_lock );
     for (i = 0; i < ARRAY_SIZE(bridge_owners); ++i) if (!bridge_owners[i].hwnd)
     {
-        bridge_owners[i] = (struct bridge_window_owner){hwnd, GetCurrentThreadId(), token,
+        bridge_owners[i] = (struct bridge_window_owner){hwnd, GetCurrentThreadId(), 0, 0, token,
                                                        NtCurrentTeb()->WowTebOffset != 0, FALSE};
         break;
     }

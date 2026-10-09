@@ -88,7 +88,7 @@ service lifetimes and native children; they are not a same-process security
 boundary.
 
 The service invokes native `NtUserCallTwoParam(&request, sizeof(request),
-0x50570020)` with the 80-byte request in the header. The WoW64 thunk rejects this
+0x50570020)` with the native request in the header (version 2 is 88 bytes). The WoW64 thunk rejects this
 operation and the driver independently requires a native token. Creation hooks
 record hidden and visible HWND owners/domains. Attach checks actual Wine server
 owners, a WoW64 guest, and a service owned by the calling native thread/token.
@@ -124,3 +124,30 @@ ps5drv.c/sysparams.c/vulkan.c compile with the pinned SDK commands. These are
 compile/contract results: token-enabled runtime packaging, service integration,
 and console input/display acceptance remain pending. The earlier device probe
 does not call this API and does not establish these hooks' runtime acceptance.
+
+## Opaque guest registration (patch 0907)
+
+Production transport carries only `pw_d3d9_window_id {epoch,id,generation}`.
+Guest HWNDs are resolved exclusively inside the driver. On its owning PE32 UI
+thread, the proxy invokes `NtUserCallTwoParam(hwnd, &request, 0x50570021)` using
+the fixed 32-byte guest request, version 1. REGISTER returns a nonzero opaque ID;
+duplicate registration returns the same live identity. UNREGISTER requires that
+identity and fails while an association still references it. Native callers,
+foreign windows, other owner threads, malformed requests and unknown handles
+are rejected. The WoW64 thunk forwards only this explicitly pointer-free request;
+the HWND parameter is a local syscall argument and never enters the wire.
+
+Each registration has a driver-issued monotonic epoch plus its owner-slot ID and
+generation. Unregister followed by register advances both counters. Destruction
+retires the identity; retaining a tombstone solely for native cleanup cannot
+make a destroyed window attachable again. Slot/handle reuse cannot revive an old
+ID, and counter exhaustion fails without wrapping. These IDs remain independent
+of the wire frame session epoch, which the transport validates separately.
+
+Native request version 2 is 88 bytes and replaces the old local guest HWND field
+with the opaque 12-byte registration ID. The native service HWND remains local.
+The driver snapshots and resolves the guest ID under its lock, queries actual
+Wine owners outside the lock, then validates the same identity again before
+changing an association. Only the guest-registration and association IDs may be
+serialized. All-zero IDs are reserved for null/inherit in typed message fields
+where that operation permits it; REGISTER and ATTACH require real identities.

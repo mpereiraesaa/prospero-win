@@ -574,3 +574,5 @@ wine/ps5/pw_d3d9_window_driver.c
 wine/ps5/pw_d3d9_window_driver.h
 wine/patches/0906-win32u-native-bridge-window-association.patch
 tests/test_d3d9_window_driver.c
+
+wine/patches/0907-win32u-bridge-opaque-guest-window-ids.patch
