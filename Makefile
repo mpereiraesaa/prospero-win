@@ -40,6 +40,8 @@ $(BUILD)/test_d3d9_implicit_wire: wine/ps5/pw_d3d9_implicit_wire.h wine/ps5/pw_d
 
 $(eval $(call test_rule,test_d3d9_command_batch,tests/test_d3d9_command_batch.c wine/ps5/pw_d3d9_command_batch.c wine/ps5/pw_d3d9_command_wire.c,-Iwine/ps5))
 $(BUILD)/test_d3d9_command_batch: wine/ps5/pw_d3d9_command_batch.h wine/ps5/pw_d3d9_command_wire.h
+$(eval $(call test_rule,test_d3d9_draw_shadow,tests/test_d3d9_draw_shadow.c wine/ps5/pw_d3d9_draw_shadow.c,-Iwine/ps5))
+$(BUILD)/test_d3d9_draw_shadow: wine/ps5/pw_d3d9_draw_shadow.h wine/ps5/pw_d3d9_command_wire.h
 $(eval $(call test_rule,test_d3d9_command_policy,tests/test_d3d9_command_policy.c wine/ps5/pw_d3d9_command_policy.c wine/ps5/pw_d3d9_command_wire.c,-Iwine/ps5))
 $(BUILD)/test_d3d9_command_policy: wine/ps5/pw_d3d9_command_policy.h wine/ps5/pw_d3d9_command_wire.h
 $(eval $(call test_rule,test_d3d9_binding_plan,tests/test_d3d9_binding_plan.c wine/ps5/pw_d3d9_binding_plan.c wine/ps5/pw_d3d9_command_policy.c wine/ps5/pw_d3d9_command_wire.c,-Iwine/ps5))
@@ -193,7 +195,7 @@ $(eval $(call test_rule,test_pw_diagnostics,tests/test_pw_diagnostics.c native/p
 $(eval $(call test_rule,test_pw_qpc_clock,tests/test_pw_qpc_clock.c,))
 $(eval $(call test_rule,test_pw_key_shared,tests/test_pw_key_shared.c,))
 
-TESTS := test_d3d9_binding_plan test_d3d9_command_policy test_d3d9_command_batch test_d3d9_failure_diag test_d3d9_object_getter test_pw_qpc_clock test_pw_key_shared test_pw_diagnostics test_pw_x86_hostexec test_pw_app_profile test_pw_profile_catalog test_pw_present \
+TESTS := test_d3d9_draw_shadow test_d3d9_binding_plan test_d3d9_command_policy test_d3d9_command_batch test_d3d9_failure_diag test_d3d9_object_getter test_pw_qpc_clock test_pw_key_shared test_pw_diagnostics test_pw_x86_hostexec test_pw_app_profile test_pw_profile_catalog test_pw_present \
 	test_pw_wine_heap test_pw_wine_dmem test_pw_wine_dmem_ps5 test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_script_input test_pw_game_profile test_pw_prefix_temp test_pw_tsc_calibrate test_pw_wine_prefix_cpu test_vk_command_stream test_vk_spsc test_d3d9_bridge_wire test_vk_replay test_d3d9_objects test_d3d9_program_query test_d3d9_program_wire test_d3d9_factory_wire test_d3d9_resource_wire test_d3d9_texture_wire test_d3d9_window test_d3d9_window_driver test_vk_wire test_vk_codec \
 	test_pw_wine_library test_pw_wine_display test_pw_hid test_pw_hid_ps5 test_pw_spinner test_pw_wine_dl test_pw_wine_sink \
 	test_pw_wine_threads test_pw_wine_compat test_pw_wine_cwd test_pw_wine_cwd_listing test_pw_ws2_32_libc test_pw_launcher_render test_pw_pad \
