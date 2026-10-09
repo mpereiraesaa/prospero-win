@@ -450,6 +450,10 @@ static void test_debug_env(void)
     assert(parse(APP "[debug]\nenv = RADV_DEBUG=nocache,hang\nenv = VK_LOADER_DEBUG=all\n"
                  "env = GALLIUM_PRINT_OPTIONS=1\nenv = PW_VK_BATCH_MASK=0x7f\n", &p) == PW_OK);
     assert(p.debug_env_count == 4 && !strcmp(p.debug_env[0].value, "nocache,hang"));
+    /* Zink's own options, for the OpenGL games it draws. */
+    assert(parse(APP "[debug]\nenv = ZINK_DESCRIPTORS=lazy\n", &p) == PW_OK);
+    assert(p.debug_env_count == 1 && !strcmp(p.debug_env[0].name, "ZINK_DESCRIPTORS") &&
+           !strcmp(p.debug_env[0].value, "lazy"));
     /* A value may itself hold '=': only the first one splits. */
     assert(parse(APP "[debug]\nenv = DXVK_CONFIG=d3d9.maxFrameRate=60\n", &p) == PW_OK);
     assert(!strcmp(p.debug_env[0].name, "DXVK_CONFIG") && !strcmp(p.debug_env[0].value, "d3d9.maxFrameRate=60"));

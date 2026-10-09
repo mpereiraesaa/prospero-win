@@ -264,7 +264,7 @@ static int same(const uint8_t *text, size_t length, const char *name)
  * the whole profile is read. */
 static int debug_env_field(PwGameProfile *profile, const uint8_t *value, size_t value_length)
 {
-    static const char *const families[] = { "PW_", "DXVK_", "MESA_", "GALLIUM_", "RADV_", "VK_" };
+    static const char *const families[] = { "PW_", "DXVK_", "MESA_", "GALLIUM_", "ZINK_", "RADV_", "VK_" };
     static const char *const title_set[] = { "PW_VK_BATCH", "PW_INPUT_SHARED_FAST", "GALLIUM_DRIVER" };
     const uint8_t *equals = memchr(value, '=', value_length);
     size_t name_length, data_length;

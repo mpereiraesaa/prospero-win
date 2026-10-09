@@ -880,7 +880,8 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   - `[debug] env = NAME=VALUE` adds one variable to Wine's environment for
     that game, up to five lines, for diagnostics such as
     `env = PW_NATIVE_PROFILE=1` or `env = PW_VK_BATCH_STATS=1`. Names start
-    with `PW_`, `DXVK_`, `MESA_`, `GALLIUM_`, `RADV_` or `VK_`; values take
+    with `PW_`, `DXVK_`, `MESA_`, `GALLIUM_`, `ZINK_` (Zink's own options,
+    such as `ZINK_DESCRIPTORS=lazy`), `RADV_` or `VK_`; values take
     letters, digits and `_ + - , . = : /`. A name the title sets itself is
     refused, so these only add: `PW_VK_BATCH`, `PW_INPUT_SHARED_FAST`,
     `PW_QPC_TSC_*`, `GALLIUM_DRIVER`, and `DXVK_HUD` or `GALLIUM_HUD` while
