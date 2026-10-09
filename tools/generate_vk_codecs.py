@@ -42,7 +42,35 @@ class Codecs:
    self.reason(getattr(getattr(v,'parent',None),'name',v.name),'guest callback '+v.name)
    return 'goto fail; /* callback pointer cannot be deferred */'
   return self.scalar(v,address)
+ def multidraw(self,parent):
+  return {'vkCmdDrawMultiEXT':('pVertexInfo','VkMultiDrawInfoEXT'),
+          'vkCmdDrawMultiIndexedEXT':('pIndexInfo','VkMultiDrawIndexedInfoEXT')}.get(parent.name)
+ def multidraw_field(self,v,parent):
+  name,typ=self.multidraw(parent)
+  if v.name=='stride':
+   # Preserve the caller's stride for source walking; only the wire is packed.
+   return f'{{ uint32_t stride=c->decode?0:sizeof({typ}); CHECK(pw_vk_codec_value(c,&stride,sizeof(stride),0)); if(c->decode)p->stride=stride; }}'
+  if v.name!=name:return None
+  copied='p->pVertexOffset?offsetof(VkMultiDrawIndexedInfoEXT,vertexOffset):sizeof(value)' if name=='pIndexInfo' else 'sizeof(value)'
+  return f"""{{ uint64_t count=p->drawCount;
+uint64_t extent; int present;
+size_t source_stride=c->decode?sizeof({typ}):p->stride;
+if(!c->decode && count){{
+ if(count>1 && (source_stride<sizeof({typ}) || source_stride%4))goto fail;
+ extent=(count-1)*(uint64_t)source_stride+sizeof({typ});
+ if(extent>SIZE_MAX || !pw_vk_codec_source(c,p->{name},(size_t)extent))goto fail;
+}}
+present=pw_vk_codec_array(c,(void *)&p->{name},count,sizeof({typ}),0);
+if(present<0)goto fail;
+if(present)for(uint64_t i=0;i<count;i++){{
+ if(c->decode){{ CHECK(codec_{typ}(c,(void *)&p->{name}[i],0)); }}
+ else{{ {typ} value={{0}}; memcpy(&value,(const unsigned char *)p->{name}+(size_t)i*source_stride,{copied}); CHECK(codec_{typ}(c,&value,0)); }}
+}}
+}}"""
  def field(self,v,parent):
+  if self.multidraw(parent):
+   special=self.multidraw_field(v,parent)
+   if special is not None:return special
   address='&p->'+v.name
   if getattr(v,'bit_width',None):
    width=v.bit_width
@@ -204,6 +232,7 @@ int pw_vk_generated_decode(unsigned code,const void *wire,size_t bytes,void *are
   if v.type_name in ['float','double']:return f'*({address})=({v.type_name})2.5;'
   return f'*({address})=({v.type_name})4;'
  def fixture_field(self,v,parent):
+  if v.name=='stride' and self.multidraw(parent):return 'p->stride=sizeof('+self.multidraw(parent)[1]+');'
   if v.name in ['pNext','pAllocator']:return ''
   if v.name=='sType' and getattr(v,'values',None):return 'p->sType='+v.values+';'
   if getattr(v,'bit_width',None):return 'p->'+v.name+'=1;'

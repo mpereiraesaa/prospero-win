@@ -511,3 +511,4 @@ wine/ps5/pw_vk_replay.c
 wine/ps5/pw_vk_replay.h
 tests/test_vk_replay.c
 docs/vulkan-replay-workers.md
+tests/lab/vk_multidraw_stride.c

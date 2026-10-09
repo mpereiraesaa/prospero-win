@@ -104,3 +104,20 @@ host throughput measurements carry no native graphics performance claim.
 The optional `blob-benchmark` mode runs a 64 KiB buffer update through encoding,
 stream collection, both decode passes and controlled native dispatch, counting
 generated scalar codec calls without asserting elapsed time.
+
+## Multidraw byte strides
+
+`vkCmdDrawMultiEXT` and `vkCmdDrawMultiIndexedEXT` accept a byte stride between
+input records. Encoding walks that stride, owns each record, and serializes a
+packed stride. Caller arrays and parameters stay unchanged. This uses the existing
+wire fields and works with the existing Unix decoder; no Unix library replacement
+is needed. Multiple records require an aligned stride at least the record size;
+a single record accepts zero stride. Pointer overflow and wire aliasing fail before
+source reads. Indexed draws retain the optional shared vertex offset and skip the ignored
+per-record vertex offset when that shared value is present.
+
+The PE32-to-Unix64 lab fixture checks the values at the decoded driver stride for
+empty, single, tightly packed and padded arrays, both indexed offset modes, source
+overwrite, malformed strides, pointer overflow and truncated packets. No GPU is
+used. Contracts: [multidraw](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdDrawMultiEXT.html)
+and [indexed multidraw](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdDrawMultiIndexedEXT.html).
