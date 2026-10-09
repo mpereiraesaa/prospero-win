@@ -6,7 +6,7 @@
 #define PW_D3D9_GAMMA_WORDS 768u
 #define PW_D3D9_GAMMA_REQUEST_BYTES 1560u
 #define PW_D3D9_GAMMA_REPLY_BYTES 1552u
-/* Outer opcode30. Ordered red, green, blue, 256 WORDs each. */
+/* Outer opcode31. Ordered red, green, blue, 256 WORDs each. */
 enum pw_d3d9_gamma_method {PW_D3D9_GAMMA_SET=21,PW_D3D9_GAMMA_GET=22};
 struct pw_d3d9_gamma_request {uint32_t method,swapchain,flags,has_ramp;uint16_t ramp[PW_D3D9_GAMMA_WORDS];};
 /* hresult is transport/dispatch status, never an invented native return value. */
