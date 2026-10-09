@@ -14,6 +14,9 @@
 #include "pw_d3d9_service_texture.h"
 #endif
 #include "pw_d3d9_session.h"
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+#include "pw_d3d9_native_draw_state.h"
+#endif
 #ifdef PW_D3D9_ENABLE_API_OBSERVE
 #include "pw_d3d9_api_observe.h"
 #endif
@@ -102,6 +105,9 @@ static uint32_t compiled_features(void)
     mask|=8192u | PW_D3D9_COMMAND_POLICY_FEATURE;
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
     mask|=PW_D3D9_BINDING_FEATURE;
+#endif
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+    mask|=PW_D3D9_DRAW_FEATURE;
 #endif
 #endif
     return mask;
@@ -524,6 +530,7 @@ static HRESULT batch_enqueue_admitted(struct pw_d3d9_session *s,struct pw_d3d9_o
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
  ,struct pw_d3d9_queue_ticket *ticket
 #endif
+ ,const struct pw_d3d9_session_observer *observer
 )
 {
     HRESULT hr=S_OK;int cleanup=0;
@@ -555,6 +562,7 @@ static HRESULT batch_enqueue_admitted(struct pw_d3d9_session *s,struct pw_d3d9_o
     if(ticket&&ticket->drop){s->tickets[s->batch.count-1]=*ticket;*ticket=(struct pw_d3d9_queue_ticket){0};}
 #endif
     if(s->batch_next==UINT64_MAX)s->batch_exhausted=1;else s->batch_next++;
+    if(observer&&observer->queued&&observer->queued(observer->context,request)!=S_OK){hr=E_FAIL;goto failed;}
     if(profile_enabled()){
         struct pw_d3d9_transport_stats sample={0};struct profile_record record;sample.async_queued=1;
         profile_capture(&s->ipc,&sample,NULL,0,S_OK,0,0,0,&record);
@@ -576,11 +584,13 @@ static HRESULT batch_enqueue(struct pw_d3d9_session *s,struct pw_d3d9_object_ref
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
         ,NULL
 #endif
+        ,NULL
     );
 }
 #endif
 static HRESULT transact_admitted(struct pw_d3d9_session *s,struct pw_d3d9_message *m,const void *payload,
-                        unsigned char *output,size_t capacity,struct pw_d3d9_message *reply,int inherited,struct batch_drops *drops)
+                        unsigned char *output,size_t capacity,struct pw_d3d9_message *reply,int inherited,struct batch_drops *drops,
+                        const struct pw_d3d9_session_observer *observer)
 {
     HRESULT result=E_FAIL;unsigned char scratch[RING_BYTES];const char *phase="send";
     int prof=profile_enabled(),present=prof?profile_present(m,payload):0,locked=0,cleanup=0,output_staged=0;
@@ -631,6 +641,8 @@ static HRESULT transact_admitted(struct pw_d3d9_session *s,struct pw_d3d9_messag
         }
     }
 #endif
+    if(observer&&observer->completed&&observer->completed(observer->context,m->opcode,payload,m->payload_bytes,
+        scratch+64,reply->payload_bytes,(HRESULT)reply->result)!=S_OK){cancel_ipc(&s->ipc);goto done;}
     if(reply->payload_bytes)memcpy(output,scratch+64,reply->payload_bytes);
     output_staged=1;
     phase="backend_result";result=(HRESULT)reply->result;
@@ -655,7 +667,7 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
  unsigned char *output,size_t capacity,struct pw_d3d9_message *reply)
 {
     struct batch_drops drops;drops.count=0;
-    return transact_admitted(s,m,payload,output,capacity,reply,0,&drops);
+    return transact_admitted(s,m,payload,output,capacity,reply,0,&drops,NULL);
 }
 static void destroy_session_now(struct pw_d3d9_session *s)
 {
@@ -728,6 +740,15 @@ HRESULT pw_d3d9_session_open(const WCHAR *service,const WCHAR *backend,struct pw
  fail:
     cancel_ipc(&s->ipc);destroy_session(s);return E_FAIL;
 }
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+static HRESULT transact_observed(struct pw_d3d9_session *s,struct pw_d3d9_message *m,const void *payload,
+ unsigned char *output,size_t capacity,struct pw_d3d9_message *reply,const struct pw_d3d9_session_observer *observer)
+{
+    struct batch_drops drops;drops.count=0;
+    if(!observer||!observer->completed){memset(reply,0,sizeof(*reply));pw_d3d9_session_cancel(s);return E_FAIL;}
+    return transact_admitted(s,m,payload,output,capacity,reply,0,&drops,observer);
+}
+#endif
 HRESULT pw_d3d9_session_create(struct pw_d3d9_session *s,UINT sdk,struct pw_d3d9_object_ref *ref)
 {
     SESSION_OPERATION(s,E_FAIL);
@@ -775,6 +796,26 @@ HRESULT pw_d3d9_session_device(struct pw_d3d9_session *s,struct pw_d3d9_object_r
     if(pw_d3d9_device_reply_decode(&decoded,out,r.payload_bytes)!=PW_D3D9_DEVICE_OK || decoded.operation!=request->operation || decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
     *reply=decoded;return hr;
 }
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+HRESULT pw_d3d9_session_device_observed(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,
+                              const struct pw_d3d9_device_request *request,struct pw_d3d9_device_reply *reply,const struct pw_d3d9_session_observer *observer)
+{
+    SESSION_OPERATION(s,E_FAIL);
+    unsigned char in[PW_D3D9_DEVICE_MAX_REQUEST],out[PW_D3D9_DEVICE_MAX_REPLY];size_t bytes;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_DEVICE_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
+    if(!s||!request||!reply)return E_POINTER;
+    int encoded=pw_d3d9_device_request_encode(in,sizeof(in),&bytes,request);
+    if(encoded==PW_D3D9_DEVICE_UNSUPPORTED)return E_NOTIMPL;
+    if(encoded!=PW_D3D9_DEVICE_OK)return E_INVALIDARG;
+    m.payload_bytes=(uint32_t)bytes;
+    HRESULT hr=transact_observed(s,&m,in,out,sizeof(out),&r,observer);
+    if(!r.payload_bytes&&FAILED(hr))return hr;
+    struct pw_d3d9_device_reply decoded;
+    if(pw_d3d9_device_reply_decode(&decoded,out,r.payload_bytes)!=PW_D3D9_DEVICE_OK || decoded.operation!=request->operation || decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
+#endif
+
 #endif
 #ifdef PW_D3D9_ENABLE_RESOURCE
 HRESULT pw_d3d9_session_resource(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,
@@ -842,13 +883,13 @@ HRESULT pw_d3d9_session_binding(struct pw_d3d9_session *s,struct pw_d3d9_object_
     if(hr!=S_OK){if(SUCCEEDED(hr))hr=E_FAIL;goto failed;}
     struct pw_d3d9_binding plan;
     if(s->async_enabled&&pw_d3d9_binding_plan(request,&plan)==PW_D3D9_BINDING_READY)
-        return batch_enqueue_admitted(s,ref,request,1,&drops,&ticket);
+        return batch_enqueue_admitted(s,ref,request,1,&drops,&ticket,NULL);
     /* Synchronous fallback keeps the same gate and ticket through the reply. */
     unsigned char input[RING_BYTES],output[16];size_t bytes;uint32_t method,result;
     if(pw_d3d9_command_encode(input,sizeof(input),&bytes,request)!=PW_D3D9_COMMAND_OK){hr=D3DERR_INVALIDCALL;goto failed;}
     if(ticket.drop){drops.items[drops.count++]=ticket;ticket=(struct pw_d3d9_queue_ticket){0};}
     struct pw_d3d9_message m={.opcode=PW_D3D9_COMMAND_CALL,.device=1,.object=ref.id,.generation=ref.generation,.payload_bytes=(uint32_t)bytes},r;
-    hr=transact_admitted(s,&m,input,output,sizeof(output),&r,1,&drops);
+    hr=transact_admitted(s,&m,input,output,sizeof(output),&r,1,&drops,NULL);
     if(FAILED(hr)&&!r.payload_bytes)return hr;
     if(pw_d3d9_command_reply_decode(&method,&result,output,r.payload_bytes)!=PW_D3D9_COMMAND_OK||method!=request->method||result!=(uint32_t)hr){pw_d3d9_session_cancel(s);return E_FAIL;}
     return hr;
@@ -856,6 +897,108 @@ HRESULT pw_d3d9_session_binding(struct pw_d3d9_session *s,struct pw_d3d9_object_
     if(ticket.drop)drops.items[drops.count++]=ticket;
     s->active_thread=0;serial_leave(s);batch_cancel_drain(s);batch_drop(&drops);
     restore_quit();drain_deferred(s);return hr;
+}
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+HRESULT pw_d3d9_session_binding_observed(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,
+ struct pw_d3d9_command *request,pw_d3d9_binding_acquire_fn acquire,void *context,const struct pw_d3d9_session_observer *observer)
+{
+    SESSION_OPERATION(s,E_FAIL);
+    if(!s||!request||!acquire)return E_POINTER;
+    if(!observer||!observer->completed||!observer->queued){pw_d3d9_session_cancel(s);return E_FAIL;}
+    if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+    if(!ref.id||!ref.generation)return D3DERR_INVALIDCALL;
+    if(serial_enter(s)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
+    if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
+    s->active_thread=GetCurrentThreadId();
+    struct batch_drops drops;drops.count=0;
+    struct pw_d3d9_queue_ticket ticket={0};HRESULT hr=E_FAIL;
+    if(pw_d3d9_channel_state(&s->ipc.channel)!=PW_D3D9_READY)goto failed;
+    hr=acquire(context,request,&ticket);
+    if(hr!=S_OK){if(SUCCEEDED(hr))hr=E_FAIL;goto failed;}
+    struct pw_d3d9_binding plan;
+    if(s->async_enabled&&pw_d3d9_binding_plan(request,&plan)==PW_D3D9_BINDING_READY)
+        return batch_enqueue_admitted(s,ref,request,1,&drops,&ticket,observer);
+    /* Synchronous fallback keeps the same gate and ticket through the reply. */
+    unsigned char input[RING_BYTES],output[16];size_t bytes;uint32_t method,result;
+    if(pw_d3d9_command_encode(input,sizeof(input),&bytes,request)!=PW_D3D9_COMMAND_OK){hr=D3DERR_INVALIDCALL;goto failed;}
+    if(ticket.drop){drops.items[drops.count++]=ticket;ticket=(struct pw_d3d9_queue_ticket){0};}
+    struct pw_d3d9_message m={.opcode=PW_D3D9_COMMAND_CALL,.device=1,.object=ref.id,.generation=ref.generation,.payload_bytes=(uint32_t)bytes},r;
+    hr=transact_admitted(s,&m,input,output,sizeof(output),&r,1,&drops,observer);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_command_reply_decode(&method,&result,output,r.payload_bytes)!=PW_D3D9_COMMAND_OK||method!=request->method||result!=(uint32_t)hr){pw_d3d9_session_cancel(s);return E_FAIL;}
+    return hr;
+ failed:
+    if(ticket.drop)drops.items[drops.count++]=ticket;
+    s->active_thread=0;serial_leave(s);batch_cancel_drain(s);batch_drop(&drops);
+    restore_quit();drain_deferred(s);return hr;
+}
+#endif
+
+#endif
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+HRESULT pw_d3d9_session_command_observed(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,
+ const struct pw_d3d9_command *request,const struct pw_d3d9_session_observer *observer)
+{
+    SESSION_OPERATION(s,E_FAIL);
+    unsigned char input[RING_BYTES],output[16];size_t bytes;uint32_t method,result;
+    if(!s||!request)return E_POINTER;
+    if(!observer||!observer->completed||!observer->queued||!observer->eligible){pw_d3d9_session_cancel(s);return E_FAIL;}
+    if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+    if(!ref.id||!ref.generation)return D3DERR_INVALIDCALL;
+    if(pw_d3d9_command_encode(input,sizeof(input),&bytes,request)!=PW_D3D9_COMMAND_OK)return D3DERR_INVALIDCALL;
+    if(serial_enter(s)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
+    if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
+    s->active_thread=GetCurrentThreadId();
+    struct batch_drops drops;drops.count=0;
+    /* Read owner evidence only after admission. No local cache or successful
+     * acceptance may bypass cancellation, sticky failure or callback guards. */
+    if(pw_d3d9_channel_state(&s->ipc.channel)==PW_D3D9_READY&&SUCCEEDED(s->batch_failure)&&s->async_enabled&&
+       (pw_d3d9_command_can_queue(request)||observer->eligible(observer->context,request)))
+        return batch_enqueue_admitted(s,ref,request,1,&drops,NULL,observer);
+    struct pw_d3d9_message m={.opcode=PW_D3D9_COMMAND_CALL,.device=1,.object=ref.id,.generation=ref.generation,.payload_bytes=(uint32_t)bytes},r;
+    HRESULT hr=transact_admitted(s,&m,input,output,sizeof(output),&r,1,&drops,observer);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_command_reply_decode(&method,&result,output,r.payload_bytes)!=PW_D3D9_COMMAND_OK||method!=request->method||result!=(uint32_t)hr){pw_d3d9_session_cancel(s);return E_FAIL;}
+    return hr;
+}
+#endif
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+HRESULT pw_d3d9_session_getter_observed(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,
+ const struct pw_d3d9_getter_request *request,struct pw_d3d9_getter_reply *reply,const struct pw_d3d9_session_observer *observer)
+{
+    SESSION_OPERATION(s,E_FAIL);
+    unsigned char input[24],output[PW_D3D9_GETTER_MAX];size_t bytes,written;struct pw_d3d9_getter_reply decoded={0};
+    if(!s||!request||!reply)return E_POINTER;
+    if(!observer||!observer->completed){pw_d3d9_session_cancel(s);return E_FAIL;}
+    if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+    if(!ref.id||!ref.generation)return D3DERR_INVALIDCALL;
+    if(pw_d3d9_getter_encode(input,sizeof(input),&bytes,request)!=PW_D3D9_GETTER_OK)return D3DERR_INVALIDCALL;
+    if(serial_enter(s)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
+    if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
+    s->active_thread=GetCurrentThreadId();struct batch_drops drops;drops.count=0;HRESULT hr=E_FAIL;
+    if(FAILED(s->batch_failure)){hr=s->batch_failure;goto local_done;}
+    if(pw_d3d9_channel_state(&s->ipc.channel)!=PW_D3D9_READY)goto local_done;
+    /* A known answer observes accepted ordered setters. It may avoid flushing
+     * a pending proven batch, but can never bypass an already known failure.
+     * Async-off remains the original synchronous baseline. */
+    if(s->async_enabled&&request->method==45&&observer->answer){
+        int hit=observer->answer(observer->context,request,&decoded);
+        if(hit<0){cancel_ipc(&s->ipc);goto local_done;}
+        if(hit){
+            if(hit!=1||decoded.hresult!=S_OK||pw_d3d9_getter_reply_encode(output,sizeof(output),&written,request,&decoded)!=PW_D3D9_GETTER_OK){cancel_ipc(&s->ipc);goto local_done;}
+            hr=S_OK;goto local_done;
+        }
+    }
+    struct pw_d3d9_message m={.opcode=PW_D3D9_GETTER_CALL,.device=1,.object=ref.id,.generation=ref.generation,.payload_bytes=(uint32_t)bytes},r;
+    hr=transact_admitted(s,&m,input,output,sizeof(output),&r,1,&drops,observer);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_getter_reply_decode(&decoded,request,output,r.payload_bytes)!=PW_D3D9_GETTER_OK||decoded.hresult!=(uint32_t)hr){pw_d3d9_session_cancel(s);return E_FAIL;}
+    *reply=decoded;return hr;
+ local_done:
+    s->active_thread=0;serial_leave(s);batch_cancel_drain(s);batch_drop(&drops);
+    restore_quit();drain_deferred(s);
+    if(hr==S_OK)*reply=decoded;
+    return hr;
 }
 #endif
 HRESULT pw_d3d9_session_getter(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_getter_request *request,struct pw_d3d9_getter_reply *reply)
@@ -954,6 +1097,21 @@ HRESULT pw_d3d9_session_stateblock(struct pw_d3d9_session *s,struct pw_d3d9_obje
     if(pw_d3d9_stateblock_reply_decode(&decoded,request,out,r.payload_bytes)!=PW_D3D9_SB_OK||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
     *reply=decoded;return hr;
 }
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+HRESULT pw_d3d9_session_stateblock_observed(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_stateblock_request *request,struct pw_d3d9_stateblock_reply *reply,const struct pw_d3d9_session_observer *observer)
+{
+    SESSION_OPERATION(s,E_FAIL);
+    unsigned char in[16],out[16];struct pw_d3d9_stateblock_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_STATEBLOCK_CALL,.device=1,.object=ref.id,.generation=ref.generation,.payload_bytes=16},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_stateblock_encode(in,sizeof(in),request)!=PW_D3D9_SB_OK)return D3DERR_INVALIDCALL;
+    HRESULT hr=transact_observed(s,&m,in,out,sizeof(out),&r,observer);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_stateblock_reply_decode(&decoded,request,out,r.payload_bytes)!=PW_D3D9_SB_OK||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
+#endif
+
 #endif
 #ifdef PW_D3D9_ENABLE_OBJECT_GETTER
 HRESULT pw_d3d9_session_object_getter(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_object_getter_request *request,struct pw_d3d9_object_getter_reply *reply)
@@ -968,6 +1126,21 @@ HRESULT pw_d3d9_session_object_getter(struct pw_d3d9_session *s,struct pw_d3d9_o
     if(pw_d3d9_object_getter_reply_decode(&decoded,request,out,r.payload_bytes)!=PW_D3D9_OBJECT_GETTER_OK||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
     *reply=decoded;return hr;
 }
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+HRESULT pw_d3d9_session_object_getter_observed(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_object_getter_request *request,struct pw_d3d9_object_getter_reply *reply,const struct pw_d3d9_session_observer *observer)
+{
+    SESSION_OPERATION(s,E_FAIL);
+    unsigned char in[24],out[32];size_t bytes;struct pw_d3d9_object_getter_reply decoded;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_OBJECT_GETTER_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
+    if(!s||!request||!reply)return E_POINTER;
+    if(pw_d3d9_object_getter_encode(in,sizeof(in),&bytes,request)!=PW_D3D9_OBJECT_GETTER_OK)return D3DERR_INVALIDCALL;
+    m.payload_bytes=(uint32_t)bytes;HRESULT hr=transact_observed(s,&m,in,out,sizeof(out),&r,observer);
+    if(FAILED(hr)&&!r.payload_bytes)return hr;
+    if(pw_d3d9_object_getter_reply_decode(&decoded,request,out,r.payload_bytes)!=PW_D3D9_OBJECT_GETTER_OK||decoded.hresult!=(uint32_t)hr){cancel_ipc(&s->ipc);return E_FAIL;}
+    *reply=decoded;return hr;
+}
+#endif
+
 #endif
 #ifdef PW_D3D9_ENABLE_UP
 HRESULT pw_d3d9_session_up(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_up_request *request,struct pw_d3d9_up_reply *reply)
@@ -1236,6 +1409,9 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             if(m.device||m.object||m.payload_bytes!=32||memcmp(payload,hello,32)||pw_d3d9_channel_ready(&ipc.channel)!=PW_D3D9_OK)goto done;
 #ifdef PW_D3D9_ENABLE_BINDING_TICKETS
             if(!pw_d3d9_service_batch_bindings(&batches,1))goto done;
+#endif
+#ifdef PW_D3D9_ENABLE_DRAW_BATCH
+            if(!pw_d3d9_service_batch_draws(&batches,1))goto done;
 #endif
             memcpy(output,hello,32);bytes=32;
         }else if(m.opcode==PW_D3D9_STOP){
