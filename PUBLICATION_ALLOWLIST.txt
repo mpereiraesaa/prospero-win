@@ -775,3 +775,7 @@ wine/ps5/d3d9/pw_d3d9_native_query.h
 tests/lab/d3d9_native_query.c
 tests/lab/d3d9_native_query.py
 docs/d3d9-native-query.md
+wine/ps5/pw_d3d9_gamma_wire.c
+wine/ps5/pw_d3d9_gamma_wire.h
+tests/test_d3d9_gamma_wire.c
+docs/d3d9-gamma-wire.md
