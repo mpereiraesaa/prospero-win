@@ -27,7 +27,7 @@ static struct pw_vk_template_cache templates;
 static struct pw_vk_retirement retirement;
 static unsigned char *scratch;
 static BOOL enabled,stats_enabled;
-static _Atomic int negotiated;
+static _Atomic int negotiated,async_backend;
 /* Only the existing gated fallback path owns these arrays. */
 static BOOL fallback_profile;
 static UINT64 fallback_counts[unix_count],fallback_reported[unix_count];
@@ -173,10 +173,10 @@ static NTSTATUS flush_call(unsigned int code,void *args)
 {
  size_t bytes=0,records=0;struct pw_vk_batch_params p;NTSTATUS status;
  collect(&bytes,&records);
- if(!bytes){status=code==unix_count?STATUS_SUCCESS:raw_call(code,args);pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return status;}
- p.version=PW_VK_BATCH_VERSION;p.batch=(UINT_PTR)scratch;p.bytes=bytes;p.code=code;p.args=(UINT_PTR)args;p.status=STATUS_SUCCESS;
+ if(!bytes&&!async_backend){status=code==unix_count?STATUS_SUCCESS:raw_call(code,args);pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return status;}
+ p.version=async_backend?PW_VK_BATCH_ASYNC_VERSION:PW_VK_BATCH_VERSION;p.batch=(UINT_PTR)scratch;p.bytes=bytes;p.code=code;p.args=(UINT_PTR)args;p.status=STATUS_SUCCESS;
  status=raw_call(unix_pw_vk_batch,&p);if(status)fatal();
- dispatches_total++;records_total+=records;if(code!=unix_count)piggyback_total++;
+ dispatches_total++;records_total+=records;if(code<unix_count)piggyback_total++;
  pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return p.status;
 }
 /* Manual loader wrappers unlink PE lists immediately, but queued native thunks
@@ -346,9 +346,10 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
  fallback_total++;
  if(fallback_profile&&code<unix_count)fallback_counts[code]++;
  if(pw_vk_stream_progress_call(code)){
-  /* Complete owned replay before unlocking. Never piggyback a driver wait on
-   * shared scratch: another thread must be able to drain and signal it. */
-  if(negotiated)flush_call(unix_count,NULL);
+  /* Transfer owned records before unlocking. The async backend waits only
+   * the referenced lanes in raw submit/lifecycle hooks. Never run a blocking
+   * driver wait while holding the PE gate or retaining shared scratch. */
+  if(negotiated)flush_call(async_backend?unix_count+1:unix_count,NULL);
   leave();status=raw_call(code,args);
   /* All other progress operations have no cache/lifetime posthooks. Present
    * diagnostics read non-atomic cumulative totals briefly under the gate. */
@@ -357,7 +358,15 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
  }
  status=negotiated?flush_call(code,args):raw_call(code,args);
  retire_template(code,args);template_created(code,args);
- if(code==unix_vkCreateInstance&&!status){struct vkCreateInstance_params *q=args;if(q->result==VK_SUCCESS&&q->pInstance&&*q->pInstance){struct is_available_instance_function_params cap={*q->pInstance,PW_VK_BATCH_NAME};negotiated=raw_call(unix_is_available_instance_function,&cap)==PW_VK_BATCH_CAPABILITY;}}
+ if(code==unix_vkCreateInstance&&!status){
+  struct vkCreateInstance_params *q=args;
+  if(q->result==VK_SUCCESS&&q->pInstance&&*q->pInstance){
+   struct is_available_instance_function_params cap={*q->pInstance,PW_VK_BATCH_ASYNC_NAME};
+   async_backend=raw_call(unix_is_available_instance_function,&cap)==PW_VK_BATCH_ASYNC_CAPABILITY;
+   if(async_backend)negotiated=TRUE;
+   else{cap.name=PW_VK_BATCH_NAME;negotiated=raw_call(unix_is_available_instance_function,&cap)==PW_VK_BATCH_CAPABILITY;}
+  }
+ }
  snapshot(code,args);
  leave();return status;
 }

@@ -19,7 +19,8 @@ static void diagnostic(const char *format,...)
 #define WINE_MESSAGE(...) diagnostic(__VA_ARGS__)
 #include "pw_vk_batch_pe.c"
 static unsigned ordinary,batches,replayed,draw_raw,sequence[4096],used;
-static BOOL support=TRUE;
+static BOOL support=TRUE,async_support;
+static unsigned async_pending,empty_batches,admissions,completions;
 static HANDLE replay_entered,replay_release;
 static LONG hold_replay;
 static int effect(void *unused,const struct pw_vk_stream_record *r){(void)unused;assert(pw_vk_wire_validate(r->opcode,r->payload,r->payload_bytes));assert(r->opcode==PW_VK_DRAW_INDEXED);assert(used<4096);sequence[used++]=pw_vk_wire_u32(r->payload+4);replayed++;return 0;}
@@ -27,14 +28,29 @@ static NTSTATUS original(unsigned int code,void *args)
 {
  ordinary++;
  if(code==unix_vkCreateInstance){struct vkCreateInstance_params *p=args;*p->pInstance=(VkInstance)(uintptr_t)7;p->result=VK_SUCCESS;}
- if(code==unix_is_available_instance_function){struct is_available_instance_function_params *p=args;if(!strcmp(p->name,PW_VK_BATCH_NAME))return support?PW_VK_BATCH_CAPABILITY:0;}
+ if(code==unix_is_available_instance_function){struct is_available_instance_function_params *p=args;if(!strcmp(p->name,PW_VK_BATCH_ASYNC_NAME))return async_support?PW_VK_BATCH_ASYNC_CAPABILITY:0;if(!strcmp(p->name,PW_VK_BATCH_NAME))return support?PW_VK_BATCH_CAPABILITY:0;}
  if(code==unix_vkCmdDrawIndexed)draw_raw++;
+ if(async_support&&code==unix_vkQueuePresentKHR)assert(!depth&&async_pending);
+ if(async_support&&(code==unix_vkDestroyBuffer||code==unix_vkCreateDebugUtilsMessengerEXT))assert(!async_pending);
  if(code==unix_vkCreateDebugUtilsMessengerEXT){struct is_available_instance_function_params p={(VkInstance)(uintptr_t)7,"vkDummy"};assert(pw_vk_batch_call(unix_is_available_instance_function,&p)==STATUS_SUCCESS);}
  return STATUS_SUCCESS;
 }
 static NTSTATUS mock_call(unsigned int code,void *args)
 {
- if(code==unix_pw_vk_batch){struct pw_vk_batch_params *p=args;size_t done;if(InterlockedCompareExchange(&hold_replay,0,0)){SetEvent(replay_entered);assert(WaitForSingleObject(replay_release,2000)==WAIT_OBJECT_0);}batches++;assert(support);assert(p->version==PW_VK_BATCH_VERSION);assert(pw_vk_stream_replay((void *)(uintptr_t)p->batch,p->bytes,effect,NULL,&done)==PW_VK_STREAM_OK);p->status=p->code==unix_count?STATUS_SUCCESS:original(p->code,(void *)(uintptr_t)p->args);return STATUS_SUCCESS;}
+ if(code==unix_pw_vk_batch){
+  struct pw_vk_batch_params *p=args;size_t done;
+  if(InterlockedCompareExchange(&hold_replay,0,0)){SetEvent(replay_entered);assert(WaitForSingleObject(replay_release,2000)==WAIT_OBJECT_0);}
+  batches++;assert(support);assert(p->version==(async_support?PW_VK_BATCH_ASYNC_VERSION:PW_VK_BATCH_VERSION));
+  if(!p->bytes)empty_batches++;
+  assert(pw_vk_stream_replay((void *)(uintptr_t)p->batch,p->bytes,effect,NULL,&done)==PW_VK_STREAM_OK);
+  if(async_support){
+   async_pending+=done;
+   if(p->code==unix_count+1){admissions++;assert(depth);}
+   else{async_pending=0;completions++;}
+  }else assert(p->code<=unix_count);
+  p->status=p->code>=unix_count?STATUS_SUCCESS:original(p->code,(void *)(uintptr_t)p->args);
+  return STATUS_SUCCESS;
+ }
  return original(code,args);
 }
 static void draw_index(unsigned n){struct vkCmdDrawIndexed_params p={(VkCommandBuffer)(uintptr_t)9,n,1,0,-7,0};assert(pw_vk_batch_call(unix_vkCmdDrawIndexed,&p)==STATUS_SUCCESS);memset(&p,0xee,sizeof(p));}
@@ -44,10 +60,32 @@ static DWORD WINAPI disable_worker(void *unused){struct vkCreateDebugUtilsMessen
 int main(int argc,char **argv)
 {
  VkInstance handle;VkInstanceCreateInfo info={0};struct vkCreateInstance_params create={0};HANDLE thread;struct vkResetCommandBuffer_params destroy={0};unsigned prior;
- assert(argc==2);support=strcmp(argv[1],"old")!=0;SetEnvironmentVariableA("PW_VK_BATCH",(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats"))?"0":"1");SetEnvironmentVariableA("PW_VK_BATCH_STATS",(!strcmp(argv[1],"stats")||!strcmp(argv[1],"profile")||!strcmp(argv[1],"stall-report"))?"1":"0");SetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",(!strcmp(argv[1],"profile")||!strcmp(argv[1],"profile-no-stats"))?"1":"0");
+ assert(argc==2);async_support=!strncmp(argv[1],"async-",6);support=strcmp(argv[1],"old")!=0;SetEnvironmentVariableA("PW_VK_BATCH",(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats"))?"0":"1");SetEnvironmentVariableA("PW_VK_BATCH_STATS",(!strcmp(argv[1],"stats")||!strcmp(argv[1],"profile")||!strcmp(argv[1],"stall-report"))?"1":"0");SetEnvironmentVariableA("PW_VK_BATCH_FALLBACK_PROFILE",(!strcmp(argv[1],"profile")||!strcmp(argv[1],"profile-no-stats"))?"1":"0");
  create.pCreateInfo=&info;create.pInstance=&handle;assert(pw_vk_batch_call(unix_vkCreateInstance,&create)==0);
  if(!strcmp(argv[1],"off")||!strcmp(argv[1],"stats")||!support){draw_index(1);assert(draw_raw==1&&batches==0);if(!strcmp(argv[1],"stats")){struct vkQueuePresentKHR_params q={0};assert(pw_vk_batch_call(unix_vkQueuePresentKHR,&q)==0);assert(crossings_total==3&&present==1);}else assert(crossings_total==0);puts("PASS original path and old-Unix capability without new table access");return 0;}
- assert(negotiated&&enabled);
+ assert(negotiated&&enabled);assert(!!async_backend==!!async_support);
+ if(async_support){
+  struct vkQueuePresentKHR_params present_args={0};
+  draw_index(71);assert(!batches);
+  assert(!pw_vk_batch_call(unix_vkQueuePresentKHR,&present_args));
+  assert(batches==1&&admissions==1&&!completions&&async_pending==1&&!depth);
+  /* A second progress call has no PE bytes but still transfers an empty
+   * admission fence; the backend retains outstanding unrelated work. */
+  assert(!pw_vk_batch_call(unix_vkQueuePresentKHR,&present_args));
+  assert(batches==2&&admissions==2&&empty_batches==1&&async_pending==1);
+  if(!strcmp(argv[1],"async-disable")){
+   struct vkCreateDebugUtilsMessengerEXT_params callback={0};
+   assert(!pw_vk_batch_call(unix_vkCreateDebugUtilsMessengerEXT,&callback));
+   assert(sticky_disabled&&!depth&&!async_pending&&completions==1&&empty_batches==2);
+   prior=batches;draw_index(72);assert(draw_raw==1&&batches==prior);
+   puts("PASS async empty completion before sticky callback disable and raw reentry");return 0;
+  }
+  assert(!strcmp(argv[1],"async-lifetime"));
+  {struct vkDestroyBuffer_params p={0};assert(!pw_vk_batch_call(unix_vkDestroyBuffer,&p));}
+  assert(!async_pending&&completions==1&&empty_batches==2&&batches==3&&!depth);
+  assert(piggyback_total==1); /* Admission sentinels are not piggybacks. */
+  puts("PASS async capability, empty admission, unlocked progress and empty resource barrier");return 0;
+ }
  if(!strcmp(argv[1],"stall-report")){
   struct producer *p=producer();struct pw_vk_spsc_sequence paused_sequence;
   struct vkCmdDrawIndexed_params draw={(VkCommandBuffer)(uintptr_t)9,31,1,0,0,0};size_t bytes;uint32_t opcode;
