@@ -19,3 +19,26 @@ The portable accumulator test covers accumulation, absent/reversed clocks and sa
 With API observation compiled, each published Present emits its API snapshot after releasing the session lock, using the identical epoch/request sequence/object/generation. Backend failures are included; unpublished/nested rejects have no immediate API snapshot. Their external entry counts remain in the next process-wide snapshot. Client teardown flushes API histograms after broker join and before IPC destruction, outside transaction locks. API process scope differs from transport session scope; do not infer per-device API totals from correlation.
 
 `tests/lab/d3d9_profile_transport.py --recovery PATH --output NEW_PATH` builds the actual paired DLLs and runs three existing D3DX smoke cycles, substituting only the previously tested ordinary-host native HWND adapter. It requires terminal success, exact client/service/API Present correlation, matching request/reply counts and byte totals, valid clocks, and final API flushes. This proves real native-service metric routing, not console throughput or CPU time.
+
+## Pipeline accumulator fields
+
+The local accumulator reserves four opt-in pipeline counters. No wire layout or
+feature negotiation changes with this helper alone:
+
+- `pipeline_published`: batches actually published to the request ring.
+- `pipeline_acked`: batches retired by a fully validated ACK, including a valid
+  failed-prefix ACK. Malformed or missing ACKs do not increment it.
+- `pipeline_pending_peak`: maximum published, not-yet-retired batch count in the
+  interval. Accumulator merge takes the maximum; it does not sum this field.
+- `pipeline_wait_wall_us`: producer wall time spent waiting for an ACK at a
+  credit/ring limit or synchronous boundary. It includes callbacks and scheduling
+  delay and is not CPU time or pure blocked time.
+
+The other three fields sum with the existing saturation rules. Pipeline-disabled
+runs leave all four zero. Session integration and native overlap evidence are
+separate changes. Existing `published` and historical emitted
+`sync_published` counters retain their raw wire-publication meaning; consumers
+can subtract `pipeline_published` to derive synchronous publications when these
+new fields are emitted. Overlapping publication-to-ACK lifetimes must not be
+summed as producer time. Existing guest-wait and roundtrip totals may overlap
+with the new wait field, so it is a breakdown, not an additional elapsed interval.

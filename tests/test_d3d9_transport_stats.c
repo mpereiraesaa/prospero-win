@@ -18,5 +18,13 @@ int main(void){
  assert(!pw_d3d9_stats_ticks_us(3,0));
  assert(!pw_d3d9_stats_ticks_us((UINT64_MAX/1000000u)*3+2,3));
  assert(pw_d3d9_stats_ticks_us(UINT64_MAX,1000000)==UINT64_MAX);
+ struct pw_d3d9_transport_stats pipeline={0},part={0};
+ assert(!pipeline.pipeline_published&&!pipeline.pipeline_acked&&!pipeline.pipeline_pending_peak&&!pipeline.pipeline_wait_wall_us);
+ part.pipeline_published=3;part.pipeline_acked=2;part.pipeline_pending_peak=3;part.pipeline_wait_wall_us=17;
+ pw_d3d9_stats_add(&pipeline,&part);part.pipeline_pending_peak=2;pw_d3d9_stats_add(&pipeline,&part);
+ assert(pipeline.pipeline_published==6&&pipeline.pipeline_acked==4&&pipeline.pipeline_pending_peak==3&&pipeline.pipeline_wait_wall_us==34);
+ part.pipeline_pending_peak=8;part.pipeline_published=UINT64_MAX;pw_d3d9_stats_add(&pipeline,&part);
+ assert(pipeline.pipeline_published==UINT64_MAX&&pipeline.saturated&&pipeline.pipeline_pending_peak==8);
+ struct pw_d3d9_transport_stats empty={0};pw_d3d9_stats_add(&pipeline,&empty);assert(pipeline.pipeline_pending_peak==8);
  puts("transport stats PASS");return 0;
 }
