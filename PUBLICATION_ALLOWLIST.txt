@@ -906,6 +906,10 @@ tests/lab/d3d9_surface_owners_control.c
 tests/lab/d3d9_surface_owners_control.py
 tests/lab/d3d9_program_copy.c
 tests/lab/d3d9_program_copy.py
+wine/ps5/pw_d3d9_batch_pipeline.c
+wine/ps5/pw_d3d9_batch_pipeline.h
+tests/test_d3d9_batch_pipeline.c
+docs/d3d9-batch-pipeline.md
 wine/ps5/pw_d3d9_command_batch.c
 wine/ps5/pw_d3d9_command_batch.h
 tests/test_d3d9_command_batch.c
