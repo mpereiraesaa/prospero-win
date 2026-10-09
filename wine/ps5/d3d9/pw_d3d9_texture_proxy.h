@@ -5,6 +5,8 @@
 #include "pw_d3d9_session.h"
 #include "pw_d3d9_texture_client.h"
 #include "pw_d3d9_kinds.h"
+/* texture must validate a CONTAINER device reply against the exact parent
+ * remote identity before returning it; mismatches cancel the session. */
 struct pw_d3d9_texture_proxy_ops {
  HRESULT (*texture)(IDirect3DDevice9 *,struct pw_d3d9_object_ref,const struct pw_d3d9_texture_request *,struct pw_d3d9_texture_reply *);
  HRESULT (*release)(IDirect3DDevice9 *,struct pw_d3d9_object_ref);

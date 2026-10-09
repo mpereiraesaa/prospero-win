@@ -166,7 +166,38 @@ static HRESULT WINAPI texture_surface(IDirect3DTexture9 *s,UINT level,IDirect3DS
  if(SUCCEEDED(hr)){p->client.object=r.object;if(!r.object.id || !r.object.generation){ops.fail(p->parent,E_FAIL);free_local(p);hr=E_FAIL;}else {HRESULT adopted=adopt(p,r.levels,(void **)out);if(FAILED(adopted))hr=adopted;}}else free_local(p);
  release(s);return hr;
 }
-static HRESULT WINAPI surface_container(IDirect3DSurface9 *s,REFIID i,void **o){(void)i;if(o)*o=NULL;return unsupported(s);}
+static HRESULT WINAPI surface_container(IDirect3DSurface9 *s,REFIID iid,void **out)
+{
+ static const IID *const interfaces[]={NULL,&IID_IUnknown,&IID_IDirect3DDevice9,&IID_IDirect3DResource9,
+  &IID_IDirect3DBaseTexture9,&IID_IDirect3DTexture9,&IID_IDirect3DSwapChain9};
+ struct proxy *surface=impl(s),*holder;struct pw_d3d9_texture_request q={0};struct pw_d3d9_texture_reply r={0};
+ IUnknown *texture=NULL;HRESULT hr,local;unsigned selector;
+ if(!out)return D3DERR_INVALIDCALL;
+ *out=NULL;if(!iid)return E_NOINTERFACE;
+ for(selector=1;selector<sizeof(interfaces)/sizeof(*interfaces);selector++)if(IsEqualGUID(iid,interfaces[selector]))break;
+ if(selector==sizeof(interfaces)/sizeof(*interfaces))return E_NOINTERFACE;
+ addref(s);
+ /* Allocate retirement storage before obtaining any owned remote reference. */
+ holder=allocate(surface->parent,PW_D3D9_KIND_TEXTURE_2D);
+ if(!holder){release(s);return E_OUTOFMEMORY;}
+ q.operation=PW_D3D9_TEXTURE_CONTAINER;q.value=selector;hr=invoke(surface,&q,&r);
+ if(FAILED(hr)){free_local(holder);goto done;}
+ if(!r.object.id || !r.object.generation ||
+    (r.container_kind!=PW_D3D9_KIND_DEVICE && r.container_kind!=PW_D3D9_KIND_TEXTURE_2D) ||
+    (r.container_kind==PW_D3D9_KIND_DEVICE ? r.levels!=0 : !r.levels)){
+  ops.fail(surface->parent,E_FAIL);free_local(holder);hr=E_FAIL;goto done;
+ }
+ holder->client.object=r.object;
+ if(r.container_kind==PW_D3D9_KIND_DEVICE){
+  /* Session adapter verifies this ID is the exact parent device before returning it. */
+  finish(holder);local=IDirect3DDevice9_QueryInterface(surface->parent,iid,out);
+ }else{
+  local=adopt(holder,r.levels,(void **)&texture);
+  if(SUCCEEDED(local)){local=IUnknown_QueryInterface(texture,iid,out);IUnknown_Release(texture);}
+ }
+ if(FAILED(local))hr=local;
+ done:release(s);return hr;
+}
 static HRESULT WINAPI surface_getdc(IDirect3DSurface9 *s,HDC *dc){(void)dc;return unsupported(s);}
 static HRESULT WINAPI surface_releasedc(IDirect3DSurface9 *s,HDC dc){(void)dc;return unsupported(s);}
 #define COMMON_SLOTS(t) t##_query,t##_addref,t##_release,t##_device,t##_setprivate,t##_getprivate,t##_freeprivate,t##_setpriority,t##_priority,t##_preload,t##_type

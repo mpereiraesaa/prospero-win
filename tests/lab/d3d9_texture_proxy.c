@@ -9,6 +9,8 @@ static IDirect3DDevice9 parent;static LONG parent_refs=1;static unsigned refs[16
 static unsigned char contents[24];static struct pw_d3d9_deferred *pending;
 static ULONG WINAPI parent_addref(IDirect3DDevice9 *d){assert(d==&parent);return InterlockedIncrement(&parent_refs);}
 static ULONG WINAPI parent_release(IDirect3DDevice9 *d){assert(d==&parent);return InterlockedDecrement(&parent_refs);}
+static HRESULT WINAPI parent_query(IDirect3DDevice9 *d,REFIID iid,void **out)
+{*out=NULL;if(!IsEqualGUID(iid,&IID_IUnknown)&&!IsEqualGUID(iid,&IID_IDirect3DDevice9))return E_NOINTERFACE;*out=d;parent_addref(d);return S_OK;}
 static HRESULT exchange(IDirect3DDevice9 *d,struct pw_d3d9_object_ref ref,const struct pw_d3d9_texture_request *request,struct pw_d3d9_texture_reply *r)
 {
  struct pw_d3d9_texture_request decoded;unsigned char wire[PW_D3D9_TEXTURE_MAX_WIRE];size_t bytes;const struct pw_d3d9_texture_request *q=&decoded;unsigned id=ref.id;
@@ -23,6 +25,11 @@ static HRESULT exchange(IDirect3DDevice9 *d,struct pw_d3d9_object_ref ref,const 
  case PW_D3D9_TEXTURE_CREATE_DEPTH:assert(q->discard==0xffffffffu);id=11;goto created;
  case PW_D3D9_TEXTURE_SURFACE_LEVEL:assert(ref.id==7 && q->level==2);id=8;
  created:refs[id]++;r->object=(struct pw_d3d9_object_ref){id,9};r->levels=id==7?6:1;break;
+ case PW_D3D9_TEXTURE_CONTAINER:
+  if(id==8 && q->value!=PW_D3D9_CONTAINER_DEVICE && q->value!=PW_D3D9_CONTAINER_SWAPCHAIN){r->container_kind=PW_D3D9_KIND_TEXTURE_2D;id=7;r->levels=6;}
+  else if(id==9 && (q->value==PW_D3D9_CONTAINER_UNKNOWN || q->value==PW_D3D9_CONTAINER_DEVICE)){r->container_kind=PW_D3D9_KIND_DEVICE;id=2;r->levels=0;}
+  else {r->hresult=E_NOINTERFACE;return E_NOINTERFACE;}
+  refs[id]++;r->object=(struct pw_d3d9_object_ref){id,9};break;
  case PW_D3D9_TEXTURE_DESC:r->levels=id==7?6:1;break;
  case PW_D3D9_TEXTURE_LOCK:assert(!active[id]);active[id]=1;generation++;r->lock_generation=generation;r->pitch=negative?-16:16;r->rows=2;r->row_bytes=8;r->length=24;break;
  case PW_D3D9_TEXTURE_READ:assert(active[id] && q->lock_generation==generation && !q->offset && q->count==24);r->lock_generation=generation;r->count=24;memcpy(r->data,contents,24);break;
@@ -54,7 +61,7 @@ static void fail(IDirect3DDevice9 *d,HRESULT hr){assert(d==&parent && FAILED(hr)
 int main(void)
 {
  IDirect3DDevice9Vtbl table={0};struct pw_d3d9_texture_proxy_ops ops={exchange,remote_release,defer,fail};IDirect3DTexture9 *t,*alias;IDirect3DSurface9 *s,*off,*rt,*depth;IDirect3DDevice9 *owner;IUnknown *u;D3DSURFACE_DESC desc;D3DLOCKED_RECT lock;struct pw_d3d9_object_ref resolved={0};RECT rect={1,2,3,4};POINT point={3,4};
- table.AddRef=parent_addref;table.Release=parent_release;parent.lpVtbl=&table;pw_d3d9_texture_proxy_install(&table,&ops);
+ table.QueryInterface=parent_query;table.AddRef=parent_addref;table.Release=parent_release;parent.lpVtbl=&table;pw_d3d9_texture_proxy_install(&table,&ops);
  assert(!table.Present && !table.GetRenderState);
  assert(IDirect3DDevice9_CreateTexture(&parent,32,32,0,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,NULL,NULL)==D3DERR_INVALIDCALL && !calls);
  assert(IDirect3DDevice9_CreateTexture(&parent,32,32,0,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&t,NULL)==S_OK);
@@ -69,6 +76,11 @@ int main(void)
  assert(IDirect3DTexture9_GetLevelDesc(t,0,&desc)==S_OK && desc.Width==16 && desc.Height==8);
  assert(IDirect3DTexture9_GetSurfaceLevel(t,2,&s)==S_OK && IDirect3DSurface9_GetType(s)==D3DRTYPE_SURFACE);
  assert(IDirect3DSurface9_GetDesc(s,&desc)==S_OK && desc.Format==D3DFMT_A8R8G8B8);
+ assert(IDirect3DSurface9_GetContainer(s,&IID_IDirect3DTexture9,(void **)&alias)==S_OK && alias==t && refs[7]==1);IDirect3DTexture9_Release(alias);
+ assert(IDirect3DSurface9_GetContainer(s,&IID_IUnknown,(void **)&u)==S_OK && u==(IUnknown *)t);IUnknown_Release(u);
+ assert(IDirect3DSurface9_GetContainer(s,&IID_IDirect3DDevice9,(void **)&owner)==E_NOINTERFACE && !owner);
+ assert(IDirect3DSurface9_GetContainer(s,&IID_IDirect3DSwapChain9,(void **)&u)==E_NOINTERFACE && !u);
+ assert(IDirect3DSurface9_GetContainer(s,&IID_IDirect3DSurface9,(void **)&u)==E_NOINTERFACE && !u);
  assert(IDirect3DTexture9_SetPriority(t,0xfedcba98)==0 && IDirect3DTexture9_GetPriority(t)==0xfedcba98);
  assert(IDirect3DSurface9_SetPriority(s,0xabcdef01)==0 && IDirect3DSurface9_GetPriority(s)==0xabcdef01);
  IDirect3DTexture9_PreLoad(t);IDirect3DSurface9_PreLoad(s);assert(preloads==2);
@@ -97,6 +109,9 @@ int main(void)
  assert(IDirect3DDevice9_StretchRect(&parent,s,&rect,rt,&rect,D3DTEXF_LINEAR)==S_OK);
  assert(IDirect3DDevice9_UpdateSurface(&parent,(void *)(uintptr_t)1,NULL,off,NULL)==D3DERR_INVALIDCALL);
  assert(IDirect3DDevice9_ColorFill(&parent,rt,&rect,0xff123456)==S_OK);assert(IDirect3DDevice9_GetRenderTargetData(&parent,rt,off)==S_OK);
+ assert(IDirect3DSurface9_GetContainer(off,&IID_IDirect3DDevice9,(void **)&owner)==S_OK && owner==&parent && !refs[2]);IDirect3DDevice9_Release(owner);
+ blocked=1;assert(IDirect3DSurface9_GetContainer(off,&IID_IUnknown,(void **)&u)==S_OK && u==(IUnknown *)&parent && pending && refs[2]==1);IUnknown_Release(u);
+ {struct pw_d3d9_deferred *n=pending;pending=NULL;blocked=0;n->function(n->context);}assert(!refs[2]);
  IDirect3DSurface9_Release(off);IDirect3DSurface9_Release(rt);IDirect3DSurface9_Release(depth);IDirect3DSurface9_Release(s);
  if(sizeof(void *)==4)assert(IDirect3DTexture9_LockRect(t,0,&lock,NULL,0)==S_OK && pw_d3d9_staging_bytes()==24);
  else assert(IDirect3DTexture9_LockRect(t,0,&lock,NULL,0)==E_OUTOFMEMORY && !active[7]);

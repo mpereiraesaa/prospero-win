@@ -47,3 +47,19 @@ Receipt: `/tmp/prospero-d3d9-texture-proxy-r4/receipt.json`.
 This proves frontend ABI and ownership with codec round trips. Native helper
 execution and production session integration have separate receipts. No console
 or gameplay claim is made.
+
+## Surface containers
+
+GetContainer sends a bounded IID selector and preserves the backend HRESULT.
+Texture containers enter the canonical Texture2D cache before the requested
+interface is queried. Device containers balance the owned remote reference and
+query the actual local parent; the session adapter must first validate that the
+returned remote identity equals that parent. Swapchain containers remain explicitly
+unsupported by the native adapter.
+
+Retirement storage is allocated before the request. A blocked remote Release uses
+the existing intrusive deferred queue and retains the parent until retirement; no
+allocation is needed after receiving the owned reference. The controlled PE32/PE64
+fixture covers canonical texture identity, device identity, unsupported IIDs and
+deferred device-reference balancing. Actual native container semantics are covered
+separately by the native texture fixture.
