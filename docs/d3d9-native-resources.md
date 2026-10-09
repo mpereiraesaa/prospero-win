@@ -27,6 +27,8 @@ buffer kinds in DEFAULT/dynamic and MANAGED pools, transfer more than one ring's
 worth of data, overwrite request storage after copies, read it back, reject stale
 IDs/ranges/duplicate unlocks, cancel a lock and destroy an active mapping. The
 fixture also compares a real zero-length buffer creation failure with the adapter
-HRESULT. It uses no mocked D3D methods. This proves the PE64 adapter and copied
+HRESULT. Those backend checks use real DXVK methods. A separate isolated
+controlled CreateVertexBuffer returning success with a null output verifies the
+defensive guard without dereferencing or publishing that output. This proves the PE64 adapter and copied
 payloads; PE32 low-address staging, COM identity proxies and session dispatch are
 separate integration work.

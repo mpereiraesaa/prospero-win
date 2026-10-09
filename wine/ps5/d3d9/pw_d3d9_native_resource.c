@@ -58,6 +58,7 @@ void pw_d3d9_native_resource_create(void *native_device,const struct pw_d3d9_res
  r->kind=q->operation==PW_D3D9_RESOURCE_CREATE_VB?PW_D3D9_KIND_VERTEX_BUFFER:PW_D3D9_KIND_INDEX_BUFFER;
  if(r->kind==PW_D3D9_KIND_VERTEX_BUFFER)hr=IDirect3DDevice9_CreateVertexBuffer(device,q->length,q->usage,q->format_fvf,q->pool,&r->object.vb,NULL);
  else hr=IDirect3DDevice9_CreateIndexBuffer(device,q->length,q->usage,q->format_fvf,q->pool,&r->object.ib,NULL);
+ if(SUCCEEDED(hr)&&!r->object.unknown)hr=E_FAIL;
  if(SUCCEEDED(hr)){
   r->device=device;IDirect3DDevice9_AddRef(device);
   hr=describe(r,&reply->desc);

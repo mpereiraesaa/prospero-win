@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-/* Real native backend buffer proof. No mocked D3D entry points. */
+/* Real native backend buffer proof plus one isolated null-output fault guard. */
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
@@ -56,11 +56,21 @@ static void buffer(IDirect3DDevice9 *device,int index,D3DPOOL pool)
  assert(pw_d3d9_native_resource_destroy(r)==S_OK);
  printf("PW_NATIVE_BUFFER kind=%u pool=%u bytes=%u pass=1\n",index?4:3,(unsigned)pool,span);fflush(stdout);
 }
+static HRESULT WINAPI null_buffer(IDirect3DDevice9 *d,UINT size,DWORD usage,DWORD fvf,D3DPOOL pool,IDirect3DVertexBuffer9 **out,HANDLE *shared)
+{(void)d;(void)size;(void)usage;(void)fvf;(void)pool;(void)shared;*out=NULL;return S_OK;}
+static void null_output_guard(void)
+{
+ static IDirect3DDevice9Vtbl vtable={.CreateVertexBuffer=null_buffer};IDirect3DDevice9 bad={&vtable};
+ struct pw_d3d9_native_resource *r=NULL;struct pw_d3d9_resource_reply reply;
+ struct pw_d3d9_resource_request q={.operation=PW_D3D9_RESOURCE_CREATE_VB,.length=128};
+ pw_d3d9_native_resource_create(&bad,&q,&reply,&r);assert(reply.hresult==(uint32_t)E_FAIL&&!r);
+}
 int wmain(int argc,WCHAR **argv)
 {
  HMODULE module;IDirect3D9 *(WINAPI *factory)(UINT);IDirect3D9 *d3d;IDirect3DDevice9 *device=NULL;
  HWND window;D3DPRESENT_PARAMETERS pp={0};HRESULT hr;WNDCLASSW cls={0};
  if(argc!=2)return 2;
+ null_output_guard();
  cls.lpfnWndProc=DefWindowProcW;cls.hInstance=GetModuleHandleW(NULL);cls.lpszClassName=L"PW_NATIVE_RESOURCE";
  assert(RegisterClassW(&cls));window=CreateWindowW(cls.lpszClassName,L"resource",WS_POPUP,0,0,64,64,NULL,NULL,cls.hInstance,NULL);assert(window);
  module=LoadLibraryW(argv[1]);assert(module);factory=(void *)GetProcAddress(module,"Direct3DCreate9");assert(factory);d3d=factory(D3D_SDK_VERSION);assert(d3d);
