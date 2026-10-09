@@ -23,7 +23,7 @@ try:
  run(['python3',root/'tools/generate_d3d9_api_observe.py','--header',a.header,'--output',root/'wine/ps5/d3d9/pw_d3d9_api_observe_generated.h','--check'],'generator')
  for arch in ('i686','x86_64'):
   compiler=arch+'-w64-mingw32-gcc';flags=['-std=c11','-O2','-Wall','-Wextra','-Werror'];dll=out/(arch+'.dll');exe=out/(arch+'.exe')
-  run([compiler,*flags,'-DPROFILE_DLL','-shared',Path(__file__).with_suffix('.c'),root/'wine/ps5/d3d9/pw_d3d9_api_observe.c','-o',dll],arch+'-dll')
+  run([compiler,*flags,'-DPROFILE_DLL','-DPW_D3D9_API_PROFILE_TEST','-shared',Path(__file__).with_suffix('.c'),root/'wine/ps5/d3d9/pw_d3d9_api_observe.c','-o',dll],arch+'-dll')
   run([compiler,*flags,Path(__file__).with_suffix('.c'),'-o',exe],arch+'-exe')
   for profile,diagnostics in ((0,0),(1,0),(0,1),(1,1)):
    env=os.environ.copy();env.update(WINEPREFIX=str(a.prefix.resolve()),WINEDEBUG='-all',WINEDLLOVERRIDES='mscoree,mshtml=')
@@ -32,12 +32,17 @@ try:
    assert stderr.count('PW_D3D9_API_FAIL ')==(2 if diagnostics else 0),stderr
    assert stderr.count('PW_D3D9_API_PROFILE ')==(121 if profile else 0),stderr
    if profile:
-    assert 'hr=80004005 attempt=1 startup=1 classification_valid=1 api_external_vtable_entries=9 interval_entries=9' in stderr,stderr
-    assert 'hr=00000000 attempt=2 startup=0 classification_valid=1 api_external_vtable_entries=9 interval_entries=0' in stderr,stderr
+    assert 'hr=80004005 attempt=1 startup=1 classification_valid=1 saturated=0 api_external_vtable_entries=9 interval_entries=9' in stderr,stderr
+    assert 'hr=00000000 attempt=2 startup=0 classification_valid=1 saturated=0 api_external_vtable_entries=9 interval_entries=0' in stderr,stderr
     assert 'boundary=session_close epoch=3 sequence=0 object=0 generation=0' in stderr,stderr
     assert 'method=GetAvailableTextureMem cumulative=119 interval=118 interval_start_attempt=1 interval_end_attempt=120 startup=0' in stderr,stderr
     assert 'method=GetAvailableTextureMem cumulative=120 interval=1 interval_start_attempt=120 interval_end_attempt=120 startup=0' in stderr,stderr
     assert stderr.count('PW_D3D9_API_METHOD ')==11,stderr
+  stdout,stderr=run([a.wine_build.resolve()/'loader/wine',exe,str(dll),'1','0','edges'],arch+'-edges',env)
+  assert 'edges=saturation,classification,initial_close status=0' in stdout,stdout
+  assert 'attempt=0 startup=1 classification_valid=1 saturated=0 api_external_vtable_entries=0' in stderr,stderr
+  assert 'attempt=1 startup=0 classification_valid=1 saturated=1 api_external_vtable_entries=18446744073709551615' in stderr,stderr
+  assert 'classification_valid=0 saturated=1' in stderr,stderr
  assert r['sources']=={str(f.resolve()):sha(f) for f in files}
  r.update(status='pass',artifacts={str(f):sha(f) for f in out.iterdir() if f.suffix in ('.exe','.dll')});save()
 except Exception:

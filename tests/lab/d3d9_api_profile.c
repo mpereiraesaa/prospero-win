@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #ifdef PROFILE_DLL
 static IDirect3DDevice9 device;
 static IDirect3DSurface9 surface;
@@ -41,6 +42,10 @@ __declspec(dllexport) IDirect3DSurface9 *get_surface(void)
 {static const IDirect3DSurface9Vtbl raw={.LockRect=lock_rect};surface.lpVtbl=(IDirect3DSurface9Vtbl *)pw_d3d9_api_observe_IDirect3DSurface9(&raw);return &surface;}
 __declspec(dllexport) unsigned get_transactions(void){return transactions;}
 __declspec(dllexport) void snapshot(struct pw_d3d9_api_profile_snapshot *s){pw_d3d9_api_profile_snapshot(s);}
+extern void pw_d3d9_api_profile_test_seed(unsigned,unsigned,LONG64);
+extern void pw_d3d9_api_profile_test_invalidate(void);
+__declspec(dllexport) void seed(unsigned i,unsigned j,LONG64 value){pw_d3d9_api_profile_test_seed(i,j,value);}
+__declspec(dllexport) void invalidate(void){pw_d3d9_api_profile_test_invalidate();}
 __declspec(dllexport) void flush(void){pw_d3d9_api_profile_flush(3);}
 __declspec(dllexport) void present(HRESULT hr){pw_d3d9_api_profile_present(3,17,5,7,hr);}
 #else
@@ -50,15 +55,23 @@ static uint64_t total(const struct pw_d3d9_api_profile_snapshot *s)
 #define LOAD(type,name) type name;do{FARPROC p=GetProcAddress(dll,#name);assert(p);memcpy(&name,&p,sizeof(name));}while(0)
 int main(int argc,char **argv)
 {
- assert(argc==4);int profile=atoi(argv[2]),diagnostics=atoi(argv[3]);
+ assert(argc==4||argc==5);int profile=atoi(argv[2]),diagnostics=atoi(argv[3]);
  SetEnvironmentVariableA("PW_D3D9_PROFILE",profile?"1":"0");SetEnvironmentVariableA("PW_D3D9_DIAGNOSTICS",diagnostics?"1":"0");
  HMODULE dll=LoadLibraryA(argv[1]);assert(dll);
  typedef IDirect3DDevice9 *(*device_fn)(void (*)(IDirect3DDevice9 *),int *);
  typedef IDirect3DSurface9 *(*surface_fn)(void);
- typedef unsigned (*count_fn)(void);typedef void (*snapshot_fn)(struct pw_d3d9_api_profile_snapshot *);typedef void (*present_fn)(HRESULT);typedef void (*flush_fn)(void);
- LOAD(device_fn,get_device);LOAD(surface_fn,get_surface);LOAD(count_fn,get_transactions);LOAD(snapshot_fn,snapshot);LOAD(present_fn,present);LOAD(flush_fn,flush);
+ typedef unsigned (*count_fn)(void);typedef void (*snapshot_fn)(struct pw_d3d9_api_profile_snapshot *);typedef void (*present_fn)(HRESULT);typedef void (*flush_fn)(void);typedef void (*seed_fn)(unsigned,unsigned,LONG64);
+ LOAD(device_fn,get_device);LOAD(surface_fn,get_surface);LOAD(count_fn,get_transactions);LOAD(snapshot_fn,snapshot);LOAD(present_fn,present);LOAD(flush_fn,flush);LOAD(seed_fn,seed);LOAD(flush_fn,invalidate);
  int wrapped=-1;IDirect3DDevice9 *d=get_device(guest_callback,&wrapped);IDirect3DSurface9 *s=get_surface();
  assert(wrapped==(profile||diagnostics));struct pw_d3d9_api_profile_snapshot before,after;snapshot(&before);assert(!total(&before));
+ if(argc==5){
+  assert(profile&&!diagnostics);flush();
+  seed(16,4,LLONG_MAX-1);assert(IDirect3DDevice9_GetAvailableTextureMem(d)==123);assert(IDirect3DDevice9_GetAvailableTextureMem(d)==123);
+  snapshot(&after);assert(after.entries[16][4]==LLONG_MAX&&after.saturated);
+  seed(0,0,LLONG_MAX);seed(0,1,LLONG_MAX);present(S_OK);
+  invalidate();assert(IDirect3DDevice9_GetAvailableTextureMem(d)==123);snapshot(&after);assert(!after.classification_valid&&after.entries[16][4]==LLONG_MAX);flush();
+  puts("PW_API_PROFILE edges=saturation,classification,initial_close status=0");FreeLibrary(dll);return 0;
+ }
  D3DLOCKED_RECT lock;assert(IDirect3DSurface9_LockRect(s,&lock,NULL,0)==S_OK&&lock.Pitch==16);
  snapshot(&after);assert(total(&after)==(profile?1:0)&&get_transactions()==3);
  DWORD passes=0;assert(IDirect3DDevice9_ValidateDevice(d,&passes)==D3DERR_INVALIDCALL&&passes==7&&errno==ERANGE&&GetLastError()==0xbeef);

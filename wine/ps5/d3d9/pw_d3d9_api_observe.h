@@ -10,12 +10,14 @@
 int pw_d3d9_api_observe_enabled(void);
 int pw_d3d9_api_diagnostics_enabled(void);
 /* Entry origin, not nesting depth, separates guest calls from bridge pins.
- * Every method count is atomic; a snapshot is not a global stop-the-world cut. */
+ * Every method count is atomic; a snapshot is not a global stop-the-world cut.
+ * Entries saturate at LLONG_MAX and aggregates at UINT64_MAX; saturated=1
+ * marks lost numeric precision without wrapping or negative histogram deltas. */
 #define PW_D3D9_API_INTERFACES 17
 #define PW_D3D9_API_SLOTS 119
 struct pw_d3d9_api_profile_snapshot {
  uint64_t entries[PW_D3D9_API_INTERFACES][PW_D3D9_API_SLOTS];
- int enabled,classification_valid;
+ int enabled,classification_valid,saturated;
 };
 void pw_d3d9_api_profile_enter(unsigned,unsigned,const void *);
 void pw_d3d9_api_profile_snapshot(struct pw_d3d9_api_profile_snapshot *);
