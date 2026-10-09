@@ -173,7 +173,10 @@ static NTSTATUS flush_call(unsigned int code,void *args)
 {
  size_t bytes=0,records=0;struct pw_vk_batch_params p;NTSTATUS status;
  collect(&bytes,&records);
- if(!bytes&&!async_backend){status=code==unix_count?STATUS_SUCCESS:raw_call(code,args);pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return status;}
+ /* An admission-only sentinel carries no dependency when the collected
+  * prefix is empty. Raw progress hooks still wait their referenced lanes.
+  * Completion sentinels and ordinary resource fallbacks must reach Unix. */
+ if(!bytes&&(!async_backend||code==unix_count+1)){status=code>=unix_count?STATUS_SUCCESS:raw_call(code,args);pw_vk_retirement_drain(&retirement,free,heap_free);reclaim();return status;}
  p.version=async_backend?PW_VK_BATCH_ASYNC_VERSION:PW_VK_BATCH_VERSION;p.batch=(UINT_PTR)scratch;p.bytes=bytes;p.code=code;p.args=(UINT_PTR)args;p.status=STATUS_SUCCESS;
  status=raw_call(unix_pw_vk_batch,&p);if(status)fatal();
  dispatches_total++;records_total+=records;if(code<unix_count)piggyback_total++;

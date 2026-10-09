@@ -69,22 +69,22 @@ int main(int argc,char **argv)
   draw_index(71);assert(!batches);
   assert(!pw_vk_batch_call(unix_vkQueuePresentKHR,&present_args));
   assert(batches==1&&admissions==1&&!completions&&async_pending==1&&!depth);
-  /* A second progress call has no PE bytes but still transfers an empty
-   * admission fence; the backend retains outstanding unrelated work. */
+  /* An empty admission has nothing to transfer. Skipping its crossing must
+   * retain outstanding work for the subsequent resource/completion barrier. */
   assert(!pw_vk_batch_call(unix_vkQueuePresentKHR,&present_args));
-  assert(batches==2&&admissions==2&&empty_batches==1&&async_pending==1);
+  assert(batches==1&&admissions==1&&!empty_batches&&async_pending==1);
   if(!strcmp(argv[1],"async-disable")){
    struct vkCreateDebugUtilsMessengerEXT_params callback={0};
    assert(!pw_vk_batch_call(unix_vkCreateDebugUtilsMessengerEXT,&callback));
-   assert(sticky_disabled&&!depth&&!async_pending&&completions==1&&empty_batches==2);
+   assert(sticky_disabled&&!depth&&!async_pending&&completions==1&&empty_batches==1);
    prior=batches;draw_index(72);assert(draw_raw==1&&batches==prior);
    puts("PASS async empty completion before sticky callback disable and raw reentry");return 0;
   }
   assert(!strcmp(argv[1],"async-lifetime"));
   {struct vkResetDescriptorPool_params p={0};assert(!pw_vk_batch_call(unix_vkResetDescriptorPool,&p));}
-  assert(!async_pending&&completions==1&&empty_batches==2&&batches==3&&!depth);
+  assert(!async_pending&&completions==1&&empty_batches==1&&batches==2&&!depth);
   assert(piggyback_total==1); /* Admission sentinels are not piggybacks. */
-  puts("PASS async capability, empty admission, unlocked progress and empty resource barrier");return 0;
+  puts("PASS async capability, skipped empty admission, unlocked progress and required empty resource barrier");return 0;
  }
  if(!strcmp(argv[1],"stall-report")){
   struct producer *p=producer();struct pw_vk_spsc_sequence paused_sequence;

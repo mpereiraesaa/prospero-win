@@ -7,15 +7,21 @@ and preserves synchronous behavior. No new sentinel reaches an older backend.
 The runtime owns these capability constants and must dispatch versions 1 and 2
 synchronously even when native workers are available.
 
-Version 3 always crosses the Unix boundary on a flush, including zero records.
-An empty PE stream does not imply that previously transferred worker jobs are
-finished. Ordinary fallback calls therefore retain a backend opportunity to
+Version 3 completion and resource fallback flushes cross the Unix boundary
+even with zero records. An empty PE stream does not imply that previously
+transferred worker jobs are finished. Ordinary fallback calls therefore retain
+a backend opportunity to
 wait before destroying or mutating resources. The original `unix_count` flush
 sentinel completes all outstanding jobs and is used for callback disable,
 allocation-failure retirement and explicit completion boundaries.
 
 Queue and GPU progress calls use `unix_count + 1` to transfer records without
-waiting for unrelated native jobs. The backend must copy all records before
+waiting for unrelated native jobs. If prefix collection yields zero records,
+this admission-only crossing is skipped: there are no bytes to transfer, and
+the following raw progress call retains its native dependency hooks. Collection
+still waits for reserved but unpublished tickets in its prefix. The ordinary
+`unix_count` completion sentinel is never skipped for an asynchronous backend.
+The backend must copy all records before
 returning, must not dispatch that sentinel as a function-table index, and must
 not retain shared PE scratch. PE then releases its replay gate before invoking
 the raw progress call. Native submit hooks wait only the command buffer lanes
@@ -32,7 +38,8 @@ admitting records does not authorize destruction to bypass those hooks.
 
 `tests/lab/vk_batch_runtime.py` includes the `async-lifetime` and `async-disable`
 PE fixture modes. Their mocked backend retains outstanding jobs across two
-progress calls, including an empty second call. They assert admission does not
+progress calls, including an empty second call. They assert the second progress
+call adds no crossing and admission does not
 complete those jobs, raw progress executes with the PE gate released, empty
 resource fallback reaches completion, and empty callback disable completes work
 before callback reentry. Original version 2 and unsupported-backend cases remain
@@ -68,3 +75,18 @@ may serialize DXVK buffers sharing a logical graphics pool; measured worker
 activity, FPS and profiler results are required before claiming gains. Separate
 pool fanout is not enabled here. No console performance result is implied by
 the host concurrency tests.
+
+## Empty-admission regression evidence
+
+The full actual PE suite passed with the optimized path in
+`/tmp/prospero-replay-fanout-pe-r1/receipt.json`. Its async cases retain pending
+mocked native jobs across two progress calls while observing only one admission
+crossing. A subsequent empty resource or callback-disable boundary still reaches
+the backend and completes those jobs.
+
+The negative control in
+`/tmp/prospero-replay-fanout-build/negative-admission/receipt.json` changes the
+optimization to skip every zero-byte flush. Both `async-lifetime` and
+`async-disable` reject it at `!async_pending`, with the expected exit code 3.
+The immutable combined package and SDK checks are recorded in
+[fanout evidence](vulkan-replay-pool-fanout.md#combined-candidate-evidence).
