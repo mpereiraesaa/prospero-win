@@ -64,3 +64,11 @@ result instead of a local answer. The feature stays behind `PW_D3D9_ASYNC=1`.
 sanitizers. It covers the slot mapping, exact Set/Get outcomes, NULL identity,
 Multiply, recording, refused and failed Capture/Apply, ALL/PIXEL/VERTEX and
 recorded blocks, missing snapshot storage and Reset boundaries.
+
+`tests/lab/d3d9_transform_shadow.py` also runs it as actual PE32 and PE64
+programs, and drives a real DXVK device and the shadow with the same seeded
+sequence of setters, getters, state block operations, releases and Resets in
+hardware, mixed and software vertex processing. After every step, each value
+the shadow claims to know is compared with the backend's `GetTransform` bytes,
+including NaN payloads, negative zero and denormals. The retained run compared
+514,710 known values with no mismatch.
