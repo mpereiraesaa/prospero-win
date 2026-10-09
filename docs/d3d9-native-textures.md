@@ -63,3 +63,10 @@ surface contexts and invokes the real backend. Neither operation uploads guest
 addresses. The fixture fills a render target and a subrectangle, reads it back to
 a system-memory surface, then verifies both colors through the copied lock path.
 An invalid ColorFill rectangle also compares its HRESULT with a direct call.
+
+Texture payload operations 18–25 execute actual priority, PreLoad, LOD and
+autogen filter/mipmap methods. Priority and PreLoad accept textures and surfaces;
+LOD and autogen operations reject surfaces. SetPriority and SetLOD preserve the
+backend previous DWORD. Void methods acknowledge only after executing the real
+backend call, including any backend-defined no-op semantics. No native mapping
+or interface pointer is serialized.

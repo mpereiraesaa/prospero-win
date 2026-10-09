@@ -11,7 +11,10 @@ enum pw_d3d9_texture_operation {
  PW_D3D9_TEXTURE_UNLOCK, PW_D3D9_TEXTURE_CANCEL_LOCK,
  PW_D3D9_TEXTURE_DIRTY, PW_D3D9_TEXTURE_UPDATE, PW_D3D9_TEXTURE_UPDATE_SURFACE,
  PW_D3D9_TEXTURE_CREATE_RT, PW_D3D9_TEXTURE_CREATE_DEPTH, PW_D3D9_TEXTURE_STRETCH,
- PW_D3D9_TEXTURE_COLOR_FILL, PW_D3D9_TEXTURE_RT_DATA
+ PW_D3D9_TEXTURE_COLOR_FILL, PW_D3D9_TEXTURE_RT_DATA,
+ PW_D3D9_TEXTURE_GET_PRIORITY=18, PW_D3D9_TEXTURE_SET_PRIORITY, PW_D3D9_TEXTURE_PRELOAD,
+ PW_D3D9_TEXTURE_GET_LOD, PW_D3D9_TEXTURE_SET_LOD, PW_D3D9_TEXTURE_GET_AUTOGEN_FILTER,
+ PW_D3D9_TEXTURE_SET_AUTOGEN_FILTER, PW_D3D9_TEXTURE_GENERATE_MIPS
 };
 struct pw_d3d9_surface_desc {
  uint32_t format,type,usage,pool,multisample_type,multisample_quality,width,height;
@@ -25,7 +28,7 @@ struct pw_d3d9_texture_request {
  int32_t x,y;
  struct pw_d3d9_object_ref source,destination;
  uint64_t lock_generation;
- uint32_t offset,count;
+ uint32_t offset,count,value;
  unsigned char data[PW_D3D9_RESOURCE_CHUNK];
 };
 struct pw_d3d9_texture_reply {
@@ -35,7 +38,7 @@ struct pw_d3d9_texture_reply {
  struct pw_d3d9_surface_desc desc;
  uint64_t lock_generation;
  int32_t pitch;
- uint32_t rows,row_bytes,length,offset,count;
+ uint32_t rows,row_bytes,length,offset,count,value;
  unsigned char data[PW_D3D9_RESOURCE_CHUNK];
 };
 /* Local DTOs only. Signed pitch is preserved; padding in copied staging is zero

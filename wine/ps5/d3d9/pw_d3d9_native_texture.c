@@ -165,6 +165,24 @@ void pw_d3d9_native_texture_call(struct pw_d3d9_native_texture *r,const struct p
  HRESULT hr=D3DERR_INVALIDCALL;D3DSURFACE_DESC d;struct pw_d3d9_native_texture *child;
  memset(reply,0,sizeof(*reply));reply->operation=q->operation;reply->hresult=hr;*out=NULL;if(!r)return;
  switch(q->operation){
+ case PW_D3D9_TEXTURE_GET_PRIORITY:
+  reply->value=r->kind==PW_D3D9_KIND_TEXTURE_2D?IDirect3DTexture9_GetPriority(r->object.texture):IDirect3DSurface9_GetPriority(r->object.surface);hr=S_OK;break;
+ case PW_D3D9_TEXTURE_SET_PRIORITY:
+  reply->value=r->kind==PW_D3D9_KIND_TEXTURE_2D?IDirect3DTexture9_SetPriority(r->object.texture,q->value):IDirect3DSurface9_SetPriority(r->object.surface,q->value);hr=S_OK;break;
+ case PW_D3D9_TEXTURE_PRELOAD:
+  if(r->kind==PW_D3D9_KIND_TEXTURE_2D)IDirect3DTexture9_PreLoad(r->object.texture);else IDirect3DSurface9_PreLoad(r->object.surface);
+  hr=S_OK;break;
+ case PW_D3D9_TEXTURE_GET_LOD:
+  if(r->kind==PW_D3D9_KIND_TEXTURE_2D){reply->value=IDirect3DTexture9_GetLOD(r->object.texture);hr=S_OK;}break;
+ case PW_D3D9_TEXTURE_SET_LOD:
+  if(r->kind==PW_D3D9_KIND_TEXTURE_2D){reply->value=IDirect3DTexture9_SetLOD(r->object.texture,q->value);hr=S_OK;}break;
+ case PW_D3D9_TEXTURE_GET_AUTOGEN_FILTER:
+  if(r->kind==PW_D3D9_KIND_TEXTURE_2D){reply->value=IDirect3DTexture9_GetAutoGenFilterType(r->object.texture);hr=S_OK;}break;
+ case PW_D3D9_TEXTURE_SET_AUTOGEN_FILTER:
+  if(r->kind==PW_D3D9_KIND_TEXTURE_2D)hr=IDirect3DTexture9_SetAutoGenFilterType(r->object.texture,q->value);
+  break;
+ case PW_D3D9_TEXTURE_GENERATE_MIPS:
+  if(r->kind==PW_D3D9_KIND_TEXTURE_2D){IDirect3DTexture9_GenerateMipSubLevels(r->object.texture);hr=S_OK;}break;
  case PW_D3D9_TEXTURE_DESC:hr=desc(r,q->level,&d);if(SUCCEEDED(hr)){describe(&reply->desc,&d);reply->levels=r->kind==PW_D3D9_KIND_TEXTURE_2D?IDirect3DTexture9_GetLevelCount(r->object.texture):1;if(!reply->levels)hr=E_FAIL;}break;
  case PW_D3D9_TEXTURE_SURFACE_LEVEL:
   if(r->kind!=PW_D3D9_KIND_TEXTURE_2D)break;
