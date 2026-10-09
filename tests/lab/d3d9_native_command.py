@@ -41,11 +41,11 @@ for i in range(3):
  env['PW_COMMAND_BEHAVIOR']=str([0x40,0x80,0x20][i])
  r=run([a.wine_build.resolve()/'loader/wine',out/'client.exe','Z:'+str(out/'service.dll').replace('/','\\')],'pe-'+str(i),env)
  assert len(re.findall('PW_COMMAND_NATIVE index=',r.stdout))==48,r.stdout
- assert 'PW_COMMAND_POLICY cases=608 live_and_recorded=1 fallback=4 null_rejects=2 ok=1' in r.stdout,r.stdout
+ assert 'PW_COMMAND_POLICY cases=620 live_and_recorded=1 fallback=4 null_rejects=2 ok=1' in r.stdout,r.stdout
  assert re.search(r'PW_CONSTANT_POLICY creation=[0-9a-f]+ comparisons=132 live_and_recorded=1 ok=1',r.stdout),r.stdout
  assert re.search(r'PW_COMMAND_PE status=00000000 create=00000000 present=00000000 commands=48 pins=6 pixel=[0-9a-f]+ zero=6 error=0',r.stdout),r.stdout
 assert frozen=={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in inputs},'source changed during proof'
-receipt.update(status='pass',sources=frozen,policy_comparisons_per_process=608,constant_comparisons_per_process=132,creation_modes=['hardware','mixed','software'],native_methods=40,pe_processes=3,commands_per_process=48,valid_draws_per_process=2,negative_unbound_draws_per_process=2,zero_count_native_comparisons_per_process=6,
+receipt.update(status='pass',sources=frozen,policy_comparisons_per_process=620,constant_comparisons_per_process=132,creation_modes=['hardware','mixed','software'],native_methods=40,pe_processes=3,commands_per_process=48,valid_draws_per_process=2,negative_unbound_draws_per_process=2,zero_count_native_comparisons_per_process=6,
  scope='First-wave policy live/recorded direct-vs-native parity and conservative invalid-sampler fallback. Controlled exact HRESULT/field/pin ABI; PE32-owned codec payloads decoded by PE64 helper on real DXVK, valid primitive/indexed draws and changed-pixel readback. No production COM proxy/session wiring or console performance claim.',
  sha256={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [native,native.with_suffix('.h'),codec,policy,fixture,pe,Path(__file__),a.backend64.resolve(),out/'client.exe',out/'service.dll']})
 (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');print('PASS '+str(out/'receipt.json'))

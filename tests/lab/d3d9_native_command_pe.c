@@ -128,12 +128,15 @@ static int policy_proof(IDirect3DDevice9 *device)
   c=(struct pw_d3d9_command){.method=44,.args={states[i]},.data_bytes=64};
   D3DMATRIX value={0};value._11=value._22=value._33=value._44=1;memcpy(c.data.bytes,&value,sizeof(value));
   if(!policy_case(device,&c,1,&count))goto done;
+  if(IDirect3DDevice9_SetTransform(device,states[i],NULL)!=S_OK ||
+   pw_d3d9_native_command_dispatch(device,&c,NULL,NULL)!=S_OK)goto done;
+  ++count;
  }}
   if(record && FAILED(IDirect3DDevice9_EndStateBlock(device,&recorded)))goto done;
  }
  if(IDirect3DDevice9_SetMaterial(device,NULL)!=D3DERR_INVALIDCALL ||
  IDirect3DDevice9_SetScissorRect(device,NULL)!=D3DERR_INVALIDCALL)goto done;
- ok=count==608;
+ ok=count==620;
  done:
  if(recorded)IDirect3DStateBlock9_Release(recorded);
  if(saved){if(FAILED(IDirect3DStateBlock9_Apply(saved)))ok=0;IDirect3DStateBlock9_Release(saved);}
