@@ -26,7 +26,7 @@ struct context {
  struct fixture *f;
  unsigned pool,entered,last,release;
 };
-struct payload {unsigned sequence,magic;int fail;};
+struct payload {unsigned sequence,magic;int fail;unsigned char padding[84];};
 static int execute(void *arg,const void *data,size_t bytes)
 {
  struct context *c=arg;struct fixture *f=c->f;struct payload p;
@@ -62,7 +62,7 @@ static void release(struct context *c)
 }
 static uint64_t append(struct pw_vk_replay_lane *lane,unsigned n,int fail)
 {
- struct payload p={n,0x12345678,fail};uint64_t ticket=0;
+ struct payload p={.sequence=n,.magic=0x12345678,.fail=fail};uint64_t ticket=0;
  assert(pw_vk_replay_enqueue(lane,&p,sizeof(p),&ticket)==0);memset(&p,0xee,sizeof(p));return ticket;
 }
 static void parallel_and_ordered(void)
@@ -101,8 +101,8 @@ static void backpressure(void)
  struct fixture f;struct pw_vk_replay *s;struct pw_vk_replay_lane *lane;struct pw_vk_replay_stats stats;
  struct timespec start,now;pthread_t producer;
  init(&f);struct context c={&f,1,0,0,0};
- /* At most two 12-byte payload jobs fit, including the private job headers. */
- s=pw_vk_replay_create(2,128,execute);assert(s);lane=pw_vk_replay_lane_create(s,1,&c);assert(lane);
+ /* At most two 96-byte payload jobs fit on both 32/64-bit hosts, including headers. */
+ s=pw_vk_replay_create(2,288,execute);assert(s);lane=pw_vk_replay_lane_create(s,1,&c);assert(lane);
  append(lane,1,0);entered(&c,1);append(lane,2,0);
  struct admission a={lane,0};assert(!pthread_create(&producer,NULL,admit,&a));
  assert(!clock_gettime(CLOCK_MONOTONIC,&start));
@@ -112,7 +112,7 @@ static void backpressure(void)
  }while(!stats.capacity_waits);
  assert(stats.submitted==2);release(&c);assert(!pthread_join(producer,NULL));assert(a.ticket==3);
  assert(!pw_vk_replay_wait_all(s));pw_vk_replay_get_stats(s,&stats);
- assert(stats.completed==3 && !stats.owned_bytes && stats.peak_owned_bytes<=128);
+ assert(stats.completed==3 && !stats.owned_bytes && stats.peak_owned_bytes<=288);
  assert(!pw_vk_replay_lane_drop(lane));pw_vk_replay_destroy(s);finish(&f);
 }
 static void errors(void)
