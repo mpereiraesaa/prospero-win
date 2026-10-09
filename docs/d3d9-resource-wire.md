@@ -21,7 +21,9 @@ unsupported. Zero-size locks expose the remaining safe descriptor range.
 
 The client allocates owned low-address staging, prefills it through READ chunks,
 and publishes the complete writable span through ordered WRITE chunks before
-Unlock. READONLY locks need no upload. Backend flags pass through unchanged:
+Unlock. READONLY locks need no upload. CANCEL_LOCK performs the real backend
+Unlock without requiring an upload, so allocation/transfer failure can release
+the mapping without destroying a still-live resource. Backend flags pass through unchanged:
 DXVK 2.6.2 ignores DISCARD combined with NOOVERWRITE and ignores both for
 non-default pools; the codec must not invent errors for these combinations.
 The adapter returns the actual backend Lock/Unlock HRESULT. Shared handles are

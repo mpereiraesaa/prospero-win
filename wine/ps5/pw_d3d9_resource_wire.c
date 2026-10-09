@@ -10,7 +10,7 @@ static void put32(unsigned char *p,uint32_t n)
 static void put64(unsigned char *p,uint64_t n)
 {put32(p,(uint32_t)n);put32(p+4,(uint32_t)(n>>32));}
 static int valid_op(uint32_t op)
-{return op>=PW_D3D9_RESOURCE_CREATE_VB&&op<=PW_D3D9_RESOURCE_UNLOCK;}
+{return op>=PW_D3D9_RESOURCE_CREATE_VB&&op<=PW_D3D9_RESOURCE_CANCEL_LOCK;}
 static int chunk_valid(uint64_t generation,uint32_t offset,uint32_t count)
 {return generation&&count&&count<=PW_D3D9_RESOURCE_CHUNK&&offset<=UINT32_MAX-count;}
 static int req_size(const struct pw_d3d9_resource_request *q,size_t *n)
@@ -22,7 +22,7 @@ static int req_size(const struct pw_d3d9_resource_request *q,size_t *n)
  case PW_D3D9_RESOURCE_READ:case PW_D3D9_RESOURCE_WRITE:
   if(!chunk_valid(q->lock_generation,q->offset,q->count))return 0;
   *n=16+(q->operation==PW_D3D9_RESOURCE_WRITE?q->count:0);break;
- case PW_D3D9_RESOURCE_UNLOCK:if(!q->lock_generation)return 0;*n=8;break;
+ case PW_D3D9_RESOURCE_UNLOCK:case PW_D3D9_RESOURCE_CANCEL_LOCK:if(!q->lock_generation)return 0;*n=8;break;
  default:return 0;
  }return 1;
 }
@@ -43,7 +43,7 @@ int pw_d3d9_resource_request_encode(void *wire,size_t cap,size_t *written,const 
   put64(p,q->lock_generation);put32(p+8,q->offset);put32(p+12,q->count);
   if(q->operation==PW_D3D9_RESOURCE_WRITE)memcpy(p+16,q->data,q->count);
   break;
- case PW_D3D9_RESOURCE_UNLOCK:put64(p,q->lock_generation);break;
+ case PW_D3D9_RESOURCE_UNLOCK:case PW_D3D9_RESOURCE_CANCEL_LOCK:put64(p,q->lock_generation);break;
  default:break;
  }
  memcpy(wire,tmp,n+16);*written=n+16;return PW_D3D9_RESOURCE_OK;
@@ -65,7 +65,7 @@ int pw_d3d9_resource_request_decode(struct pw_d3d9_resource_request *out,const v
  case PW_D3D9_RESOURCE_READ:case PW_D3D9_RESOURCE_WRITE:
   if(bytes<32)return PW_D3D9_RESOURCE_INVALID;
   q.lock_generation=get64(p);q.offset=get32(p+8);q.count=get32(p+12);break;
- case PW_D3D9_RESOURCE_UNLOCK:
+ case PW_D3D9_RESOURCE_UNLOCK:case PW_D3D9_RESOURCE_CANCEL_LOCK:
   if(bytes!=24)return PW_D3D9_RESOURCE_INVALID;
   q.lock_generation=get64(p);break;
  default:return PW_D3D9_RESOURCE_INVALID;

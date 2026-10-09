@@ -42,7 +42,7 @@ int main(void)
  unsigned op;size_t n;unsigned char wire[PW_D3D9_RESOURCE_MAX_WIRE];
  struct pw_d3d9_resource_request q={.operation=PW_D3D9_RESOURCE_WRITE,.lock_generation=1,.count=1};
  struct pw_d3d9_resource_reply r={.operation=PW_D3D9_RESOURCE_LOCK,.lock_generation=1,.length=1};
- for(op=1;op<=7;op++){request_roundtrip(op);reply_roundtrip(op,0);reply_roundtrip(op,0x8876086a);}
+ for(op=1;op<=8;op++){request_roundtrip(op);reply_roundtrip(op,0);reply_roundtrip(op,0x8876086a);}
  q.offset=UINT32_MAX;assert(pw_d3d9_resource_request_encode(wire,sizeof(wire),&n,&q));
  q.offset=0;q.count=4097;assert(pw_d3d9_resource_request_encode(wire,sizeof(wire),&n,&q));
  q.count=0;assert(pw_d3d9_resource_request_encode(wire,sizeof(wire),&n,&q));
