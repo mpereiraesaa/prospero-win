@@ -294,9 +294,13 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
       pw_vk_generated_encode_templates(code,args,wire+4,PW_VK_BATCH_ARENA-PW_VK_STREAM_HEADER-4,&bytes,template_snapshot,template_device(code,args))){
     memcpy(wire,&code,4);bytes+=4;opcode=PW_VK_BATCH_GENERATED_OPCODE;
    }
+   /* Remove old metadata before the consumer can execute destruction and a
+    * synchronous creator can reuse its handle. A FULL retry needs no metadata
+    * to encode destruction again. */
+   if(bytes)retire_template(code,args);
    appended=bytes?pw_vk_spsc_append(&stream_sequence,&p->stream,opcode,wire,bytes):PW_VK_STREAM_INVALID;
    if(appended==PW_VK_STREAM_OK){
-    retire_template(code,args);InterlockedExchange(&p->publishing,0);return STATUS_SUCCESS;
+    InterlockedExchange(&p->publishing,0);return STATUS_SUCCESS;
    }
    InterlockedExchange(&p->publishing,0);
    if(appended==PW_VK_STREAM_FULL){
