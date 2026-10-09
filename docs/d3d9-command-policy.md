@@ -91,8 +91,10 @@ serialization, or invent successful execution for those uploads.
 Expanded admission is policy revision2 and requires the additional HELLO feature
 16384 on both peers, alongside command batching. An old first-wave-only peer
 must not accept an expanded-policy pair. This foundation exports the required
-feature; production negotiation and enablement remain the integration caller's
-responsibility.
+feature and the production session adds it atomically to batch-enabled HELLO.
+The exact feature equality check rejects first-wave/expanded mixed pairs before
+object creation. Expanded production pairs advertise30719; first-wave pairs
+remain14335. Runtime enablement still requires the existing explicit opt-in.
 
 Retained host proof for this extension passed620 setter/Transform comparisons
 and132 constant boundary comparisons per native process, across hardware, mixed

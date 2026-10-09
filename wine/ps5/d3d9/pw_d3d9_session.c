@@ -95,7 +95,7 @@ static uint32_t compiled_features(void)
     mask|=4096u;
 #endif
 #ifdef PW_D3D9_ENABLE_BATCH
-    mask|=8192u;
+    mask|=8192u | PW_D3D9_COMMAND_POLICY_FEATURE;
 #endif
     return mask;
 }
