@@ -85,11 +85,11 @@ static HRESULT STDMETHODCALLTYPE test_SetFVF(IDirect3DDevice9 *self, DWORD FVF)
 static HRESULT STDMETHODCALLTYPE test_SetVertexShader(IDirect3DDevice9 *self, IDirect3DVertexShader9* pShader)
 {assert(self==&device && expected.method==92);++calls;assert((void *)pShader==(null_binding?NULL:(void *)&object));return result(92);}
 static HRESULT STDMETHODCALLTYPE test_SetVertexShaderConstantF(IDirect3DDevice9 *self, UINT reg_idx, const float *data, UINT count)
-{assert(self==&device && expected.method==94);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(94);}
+{assert(data);assert(self==&device && expected.method==94);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(94);}
 static HRESULT STDMETHODCALLTYPE test_SetVertexShaderConstantI(IDirect3DDevice9 *self, UINT reg_idx, const int *data, UINT count)
-{assert(self==&device && expected.method==96);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(96);}
+{assert(data);assert(self==&device && expected.method==96);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(96);}
 static HRESULT STDMETHODCALLTYPE test_SetVertexShaderConstantB(IDirect3DDevice9 *self, UINT reg_idx, const BOOL *data, UINT count)
-{assert(self==&device && expected.method==98);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(98);}
+{assert(data);assert(self==&device && expected.method==98);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(98);}
 static HRESULT STDMETHODCALLTYPE test_SetStreamSource(IDirect3DDevice9 *self, UINT StreamNumber, IDirect3DVertexBuffer9* pStreamData, UINT OffsetInBytes, UINT Stride)
 {assert(self==&device && expected.method==100);++calls;assert((uint32_t)StreamNumber==expected.args[0]);assert((void *)pStreamData==(null_binding?NULL:(void *)&object));assert((uint32_t)OffsetInBytes==expected.args[3]);assert((uint32_t)Stride==expected.args[4]);return result(100);}
 static HRESULT STDMETHODCALLTYPE test_SetStreamSourceFreq(IDirect3DDevice9 *self, UINT StreamNumber, UINT Divider)
@@ -99,11 +99,11 @@ static HRESULT STDMETHODCALLTYPE test_SetIndices(IDirect3DDevice9 *self, IDirect
 static HRESULT STDMETHODCALLTYPE test_SetPixelShader(IDirect3DDevice9 *self, IDirect3DPixelShader9* pShader)
 {assert(self==&device && expected.method==107);++calls;assert((void *)pShader==(null_binding?NULL:(void *)&object));return result(107);}
 static HRESULT STDMETHODCALLTYPE test_SetPixelShaderConstantF(IDirect3DDevice9 *self, UINT reg_idx, const float *data, UINT count)
-{assert(self==&device && expected.method==109);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(109);}
+{assert(data);assert(self==&device && expected.method==109);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(109);}
 static HRESULT STDMETHODCALLTYPE test_SetPixelShaderConstantI(IDirect3DDevice9 *self, UINT reg_idx, const int *data, UINT count)
-{assert(self==&device && expected.method==111);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(111);}
+{assert(data);assert(self==&device && expected.method==111);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(111);}
 static HRESULT STDMETHODCALLTYPE test_SetPixelShaderConstantB(IDirect3DDevice9 *self, UINT reg_idx, const BOOL *data, UINT count)
-{assert(self==&device && expected.method==113);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(113);}
+{assert(data);assert(self==&device && expected.method==113);++calls;assert((uint32_t)reg_idx==expected.args[0]);assert(!expected.data_bytes || (data && !memcmp(data,expected.data.bytes,expected.data_bytes)));assert((uint32_t)count==expected.args[1]);return result(113);}
 static const IDirect3DDevice9Vtbl device_vtable={
 .TestCooperativeLevel=test_TestCooperativeLevel,
 .EvictManagedResources=test_EvictManagedResources,
@@ -156,7 +156,7 @@ static void exercise(unsigned method,unsigned large)
   if(s->object_words&(1u<<i)){expected.args[i]=17;expected.args[i+1]=23;}
  }
  if(s->shape==PW_D3D9_DATA_CLEAR)expected.args[0]=large?256:3;
- if(s->shape==PW_D3D9_DATA_VECTOR4 || s->shape==PW_D3D9_DATA_BOOL)expected.args[1]=large?(s->shape==PW_D3D9_DATA_BOOL?1024:256):3;
+ if(s->shape==PW_D3D9_DATA_VECTOR4 || s->shape==PW_D3D9_DATA_BOOL)expected.args[1]=large==2?0:large?(s->shape==PW_D3D9_DATA_BOOL?1024:256):3;
  assert(!pw_d3d9_command_data_bytes(method,expected.args,&bytes));expected.data_bytes=bytes;
  for(i=0;i<bytes/4;i++)expected.data.words[i]=s->shape==PW_D3D9_DATA_BOOL?(i&1):0x3f800000u+i*0x10000u;
  if(method==82)expected.args[1]=0xffffffd6u;
@@ -176,6 +176,7 @@ int main(void)
  PW_D3D9_COMMAND_METHODS(EXERCISE)
 #undef EXERCISE
  exercise(43,1);exercise(94,1);exercise(96,1);exercise(98,1);
+ exercise(94,2);exercise(96,2);exercise(98,2);exercise(109,2);exercise(111,2);exercise(113,2);
  memset(&expected,0,sizeof(expected));expected.method=98;expected.args[1]=1;expected.data_bytes=4;expected.data.words[0]=2;
  assert(pw_d3d9_native_command_dispatch(&device,&expected,NULL,NULL)==D3DERR_INVALIDCALL);
  expected.method=84;assert(pw_d3d9_native_command_dispatch(&device,&expected,NULL,NULL)==E_NOTIMPL);

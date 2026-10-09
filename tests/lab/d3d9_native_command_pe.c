@@ -62,6 +62,23 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
   printf("PW_COMMAND_NATIVE index=%u method=%u hr=%08lx\n",i,c.method,hr);
   if(i>=40 && FAILED(hr))goto done;
  }
+ {unsigned methods[]={94,96,98,109,111,113};float f[4]={0};int integers[4]={0};BOOL booleans[1]={0};
+ for(unsigned i=0;i<6;i++){
+  HRESULT direct,actual;memset(&c,0,sizeof(c));c.method=methods[i];
+  switch(c.method){
+  case 94:direct=IDirect3DDevice9_SetVertexShaderConstantF(device,0,f,0);break;
+  case 96:direct=IDirect3DDevice9_SetVertexShaderConstantI(device,0,integers,0);break;
+  case 98:direct=IDirect3DDevice9_SetVertexShaderConstantB(device,0,booleans,0);break;
+  case 109:direct=IDirect3DDevice9_SetPixelShaderConstantF(device,0,f,0);break;
+  case 111:direct=IDirect3DDevice9_SetPixelShaderConstantI(device,0,integers,0);break;
+  default:direct=IDirect3DDevice9_SetPixelShaderConstantB(device,0,booleans,0);break;
+  }
+  actual=pw_d3d9_native_command_dispatch(device,&c,acquire,&objects);
+  printf("PW_COMMAND_ZERO method=%u direct=%08lx helper=%08lx\n",c.method,direct,actual);
+  if(actual!=direct)goto done;
+ }
+ result[5]=6;
+ }
  if(FAILED(IDirect3DDevice9_GetFVF(device,&fvf)) || fvf!=(D3DFVF_XYZRHW|D3DFVF_DIFFUSE))goto done;
  memset(&c,0,sizeof(c));c.method=57;c.args[0]=0xffffffff;c.args[1]=123;
  if(pw_d3d9_native_command_dispatch(device,&c,acquire,&objects)!=IDirect3DDevice9_SetRenderState(device,(D3DRENDERSTATETYPE)0xffffffff,123))goto done;
@@ -144,7 +161,7 @@ int main(int argc,char **argv)
  query=(query_fn)GetProcAddress(GetModuleHandleA("ntdll.dll"),"NtQueryInformationProcess");
  if(!query)return 6;
  status=query(GetCurrentProcess(),0x50570001,&r,sizeof(r),&returned);
- printf("PW_COMMAND_PE status=%08lx create=%08llx present=%08llx commands=%llu pins=%llu pixel=%08llx error=%llu\n",status,r.result[0],r.result[1],r.result[2],r.result[3],r.result[4],r.result[7]);
- result=s->hr[25]!=(uint32_t)D3DERR_INVALIDCALL || s->hr[26]!=(uint32_t)D3DERR_INVALIDCALL || status || returned!=sizeof(r) || r.result[0] || r.result[1] || r.result[2]!=48 || r.result[7];UnmapViewOfFile(s);CloseHandle(mapping);return result;
+ printf("PW_COMMAND_PE status=%08lx create=%08llx present=%08llx commands=%llu pins=%llu pixel=%08llx zero=%llu error=%llu\n",status,r.result[0],r.result[1],r.result[2],r.result[3],r.result[4],r.result[5],r.result[7]);
+ result=s->hr[25]!=(uint32_t)D3DERR_INVALIDCALL || s->hr[26]!=(uint32_t)D3DERR_INVALIDCALL || status || returned!=sizeof(r) || r.result[0] || r.result[1] || r.result[2]!=48 || r.result[5]!=6 || r.result[7];UnmapViewOfFile(s);CloseHandle(mapping);return result;
 }
 #endif

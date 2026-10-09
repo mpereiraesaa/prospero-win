@@ -34,9 +34,9 @@ for i in range(3):
  env['PW_COMMAND_SESSION']=uuid.uuid4().hex
  r=run([a.wine_build.resolve()/'loader/wine',out/'client.exe','Z:'+str(out/'service.dll').replace('/','\\')],'pe-'+str(i),env)
  assert len(re.findall('PW_COMMAND_NATIVE index=',r.stdout))==48,r.stdout
- assert re.search(r'PW_COMMAND_PE status=00000000 create=00000000 present=00000000 commands=48 pins=6 pixel=[0-9a-f]+ error=0',r.stdout),r.stdout
+ assert re.search(r'PW_COMMAND_PE status=00000000 create=00000000 present=00000000 commands=48 pins=6 pixel=[0-9a-f]+ zero=6 error=0',r.stdout),r.stdout
 assert frozen=={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in inputs},'source changed during proof'
-receipt.update(status='pass',native_methods=40,pe_processes=3,commands_per_process=48,valid_draws_per_process=2,negative_unbound_draws_per_process=2,
+receipt.update(status='pass',native_methods=40,pe_processes=3,commands_per_process=48,valid_draws_per_process=2,negative_unbound_draws_per_process=2,zero_count_native_comparisons_per_process=6,
  scope='Controlled exact HRESULT/field/pin ABI; PE32-owned codec payloads decoded by PE64 helper on real DXVK, valid primitive/indexed draws and changed-pixel readback. No production COM proxy/session wiring or console performance claim.',
  sha256={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [native,native.with_suffix('.h'),codec,fixture,pe,Path(__file__),a.backend64.resolve(),out/'client.exe',out/'service.dll']})
 (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');print('PASS '+str(out/'receipt.json'))

@@ -123,16 +123,16 @@ HRESULT pw_d3d9_native_command_dispatch(IDirect3DDevice9 *device,
     case 87:hr=CALL(SetVertexDeclaration,(IDirect3DVertexDeclaration9 *)object);break;
     case 89:hr=CALL(SetFVF,a[0]);break;
     case 92:hr=CALL(SetVertexShader,(IDirect3DVertexShader9 *)object);break;
-    case 94:hr=CALL(SetVertexShaderConstantF,a[0],a[1]?n.f:NULL,a[1]);break;
-    case 96:hr=CALL(SetVertexShaderConstantI,a[0],a[1]?n.integers:NULL,a[1]);break;
-    case 98:hr=CALL(SetVertexShaderConstantB,a[0],a[1]?n.booleans:NULL,a[1]);break;
+    case 94:hr=CALL(SetVertexShaderConstantF,a[0],n.f,a[1]);break;
+    case 96:hr=CALL(SetVertexShaderConstantI,a[0],n.integers,a[1]);break;
+    case 98:hr=CALL(SetVertexShaderConstantB,a[0],n.booleans,a[1]);break;
     case 100:hr=CALL(SetStreamSource,a[0],(IDirect3DVertexBuffer9 *)object,a[3],a[4]);break;
     case 102:hr=CALL(SetStreamSourceFreq,a[0],a[1]);break;
     case 104:hr=CALL(SetIndices,(IDirect3DIndexBuffer9 *)object);break;
     case 107:hr=CALL(SetPixelShader,(IDirect3DPixelShader9 *)object);break;
-    case 109:hr=CALL(SetPixelShaderConstantF,a[0],a[1]?n.f:NULL,a[1]);break;
-    case 111:hr=CALL(SetPixelShaderConstantI,a[0],a[1]?n.integers:NULL,a[1]);break;
-    case 113:hr=CALL(SetPixelShaderConstantB,a[0],a[1]?n.booleans:NULL,a[1]);break;
+    case 109:hr=CALL(SetPixelShaderConstantF,a[0],n.f,a[1]);break;
+    case 111:hr=CALL(SetPixelShaderConstantI,a[0],n.integers,a[1]);break;
+    case 113:hr=CALL(SetPixelShaderConstantB,a[0],n.booleans,a[1]);break;
     default:hr=E_NOTIMPL;break;
     }
 #undef CALL

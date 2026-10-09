@@ -48,9 +48,21 @@ render-target readback differs from the clear color, and Present succeeds.
 The exact payloads contain only scalar data and object tokens. Native test
 resources are registered by a controlled resolver.
 
-Receipt: `/tmp/prospero-d3d9-native-command-r2/receipt.json`.
+Receipt: `/tmp/prospero-d3d9-native-command-r4/receipt.json`.
 This proves the codec/helper and native ABI. It does not claim production COM
 proxy/COMMAND_CALL21 routing, complete D3D9 coverage, hardware console rendering,
 or a performance improvement. Session integration and console validation remain
 separate gates. UP draws, getters, state blocks and unreviewed methods remain
 unsupported until their own complete adapters exist.
+
+All six shader constant setters pass a valid native temporary pointer even for
+zero elements. Their codecs carry no pointer-presence bit; the guest proxy must
+validate required input pointers before encoding. The zero count itself remains
+unchanged. Clear with zero rectangles keeps its documented null-list form.
+The controlled fixture asserts non-null constant data for all six zero-count
+calls. Each real-device process compares those six helper HRESULTs with direct
+backend calls using valid buffers and zero counts.
+
+An earlier r3 repeated-process run exited during DXVK initialization before the
+second helper dispatch; its failed receipt is retained. The unchanged r4 source
+passed all three processes, including all six direct/backend comparisons each.
