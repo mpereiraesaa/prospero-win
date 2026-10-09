@@ -4,6 +4,9 @@
 #include "../pw_d3d9_texture_wire.h"
 #include "pw_d3d9_kinds.h"
 struct pw_d3d9_native_texture;
+/* Consumes the owned native COM reference on every path. Validates kind through
+ * QueryInterface and checks GetDevice ownership. Caller retains parent window. */
+uint32_t pw_d3d9_native_texture_adopt(void *native_device,uint32_t kind,void *owned_native_object,struct pw_d3d9_native_texture **);
 void pw_d3d9_native_texture_create(void *,const struct pw_d3d9_texture_request *,struct pw_d3d9_texture_reply *,struct pw_d3d9_native_texture **);
 /* SURFACE_LEVEL returns a new owned context. Registry deduplicates its canonical
  * IUnknown identity, balances extra backend refs, and assigns the reply ID. */

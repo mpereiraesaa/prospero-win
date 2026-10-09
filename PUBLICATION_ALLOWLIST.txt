@@ -653,3 +653,12 @@ tests/lab/d3d9_native_getter.c
 tests/lab/d3d9_native_getter_pe.c
 tests/lab/d3d9_native_getter.py
 docs/d3d9-native-getter.md
+wine/ps5/pw_d3d9_texture_wire.h
+wine/ps5/pw_d3d9_texture_wire.c
+tests/test_d3d9_texture_wire.c
+docs/d3d9-texture-wire.md
+wine/ps5/d3d9/pw_d3d9_native_texture.c
+wine/ps5/d3d9/pw_d3d9_native_texture.h
+tests/lab/d3d9_native_texture.c
+tests/lab/d3d9_native_texture.py
+docs/d3d9-native-textures.md

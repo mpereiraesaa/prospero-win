@@ -80,6 +80,24 @@ void *pw_d3d9_native_texture_backend(struct pw_d3d9_native_texture *r)
 {return r?r->object.unknown:NULL;}
 uint32_t pw_d3d9_native_texture_kind(struct pw_d3d9_native_texture *r)
 {return r?r->kind:0;}
+uint32_t pw_d3d9_native_texture_adopt(void *device,uint32_t kind,void *owned,struct pw_d3d9_native_texture **out)
+{
+ struct pw_d3d9_native_texture *r;HRESULT hr;IUnknown *object=owned;
+ if(out)*out=NULL;
+ if(!out||!device||!object){if(object)IUnknown_Release(object);return E_INVALIDARG;}
+ if(kind!=PW_D3D9_KIND_TEXTURE_2D&&kind!=PW_D3D9_KIND_SURFACE){IUnknown_Release(object);return E_NOTIMPL;}
+ r=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*r));if(!r){IUnknown_Release(object);return E_OUTOFMEMORY;}
+ r->kind=kind;
+ hr=IUnknown_QueryInterface(object,kind==PW_D3D9_KIND_TEXTURE_2D?&IID_IDirect3DTexture9:&IID_IDirect3DSurface9,(void **)&r->object.unknown);
+ IUnknown_Release(object);
+ if(SUCCEEDED(hr)&&!r->object.unknown)hr=E_FAIL;
+ if(SUCCEEDED(hr)){
+  hr=kind==PW_D3D9_KIND_TEXTURE_2D?IDirect3DTexture9_GetDevice(r->object.texture,&r->device):IDirect3DSurface9_GetDevice(r->object.surface,&r->device);
+  if(SUCCEEDED(hr)&&r->device!=device)hr=D3DERR_INVALIDCALL;
+ }
+ if(FAILED(hr))pw_d3d9_native_texture_destroy(r);else *out=r;
+ return (uint32_t)hr;
+}
 void pw_d3d9_native_texture_create(void *device,const struct pw_d3d9_texture_request *q,struct pw_d3d9_texture_reply *reply,struct pw_d3d9_native_texture **out)
 {
  struct pw_d3d9_native_texture *r;D3DSURFACE_DESC d;HRESULT hr;
