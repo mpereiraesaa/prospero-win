@@ -129,8 +129,9 @@ static struct bridge_surface bridge_surfaces[PW_D3D9_WINDOW_LEASES];
 static BOOL bridge_guest_state( HWND hwnd, struct pw_d3d9_window_state *state )
 {
     RECT rect;
+    const struct ratio physical_dpi = {0};
     int64_t width, height;
-    if (!get_client_rect_rel( hwnd, COORDS_SCREEN, &rect, no_dpi )) return FALSE;
+    if (!get_client_rect_rel( hwnd, COORDS_SCREEN, &rect, physical_dpi )) return FALSE;
     width = (int64_t)rect.right - rect.left;
     height = (int64_t)rect.bottom - rect.top;
     if (width < 0 || height < 0 || width > INT32_MAX || height > INT32_MAX) return FALSE;

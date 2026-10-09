@@ -45,11 +45,11 @@ static int is_client_surface_window(struct client_surface *c,HWND hwnd)
 }
 typedef struct {int32_t left,top,right,bottom;} RECT;
 #define COORDS_SCREEN 0
-#define no_dpi 0
+struct ratio {unsigned num,den;} ;
 #define GWL_STYLE (-16)
 #define WS_VISIBLE 0x10000000u
 static RECT guest_rect={20,20,340,260};
-static int get_client_rect_rel(HWND hwnd,int relative,RECT *rect,int dpi)
+static int get_client_rect_rel(HWND hwnd,int relative,RECT *rect,struct ratio dpi)
 {(void)relative;(void)dpi;if(hwnd!=(HWND)100)return 0;*rect=guest_rect;return 1;}
 static unsigned NtUserGetWindowLongW(HWND hwnd,int index)
 {(void)hwnd;(void)index;return WS_VISIBLE;}
