@@ -32,6 +32,10 @@
 #endif
 #include "../pw_d3d9_bridge_wire.h"
 #include "../pw_d3d9_transport_stats.h"
+#ifdef PW_D3D9_ENABLE_BATCH
+#include "../pw_d3d9_command_batch.h"
+#include "../pw_d3d9_command_policy.h"
+#endif
 #include <d3d9.h>
 #include <stdio.h>
 #include <errno.h>
@@ -89,6 +93,9 @@ static uint32_t compiled_features(void)
 #endif
 #ifdef PW_D3D9_ENABLE_IMPLICIT
     mask|=4096u;
+#endif
+#ifdef PW_D3D9_ENABLE_BATCH
+    mask|=8192u;
 #endif
     return mask;
 }
@@ -155,7 +162,7 @@ static void profile_emit(const struct profile_record *r)
     DWORD error=GetLastError();int saved=errno;
     const struct pw_d3d9_transport_stats *d=&r->delta,*t=&r->total;
     char line[4096];
-    int used=snprintf(line,sizeof(line),"PW_D3D9_PROFILE transport role=%s pid=%lu tid=%lu domain=%s scope=session_interval epoch=%u frame=%llu seq=%llu object=%u generation=%u hr=%08x reply_valid=%d final=%d startup=%d clock_valid=%d saturated=%llu attempts=%llu sync_published=%llu replies=%llu failures=%llu rejected_present=%llu async_queued=0 request_bytes=%llu reply_bytes=%llu serial_wait_wall_us=%llu guest_wait_wall_us=%llu roundtrip_wall_us=%llu service_dispatch_wall_us=%llu total_attempts=%llu total_sync_published=%llu total_replies=%llu",
+    int used=snprintf(line,sizeof(line),"PW_D3D9_PROFILE transport role=%s pid=%lu tid=%lu domain=%s scope=session_interval epoch=%u frame=%llu seq=%llu object=%u generation=%u hr=%08x reply_valid=%d final=%d startup=%d clock_valid=%d saturated=%llu attempts=%llu sync_published=%llu replies=%llu failures=%llu rejected_present=%llu async_queued=%llu batch_flushes=%llu batch_commands=%llu batch_residence_wall_us=%llu request_bytes=%llu reply_bytes=%llu serial_wait_wall_us=%llu guest_wait_wall_us=%llu roundtrip_wall_us=%llu service_dispatch_wall_us=%llu total_attempts=%llu total_sync_published=%llu total_replies=%llu",
 #ifdef _WIN64
         "service",GetCurrentProcessId(),GetCurrentThreadId(),"native64",
 #else
@@ -163,6 +170,7 @@ static void profile_emit(const struct profile_record *r)
 #endif
         r->epoch,(unsigned long long)r->frame,(unsigned long long)r->sequence,r->object,r->generation,r->status,r->reply_valid,r->final,r->startup,
         r->clock_valid,(unsigned long long)t->saturated,(unsigned long long)d->attempts,(unsigned long long)d->published,(unsigned long long)d->replies,(unsigned long long)d->failures,(unsigned long long)d->rejected_present,
+        (unsigned long long)d->async_queued,(unsigned long long)d->batch_flushes,(unsigned long long)d->batch_commands,(unsigned long long)d->batch_residence_wall_us,
         (unsigned long long)d->request_bytes,(unsigned long long)d->reply_bytes,(unsigned long long)d->serial_wait_wall_us,(unsigned long long)d->guest_wait_wall_us,(unsigned long long)d->roundtrip_wall_us,(unsigned long long)d->service_dispatch_wall_us,
         (unsigned long long)t->attempts,(unsigned long long)t->published,(unsigned long long)t->replies);
     for(unsigned n=0;n<PW_D3D9_STATS_OPS&&used>0&&(size_t)used<sizeof(line)-64;n++)
@@ -318,6 +326,13 @@ struct pw_d3d9_session {
     int draining;
     struct bootstrap bootstrap;
     LONG status;
+#ifdef PW_D3D9_ENABLE_BATCH
+    struct pw_d3d9_command_batch batch;
+    struct pw_d3d9_object_ref batch_target;
+    uint64_t batch_next,batch_started_ms;
+    HRESULT batch_failure;
+    int batch_exhausted,async_enabled;
+#endif
 };
 static LONG session_claim,session_serial;
 static DWORD WINAPI broker_main(void *parameter)
@@ -356,6 +371,85 @@ static void drain_deferred(struct pw_d3d9_session *s)
         AcquireSRWLockExclusive(&s->deferred_lock);
     }
 }
+#ifdef PW_D3D9_ENABLE_BATCH
+/* Caller owns s->lock and active_thread; callbacks cannot enter this stream.
+ * The live remote guest reference cannot retire before ordered RELEASE, which
+ * passes through this same flush gate. The service pins it during replay. */
+static HRESULT batch_flush_locked(struct pw_d3d9_session *s)
+{
+    if(FAILED(s->batch_failure))return s->batch_failure;
+    if(!s->batch.count)return S_OK;
+    unsigned char input[PW_D3D9_BATCH_MAX],scratch[RING_BYTES];size_t bytes=0;
+    struct pw_d3d9_message m={.opcode=PW_D3D9_COMMAND_BATCH_CALL,.device=1,
+        .object=s->batch_target.id,.generation=s->batch_target.generation},reply={0};
+    struct pw_d3d9_batch_reply decoded={0};HRESULT hr=E_FAIL;
+    int prof=profile_enabled();uint64_t begin=prof?profile_now():0;
+    struct pw_d3d9_transport_stats sample;struct profile_record record;
+    if(prof){memset(&sample,0,sizeof(sample));sample.attempts=1;sample.opcode[PW_D3D9_COMMAND_BATCH_CALL]=1;
+        uint64_t now=GetTickCount64();
+        if(now<s->batch_started_ms||(now-s->batch_started_ms)>UINT64_MAX/1000u)sample.clock_invalid++;
+        else sample.batch_residence_wall_us=(now-s->batch_started_ms)*1000u;}
+    if(pw_d3d9_batch_encode(input,sizeof(input),&bytes,&s->batch)!=PW_D3D9_BATCH_OK)goto done;
+    m.payload_bytes=(uint32_t)bytes;uint64_t sequence=s->ipc.channel.next_send;
+    int sent=send_wake(&s->ipc,&m,input);
+    if(prof&&s->ipc.channel.next_send!=sequence){sample.published=sample.batch_flushes=1;sample.batch_commands=s->batch.count;sample.request_bytes=64u+bytes;}
+    if(sent!=PW_D3D9_OK)goto done;
+    client_pump();uint64_t waiting=prof?profile_now():0;
+    int received=receive_wait(&s->ipc,&reply,scratch,sizeof(scratch),s->broker);
+    if(prof){sample.guest_wait_wall_us=pw_d3d9_stats_elapsed(waiting,profile_now(),&sample.clock_invalid);
+        if(received==PW_D3D9_OK){sample.replies=1;sample.reply_bytes=64u+reply.payload_bytes;}}
+    if(received!=PW_D3D9_OK||pw_d3d9_batch_reply_decode(&decoded,scratch+64,reply.payload_bytes,
+        s->batch.first_sequence,s->batch.count)!=PW_D3D9_BATCH_OK||decoded.hresult!=(uint32_t)reply.result)goto done;
+    hr=(HRESULT)decoded.hresult;
+ done:
+    if(prof){sample.failures=FAILED(hr);sample.roundtrip_wall_us=pw_d3d9_stats_elapsed(begin,profile_now(),&sample.clock_invalid);
+        profile_capture(&s->ipc,&sample,&m,0,hr,0,(int)sample.replies,0,&record);}
+    if(FAILED(hr)){
+        s->batch_failure=hr;cancel_ipc(&s->ipc);
+        fprintf(stderr,"PW_D3D9_BATCH failed first=%llu count=%u attempted=%u failed_index=%u hr=%08lx\n",
+            (unsigned long long)s->batch.first_sequence,s->batch.count,decoded.attempted,decoded.failed_index,(DWORD)hr);
+    }
+    s->batch.count=0;s->batch.used=0;return hr;
+}
+static HRESULT batch_enqueue(struct pw_d3d9_session *s,struct pw_d3d9_object_ref ref,const struct pw_d3d9_command *request)
+{
+    HRESULT hr=S_OK;int cleanup=0;
+    if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+    if(!ref.id||!ref.generation)return D3DERR_INVALIDCALL;
+    while(!TryEnterCriticalSection(&s->lock)){
+        if(client_wait(1,&s->serial_event,30000)!=WAIT_OBJECT_0){restore_quit();drain_deferred(s);return E_FAIL;}
+    }
+    if(s->active_thread){LeaveCriticalSection(&s->lock);return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;}
+    s->active_thread=GetCurrentThreadId();cleanup=1;
+    if(FAILED(s->batch_failure)){hr=s->batch_failure;goto done;}
+    if(pw_d3d9_channel_state(&s->ipc.channel)!=PW_D3D9_READY){hr=E_FAIL;goto failed;}
+    uint64_t now=GetTickCount64();
+    if(s->batch.count&&(s->batch_target.id!=ref.id||s->batch_target.generation!=ref.generation||
+        now<s->batch_started_ms||now-s->batch_started_ms>=1)){
+        hr=batch_flush_locked(s);if(FAILED(hr))goto done;
+    }
+    if(s->batch_exhausted){hr=E_FAIL;goto failed;}
+ retry:
+    if(!s->batch.count){
+        if(pw_d3d9_batch_init(&s->batch,s->batch_next)!=PW_D3D9_BATCH_OK){hr=E_FAIL;goto failed;}
+        s->batch_target=ref;s->batch_started_ms=GetTickCount64();
+    }
+    int appended=pw_d3d9_batch_append(&s->batch,request);
+    if(appended==PW_D3D9_BATCH_FULL){hr=batch_flush_locked(s);if(FAILED(hr))goto done;goto retry;}
+    if(appended!=PW_D3D9_BATCH_OK){hr=E_FAIL;goto failed;}
+    if(s->batch_next==UINT64_MAX)s->batch_exhausted=1;else s->batch_next++;
+    if(profile_enabled()){
+        struct pw_d3d9_transport_stats sample={0};struct profile_record record;sample.async_queued=1;
+        profile_capture(&s->ipc,&sample,NULL,0,S_OK,0,0,0,&record);
+    }
+    goto done;
+ failed:
+    s->batch_failure=hr;cancel_ipc(&s->ipc);
+ done:
+    s->active_thread=0;LeaveCriticalSection(&s->lock);SetEvent(s->serial_event);
+    if(cleanup){restore_quit();drain_deferred(s);}return hr;
+}
+#endif
 static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,const void *payload,
                         unsigned char *output,size_t capacity,struct pw_d3d9_message *reply)
 {
@@ -387,6 +481,11 @@ static HRESULT transact(struct pw_d3d9_session *s,struct pw_d3d9_message *m,cons
     if(s->active_thread){LeaveCriticalSection(&s->lock);result=RPC_E_CANTCALLOUT_ININPUTSYNCCALL;goto metric_done;}
     locked=cleanup=1;
     s->active_thread=GetCurrentThreadId();
+#ifdef PW_D3D9_ENABLE_BATCH
+    result=batch_flush_locked(s);if(FAILED(result))goto done;
+    if(m->opcode==PW_D3D9_STOP&&pw_d3d9_channel_stop(&s->ipc.channel)!=PW_D3D9_OK){result=E_FAIL;goto done;}
+    result=E_FAIL;
+#endif
     sequence=s->ipc.channel.next_send;
     int sent=send_wake(&s->ipc,m,payload);
     if(prof&&s->ipc.channel.next_send!=sequence){sample.published=1;sample.request_bytes=64u+m->payload_bytes;}
@@ -447,6 +546,10 @@ HRESULT pw_d3d9_session_open(const WCHAR *service,const WCHAR *backend,struct pw
     epoch=(DWORD)++session_serial;
     s=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*s));
     if(!s){InterlockedExchange(&session_claim,0);return E_OUTOFMEMORY;}
+#ifdef PW_D3D9_ENABLE_BATCH
+    s->batch_next=1;
+    {char value[2];s->async_enabled=GetEnvironmentVariableA("PW_D3D9_ASYNC",value,sizeof(value))==1&&value[0]=='1';}
+#endif
     InitializeCriticalSection(&s->lock);
     InitializeSRWLock(&s->deferred_lock);
     s->serial_event=CreateEventW(NULL,FALSE,FALSE,NULL);
@@ -562,6 +665,9 @@ HRESULT pw_d3d9_session_command(struct pw_d3d9_session *s,struct pw_d3d9_object_
     unsigned char in[RING_BYTES],out[16];size_t bytes;uint32_t method,hresult;
     struct pw_d3d9_message m={.opcode=PW_D3D9_COMMAND_CALL,.device=1,.object=ref.id,.generation=ref.generation},r;
     if(!s||!request)return E_POINTER;
+#ifdef PW_D3D9_ENABLE_BATCH
+    if(s->async_enabled&&pw_d3d9_command_can_queue(request))return batch_enqueue(s,ref,request);
+#endif
     if(pw_d3d9_command_encode(in,sizeof(in),&bytes,request)!=PW_D3D9_COMMAND_OK)return D3DERR_INVALIDCALL;
     m.payload_bytes=(uint32_t)bytes;HRESULT hr=transact(s,&m,in,out,sizeof(out),&r);
     if(FAILED(hr)&&!r.payload_bytes)return hr;
@@ -719,7 +825,11 @@ HRESULT pw_d3d9_session_close(struct pw_d3d9_session *s)
     struct pw_d3d9_message m={.opcode=PW_D3D9_STOP},r;HRESULT hr=E_FAIL;
     if(!s)return E_POINTER;
     if(callback_depth())return RPC_E_CANTCALLOUT_ININPUTSYNCCALL;
+#ifdef PW_D3D9_ENABLE_BATCH
+    hr=transact(s,&m,NULL,NULL,0,&r); /* Flush while READY, then STOP under the same lock. */
+#else
     if(pw_d3d9_channel_stop(&s->ipc.channel)==PW_D3D9_OK)hr=transact(s,&m,NULL,NULL,0,&r);
+#endif
     if(FAILED(hr))cancel_ipc(&s->ipc);
     client_wait(1,&s->broker,INFINITE);
     if(s->status || pw_d3d9_channel_state(&s->ipc.channel)!=PW_D3D9_STOPPED)hr=E_FAIL;
@@ -879,6 +989,9 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
     HMODULE backend=NULL;IDirect3D9 *(WINAPI *factory)(UINT)=NULL;
     struct pw_d3d9_object_slot *slots=NULL;struct pw_d3d9_objects objects;BOOL objects_ready=FALSE;
     unsigned char scratch[RING_BYTES],output[RING_BYTES],hello[32];
+#ifdef PW_D3D9_ENABLE_BATCH
+    struct pw_d3d9_service_batch_state batches;pw_d3d9_service_batch_init(&batches);
+#endif
     if(*(volatile LONG *)((char *)NtCurrentTeb()+0x180c))return 2;
     name(object_name,L"BOOT",pid,0);ipc.descriptor_mapping=OpenFileMappingW(FILE_MAP_READ,FALSE,object_name);
     if(!ipc.descriptor_mapping)goto done;
@@ -908,6 +1021,9 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
         phase="receive";
         if(receive_wait(&ipc,&m,scratch,sizeof(scratch),NULL)!=PW_D3D9_OK)goto done;
         last_opcode=m.opcode;phase="dispatch_or_encode";
+#ifdef PW_D3D9_ENABLE_BATCH
+        if(batches.failed_result)goto done;
+#endif
         if(prof){profile_pending=1;profile_message=m;dispatch_begin=profile_now();
             profile_is_present=profile_present(&m,scratch+64);}
         const unsigned char *payload=scratch+64;HRESULT hr=S_OK;
@@ -937,6 +1053,11 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             if(m.device!=1||!m.object||m.payload_bytes)goto done;
             hr=pw_d3d9_object_release(&objects,ref)?S_OK:D3DERR_INVALIDCALL;
             if(!destroy_objects(&objects))goto done;
+#ifdef PW_D3D9_ENABLE_BATCH
+        }else if(m.opcode==PW_D3D9_COMMAND_BATCH_CALL){
+            if(m.device!=objects.device||!pw_d3d9_service_batch(&batches,&objects,ref,payload,m.payload_bytes,
+                output,sizeof(output),&bytes,&hr))goto done;
+#endif
         }else if(m.opcode==PW_D3D9_FACTORY_CALL){
             struct pw_d3d9_factory_request request;struct pw_d3d9_factory_reply reply={0};
             if(pw_d3d9_factory_request_decode(&request,payload,m.payload_bytes)!=PW_D3D9_FACTORY_OK)goto done;
@@ -1086,6 +1207,9 @@ __declspec(dllexport) DWORD WINAPI PwD3D9ServiceMain(uint64_t *result)
             sample.attempts=sample.published=1;sample.request_bytes=64u+profile_message.payload_bytes;
             if(profile_message.opcode<PW_D3D9_STATS_OPS)sample.opcode[profile_message.opcode]=1;
             sample.replies=reply_sent==PW_D3D9_OK;
+#ifdef PW_D3D9_ENABLE_BATCH
+            if(profile_message.opcode==PW_D3D9_COMMAND_BATCH_CALL){sample.batch_flushes=1;sample.batch_commands=get32(payload+4);}
+#endif
             sample.reply_bytes=sample.replies?64u+bytes:0;sample.failures=FAILED(hr)||!sample.replies;
             sample.service_dispatch_wall_us=pw_d3d9_stats_elapsed(dispatch_begin,profile_now(),&sample.clock_invalid);
             profile_capture(&ipc,&sample,&profile_message,profile_message.sequence,reply_sent==PW_D3D9_OK?hr:E_FAIL,profile_is_present,(int)sample.replies,0,&record);
