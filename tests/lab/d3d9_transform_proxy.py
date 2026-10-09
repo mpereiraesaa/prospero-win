@@ -8,8 +8,9 @@ for n in ('recovery','production-root','pair','host-service','output'):p.add_arg
 p.add_argument('--prefix',type=Path,help='reuse the preceding runner owned prefix after its terminal release')
 a=p.parse_args();base=a.recovery.resolve();root=a.production_root.resolve();pair=a.pair.resolve();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
 prefix=a.prefix.resolve() if a.prefix else out/'prefix'
+host_receipt=a.host_service.resolve().parent/'receipt.json'
 source=Path(__file__).with_suffix('.c');backend=base/'backend/d3d9.dll';sha=lambda f:hashlib.sha256(f.read_bytes()).hexdigest()
-inputs=[Path(__file__),source,pair/'receipt.json',pair/'d3d9.dll',a.host_service.resolve(),backend,*sorted((root/'wine/ps5').rglob('*.c')),*sorted((root/'wine/ps5').rglob('*.h'))]
+inputs=[Path(__file__),source,host_receipt,pair/'receipt.json',pair/'d3d9.dll',a.host_service.resolve(),backend,*sorted((root/'wine/ps5').rglob('*.c')),*sorted((root/'wine/ps5').rglob('*.h'))]
 r={'status':'running','scope':'Exact native Transform HRESULT/matrix comparison with production proxy, async off/on. Supplied host service must use only the documented ordinary-window test adapter. No console acceptance.','inputs':{str(f):sha(f) for f in inputs},'commands':[],'artifacts':{}}
 def save():(out/'receipt.json').write_text(json.dumps(r,indent=2)+'\n')
 def run(cmd,label,env=None):
@@ -21,6 +22,9 @@ def run(cmd,label,env=None):
  return (out/(label+'.log')).read_text(errors='replace')
 def win(f):return 'Z:'+str(f.resolve()).replace('/',chr(92))
 try:
+ host_proof=json.loads(host_receipt.read_text())
+ assert host_proof['status']=='pass','preceding host-service proof must be terminal PASS'
+ assert host_proof['artifacts'][str(a.host_service.resolve())]==sha(a.host_service.resolve()),'host-service bytes differ from preceding proof'
  pair_receipt=json.loads((pair/'receipt.json').read_text())
  assert pair_receipt['features']==260095,'requires the complete frozen binding/draw/Transform pair'
  for build in pair_receipt['builds']:
