@@ -818,3 +818,8 @@ docs/d3d9-gamma-wire.md
 wine/ps5/d3d9/pw_d3d9_failure_diag.h
 tests/test_d3d9_failure_diag.c
 docs/d3d9-failure-diagnostics.md
+tests/lab/d3d9_intz_control.c
+tests/lab/d3d9_intz_transport.c
+tests/lab/d3d9_intz_transport.py
+tests/lab/d3d9_intz_transport_device.c
+docs/d3d9-intz-transport.md
