@@ -170,7 +170,9 @@ static HRESULT WINAPI reset(IDirect3DDevice9 *iface,D3DPRESENT_PARAMETERS *param
     if(d->failed)return D3DERR_NOTAVAILABLE;
     if(!parameters_to_wire(&q.parameters,parameters,d->window))return D3DERR_NOTAVAILABLE;
     addref(iface);HRESULT hr=pw_d3d9_session_device(d->session,d->remote,&q,&r);
-    if(r.operation==q.operation&&!parameters_from_wire(parameters,&r.parameters,d->window))hr=E_FAIL;
+    if(r.operation==q.operation&&!parameters_from_wire(parameters,&r.parameters,d->window)){
+        hr=E_FAIL;pw_d3d9_session_cancel(d->session);pw_d3d9_session_join(d->session);
+    }
     release(iface);return hr;
 }
 static HRESULT WINAPI present(IDirect3DDevice9 *iface,const RECT *source,const RECT *destination,HWND override,const RGNDATA *dirty)
@@ -215,7 +217,9 @@ HRESULT pw_d3d9_device_proxy_create(IDirect3D9 *parent,struct pw_d3d9_session *s
     struct pw_d3d9_device_reply r={0};if(focus)q.focus_window=d->window->id;
     parameters_to_wire(&q.parameters,parameters,d->window);
     hr=pw_d3d9_session_device(session,parent_ref,&q,&r);
-    if(r.operation==q.operation&&!parameters_from_wire(parameters,&r.parameters,d->window))hr=E_FAIL;
+    if(r.operation==q.operation&&!parameters_from_wire(parameters,&r.parameters,d->window)){
+        hr=E_FAIL;pw_d3d9_session_cancel(d->session);pw_d3d9_session_join(d->session);
+    }
     if(FAILED(hr)){
         if(!release_window(d->window,session)){OutputDebugStringA("PW_D3D9: retaining failed creation cleanup\n");return hr;}
         IDirect3D9_Release(parent);HeapFree(GetProcessHeap(),0,d);return hr;
