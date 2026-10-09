@@ -16,6 +16,7 @@
 #include "pw_d3d9_session.h"
 #ifdef PW_D3D9_ENABLE_DRAW_BATCH
 #include "pw_d3d9_native_draw_state.h"
+#include "pw_d3d9_transform_observer.h"
 #endif
 #ifdef PW_D3D9_ENABLE_API_OBSERVE
 #include "pw_d3d9_api_observe.h"
@@ -107,7 +108,7 @@ static uint32_t compiled_features(void)
     mask|=PW_D3D9_BINDING_FEATURE;
 #endif
 #ifdef PW_D3D9_ENABLE_DRAW_BATCH
-    mask|=PW_D3D9_DRAW_FEATURE;
+    mask|=PW_D3D9_DRAW_FEATURE|PW_D3D9_TRANSFORM_FEATURE;
 #endif
 #endif
     return mask;

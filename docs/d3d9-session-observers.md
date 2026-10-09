@@ -30,3 +30,26 @@ service compilation at the same source commit with draw capability 65536.
 This change provides the scoped transport hooks; device-owned draw and Transform
 observers, negotiated combined capability, and actual runtime evidence follow
 separately. No console result is claimed here.
+
+## Combined device integration
+
+The device proxy owns declaration evidence and Transform state for its lifetime.
+Successful typed replies and accepted queued commands update those structures
+under the original session gate. State block evidence belongs to the canonical
+state block shell; Create/End commit canonical identity before unlocking, and
+aliases invalidate evidence conservatively. Failed End leaves recording
+knowledge uncertain. Reset invalidates relevant cached live evidence while
+preserving the pinned backend's recording semantics.
+
+The paired build option `--draws` enables both draw admission and Transform
+observers, adding capabilities 65536 and 131072 to the binding-enabled pair.
+Both sides advertise exactly 260095. A different capability mask is rejected at
+HELLO. Runtime batching and local getter serving remain controlled together by
+`PW_D3D9_ASYNC`; its off mode keeps native getter round trips.
+
+The frozen combined source 1e49a4d6 successfully compiled the complete PE32 proxy
+and PE64 service with diagnostics disabled and mask 260095. Both binaries and
+all 154 build inputs were independently reverified. Native service draw/pixel
+parity and controlled observer evidence are prerequisites, not a claim that the
+full combined runtime has passed. Combined runtime acceptance and its retained
+receipts remain pending; no console result is claimed by this publication.
