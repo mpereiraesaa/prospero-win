@@ -715,6 +715,12 @@ tests/lab/d3d9_buffer_client.py
 docs/d3d9-buffer-client.md
 
 docs/d3d9-native-command.md
+wine/ps5/d3d9/pw_d3d9_native_up.h
+wine/ps5/d3d9/pw_d3d9_native_up.c
+tests/lab/d3d9_native_up.c
+tests/lab/d3d9_native_up_pe.c
+tests/lab/d3d9_native_up.py
+docs/d3d9-native-up.md
 tests/lab/d3d9_native_command.c
 tests/lab/d3d9_native_command.py
 tests/lab/d3d9_native_command_pe.c
