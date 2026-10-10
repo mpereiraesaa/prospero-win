@@ -86,7 +86,7 @@ DOWNLOADS = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "pr
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 REG_TYPES = {"REG_SZ", "REG_DWORD", "REG_BINARY"}
 PROSPERO_DISPLAY = ("desktop", "scaling", "view", "show_fps", "refresh", "opengl_thread")
-PROSPERO_INPUT = ("preset", "mode", "mouse", "mouse_speed")
+PROSPERO_INPUT = ("preset", "mode", "mouse", "mouse_speed", "player2")
 
 
 class InstallError(Exception):

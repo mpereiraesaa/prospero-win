@@ -9,17 +9,21 @@ static int user_initialize(const void *p){assert(!p);init_calls++;return user_in
 static int foreground(int32_t *u){foreground_calls++;*u=42;return 0;}
 static int terminate(void){terminate_calls++;return 0;}
 static int pad_init(void){pad_init_calls++;return 0;}
+/* User 42 is in the foreground (handle 7); user 43 signs in as player 2 (handle 8). */
 static int pad_open(int32_t u,int32_t t,int32_t i,const void *p)
-{assert(u==42&&!t&&!i&&!p);open_calls++;return 7;}
+{assert((u==42||u==43)&&!t&&!i&&!p);open_calls++;return u==42?7:8;}
 static int pad_read(int32_t h,PwPadPs5Data *s,int32_t n)
-{assert(h==7&&n==64);read_calls++;if(read_rc<0)return read_rc;
+{assert((h==7||h==8)&&n==64);read_calls++;if(read_rc<0)return read_rc;
  memcpy(s,fixture,(size_t)fixture_count*sizeof(*s));return fixture_count;}
-static int pad_close(int32_t h){assert(h==7);close_calls++;return 0;}
+static int pad_close(int32_t h){assert(h==7||h==8);close_calls++;return 0;}
 static int vibration_calls,vibration_rc;static uint8_t motors_seen[2];
 static int pad_set_vibration(int32_t h,const uint8_t m[2])
 {assert(h==7);vibration_calls++;memcpy(motors_seen,m,2);return vibration_rc;}
+static int32_t signed_in[PW_PAD_PS5_USERS]={42,-1,-1,-1};static int login_rc;
+static int login_users(int32_t ids[PW_PAD_PS5_USERS])
+{memcpy(ids,signed_in,sizeof(signed_in));return login_rc;}
 static const PwPadPs5Ops ops={user_initialize,foreground,terminate,pad_init,pad_open,pad_read,pad_close,
-                              pad_set_vibration};
+                              pad_set_vibration,login_users};
 enum { CREATE=0x1,L1=0x400 };
 static const PwPadKeyMap map[]={{L1,'Z',0,0,"left-flipper"}};
 
@@ -82,5 +86,26 @@ int main(void)
     assert(pw_pad_ps5_close(&pad)==PW_OK && terminate_calls==1);
     assert(pw_pad_ps5_close(NULL)==PW_ERR_PRECONDITION);
     assert(pw_pad_ps5_read(&pad)==PW_ERR_PRECONDITION);
+
+    /* A second signed-in user's pad for player 2. Nobody else signed in:
+     * not found; then user 43 is; its pad reads on its own handle, and
+     * closing it leaves the user service to the first pad. */
+    PwPadPs5 first,second;
+    user_init_rc=0;int terminated=terminate_calls,opened=open_calls;
+    assert(pw_pad_ps5_open(&first,&ops,map,1)==PW_OK && first.owns_user_service);
+    assert(pw_pad_ps5_open_other(&second,&first,map,1)==PW_ERR_NOT_FOUND && !second.opened);
+    signed_in[2]=43;
+    assert(pw_pad_ps5_open_other(&second,&first,map,1)==PW_OK);
+    assert(second.opened && second.user_id==43 && second.pad_handle==8 && !second.owns_user_service);
+    assert(open_calls==opened+2);
+    fixture[0]=(PwPadPs5Data){.buttons=L1,.connected=1,.timestamp=4000,.connected_count=1};
+    fixture_count=1;assert(pw_pad_ps5_read(&second)==PW_OK && second.core.pressed_edges==L1);
+    assert(pw_pad_ps5_close(&second)==PW_OK && terminate_calls==terminated);
+    login_rc=-1;assert(pw_pad_ps5_open_other(&second,&first,map,1)==PW_ERR_STATE);login_rc=0;
+    first.ops.login_users=NULL;
+    assert(pw_pad_ps5_open_other(&second,&first,map,1)==PW_ERR_UNSUPPORTED);
+    first.ops.login_users=login_users;
+    assert(pw_pad_ps5_close(&first)==PW_OK && terminate_calls==terminated+1);
+    assert(pw_pad_ps5_open_other(&second,&first,map,1)==PW_ERR_PRECONDITION);
     return 0;
 }

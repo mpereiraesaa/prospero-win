@@ -47,6 +47,10 @@ const PwGameProfile *pw_wine_library_find(const PwWineLibrary *library, const ch
  * missing or refused preset leaves only the profile's lines; the status
  * says why. */
 int pw_wine_library_input(const PwGameProfile *profile, const char *root, PwGameInput *input);
+/* The second DualSense's input: the profile's [input] player2 preset, in
+ * keyboard mode. PW_ERR_NOT_FOUND when the profile names none. */
+int pw_wine_library_player2_input(const PwGameProfile *profile, const char *root,
+                                  PwGameInput *input);
 
 /* The names in a buffer of FreeBSD 11 directory records (struct dirent:
  * u32 fileno, u16 reclen, u8 type, u8 namlen, name): calls found(name,

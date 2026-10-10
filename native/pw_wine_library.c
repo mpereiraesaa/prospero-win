@@ -195,27 +195,43 @@ const PwGameProfile *pw_wine_library_find(const PwWineLibrary *library, const ch
     return NULL;
 }
 
-int pw_wine_library_input(const PwGameProfile *profile, const char *root, PwGameInput *input)
+/* input/<name>.input under root, parsed into input. */
+static int load_preset(const char *root, const char *name, PwGameInput *input)
 {
     static uint8_t text[PW_APP_PROFILE_MAX_BYTES + 1];
     char path[PW_WINE_LIBRARY_PATH + PW_WINE_LIBRARY_NAME];
+    ssize_t length;
+
+    if (snprintf(path, sizeof(path), "%s/input/%s.input", root, name) >= (int)sizeof(path))
+        return PW_ERR_LIMIT;
+    if ((length = read_file(path, text, sizeof(text) - 1)) < 0) return PW_ERR_NOT_FOUND;
+    if (length >= (ssize_t)sizeof(text) - 1) return PW_ERR_LIMIT;
+    return pw_game_input_parse(text, (size_t)length, input);
+}
+
+int pw_wine_library_input(const PwGameProfile *profile, const char *root, PwGameInput *input)
+{
     int status = PW_OK;
 
     if (!profile || !root || !input) return PW_ERR_PRECONDITION;
     pw_game_input_init(input);
-    if (profile->input.preset[0]) {
-        ssize_t length;
-        if (snprintf(path, sizeof(path), "%s/input/%s.input", root, profile->input.preset) >=
-            (int)sizeof(path))
-            status = PW_ERR_LIMIT;
-        else if ((length = read_file(path, text, sizeof(text) - 1)) < 0)
-            status = PW_ERR_NOT_FOUND;
-        else if (length >= (ssize_t)sizeof(text) - 1)
-            status = PW_ERR_LIMIT;
-        else
-            status = pw_game_input_parse(text, (size_t)length, input);
-    }
+    if (profile->input.preset[0]) status = load_preset(root, profile->input.preset, input);
     pw_game_input_overlay(input, &profile->input);
     pw_game_input_default_mode(input);
+    return status;
+}
+
+int pw_wine_library_player2_input(const PwGameProfile *profile, const char *root,
+                                  PwGameInput *input)
+{
+    int status;
+
+    if (!profile || !root || !input) return PW_ERR_PRECONDITION;
+    pw_game_input_init(input);
+    if (!profile->input.player2[0]) return PW_ERR_NOT_FOUND;
+    status = load_preset(root, profile->input.player2, input);
+    /* Only keys for now: a second XInput controller needs the sink's pad
+     * state per controller. */
+    input->mode = PW_GAME_INPUT_KEYBOARD;
     return status;
 }
