@@ -1,0 +1,109 @@
+Subject: win32u: recognize existing PS5 desktops on fresh worker threads
+
+--- a/dlls/win32u/winstation.c
++++ b/dlls/win32u/winstation.c
+@@ -609,6 +609,7 @@
+         memset( &data->shared_foreground, 0, sizeof(data->shared_foreground) );
+         thread_info->top_window = 0;
+         thread_info->msg_window = 0;
++        thread_info->desktop_cache_only = FALSE;
+         if (was_virtual_desktop != is_virtual_desktop()) update_display_cache( TRUE );
+     }
+     return ret;
+@@ -816,12 +817,36 @@
+ static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiBatchCount; }
+ #endif
+
++/* Query existing desktop handles only.  Unlike get_desktop_window(), this
++ * must not create windows, load a driver, or register builtin classes. */
++void cache_thread_desktop_windows(void)
++{
++    struct user_thread_info *thread_info = get_user_thread_info();
++
++    if (thread_info->top_window) return;
++    SERVER_START_REQ( get_desktop_window )
++    {
++        req->force = FALSE;
++        if (!wine_server_call( req ))
++        {
++            thread_info->top_window = wine_server_ptr_handle( reply->top_window );
++            thread_info->msg_window = wine_server_ptr_handle( reply->msg_window );
++            thread_info->desktop_cache_only = !!thread_info->top_window;
++        }
++    }
++    SERVER_END_REQ;
++}
++
+ HWND get_desktop_window(void)
+ {
+     struct user_thread_info *thread_info = get_user_thread_info();
+     BOOL is_service;
+
+-    if (thread_info->top_window) return thread_info->top_window;
++    if (thread_info->top_window)
++    {
++        if (!thread_info->desktop_cache_only) return thread_info->top_window;
++        goto initialize;
++    }
+
+     /* don't create an actual explorer desktop window for services */
+     is_service = is_service_process();
+@@ -929,6 +954,9 @@
+         }
+         SERVER_END_REQ;
+     }
++initialize:
++    /* Mark before callbacks, matching the old top_window reentrancy guard. */
++    thread_info->desktop_cache_only = FALSE;
+     if (!thread_info->top_window) ERR_(win)( "failed to create desktop window\n" );
+     else user_driver->pSetDesktopWindow( thread_info->top_window );
+
+--- a/dlls/win32u/ntuser_private.h
++++ b/dlls/win32u/ntuser_private.h
+@@ -132,6 +132,7 @@
+     struct mouse_tracking_info   *mouse_tracking_info;    /* NtUserTrackMouseEvent handling */
+     struct opengl_thread_data    *opengl_data;            /* OpenGL private thread data */
+     struct list                   known_pointers;         /* list of known pointers */
++    BOOL                          desktop_cache_only;     /* handles cached without USER initialization */
+ };
+
+ extern struct user_thread_info *get_user_thread_info(void);
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -335,11 +335,12 @@
+ static RECT get_client_surface_rects( HWND toplevel, HWND hwnd, RECT *monitor_rect )
+ {
+     struct ratio dpi = get_dpi_for_window( hwnd ), raw_dpi;
+-    struct window_rects rects, monitor_rects;
++    struct window_rects rects = {0}, monitor_rects;
+     RECT rect = {0};
+
++    SetRectEmpty( monitor_rect );
+     if (!toplevel) toplevel = NtUserGetAncestor( hwnd, GA_ROOT );
+-    get_window_rects( toplevel, COORDS_PARENT, &rects, dpi );
++    if (!toplevel || !get_window_rects( toplevel, COORDS_PARENT, &rects, dpi )) return rect;
+     monitor_rects = map_window_rects_virt_to_raw( rects, dpi );
+
+     if (get_present_rect( hwnd, &rect, dpi )) OffsetRect( &rect, -rects.client.left, -rects.client.top );
+@@ -1008,6 +1009,11 @@
+         break;
+
+     case GA_ROOT:
++#ifdef WINE_PS5_USER_DRIVER
++        /* Vulkan workers may never have entered USER initialization.  The
++         * server desktop has no local WND; recognize it before the walk. */
++        cache_thread_desktop_windows();
++#endif
+         if (!(list = list_window_parents( hwnd ))) return 0;
+
+         if (!list[0] || !list[1]) ret = get_full_window_handle( hwnd );  /* top-level window */
+--- a/dlls/win32u/win32u_private.h
++++ b/dlls/win32u/win32u_private.h
+@@ -290,6 +290,7 @@
+ extern BOOL get_client_rect( HWND hwnd, RECT *rect, struct ratio dpi );
+ extern BOOL get_present_rect( HWND hwnd, RECT *rect, struct ratio dpi );
+ extern HWND get_desktop_window(void);
++extern void cache_thread_desktop_windows(void);
+ extern struct ratio get_dpi_for_window( HWND hwnd );
+ extern HWND get_full_window_handle( HWND hwnd );
+ extern HWND get_parent( HWND hwnd );

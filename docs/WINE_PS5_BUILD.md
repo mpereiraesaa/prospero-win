@@ -98,6 +98,7 @@ before evaluating a candidate built from that cache.
 | 0600 | `ntdll`: anonymous memory in the reserved areas is direct memory, not flexible memory; a 16 GiB area at `0x1000000000` takes the allocations free to go anywhere; see [Direct memory](#direct-memory) |
 | 0601 | `ntdll`: an i386 image is never mapped above 4 GiB, so a relocatable exe whose preferred base is taken stays in the low reserved areas instead of the high one |
 | 0610 | `ntdll`: `__wine_ps5_set_segv_hook` lets `wowprospero` resume its own faults (fault markers) from inside Wine's SIGSEGV handler, instead of a second handler chaining to the action `sigaction` reports |
+| 0611 | `wow64`: `WINE_PS5_WOW64_CPU` names the process's CPU backend (`wow64native.dll` or `wowprospero.dll`); when the named one cannot be loaded, the prefix's own choice is used instead of ending the process |
 | 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
 | 0790 | `server`, `ntdll`: opt-in immediate mutex acquire/release using the authoritative server object without request marshalling or waiter allocation; see [Immediate mutex calls](#immediate-mutex-calls) |
 | 0879 | `win32u`: the PS5 driver's ProcessEvents reports the wake pipe as handled whenever it read it; the pipe is every GUI thread's queue fd, so a thread whose events another thread had taken kept QS_DRIVER set with its fd unarmed, and a zero-timeout message wait (DirectInput's GetDeviceState) spun until the next input, so a game stalled while a button was held |
@@ -611,9 +612,9 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   SDK's stubs. `wine/ps5/pw_vulkan_libc.c` supplies the few libc functions
   it names that a title lacks (`popen`, `pclose`, `mkstemp`, `__assert`).
   Without the SDK the module is skipped. `winevulkan.prx` and
-  `opengl32.prx` are built either way. Without the optional OpenGL SDK below,
-  `wined3d`, which Wine's `d3d10.dll` imports even over DXVK, needs `opengl32`
-  to initialise, and it does so with no driver. ps5vk is
+  `opengl32.prx` are built either way: `wined3d`, which Wine's `d3d10.dll`
+  imports even over DXVK, needs `opengl32` to initialise, and it does so
+  with no driver. ps5vk is
   GPL-3.0-or-later, so a title that ships ps5vk's `libvulkan.prx` ships a
   GPL work.
 - **RADV.** `tools/build-radv.sh release` in PS5_Vulkan builds RADV's
@@ -657,6 +658,19 @@ game (PE) -> DXVK d3d11/dxgi/d3d9/d3d8/d3d10core (PE, beside the game) -> winevu
   window it adds `VkSwapchainPresentScalingCreateInfoEXT` in front of
   the application's structures (patch 0456); dropping them crashed DXVK's
   swapchain in Mesa's WSI.
+- **One display.** VideoOut has one display, so one swapchain presents at a
+  time. A new swapchain replaces the current one through `oldSwapchain`, or
+  takes the display from one that has never presented; a swapchain that has
+  presented keeps it until it is destroyed or replaced, and another window's
+  is refused (`VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`). This matters for OpenGL
+  games under Zink that load wined3d: `hl.exe` (Half-Life, Counter-Strike)
+  reads OpenGL's caps from a context on a hidden 10x10 window, Zink makes a
+  swapchain on it and never presents, and before PS5_Mesa `f2ee389`
+  (PS5_Vulkan #4) that swapchain kept the display, so the game's window
+  stayed black with no menu. Counter-Strike 1.6 under Zink, native CPU with
+  batching, showed its menu and cursor and played dust2 at 60 fps with the
+  fix (2026-10-09); the old workaround, `hl.exe`'s Direct3D
+  `renderer=no3d` AppDefault, is not needed with it.
 - **DLLs.** DXVK's DLLs go beside the game, and its profile sets
   `dll_overrides` (`d3d11,dxgi=n`, `d3d9=n`, `d3d8,d3d9=n` or
   `d3d10core,d3d11,dxgi=n`). The unmodified Win32-WSI DXVK build is the one
@@ -684,62 +698,26 @@ back buffer back (`GetRenderTargetData`/`LockRect`, or a staging copy and
 
 ## OpenGL
 
-The optional [PS5 OpenGL SDK](https://github.com/blackbearreloaded/ps5-opengl)
-provides the EGL implementation used by Wine's experimental WGL backend for
-Windows games that need OpenGL instead of Direct3D/DXVK. Build Wine with
-`tools/build_wine_ps5.sh --ps5-opengl-sdk DIR`, where `DIR` is the installed
-SDK prefix. The build links the SDK's static EGL archive into `win32u.prx` and
-resolves its EGL entry points there; without this option, the ordinary build
-remains unchanged.
+OpenGL games draw through Mesa's Zink, which runs OpenGL on top of the
+Vulkan driver. Mesa's Windows WGL frontend and Zink are built as Windows DLLs
+(`opengl32.dll`, `libgallium_wgl.dll`) by `tools/build_mesa_zink.sh` for both
+architectures, and the package carries them under `win/mesa-zink/`. A game
+with `graphics = opengl` gets its architecture's copy installed into its
+prefix before launch, native `opengl32`, and `GALLIUM_DRIVER=zink`. The
+OpenGL calls stay inside the game; only Zink's Vulkan calls cross to the
+Unix side, through the same command-stream batching as DXVK's, so a 32-bit
+OpenGL game runs on the native WoW64 CPU by default. Frames are presented
+through the Vulkan swapchain, so the pointer comes from VideoOut's hardware
+cursor (patch 0740), and the frame rate from Wine's `fps` channel.
 
-To select the backend for one game, set `graphics = opengl` in that game's
-application profile. This selects Wine's builtin `opengl32` and enables the
-PS5 EGL driver for that launch. DXVK and GDI profiles leave EGL initialization
-off. The published SDK 0.6.0 describes experimental OpenGL 4.6 Core support.
-[SDK PR #2](https://github.com/blackbearreloaded/ps5-opengl/pull/2) adds the
-compatibility features used by legacy WGL games; it has not yet been merged
-upstream. An SDK build from that PR rendered Half-Life's `c1a0` map with
-scripted movement and audio on the PS5. Official OpenArena 0.8.8 loaded at
-its fixed `0x00400000` base with the high-address title build, initialized
-`GL_RENDERER: PS5 AGC`, loaded `aggressor`, and ran a bot match.
+`graphics = zink`, the name this path had while it was opt-in, still works.
+Wine's builtin `opengl32` is still built: `wined3d`, which Wine's `d3d10.dll`
+imports even over DXVK, needs it to initialise, with no driver behind it.
 
-On 2026-10-01, one Wine runtime linked against the compatibility SDK and
-RADV ran both backends under their own profiles. OpenArena's profile selected
-`graphics = opengl`; its match produced 98 GPU-present intervals with no
-present failure, input rejection or rejected draw, and its game log recorded
-bots fighting (`ps5log/1` run `20261001T065158237Z`). Warcraft III's
-`graphics = dxvk` run reached its intro or menu on the TV, confirmed by the
-owner, with Vulkan presentation and audio (`20261001T064255256Z`). The
-combined build used `win32u.prx` SHA-256 `48c3a0a6…` and `libvulkan.prx`
-SHA-256 `89a3f17b…`. Wine's EGL driver is gated before initialization when
-`WINE_PS5_OPENGL` is absent; this prevents DirectDraw from probing EGL while
-Vulkan owns VideoOut. The normal
-non-scripted launcher built from the same source also opened its game list
-with VideoOut and pad input ready. These bounded runs restored the prior
-title files and profiles afterward. The SDK is GPL-3.0-or-later, so
-distributed builds must preserve its source and license notices.
-
-### Immediate-mode games
-
-Older OpenGL games draw with `glBegin`, one call per vertex attribute, and
-`glEnd`: Half-Life makes about 25,000 OpenGL calls and over a thousand
-`glBegin`/`glEnd` blocks a frame. Two things keep that fast on the console:
-
-- **Fewer crossings (patch 0720).** Every OpenGL call goes from the game's
-  side of Wine to the Unix side, which costs about 0.4 µs under WoW64.
-  `opengl32` records the calls that only feed vertices and current
-  attributes (`glBegin`, `glEnd`, `glVertex*`, `glTexCoord2f`, `glColor*`,
-  `glNormal3f`, `glMultiTexCoord2f`) in a per-thread buffer and replays them
-  in order with one crossing, before any other call. Its PE and Unix halves
-  must come from the same build, so the build makes `opengl32.dll` too.
-- **Fewer draws, in the SDK.** Mesa draws a run of `glBegin`/`glEnd`
-  primitives as one triangle list, and no longer splits that run when a game
-  switches the active texture unit around each polygon.
-
-On the console, these took Half-Life's `c1a0` from 12 fps to the display's
-60, with about a third of each frame left waiting for the next refresh.
-OpenGL games log their frame rate every five seconds (patch 0721):
-`PW_GL frames=300 fps=60.0`.
+Before Zink, OpenGL went through the PS5 OpenGL SDK (ps5-opengl), linked into
+`win32u.prx` behind Wine's EGL frontend (patches 0660–0662, 0720–0723). Every
+OpenGL call crossed to the Unix side, which on the native CPU costs about
+2.8 µs, so those games had to stay on the translator. That path is removed.
 
 The Vulkan controls above ran on one ps5vk SDK (`libps5vk.a` SHA-256
 `98f8a17c…`),
@@ -886,27 +864,12 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   - `[display] show_fps` shows a frame-rate counter in the top-left corner,
     drawn by the game's own graphics backend. A DXVK game gets
     DXVK's counter (`DXVK_HUD=fps`). A `graphics = opengl` game gets Mesa's
-    (`GALLIUM_HUD=fps`), which appears once the PS5 OpenGL SDK draws Mesa's
-    HUD in the compatibility SDK candidate from PR #2. The published SDK
-    0.6.0 does not include that HUD. It's on by default; `show_fps = false`
-    turns it off;
-  - `[display] refresh = 120` asks the display for 120 Hz when the game uses
-    `graphics = opengl` (Wine patch 0722). It needs an OpenGL SDK built with
-    runtime display modes (`PS5_DYNAMIC_SCANOUT=1`), and a title that
-    declares 120 Hz output in `sce_sys/param.json`: `attribute3` bit `0x40`,
-    which this title sets; without it the console refuses 120 Hz. Measured
-    on FW 12.02: the title still starts at 60 Hz, and a game left at 60 stays
-    held to the display's refresh. Don't add bit `0x80000` as well (the SDK's
-    `native-display-metadata.py` sets both): with it, frames were no longer
-    paced at 60 Hz, which looks like variable refresh. A display without
-    120 Hz keeps presenting at 60. The default is 60. Half-Life at 1080p ran
-    at 93–98 fps with `refresh = 120`;
-  - `[display] opengl_thread = true` sets `PS5_GLTHREAD=1` for a
-    `graphics = opengl` game: Mesa's glthread then runs the game's OpenGL
-    calls on a worker thread, so the driver's per-draw work overlaps the
-    game's own. Counter-Strike 1.6 with nine bots kept more of each frame
-    free with it (the game thread waited 44–55% of the time at 60 fps,
-    against 11–25% without). It's off by default;
+    (`GALLIUM_HUD=simple,fps`), drawn by Zink. It's on by default;
+    `show_fps = false` turns it off;
+  - `[display] refresh` and `opengl_thread` set the PS5 OpenGL SDK's output
+    rate and glthread worker. Zink has neither, so they are accepted for
+    existing profiles and ignored; the launcher logs
+    `PW_WINE64 ignored display refresh=… opengl_thread=…`;
   - `[input]` binds each DualSense button to a key or a mouse button, and a
     stick moves the pointer. `preset = <name>` shares a mapping from
     `<root>/input/<name>.input`.
@@ -915,6 +878,46 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     `winedebug = err+all,+seh` for one run. Only a channel list is taken
     (letters, digits and `_ + - , = .`), and the log names it
     (`PW_WINE64 winedebug=`). Change it and push the profile again.
+  - `[debug] env = NAME=VALUE` adds one variable to Wine's environment for
+    that game, up to five lines, for diagnostics such as
+    `env = PW_NATIVE_PROFILE=1` or `env = PW_VK_BATCH_STATS=1`. Names start
+    with `PW_`, `DXVK_`, `MESA_`, `GALLIUM_`, `RADV_` or `VK_`; values take
+    letters, digits and `_ + - , . = : /`. A name the title sets itself is
+    refused, so these only add: `PW_VK_BATCH`, `PW_INPUT_SHARED_FAST`,
+    `PW_QPC_TSC_*`, `GALLIUM_DRIVER`, and `DXVK_HUD` or `GALLIUM_HUD` while
+    `show_fps` is on (set `show_fps = false` to choose the HUD). The log
+    names them (`PW_WINE64 debug_env=`).
+    Titles built before the limit went up to five accept four lines.
+  - `[runtime]` sets runtime behavior for that game only:
+    - `thread_scheduling = true` sets `WINE_PS5_SCHED=1` (Wine patch 0882):
+      the game's threads take turns on the CPUs, and threads the game raises
+      above normal priority get a higher priority on the console too. It
+      can help a game that keeps many threads busy at once. Off unless set
+      to `true` (or `1`); the log shows it (`PW_WINE64 runtime`).
+    - `cpu = native` or `cpu = translator` chooses a 32-bit game's CPU
+      backend. Without it, a 32-bit game runs on the native WoW64 CPU
+      (`wow64native.dll`); `cpu = translator` selects `wowprospero.dll`.
+      The native CPU always comes with the 32-bit Vulkan batching
+      (`PW_VK_BATCH=1`), which queues the Vulkan commands of DXVK and of
+      Zink (OpenGL games) and sends them to the host together. The launcher sets `WINE_PS5_WOW64_CPU`
+      (Wine patch 0611) and copies the runtime's `wow64native.dll` into the
+      prefix's `system32` when it is missing or differs; if that copy
+      fails, the game runs on the prefix's own CPU. The log shows the
+      choice (`PW_WINE64 cpu=native prefix_cpu=1`: copied, `0`: already
+      there, `-1`: not copied). 64-bit games never use the WoW64 CPU.
+    - `shared_input = true` sets `PW_INPUT_SHARED_FAST=1` (Wine patch
+      0901): `GetKeyState` reads Wine's shared input memory in the game
+      instead of crossing to the host each time
+      ([shared-input-fastpath.md](shared-input-fastpath.md)). Off unless set.
+    - `fast_clock = true` lets `QueryPerformanceCounter` (and
+      `timeGetTime`) read the TSC in the game (Wine patch 0900,
+      [shared-clock-fastpath.md](shared-clock-fastpath.md)). The launcher
+      measures the TSC frequency twice against `CLOCK_MONOTONIC`, about
+      25 ms each, and sets `PW_QPC_TSC_VALIDATED=1` and `PW_QPC_TSC_HZ` only
+      when both measurements agree within 0.05% (`src/pw_tsc_calibrate.c`);
+      otherwise the game keeps Wine's normal counter. The log shows the
+      result (`PW_WINE64 fast_clock=on tsc_hz=... calibration=ok`). Off
+      unless set.
   - `mode = xinput` also makes the DualSense the game's XInput controller
     0 (see [XInput controller](#xinput-controller)).
     - Cross, Circle, Square and Triangle are A, B, X and Y. L1/R1 are the

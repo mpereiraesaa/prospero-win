@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,9 @@ MODULE = r"""
 
 int answer(void) { return 42; }
 int counter_value = 7;
+#ifdef EXPECT_NATIVE_CAPS
+unsigned __wine_prospero_native_wow64_caps(unsigned version) { return version == 1 ? 7 : 0; }
+#endif
 /* volatile: clang would otherwise fold the constructor into the initial value */
 static volatile int constructed;
 __attribute__((constructor)) static void construct(void) { constructed++; }
@@ -58,7 +62,15 @@ static int collect(struct dl_phdr_info *info, size_t size, void *data)
 int main(void)
 {
     const PwPrxDescriptor *table = (const PwPrxDescriptor *)(const void *)pw_prx_exports;
-    assert(table->magic == PW_PRX_MAGIC && table->version == PW_PRX_VERSION && table->count == 3);
+    assert(table->magic == PW_PRX_MAGIC && table->version == PW_PRX_VERSION);
+#ifdef EXPECT_NATIVE_CAPS
+    assert(table->count == 4);
+    unsigned (*caps)(unsigned) = (void *)pw_prx_lookup(table, "__wine_prospero_native_wow64_caps");
+    assert(caps == __wine_prospero_native_wow64_caps && caps(1) == 7 && caps(0) == 0);
+#else
+    assert(table->count == 3);
+    assert(!pw_prx_lookup(table, "__wine_prospero_native_wow64_caps"));
+#endif
     assert(((uintptr_t)table & (PW_PRX_ALIGN - 1)) == 0);
     assert(pw_prx_lookup(table, "answer") == (const void *)answer);
     assert(pw_prx_lookup(table, "counter_value") == &counter_value);
@@ -117,8 +129,59 @@ def main() -> int:
                             f"-I{ROOT / 'wine/ps5'}", str(work / "module.c"), str(work / "descriptor.c"),
                             str(ROOT / "wine/ps5/pw_wine_prx.c"), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
-    print("gen_prx_descriptor passed: table validates in a linked image; constructors run once "
-          "whether or not a runtime ran .init_array")
+        # Test the real dynamic symbol table and linked descriptor lookup:
+        # a defined query is callable; older, hidden and undefined queries
+        # never create a dangling PRX export or authorize native execution.
+        query = "__wine_prospero_native_wow64_caps"
+        inputs = {
+            "present": f"unsigned {query}(unsigned v) {{ return v == 1 ? 7 : 0; }}",
+            "absent": "unsigned older_runtime(void) { return 0; }",
+            "hidden": f'__attribute__((visibility("hidden"))) unsigned {query}(unsigned v) {{ return v; }}',
+            "undefined": f"extern unsigned {query}(unsigned); unsigned reference(void) {{ return {query}(1); }}",
+        }
+        # Exercise the ntdll descriptor command used by the actual builder,
+        # with real ELF inputs and nm, without rebuilding all of Wine.
+        build = work / "wine-build"
+        (build / "dlls/ntdll").mkdir(parents=True)
+        prx = work / "prx"
+        (prx / "obj").mkdir(parents=True)
+        sdk = work / "sdk"
+        (sdk / "bin").mkdir(parents=True)
+        (sdk / "bin/prospero-nm").symlink_to(shutil.which("nm"))
+        builder = (ROOT / "tools/build_wine_ps5.sh").read_text()
+        begin = builder.index('    python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/ntdll_desc.c"')
+        end = builder.index('\n    python3 ', begin + 1)
+        builder_command = builder[begin:end]
+        builder_env = dict(os.environ, root=str(ROOT), build=str(build), prx=str(prx), sdk=str(sdk))
+        for kind, source in inputs.items():
+            source_path, elf = work / f"{kind}.c", work / f"{kind}.so"
+            source_path.write_text(source)
+            subprocess.run([cc, "-shared", "-fPIC", str(source_path), "-o", str(elf)], check=True)
+            descriptor = work / f"{kind}-descriptor.c"
+            subprocess.run([sys.executable, str(script), str(descriptor), "answer", "counter_value",
+                            "--optional-from", str(elf), "--optional-export", query], check=True)
+            binary = work / f"{kind}-lookup"
+            flags = ["-DEXPECT_NATIVE_CAPS"] if kind == "present" else []
+            subprocess.run([cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", *flags,
+                            f"-I{ROOT / 'wine/ps5'}", str(work / "module.c"), str(descriptor),
+                            str(ROOT / "wine/ps5/pw_wine_prx.c"), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+            shutil.copyfile(elf, build / "dlls/ntdll/ntdll.so")
+            subprocess.run(["sh", "-c", builder_command], env=builder_env, check=True)
+            published = (prx / "obj/ntdll_desc.c").read_text()
+            assert (f'{{ "{query}",' in published) == (kind == "present")
+        for flags, message in ((["--optional-export", query], "require --optional-from"),
+                               (["--optional-from", str(work / "missing.so"), "--optional-export", query],
+                                "cannot inspect optional exports"),
+                               (["--optional-from", str(work / "present.so"), "--nm", str(work / "missing-nm"),
+                                 "--optional-export", query], "cannot inspect optional exports")):
+            output = work / "failure.c"
+            result = subprocess.run([sys.executable, str(script), str(output), "answer", *flags],
+                                    capture_output=True, text=True)
+            assert result.returncode == 1 and message in result.stderr, result.stderr
+            assert not output.exists()
+    print("gen_prx_descriptor passed: linked lookup, constructor lifetime and builder optional "
+          "exports for present/absent/hidden/undefined queries")
     return 0
 
 

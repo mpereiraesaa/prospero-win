@@ -122,14 +122,30 @@ revision in `SOURCES.txt`). It is linked for the console by
 layer, both GPL-3.0-or-later, so `libvulkan.prx` as a whole is distributed
 under the GPL, version 3.
 
-## OpenGL, when included
+## OpenGL: Mesa WGL/Zink, `win/mesa-zink/`
 
-A package built with OpenGL support links the
-[ps5-opengl](https://github.com/mpereiraesaa/ps5-opengl) SDK, itself built
-on Mesa, into `win32u.prx`. That SDK is GPL-3.0-or-later, so in such a
-package `win32u.prx` is distributed under the GPL, version 3, and its Mesa
-parts keep their MIT notices as above. `SOURCES.txt` says whether your
-package includes it.
+OpenGL games draw through Mesa's Windows WGL frontend and its Zink driver,
+which runs OpenGL on top of the Vulkan driver above. `opengl32.dll`,
+`libgallium_wgl.dll` and their runtime DLLs are under
+`win/mesa-zink/i386-windows/` and `win/mesa-zink/x86_64-windows/`, built
+from the [PS5_Mesa](https://github.com/mpereiraesaa/PS5_Mesa) revision in
+`SOURCES.txt` with llvm-mingw.
+
+Mesa is primarily MIT-licensed; component-specific licence texts and
+Mesa's licence overview are copied from the pinned source into
+`LICENSES/mesa/`. The llvm-mingw C++ runtime and MinGW runtime notices
+are in `LICENSES/llvm-mingw/`. `SOURCES.txt` and
+`mesa-zink-manifest.json` record the source, compiler archive and DLL hashes.
+
+The packager validates every consumed manifest field before changing the
+output package, including compiler version, hashes, imports and licence
+metadata. Input is a trusted, immutable local builder artifact set; this is
+not manifest authentication. Limits are 1 MiB for the manifest, 32 DLLs per
+architecture (128 MiB each), 256 imports per DLL, and 256 licence files
+(16 MiB each). Provider basenames are ASCII and at most 127 bytes; symlink
+inputs and duplicate case aliases are refused. Copying after successful
+preflight remains nontransactional, so output must not be published if
+copying fails.
 
 ## Getting the source
 

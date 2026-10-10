@@ -25,7 +25,9 @@ typedef enum PwAppGraphics {
     PW_APP_GRAPHICS_AUTO = 0,
     PW_APP_GRAPHICS_GDI = 1,
     PW_APP_GRAPHICS_DXVK = 2,
-    PW_APP_GRAPHICS_OPENGL = 3,
+    /* 3 was builtin OpenGL through the PS5 OpenGL SDK; graphics = opengl
+     * now selects Zink */
+    PW_APP_GRAPHICS_ZINK = 4,
 } PwAppGraphics;
 
 /* Stable, allocation-free description of one Windows application. Paths are
@@ -55,8 +57,10 @@ typedef struct PwAppProfile {
 int pw_app_profile_parse(const uint8_t *bytes, size_t length,
                          PwAppProfile *profile);
 
-/* Return the per-game Wine overrides selected by this graphics mode. OpenGL
- * profiles force Wine's builtin opengl32 so WGL reaches the PS5 EGL backend. */
+/* Return the per-game Wine overrides selected by this graphics mode.
+ * graphics = opengl (or zink) uses native opengl32 from the Mesa package;
+ * the launcher installs the architecture's provider into an existing initialized
+ * Wine prefix before Wine starts. Missing prefixes/providers refuse launch. */
 int pw_app_profile_effective_dll_overrides(const PwAppProfile *profile,
                                            char *text, size_t capacity);
 

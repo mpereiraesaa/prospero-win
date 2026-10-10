@@ -14,7 +14,9 @@ def main() -> int:
     missing = []
     if platform.system() != "Linux" or platform.machine() not in ("x86_64", "AMD64"):
         missing.append("x86_64 Linux (native or a Linux VM/WSL2)")
-    for command in ("git", "make", "cc", "clang") + (("bison", "flex", "pkg-config", "i686-w64-mingw32-gcc",
+    # i686-w64-mingw32-gcc: the 32-bit Vulkan batching checks build its PE side.
+    # unzip: publish_release.sh inspects release zips during the host suite.
+    for command in ("git", "make", "cc", "clang", "i686-w64-mingw32-gcc", "unzip") + (("bison", "flex", "pkg-config",
                            "x86_64-w64-mingw32-gcc", "i686-w64-mingw32-strip", "x86_64-w64-mingw32-strip") if args.wine else ()):
         if not shutil.which(command): missing.append(command)
     if importlib.util.find_spec("yaml") is None: missing.append("Python PyYAML (python3-yaml or pyyaml)")

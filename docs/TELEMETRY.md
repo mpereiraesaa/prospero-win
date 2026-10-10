@@ -22,6 +22,9 @@ Every record the title writes starts with `PW_WINE64`:
 | `restart` / `restart failed` | the `LoadExec` target, cycle, reason and eboot; the failure code |
 | `profile` | the game's id, prefix, desktop, scaling, view, whether it shows the frame rate (`show_fps`) and input mode |
 | `winedebug` | the game's own `WINEDEBUG`, when its profile's `[debug]` section sets one |
+| `debug_env` | the names of the profile's `[debug] env` variables, comma-separated, when it has any |
+| `runtime` / `fast_clock` | the profile's `[runtime]` switches (`thread_scheduling`, `shared_input`); with `fast_clock = true`, whether the TSC clock is on, the measured `tsc_hz` and the calibration result (`ok`, or why it was refused: `bracket`, `short`, `backward`, `range`, `disagree`) |
+| `cpu` | a 32-bit game's CPU backend, `native` (with the Vulkan batching) or `translator`, and `prefix_cpu`: `1` copied `wow64native.dll` into the prefix, `0` it was already there, `-1` not copied (the prefix's own CPU runs), `-2` not needed |
 | `ntdll` / `load` / `environment` / `run` | the runtime found, `ntdll.prx` loaded (stage, module, segments), Wine's environment, `__wine_main` started |
 | `display` / `audio` | the present sink, input and XInput hooks, VideoOut; the audio sink and port |
 | `alive` | about once a second: Wine's output lines, frames delivered, shown and rejected with the last size, inputs posted and refused, the process's CPU time (`cpu_ms`, user and system: a stall that grows it by about 1000 a second spins, one that barely grows it waits), and the audio grains played (`audio`) and those with sound (`audible`); then Wine's VM call counters (`mmap=`) |
@@ -30,7 +33,7 @@ Every record the title writes starts with `PW_WINE64`:
 | `memory` | every five seconds: the title's free flexible memory; the direct memory backing Wine's anonymous memory, now and at its peak (`dmem`, `dmem_peak`), in how many runs, and refused calls; Wine's heap, now and at its peak; and the part of that direct memory below 4 GiB, now and at its peak (`dmem_low`, `dmem_low_peak`). A 32-bit game's own memory lives below 4 GiB: 2 GiB of address space, or 4 GiB when its exe is large-address-aware. Wine's 64-bit side and the DBT live above it. `dmem_low` shows how close a game gets to its limit; `dmem` minus `dmem_low` is our own overhead |
 | `wine-ps5: wait snapshot` (from `WINESERVER`) | only in builds with `PW_WINE64_WAIT_WATCHDOG=1` (Wine patch 0680), every two seconds: each pending async with its thread, state and fd (`async`), each thread's message queue with its wake bits and masks, pending messages and any `SendMessage` it waits for or handles (`queue`), and each thread's current wait with its objects (`wait`, then one line per object); every thread's suspend counts and last request (`thread`), and for one silent outside any wait for over a second, its i386 registers and stack (`guest`) and the critical sections on that stack with their owners (`guest ... cs=`) |
 | `wine-ps5: slow ...`, `wine-ps5: sleeper ...` (from `WINE`) | only with `PW_WINE64_WAIT_WATCHDOG=1` (Wine patch 0690): a server request answered after 200 ms, a lock taken after 100 ms, a thread stack or thread start slower than 100 ms, a direct-memory call over 50 ms (`slow`); a thread polling with `Sleep()` or asking for over half a second of sleep in two seconds, with its i386 stack (`sleeper`); a failed alert or a reused alert kqueue (`alert`) |
-| `PW_GL` (from `WINESERVER`) | every five seconds while an OpenGL game presents (Wine patch 0721): the frames shown in that time and the frame rate, e.g. `PW_GL frames=300 fps=60.0` |
+| `PW_GL` (from `WINESERVER`) | only in logs from builds with the old PS5 OpenGL SDK (Wine patch 0721, removed): every five seconds while an OpenGL game presented, the frames shown and the frame rate, e.g. `PW_GL frames=300 fps=60.0`. Zink games report through Wine's `fps` channel |
 | `wowprospero timing` (from `WINESERVER`) | only when `/data/prospero-win/pw_wow_timing` exists: every 5 to 10 seconds, each busy guest thread's split between translated code (`run`), Unix calls (`unix`) and system calls (`sys`), and the Unix calls that took over a millisecond, which are waits (see the [debugging guide](DEBUGGING_GUIDE.md#8-when-a-game-is-slow-time-it-first)) |
 | `wowprospero calls` (from `WINESERVER`) | with each timing line: the system calls (`sys_top`) and Unix calls (`unix_top`) that took most of that thread's time, with their rate and share (see the [debugging guide](DEBUGGING_GUIDE.md#8-when-a-game-is-slow-time-it-first)) |
 | `close requested` / `close timeout` | Options+Create (or the unattended deadline) sent Alt+F4; the game did not close in time |
@@ -50,8 +53,15 @@ number the next session takes. A file starts with
 and then has one line per record, `REC seq=<n> t=<monotonic seconds> <record>`.
 A session keeps two chunks of at most a megabyte: when the current one is
 full, it becomes `session-N.previous.log` (replacing the older chunk) and a new
-one starts with the same `PW_REPORT/1` line. The title writes buffered records
-every 100 ms and before every restart, so a crash loses at most that much.
+one starts with the same `PW_REPORT/1` line. A writer thread saves and sends
+buffered records every 100 ms and before every restart, so a crash loses at
+most that much; the thread that logs a record (any game thread, through Wine's
+stderr sink) only copies it into a 512 KiB buffer and never waits for the
+file or the network. When that buffer is full, because the disk or the
+network fell that far behind, further records are dropped rather than waited
+for: the sequence numbers still count them, the next record the writer saves
+is `PW_WINE64 diagnostics dropped records=<n> bytes=<b>`, and the launcher's
+log status shows the session's total as `LOG SAVED (<n> DROPPED)`.
 
 Records longer than a `ps5log` record (1024 bytes) are cut and end in
 `[truncated]`, in both the saved file and the live stream.

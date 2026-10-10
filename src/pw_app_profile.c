@@ -120,12 +120,12 @@ static int valid_dll_overrides(const char *text)
     return 1;
 }
 
-/* 1 if an explicit builtin opengl32 entry is present, 0 if absent, -1 if an
- * OpenGL profile explicitly selects another load order. */
-static int opengl32_override(const char *text)
+/* 1 if an explicit matching opengl32 entry is present, 0 if absent,
+ * -1 if the profile explicitly selects a conflicting load order. */
+static int opengl32_override(const char *text, unsigned char required)
 {
     const char *entry = text;
-    int builtin = 0;
+    int matching = 0;
 
     while (*entry) {
         const char *entry_end = strchr(entry, ';');
@@ -146,40 +146,42 @@ static int opengl32_override(const char *text)
             const char *name_end = memchr(name, ',', (size_t)(names_end - name));
             if (!name_end)
                 name_end = names_end;
+            const char *match_name = name;
             size_t name_length = (size_t)(name_end - name);
-            int is_opengl32 = equal_ascii((const uint8_t *)name, name_length, "opengl32") ||
-                              equal_ascii((const uint8_t *)name, name_length, "opengl32.dll");
+            if (required == 'n' && name_length && *match_name == '*') { ++match_name; --name_length; }
+            int is_opengl32 = equal_ascii((const uint8_t *)match_name, name_length, "opengl32") ||
+                              equal_ascii((const uint8_t *)match_name, name_length, "opengl32.dll");
             if (is_opengl32) {
                 value_end = entry_end;
                 if ((size_t)(value_end - (equals + 1)) != 1u ||
-                    (equals[1] != 'b' && equals[1] != 'B'))
+                    lower_ascii((unsigned char)equals[1]) != required)
                     return -1;
-                builtin = 1;
+                matching = 1;
             }
             name = *name_end ? name_end + 1 : name_end;
         }
         entry = *entry_end ? entry_end + 1 : entry_end;
     }
-    return builtin;
+    return matching;
 }
 
 int pw_app_profile_effective_dll_overrides(const PwAppProfile *profile,
                                            char *text, size_t capacity)
 {
-    static const char suffix[] = "opengl32=b";
+    const char *suffix = "opengl32=n";
     size_t base_length, append_length, suffix_length;
     int has_opengl32;
 
     if (!profile || !text || capacity == 0u)
         return PW_ERR_PRECONDITION;
     base_length = strlen(profile->dll_overrides);
-    if (profile->graphics != PW_APP_GRAPHICS_OPENGL) {
+    if (profile->graphics != PW_APP_GRAPHICS_ZINK) {
         if (base_length >= capacity)
             return PW_ERR_LIMIT;
         memcpy(text, profile->dll_overrides, base_length + 1u);
         return PW_OK;
     }
-    has_opengl32 = opengl32_override(profile->dll_overrides);
+    has_opengl32 = opengl32_override(profile->dll_overrides, 'n');
     if (has_opengl32 < 0)
         return PW_ERR_MALFORMED;
     if (has_opengl32) {
@@ -189,11 +191,11 @@ int pw_app_profile_effective_dll_overrides(const PwAppProfile *profile,
         return PW_OK;
     }
     /* A profile checker may accept a trailing separator; reuse it instead of
-     * emitting an empty entry when appending Wine's builtin opengl32 rule. */
+     * emitting an empty entry when appending the selected opengl32 rule. */
     append_length = base_length;
     if (append_length && profile->dll_overrides[append_length - 1u] == ';')
         --append_length;
-    suffix_length = sizeof(suffix) - 1u;
+    suffix_length = strlen(suffix);
     if (append_length + (append_length != 0u) + suffix_length >= capacity)
         return PW_ERR_LIMIT;
     memcpy(text, profile->dll_overrides, append_length);
@@ -317,8 +319,11 @@ static int parse_field(PwAppProfile *profile, uint32_t *fields,
         } else if (equal_ascii(value, (size_t)(value_end - value), "dxvk")) {
             profile->graphics = PW_APP_GRAPHICS_DXVK;
             status = PW_OK;
-        } else if (equal_ascii(value, (size_t)(value_end - value), "opengl")) {
-            profile->graphics = PW_APP_GRAPHICS_OPENGL;
+        } else if (equal_ascii(value, (size_t)(value_end - value), "opengl") ||
+                   equal_ascii(value, (size_t)(value_end - value), "zink")) {
+            /* OpenGL draws through Mesa's Zink on Vulkan; zink is the
+             * older name for the same thing */
+            profile->graphics = PW_APP_GRAPHICS_ZINK;
             status = PW_OK;
         } else {
             status = PW_ERR_UNSUPPORTED;
@@ -401,8 +406,7 @@ int pw_app_profile_parse(const uint8_t *bytes, size_t length,
         !valid_windows_path(parsed.working_directory) ||
         !has_exe_extension(parsed.executable))
         return PW_ERR_MALFORMED;
-    if (parsed.graphics == PW_APP_GRAPHICS_OPENGL &&
-        opengl32_override(parsed.dll_overrides) < 0)
+    if (parsed.graphics == PW_APP_GRAPHICS_ZINK && opengl32_override(parsed.dll_overrides, 'n') < 0)
         return PW_ERR_MALFORMED;
     *profile = parsed;
     return PW_OK;
