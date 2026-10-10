@@ -20,10 +20,6 @@ with tempfile.TemporaryDirectory(prefix="native-provider-test-") as directory:
         elif current and line.startswith("+") and not line.startswith("+++"):
             files[current].append(line[1:])
     assert set(files) == {"native_libkernel_resolver.c", "native_libkernel_resolver.h"}
-    # The title shell runs the same check to keep the translator on consoles
-    # the native CPU does not support (native/wine64_main.c).
-    for name, lines in files.items():
-        assert (root / "native" / name).read_text() == "\n".join(lines) + "\n", name
     for name, lines in files.items():
         (out / name).write_text("\n".join(lines) + "\n")
     executable = out / "resolver-test"

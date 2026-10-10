@@ -38,7 +38,6 @@
 #include "pw_videoout_ps5.h"
 #include "pw_wine_library.h"
 #include "pw_wine_prefix.h"
-#include "native_libkernel_resolver.h"
 #include "../src/pw_present.h"
 #include "../src/pw_spinner.h"
 #include "../src/pw_tsc_calibrate.h"
@@ -305,49 +304,6 @@ static void log_flexible_holders(size_t available)
                    (unsigned long long)(bucket[rank].bytes >> 10), bucket[rank].count,
                    (unsigned)bucket[rank].protection, bucket[rank].name[0] ? bucket[rank].name : "-");
     }
-}
-
-/* Whether this console can run the native WoW64 CPU. wow64native.dll needs
- * ntdll to report readiness, which it does only for the one libkernel build
- * its raw signal entries were measured on (patch 0883); on any other
- * firmware the backend ends the process at its first 32-bit instruction,
- * and patch 0611 falls back to the translator only when the DLL cannot be
- * loaded. The same identity check as ntdll's, run here so an unsupported
- * console keeps the translator. Logs the identity it saw either way. */
-extern int sysarch(int number, void *arguments);
-static int native_cpu_supported(void)
-{
-    unsigned char info[0x160] = { 0 };
-    const uint64_t size = sizeof(info);
-    struct native_libkernel_entries entries;
-    char fingerprint[41], segments[160];
-    uint64_t base;
-    uint32_t count;
-    size_t used = 0;
-    int status, supported;
-
-    memcpy(info, &size, sizeof(size));
-    status = sceKernelGetModuleInfo(0x2001, info);
-    supported = status == 0 && native_libkernel_resolve(info, sizeof(info), (uintptr_t)sigaction,
-                                                        (uintptr_t)sysarch, &entries);
-    for (unsigned i = 0; i < 20; i++) snprintf(fingerprint + 2 * i, 3, "%02x", info[0x14c + i]);
-    memcpy(&base, info + 0x108, sizeof(base));
-    memcpy(&count, info + 0x148, sizeof(count));
-    segments[0] = 0;
-    for (unsigned i = 0; i < 4 && i < count && used < sizeof(segments); i++) {
-        uint64_t address;
-        uint32_t length, protection;
-
-        memcpy(&address, info + 0x108 + i * 16, sizeof(address));
-        memcpy(&length, info + 0x110 + i * 16, sizeof(length));
-        memcpy(&protection, info + 0x114 + i * 16, sizeof(protection));
-        used += (size_t)snprintf(segments + used, sizeof(segments) - used, "%s+%#llx/%#x/%u", i ? "," : "",
-                                 (unsigned long long)(address - base), length, protection);
-    }
-    PS5LOG_LOG("PW_WINE64 native_cpu supported=%d status=%#x fingerprint=%s segments=%u[%s] "
-               "sigaction=+%#llx sysarch=+%#llx", supported, (unsigned)status, fingerprint, count, segments,
-               (unsigned long long)((uintptr_t)sigaction - base), (unsigned long long)((uintptr_t)sysarch - base));
-    return supported;
 }
 
 static uint64_t now_ns(void)
@@ -1101,12 +1057,10 @@ int main(int argc, char **argv)
         }
         /* [runtime] cpu: a 32-bit game runs on the native WoW64 CPU unless it
          * asks for the translator. The native CPU always brings the Vulkan
-         * batching (src/pw_game_profile.h). A console the native CPU does not
-         * support keeps the translator, even when the profile asks for native. */
+         * batching (src/pw_game_profile.h). */
         {
             PwGameEnv cpu_env[PW_GAME_CPU_ENV_MAX];
-            size_t cpu_count = pw_game_cpu_native(game) && native_cpu_supported() ?
-                               pw_game_cpu_env(game, cpu_env) : 0;
+            size_t cpu_count = pw_game_cpu_env(game, cpu_env);
             int installed = -2;
 
             for (size_t i = 0; i < cpu_count; i++)

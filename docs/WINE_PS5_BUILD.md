@@ -99,6 +99,7 @@ before evaluating a candidate built from that cache.
 | 0601 | `ntdll`: an i386 image is never mapped above 4 GiB, so a relocatable exe whose preferred base is taken stays in the low reserved areas instead of the high one |
 | 0610 | `ntdll`: `__wine_ps5_set_segv_hook` lets `wowprospero` resume its own faults (fault markers) from inside Wine's SIGSEGV handler, instead of a second handler chaining to the action `sigaction` reports |
 | 0611 | `wow64`: `WINE_PS5_WOW64_CPU` names the process's CPU backend (`wow64native.dll` or `wowprospero.dll`); when the named one cannot be loaded, the prefix's own choice is used instead of ending the process |
+| 0614 | `wow64`: when the environment's `wow64native.dll` does not start (ntdll reports no native readiness, patch 0883), the process loads `wowprospero.dll` and runs on the translator instead of ending at its first 32-bit instruction; the log has `wow64native.dll did not start (<status>); using wowprospero.dll` |
 | 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
 | 0790 | `server`, `ntdll`: opt-in immediate mutex acquire/release using the authoritative server object without request marshalling or waiter allocation; see [Immediate mutex calls](#immediate-mutex-calls) |
 | 0877 | `secur32`: a handshake GnuTLS fails for a reason schannel does not map logs the GnuTLS code and message and the clock through the err channel (and a fatal alert the clock), where the caller saw SEC_E_INTERNAL_ERROR and gnutls_perror went to stderr; on the console a date behind the certificates' makes every chain not yet valid |
@@ -1003,7 +1004,10 @@ The title runs one game per process (`src/pw_wine_launch.h`):
       prefix's `system32` when it is missing or differs; if that copy
       fails, the game runs on the prefix's own CPU. The log shows the
       choice (`PW_WINE64 cpu=native prefix_cpu=1`: copied, `0`: already
-      there, `-1`: not copied). 64-bit games never use the WoW64 CPU.
+      there, `-1`: not copied). On a console where the native CPU does
+      not start (ntdll's readiness checks fail, patch 0883), the game runs
+      on the translator instead (Wine patch 0614; still with the batching).
+      64-bit games never use the WoW64 CPU.
     - `shared_input = true` sets `PW_INPUT_SHARED_FAST=1` (Wine patch
       0901): `GetKeyState` reads Wine's shared input memory in the game
       instead of crossing to the host each time

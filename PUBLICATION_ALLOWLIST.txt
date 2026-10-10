@@ -282,8 +282,6 @@ src/pw_prefix_temp.c
 src/pw_prefix_temp.h
 native/pw_wine_prefix.c
 native/pw_wine_prefix.h
-native/native_libkernel_resolver.c
-native/native_libkernel_resolver.h
 tests/test_pw_prefix_temp.c
 tests/test_pw_wine_prefix_cpu.c
 tests/test_pw_wine_start.c
@@ -471,6 +469,7 @@ docs/native-system-service-profile.md
 tests/test_native_system_service_profile.py
 wine/patches/0612-wow64-opt-in-named-system-service-profile.patch
 wine/patches/0613-wow64-slow-system-service-events.patch
+wine/patches/0614-wow64-ps5-translator-when-the-native-cpu-does-not-start.patch
 tests/test_native_slow_syscall_events.py
 tests/test_package_mesa_zink.py
 tools/package_mesa_zink.py
