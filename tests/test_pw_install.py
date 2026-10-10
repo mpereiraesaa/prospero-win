@@ -206,6 +206,10 @@ def check_dxvk_releases() -> None:
     assert url == ("https://github.com/mpereiraesaa/dxvk/releases/download/"
                    "v2.6.2-prospero1/dxvk-2.6.2-prospero1.tar.gz")
     assert digest == "72a4d7e279f522ad9bac420caf13665bcdd28b297337e1364c31c5bda24ef3f2"
+    url, digest = pw_install.dxvk_release("2.6.2-prospero2")
+    assert url == ("https://github.com/mpereiraesaa/dxvk/releases/download/"
+                   "v2.6.2-prospero2/dxvk-2.6.2-prospero2.tar.gz")
+    assert digest == "c00c1cd7df7ce70e89130b61c1fcd2d3a18ac473f274a219da4478147e4f3c90"
     # install_dxvk reads dxvk-<version>/x32 and x64 from an archive named
     # after the release, upstream's layout, which every pinned one follows.
     for version, (url, digest) in pw_install.DXVK_RELEASES.items():
@@ -219,7 +223,7 @@ def check_dxvk_releases() -> None:
             pw_install.dxvk_release(version)
         except pw_install.InstallError as error:
             assert f"dxvk_version {version} is not pinned" in str(error)
-            assert "'2.6.2-prospero1'" in str(error)
+            assert "'2.6.2-prospero1'" in str(error) and "'2.6.2-prospero2'" in str(error)
         else:
             raise AssertionError(f"dxvk_version {version!r} should not resolve")
 

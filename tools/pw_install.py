@@ -22,7 +22,7 @@ DXVK follows Lutris's own keys (`wine: {dxvk: true, dxvk_version: 2.6.2}`):
 the release's DLLs go into the prefix's system32 and syswow64 and are set
 native, in the prefix's registry for the host and in the profile's
 dll_overrides for the title. Besides upstream releases, dxvk_version can name
-a custom build from https://github.com/mpereiraesaa/dxvk (2.6.2-prospero1,
+a custom build from https://github.com/mpereiraesaa/dxvk (2.6.2-prospero2,
 say) for a game that needs a fix upstream doesn't have; those are pinned by
 hash the same way.
 
@@ -66,6 +66,12 @@ DXVK_RELEASES = {
     # 32-bit builds (GTA San Andreas with Proper Shaders).
     "2.6.2-prospero1": ("https://github.com/mpereiraesaa/dxvk/releases/download/v2.6.2-prospero1/dxvk-2.6.2-prospero1.tar.gz",
                         "72a4d7e279f522ad9bac420caf13665bcdd28b297337e1364c31c5bda24ef3f2"),
+    # prospero1 plus pipeline compiles outside the instance lock, three
+    # CS-thread cost cuts, and the options d3d9.weakRenderTargetFlushHint,
+    # dxvk.implicitFlushChunkScale, d3d9.padVsOutputs, dxvk.logFastLinkFailures
+    # and DXVK_CS_PROFILE=1 (GTA IV and San Andreas; release notes list them).
+    "2.6.2-prospero2": ("https://github.com/mpereiraesaa/dxvk/releases/download/v2.6.2-prospero2/dxvk-2.6.2-prospero2.tar.gz",
+                        "c00c1cd7df7ce70e89130b61c1fcd2d3a18ac473f274a219da4478147e4f3c90"),
 }
 DXVK_DLLS = ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi")
 WINETRICKS = ("20260125", "https://raw.githubusercontent.com/Winetricks/winetricks/20260125/src/winetricks",

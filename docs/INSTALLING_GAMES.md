@@ -181,7 +181,7 @@ for a game that needs a change upstream doesn't have:
 ```yaml
 wine:
   dxvk: true
-  dxvk_version: "2.6.2-prospero1"   # 2.6.2 plus two fixes for San Andreas
+  dxvk_version: "2.6.2-prospero2"   # 2.6.2 plus the CS-thread fixes for GTA
 ```
 
 Lutris doesn't know these versions, so such a recipe installs with
