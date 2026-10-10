@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 10 Oct 2026 16:00:00 +0200
+Subject: [PATCH] ntdll: Keep the FS base of a 64-bit thread resumed where it
+ was.
+
+The kernel restores the FS base saved in the signal frame on sigreturn,
+and leave_handler replaced it with the host's whenever the frame's CS was
+the 64-bit one, so that a fault from 32-bit code redirected to Wine's
+64-bit exception dispatcher would not run it on the guest FS. But 64-bit
+code is not always on the host FS: the native WoW64 CPU sets the guest's
+with sysarch just before it switches to 32-bit code. A signal in that
+window had its frame's FS base replaced, and the thread then entered its
+32-bit code with the host FS; the first NtCurrentTeb() read host memory
+(GTA San Andreas' DXVK workers at startup: an access violation in
+RtlEnterCriticalSection reading 0xff86xxxx, the low half of the host
+thread pointer).
+
+Set the host FS base where the handler sends a context to 64-bit code it
+did not interrupt: setup_raise_exception, and restore_context when the
+context's CS:RIP differs from the frame's.
+---
+ dlls/ntdll/unix/signal_x86_64.c | 33 +++++++++++++++++++++++++++------
+ 1 file changed, 27 insertions(+), 6 deletions(-)
+
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index 3c17143..d5438a4 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -974,6 +974,24 @@ static inline struct thread_data *init_handler( void *sigcontext )
+ }
+ 
+ 
++#ifdef __PROSPERO__
++/* The kernel restores the FS base saved in the frame on sigreturn. A context
++ * that the handler sends to Wine's 64-bit code (the exception dispatcher, or
++ * a 64-bit context set on the thread) needs the host's. A thread resumed
++ * where it was keeps the one it had: 64-bit code is not always on the host
++ * FS, since the native WoW64 CPU sets the guest's just before it switches to
++ * 32-bit code, and forcing the host's there sent the thread into its 32-bit
++ * code with the host FS (GetCurrentThreadId reading host memory). */
++static inline void pw_set_host_fs( struct thread_data *data, ucontext_t *sigcontext )
++{
++    struct amd64_thread_data *amd64_data = amd64_thread_data( data );
++
++    if (amd64_data && amd64_data->pthread_teb && CS_sig(sigcontext) == cs64_sel)
++        FSBASE_sig(sigcontext) = (uintptr_t)amd64_data->pthread_teb;
++}
++#endif
++
++
+ /***********************************************************************
+  *           leave_handler
+  */
+@@ -982,12 +1000,6 @@ static inline void leave_handler( struct thread_data *data, ucontext_t *sigconte
+     struct amd64_thread_data *amd64_data = amd64_thread_data( data );
+ 
+     if (!amd64_data) return;
+-#ifdef __PROSPERO__
+-    /* The kernel restores the saved FS base on sigreturn. A fault raised
+-     * from CS33 may now target Wine's CS43 exception dispatcher instead. */
+-    if (CS_sig(sigcontext) == cs64_sel && amd64_data->pthread_teb)
+-        FSBASE_sig(sigcontext) = (uintptr_t)amd64_data->pthread_teb;
+-#endif
+ #ifdef __linux__
+     if (!is_inside_signal_stack( data, (void *)RSP_sig(sigcontext )) &&
+         !is_inside_syscall( data, RSP_sig(sigcontext) ))
+@@ -1162,6 +1174,9 @@ static void restore_context( struct thread_data *data, const struct xcontext *xc
+ {
+     const CONTEXT *context = &xcontext->c;
+     struct amd64_thread_data *amd64_data = amd64_thread_data( data );
++#ifdef __PROSPERO__
++    BOOL resumed = RIP_sig(sigcontext) == context->Rip && CS_sig(sigcontext) == context->SegCs;
++#endif
+ 
+     if (amd64_data)
+     {
+@@ -1174,6 +1189,9 @@ static void restore_context( struct thread_data *data, const struct xcontext *xc
+     }
+     set_sigcontext( context, sigcontext );
+     if (FPU_sig(sigcontext)) memcpy( FPU_sig(sigcontext), &context->FltSave, sizeof(context->FltSave) );
++#ifdef __PROSPERO__
++    if (!resumed) pw_set_host_fs( data, sigcontext );
++#endif
+     leave_handler( data, sigcontext );
+ }
+ 
+@@ -1725,6 +1743,9 @@ static void setup_raise_exception( struct thread_data *data, ucontext_t *sigcont
+     }
+ 
+     CS_sig(sigcontext)  = cs64_sel;
++#ifdef __PROSPERO__
++    pw_set_host_fs( data, sigcontext );
++#endif
+     RIP_sig(sigcontext) = (ULONG_PTR)pKiUserExceptionDispatcher;
+     RSP_sig(sigcontext) = (ULONG_PTR)stack;
+     /* clear single-step, direction, and align check flag */
+-- 
+2.43.0
+
