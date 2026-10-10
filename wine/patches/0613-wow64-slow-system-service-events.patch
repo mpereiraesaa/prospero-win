@@ -1,0 +1,229 @@
+From: prospero-win contributors
+Subject: [PATCH] wow64: opt-in slow guest system-service events with the guest stack
+
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -1315,6 +1315,213 @@
+         if (p->caller_counts[i]) MESSAGE("PW_NATIVE_PROTECT_CALLER tid=%04lx caller=%08lx total=%llu other=%llu\n", (ULONG)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, p->callers[i], p->caller_counts[i], p->caller_other);
+ }
+ 
++/* Diagnostic only: one line per guest system service that outlasts
++ * PW_NATIVE_SLOW_SYSCALL_US microseconds, naming the service, its first
++ * arguments, its status and the guest return addresses on the 32-bit stack.
++ * Off, the dispatch costs one static check; on, two TSC reads per service.
++ * The line is built in stack buffers: nothing here allocates or enters a
++ * guest service, since the thread may be inside one when it reports. */
++enum { PW_SLOW_SYSCALL_UNKNOWN, PW_SLOW_SYSCALL_OFF, PW_SLOW_SYSCALL_ON };
++static RTL_RUN_ONCE pw_slow_syscall_once = RTL_RUN_ONCE_INIT;
++static LONG pw_slow_syscall_state = PW_SLOW_SYSCALL_UNKNOWN;
++static ULONGLONG pw_slow_syscall_threshold;  /* ticks; 0 is off */
++static PEB32 *pw_slow_syscall_peb32;
++#define PW_SLOW_SYSCALL_STACK_CHARS 800      /* keeps the whole line under 1000 bytes */
++#define PW_SLOW_SYSCALL_SCAN_DWORDS 512
++#define PW_SLOW_SYSCALL_SCAN_ENTRIES 14
++#define PW_SLOW_SYSCALL_MODULES 256
++/* The 32-bit loader entry as the 32-bit ntdll lays it out (cf. dlls/kernel32/toolhelp.c). */
++struct pw_slow_syscall_ldr_entry32
++{
++    LIST_ENTRY32     InLoadOrderLinks;
++    LIST_ENTRY32     InMemoryOrderLinks;
++    LIST_ENTRY32     InInitializationOrderLinks;
++    ULONG            DllBase;
++    ULONG            EntryPoint;
++    ULONG            SizeOfImage;
++    UNICODE_STRING32 FullDllName;
++    UNICODE_STRING32 BaseDllName;
++};
++struct pw_slow_syscall_module
++{
++    ULONG base, size, name, name_chars;  /* name: guest address of the WCHAR base name */
++};
++struct pw_slow_syscall_text
++{
++    char chars[PW_SLOW_SYSCALL_STACK_CHARS + 4];
++    unsigned len;
++    BOOL truncated;
++};
++static ULONGLONG pw_slow_syscall_env_decimal(const WCHAR *variable)
++{
++    WCHAR buffer[32];
++    UNICODE_STRING name, value = {0, sizeof(buffer), buffer};
++    ULONGLONG result = 0;
++    unsigned i, chars;
++    RtlInitUnicodeString(&name, variable);
++    if (RtlQueryEnvironmentVariable_U(NULL, &name, &value)) return 0;
++    chars = value.Length / sizeof(WCHAR);
++    if (!chars || chars > 19) return 0;
++    for (i = 0; i < chars; ++i)
++    {
++        if (buffer[i] < '0' || buffer[i] > '9') return 0;
++        result = result * 10 + (buffer[i] - '0');
++    }
++    return result;
++}
++static ULONG WINAPI pw_slow_syscall_initialize(RTL_RUN_ONCE *once, void *arg, void **ctx)
++{
++    ULONGLONG us = pw_slow_syscall_env_decimal(L"PW_NATIVE_SLOW_SYSCALL_US");
++    ULONGLONG hz = pw_slow_syscall_env_decimal(L"PW_QPC_TSC_HZ");
++    (void)once; (void)arg; (void)ctx;
++    if (hz < 100000000ull || hz > 10000000000ull) hz = 1600000000ull;
++    if (us > 1000000000000ull) us = 1000000000000ull;
++    pw_slow_syscall_threshold = us * (hz / 1000000);
++    if (us && !pw_slow_syscall_threshold) pw_slow_syscall_threshold = 1;
++    if (pw_slow_syscall_threshold)
++        NtQueryInformationProcess(GetCurrentProcess(), ProcessWow64Information, &pw_slow_syscall_peb32,
++                                  sizeof(pw_slow_syscall_peb32), NULL);
++    InterlockedExchange(&pw_slow_syscall_state, pw_slow_syscall_threshold ? PW_SLOW_SYSCALL_ON : PW_SLOW_SYSCALL_OFF);
++    return TRUE;
++}
++static BOOL pw_slow_syscall_guest_ok(ULONG address, ULONG size)
++{
++    return address && address + size > address && address + size <= highest_user_address;
++}
++/* The loaded 32-bit modules, from the 32-bit PEB's in-load-order list, bounded
++ * and checked for range; a list changing under another thread's load can
++ * still cut the walk short, so a module may be missing from one event. */
++static unsigned pw_slow_syscall_modules(struct pw_slow_syscall_module *modules)
++{
++    const PEB32 *peb32 = pw_slow_syscall_peb32;
++    const PEB_LDR_DATA32 *ldr;
++    ULONG head, link;
++    unsigned count = 0;
++    if (!peb32 || !pw_slow_syscall_guest_ok(peb32->LdrData, sizeof(*ldr))) return 0;
++    ldr = ULongToPtr(peb32->LdrData);
++    head = peb32->LdrData + FIELD_OFFSET(PEB_LDR_DATA32, InLoadOrderModuleList);
++    for (link = ldr->InLoadOrderModuleList.Flink; link != head && count < PW_SLOW_SYSCALL_MODULES;)
++    {
++        const struct pw_slow_syscall_ldr_entry32 *entry;
++        if (link & 3 || !pw_slow_syscall_guest_ok(link, sizeof(*entry))) break;
++        entry = ULongToPtr(link);
++        if (entry->DllBase && entry->SizeOfImage && pw_slow_syscall_guest_ok(entry->DllBase, entry->SizeOfImage))
++        {
++            modules[count].base = entry->DllBase;
++            modules[count].size = entry->SizeOfImage;
++            modules[count].name = entry->BaseDllName.Buffer;
++            modules[count].name_chars = entry->BaseDllName.Length / sizeof(WCHAR);
++            if (modules[count].name_chars > 64) modules[count].name_chars = 64;
++            if (!pw_slow_syscall_guest_ok(modules[count].name, modules[count].name_chars * sizeof(WCHAR)))
++                modules[count].name_chars = 0;
++            count++;
++        }
++        link = entry->InLoadOrderLinks.Flink;
++    }
++    return count;
++}
++static void pw_slow_syscall_put(struct pw_slow_syscall_text *text, const char *chars, unsigned len)
++{
++    if (text->truncated) return;
++    if (text->len + len > PW_SLOW_SYSCALL_STACK_CHARS)
++    {
++        memcpy(text->chars + text->len, "...", 4);
++        text->len += 3;
++        text->truncated = TRUE;
++        return;
++    }
++    memcpy(text->chars + text->len, chars, len);
++    text->len += len;
++    text->chars[text->len] = 0;
++}
++static void pw_slow_syscall_put_hex(struct pw_slow_syscall_text *text, ULONG value, unsigned min_digits)
++{
++    char digits[9];
++    unsigned len = 0, i;
++    for (i = 0; i < 8; ++i)
++    {
++        unsigned nibble = (value >> (28 - 4 * i)) & 15;
++        if (len || nibble || 8 - i <= min_digits) digits[len++] = "0123456789abcdef"[nibble];
++    }
++    pw_slow_syscall_put(text, digits, len);
++}
++static int pw_slow_syscall_find(const struct pw_slow_syscall_module *modules, unsigned count, ULONG address)
++{
++    unsigned i;
++    for (i = 0; i < count; ++i)
++        if (address >= modules[i].base && address - modules[i].base < modules[i].size) return i;
++    return -1;
++}
++/* basedllname+offset, the name in lowercase ASCII. */
++static void pw_slow_syscall_put_symbol(struct pw_slow_syscall_text *text, const struct pw_slow_syscall_module *module,
++                                       ULONG address)
++{
++    const WCHAR *name = ULongToPtr(module->name);
++    char ascii[64];
++    unsigned j;
++    for (j = 0; j < module->name_chars; ++j)
++    {
++        WCHAR c = name[j];
++        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
++        ascii[j] = (c > 0x20 && c < 0x7f && c != ',' && c != '+' && c != '=') ? (char)c : '?';
++    }
++    if (!j) { memcpy(ascii, "module", 6); j = 6; }
++    pw_slow_syscall_put(text, ascii, j);
++    pw_slow_syscall_put(text, "+", 1);
++    pw_slow_syscall_put_hex(text, address - module->base, 1);
++}
++static void pw_slow_syscall_report(UINT num, UINT *args, NTSTATUS status, ULONGLONG start, ULONGLONG ticks)
++{
++    struct pw_slow_syscall_module modules[PW_SLOW_SYSCALL_MODULES];
++    struct pw_slow_syscall_text text = { {0}, 0, FALSE };
++    const TEB32 *teb32 = NtCurrentTeb32();
++    const UINT *guest = args - 2;   /* the guest ESP */
++    ULONG esp = (ULONG)(ULONG_PTR)guest, base = teb32->Tib.StackBase, limit = teb32->Tib.StackLimit;
++    unsigned count = pw_slow_syscall_modules(modules), found = 0, i;
++    /* args points eight bytes above the compatibility-mode stack: args[-2] is
++     * the syscall thunk continuation, args[-1] its caller. Both always print. */
++    for (i = 0; i < 2; ++i)
++    {
++        int module = pw_slow_syscall_find(modules, count, guest[i]);
++        if (i) pw_slow_syscall_put(&text, ",", 1);
++        if (module >= 0) pw_slow_syscall_put_symbol(&text, &modules[module], guest[i]);
++        else pw_slow_syscall_put_hex(&text, guest[i], 8);
++    }
++    /* Then every dword above them, up the thread's stack, that falls inside a
++     * module: a scan of return-address candidates, not a frame walk. */
++    if (esp >= limit && esp < base)
++        for (i = 2; i < PW_SLOW_SYSCALL_SCAN_DWORDS && found < PW_SLOW_SYSCALL_SCAN_ENTRIES; ++i)
++        {
++            ULONG address = esp + i * sizeof(ULONG);
++            int module;
++            if (address + sizeof(ULONG) > base) break;
++            if ((module = pw_slow_syscall_find(modules, count, guest[i])) < 0) continue;
++            pw_slow_syscall_put(&text, ",", 1);
++            pw_slow_syscall_put_symbol(&text, &modules[module], guest[i]);
++            found++;
++        }
++    MESSAGE("PW_NATIVE_SLOW_SYSCALL version=1 tid=%04lx tsc=%llu ticks=%llu code=%04x name=%s arg0=%08lx arg1=%08lx arg2=%08lx status=%08lx stack=%s\n",
++            (ULONG)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, start, ticks, num,
++            num < ARRAY_SIZE(pw_syscall_names) ? pw_syscall_names[num] : "win32-or-other",
++            (ULONG)args[0], (ULONG)args[1], (ULONG)args[2], (ULONG)status, text.chars);
++}
++static NTSTATUS pw_slow_syscall_dispatch(UINT num, UINT *args, ULONG_PTR thunk)
++{
++    unsigned lo, hi;
++    ULONGLONG start, end;
++    NTSTATUS status;
++    RtlRunOnceExecuteOnce(&pw_slow_syscall_once, pw_slow_syscall_initialize, NULL, NULL);
++    if (!pw_slow_syscall_threshold) return wow64_syscall(args, thunk);
++    __asm__ volatile("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
++    start = ((ULONGLONG)hi << 32) | lo;
++    status = wow64_syscall(args, thunk);
++    __asm__ volatile("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
++    end = ((ULONGLONG)hi << 32) | lo;
++    if (end - start > pw_slow_syscall_threshold) pw_slow_syscall_report(num, args, status, start, end - start);
++    return status;
++}
++
++
+ /**********************************************************************
+  *           Wow64SystemServiceEx  (wow64.@)
+  */
+@@ -1330,7 +1537,8 @@
+         return STATUS_INVALID_SYSTEM_SERVICE;
+     }
+     pw_syscall_profile(num, args);
+-    status = wow64_syscall( args, table->ServiceTable[id] );
++    if (pw_slow_syscall_state == PW_SLOW_SYSCALL_OFF) status = wow64_syscall( args, table->ServiceTable[id] );
++    else status = pw_slow_syscall_dispatch( num, args, table->ServiceTable[id] );
+     free_temp_data();
+     return status;
+ }

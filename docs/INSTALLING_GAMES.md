@@ -155,10 +155,9 @@ things differ from Lutris:
 
 - **Direct3D goes through DXVK.** `wine: {dxvk: true}` installs DXVK 2.6.2
   into the prefix, or the [custom build](#custom-dxvk-builds) the recipe
-  names. Games that use OpenGL instead (`-opengl` and the like) can
-  select the experimental PS5 WGL backend when Wine was built with the PS5
-  OpenGL SDK.
-  Set `prospero: {graphics: opengl}` in the installer; this choice skips DXVK
+  names. Games that use OpenGL instead (`-opengl` and the like) draw
+  through Mesa's Zink on top of Vulkan. Set `prospero: {graphics: opengl}`
+  in the installer and pass `--mesa-zink DIR` (below); this choice skips DXVK
   installation even if the Lutris `wine` section has `dxvk: true` (see the
   [OpenGL build notes](WINE_PS5_BUILD.md#opengl)).
 - **32-bit games** (`arch: win32`) still get a 64-bit prefix. The PS5's Wine
@@ -182,7 +181,7 @@ for a game that needs a change upstream doesn't have:
 ```yaml
 wine:
   dxvk: true
-  dxvk_version: "2.6.2-prospero1"   # 2.6.2 plus two fixes for San Andreas
+  dxvk_version: "2.6.2-prospero2"   # 2.6.2 plus the CS-thread fixes for GTA
 ```
 
 Lutris doesn't know these versions, so such a recipe installs with
@@ -212,20 +211,42 @@ settings in a `prospero` block. They become the profile's `[display]` and
 ```yaml
 prospero:
   name: Warcraft III          # the name in the launcher
-  graphics: dxvk              # gdi, dxvk, opengl, or auto for this game
+  graphics: dxvk              # gdi, dxvk, opengl (zink), or auto for this game
   display: {desktop: 1920x1080, scaling: fit}
   input: {preset: warcraft3}
 ```
 
 `graphics` takes precedence over Lutris's `wine.dxvk` setting. `dxvk` installs
-the pinned DXVK release; `opengl` selects Wine's builtin OpenGL driver for the
-game even if Lutris requested a native `opengl32` override, and requires an
-SDK-linked title. `display` also takes `view`, and
-`show_fps: false` hides the frame-rate counter a game shows in the top-left
-corner by default. `refresh: 120` lets an OpenGL game present at 120 Hz on a
-display that supports it (the default is 60). `opengl_thread: true` runs an
-OpenGL game's graphics work on its own CPU core, beside the game, which helps
-busy scenes in games such as Half-Life and Counter-Strike (off by default).
+the pinned DXVK release. `opengl` installs Mesa's WGL/Zink into the prefix
+and selects native `opengl32`, so the game draws OpenGL through Zink on top of
+Vulkan; `zink` is an older name for the same thing, and the profile says
+`graphics = opengl`. `display` also takes `view`, and `show_fps: false` hides
+the frame-rate counter a game shows in the top-left corner by default.
+`refresh` and `opengl_thread` belonged to the old PS5 OpenGL SDK; they are
+still accepted and have no effect.
+
+For `graphics: opengl`, pass `--mesa-zink DIR` to `pw_install.py`, naming a
+local output directory from the pinned Mesa WGL/Zink builder that contains
+`manifest.json`, `i386-windows/` and `x86_64-windows/`. The tool validates
+both architectures, hashes and bounded PE imports before creating a prefix.
+After Wine initializes the prefix, it installs the game's architecture-matched
+`opengl32.dll`, `libgallium_wgl.dll` and all manifest DLL companions, and
+selects native `opengl32`. Hashes bind files to the manifest; obtain that
+manifest from a trusted build. Files must remain unchanged during
+installation. A failed copy emits no profile; individual file replacement is
+atomic, the provider group is not.
+
+On the console, the launcher validates and installs the provider from the
+app's `win/mesa-zink/` into the game's existing prefix before launch, selects
+`GALLIUM_DRIVER=zink`, and runs a 32-bit game on the native WoW64 CPU with
+Vulkan batching. Existing D3D overrides remain intact: Zink selects WGL for
+OpenGL applications, not a D3D conversion.
+
+Games whose executable also loads wined3d, such as `hl.exe` for Half-Life
+and Counter-Strike, need a runtime whose `libvulkan.prx` is built from
+PS5_Mesa `f2ee389` or later (PS5_Vulkan #4); with an older one their window
+stays black, because wined3d's hidden probe window keeps the display (see
+[One display](WINE_PS5_BUILD.md#vulkan)).
 
 The profile's `[application]` section comes from the script's `game` section:
 the executable, its arguments and its working folder.

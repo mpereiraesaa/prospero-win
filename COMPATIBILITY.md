@@ -36,7 +36,7 @@ but it needs Microsoft's own D3DX9 and D3DCompiler DLLs, and with its default
 settings the city runs about 22% slower. The game's profile in
 prospero-win-profiles explains the setup and the optional mods.
 
-OpenGL games need a runtime built with the optional PS5 OpenGL SDK; see
+OpenGL games draw through Mesa's Zink on top of Vulkan; see
 [the OpenGL build notes](docs/WINE_PS5_BUILD.md#opengl).
 
 ## Benchmarks

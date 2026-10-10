@@ -27,10 +27,10 @@ int main(void)
     char long_name[80];memset(long_name,'a',sizeof(long_name));
     memcpy(long_name+sizeof(long_name)-9,".profile",9);
     assert(parse(long_name,&c)==PW_ERR_MALFORMED);
-    char many[17*16+1];many[0]=0;
-    for(unsigned i=0;i<17;i++){char line[16];line[0]=(char)('a'+i);memcpy(line+1,".profile\n",10);strcat(many,line);}
+    char many[33*16+1];many[0]=0;
+    for(unsigned i=0;i<33;i++){char line[16];line[0]=(char)('a'+i/2);line[1]=(char)('a'+i%2);memcpy(line+2,".profile\n",10);strcat(many,line);}
     assert(parse(many,&c)==PW_ERR_LIMIT);
-    many[16*10]=0;assert(parse(many,&c)==PW_OK && c.count==16);
+    many[32*11]=0;assert(parse(many,&c)==PW_OK && c.count==32);
     assert(pw_profile_catalog_parse(NULL,1,&c)==PW_ERR_PRECONDITION);
     assert(pw_profile_catalog_parse((const uint8_t *)"",0,NULL)==PW_ERR_PRECONDITION);
 
