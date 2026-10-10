@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Wed, 7 Oct 2026 14:30:00 +0200
+Subject: [PATCH] ntdll: Map a private copy of a shared section that is not
+ host page aligned.
+
+A writable shared PE section is mapped from the server's shared file
+with MAP_SHARED, which needs the section to start and end on host pages.
+On a host with pages larger than 4 KiB (16 KiB on the PS5), a section on
+4 KiB alignment fails with "unaligned shared mapping ... not supported",
+and the image does not load (STATUS_INVALID_IMAGE_FORMAT). GameMaker
+games have such a section, .mydata (0xd0000040).
+
+When the shared mapping fails for that reason, map the section like any
+other writable section: a private copy of the file data. The section is
+then no longer shared with other processes of the same image; a process
+that cannot create other processes, as on the PS5, sees no difference.
+The fallback is logged once per section with ERR, so it shows in default
+logs.
+---
+ dlls/ntdll/unix/virtual.c | 16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index aba21c6..972df7e 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -3410,6 +3410,7 @@ static NTSTATUS map_image_into_view_impl( struct file_view *view, const UNICODE_
+     {
+         static const SIZE_T sector_align = 0x1ff;
+         SIZE_T map_size, file_start, file_size, end;
++        NTSTATUS shared_status;
+ 
+         if (!sec[i].Misc.VirtualSize)
+             map_size = ROUND_SIZE( 0, sec[i].SizeOfRawData, align_mask );
+@@ -3437,15 +3438,22 @@ static NTSTATUS map_image_into_view_impl( struct file_view *view, const UNICODE_
+                             debugstr_us(nt_name), sec[i].Name, ptr + sec[i].VirtualAddress,
+                             sec[i].PointerToRawData, (int)pos, file_size, map_size,
+                             sec[i].Characteristics );
+-            if (map_file_into_view( view, shared_fd, sec[i].VirtualAddress, map_size, pos,
+-                                    VPROT_COMMITTED | VPROT_READ | VPROT_WRITE, FALSE ) != STATUS_SUCCESS)
++            shared_status = map_file_into_view( view, shared_fd, sec[i].VirtualAddress, map_size, pos,
++                                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITE, FALSE );
++            /* a section that is not aligned to host pages cannot be shared between processes;
++             * map a private copy of it instead, like any other writable section */
++            if (shared_status == STATUS_INVALID_PARAMETER)
++                ERR_(module)( "%s shared section %.8s is not host page aligned, mapping a private copy\n",
++                              debugstr_us(nt_name), sec[i].Name );
++            else if (shared_status != STATUS_SUCCESS)
+             {
+                 ERR_(module)( "Could not map %s shared section %.8s\n", debugstr_us(nt_name), sec[i].Name );
+                 goto done;
+             }
+ 
+             /* check if the import directory falls inside this section */
+-            if (imports && imports->VirtualAddress >= sec[i].VirtualAddress &&
++            if (shared_status == STATUS_SUCCESS && imports &&
++                imports->VirtualAddress >= sec[i].VirtualAddress &&
+                 imports->VirtualAddress < sec[i].VirtualAddress + map_size)
+             {
+                 UINT_PTR base = imports->VirtualAddress & ~host_page_mask;
+@@ -3457,7 +3465,7 @@ static NTSTATUS map_image_into_view_impl( struct file_view *view, const UNICODE_
+                                         VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY, FALSE );
+             }
+             pos += map_size;
+-            continue;
++            if (shared_status == STATUS_SUCCESS) continue;
+         }
+ 
+         TRACE_(module)( "mapping %s section %.8s at %p off %x size %x virt %x flags %x\n",
+-- 
+2.43.0
+
