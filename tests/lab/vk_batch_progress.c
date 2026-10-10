@@ -14,6 +14,11 @@ static NTSTATUS mock_call(unsigned int,void *);
 #undef WINE_MESSAGE
 #define WINE_MESSAGE(...) fprintf(stderr,__VA_ARGS__)
 #include "pw_vk_batch_pe.c"
+/* raw_call reaches the Unix side through the present-interval wrapper
+ * (pw_vk_present_pe.c), which this test does not link: route it to the mock. */
+NTSTATUS pw_vk_present_call(unsigned int code,void *args){return mock_call(code,args);}
+void pw_vk_present_observe(unsigned int code,void *args,NTSTATUS status){(void)code;(void)args;(void)status;}
+void pw_vk_present_forget(void){}
 static HANDLE wait_entered,signal_seen;
 static unsigned wait_code,signal_code,trace[8],trace_count,replayed;
 static DWORD wait_result;

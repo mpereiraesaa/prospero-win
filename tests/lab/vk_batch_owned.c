@@ -18,6 +18,11 @@ static NTSTATUS mock_call(unsigned int,void *);
 static int observed_append(struct pw_vk_spsc_sequence *,struct pw_vk_spsc *,uint32_t,const void *,uint32_t);
 #define pw_vk_spsc_append observed_append
 #include "pw_vk_batch_pe.c"
+/* raw_call reaches the Unix side through the present-interval wrapper
+ * (pw_vk_present_pe.c), which this test does not link: route it to the mock. */
+NTSTATUS pw_vk_present_call(unsigned int code,void *args){return mock_call(code,args);}
+void pw_vk_present_observe(unsigned int code,void *args,NTSTATUS status){(void)code;(void)args;(void)status;}
+void pw_vk_present_forget(void){}
 #undef pw_vk_spsc_append
 static int observed_append(struct pw_vk_spsc_sequence *seq,struct pw_vk_spsc *stream,uint32_t op,const void *wire,uint32_t bytes)
 {

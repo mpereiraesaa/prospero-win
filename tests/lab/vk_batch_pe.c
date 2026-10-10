@@ -18,6 +18,11 @@ static void diagnostic(const char *format,...)
 {va_list args;va_start(args,format);vfprintf(stderr,format,args);va_end(args);if(wait_reported&&strstr(format,"PW_VK_STREAM_WAIT"))SetEvent(wait_reported);}
 #define WINE_MESSAGE(...) diagnostic(__VA_ARGS__)
 #include "pw_vk_batch_pe.c"
+/* raw_call reaches the Unix side through the present-interval wrapper
+ * (pw_vk_present_pe.c), which this test does not link: route it to the mock. */
+NTSTATUS pw_vk_present_call(unsigned int code,void *args){return mock_call(code,args);}
+void pw_vk_present_observe(unsigned int code,void *args,NTSTATUS status){(void)code;(void)args;(void)status;}
+void pw_vk_present_forget(void){}
 static unsigned ordinary,batches,replayed,draw_raw,sequence[4096],used;
 static BOOL support=TRUE,async_support;
 static unsigned async_pending,empty_batches,admissions,completions;
