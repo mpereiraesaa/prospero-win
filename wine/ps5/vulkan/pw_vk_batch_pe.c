@@ -447,10 +447,11 @@ synchronous:
  }
  fallback_total++;
  if(fallback_profile&&code<unix_count)fallback_counts[code]++;
- if(pw_vk_stream_progress_call(code)){
+ if(pw_vk_stream_progress_call(code)||pw_vk_stream_compile_call(code)){
   /* Transfer owned records before unlocking. The async backend waits only
    * the referenced lanes in raw submit/lifecycle hooks. Never run a blocking
-   * driver wait while holding the PE gate or retaining shared scratch. */
+   * driver wait, or a pipeline compile, while holding the PE gate or
+   * retaining shared scratch. */
   if(negotiated)flush_call(async_backend?unix_count+1:unix_count,NULL);
   leave();status=raw_call(code,args);
   /* All other progress operations have no cache/lifetime posthooks. Present
