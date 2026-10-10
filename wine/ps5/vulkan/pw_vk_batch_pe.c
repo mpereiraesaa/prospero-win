@@ -41,6 +41,23 @@ static unsigned depth;
 static UINT64 records_total,dispatches_total,piggyback_total,full_total,fallback_total,enqueued_total;
 static DECLSPEC_ALIGN(8) UINT64 present;
 static DECLSPEC_ALIGN(8) UINT64 crossings_total;
+/* Deferred descriptor writes (PW_VK_DEFER_DESCRIPTORS=1). vkGetDescriptorEXT
+ * then enqueues its destination address, and the replay writes the descriptor
+ * there in stream order, before any later synchronous call, submit, unmap or
+ * free runs. Only a destination inside a live vkMapMemory mapping qualifies:
+ * the GPU reads a descriptor buffer after a submit, which flushes first. Zink
+ * writes descriptors straight into its mapped descriptor buffer and never reads
+ * them back; a destination the CPU may read soon (stack, heap) stays
+ * synchronous. A producer holds mapping_lock shared from the check through its
+ * append, and an unmap or free takes it exclusively before its own ticket, so a
+ * deferred write always lands before the memory goes away. */
+#define PW_VK_ALLOCATIONS 1024
+#define PW_VK_MAPPINGS 64
+static BOOL defer_descriptors;
+static SRWLOCK mapping_lock=SRWLOCK_INIT;
+static struct { uint64_t memory,size; } allocations[PW_VK_ALLOCATIONS];
+static struct { uint64_t memory; uintptr_t begin,end; } mappings[PW_VK_MAPPINGS];
+static unsigned allocation_count,mapping_count;
 static void *heap_alloc(size_t n){return HeapAlloc(GetProcessHeap(),0,n);}
 static void heap_free(void *p){HeapFree(GetProcessHeap(),0,p);}
 static const struct pw_vk_template_alloc allocator={heap_alloc,heap_free};
@@ -75,6 +92,7 @@ static BOOL CALLBACK initialize(INIT_ONCE *o,void *p,void **ctx)
  pw_vk_spsc_sequence_init(&stream_sequence);
  scratch=heap_alloc(PW_VK_BATCH_SCRATCH);
  enabled=tls!=TLS_OUT_OF_INDEXES&&scratch;
+ defer_descriptors=enabled&&GetEnvironmentVariableA("PW_VK_DEFER_DESCRIPTORS",env,sizeof(env))==1&&env[0]=='1';
  /* Diagnostics are independently opt-in; FPS confirmation leaves them off. */
  return TRUE;
 }
@@ -306,13 +324,93 @@ static void snapshot(unsigned int code,void *args)
   fallback_snapshot(ordinal);
  }
 }
+static void forget_memory_locked(uint64_t memory,BOOL allocation)
+{
+ unsigned i;
+ for(i=0;i<mapping_count;i++)if(mappings[i].memory==memory){mappings[i]=mappings[--mapping_count];break;}
+ if(allocation)for(i=0;i<allocation_count;i++)if(allocations[i].memory==memory){allocations[i]=allocations[--allocation_count];break;}
+}
+/* Before an unmap, free or device destruction takes its ticket or runs. */
+static void mapping_before(unsigned int code,void *args)
+{
+ if(!defer_descriptors)return;
+ switch(code){
+ case unix_vkUnmapMemory:case unix_vkFreeMemory:case unix_vkUnmapMemory2:case unix_vkUnmapMemory2KHR:case unix_vkDestroyDevice:break;
+ default:return;
+ }
+ AcquireSRWLockExclusive(&mapping_lock);
+ switch(code){
+ case unix_vkUnmapMemory:forget_memory_locked(((const struct vkUnmapMemory_params *)args)->memory,FALSE);break;
+ case unix_vkFreeMemory:forget_memory_locked(((const struct vkFreeMemory_params *)args)->memory,TRUE);break;
+ case unix_vkUnmapMemory2:{const struct vkUnmapMemory2_params *q=args;if(q->pMemoryUnmapInfo)forget_memory_locked(q->pMemoryUnmapInfo->memory,FALSE);break;}
+ case unix_vkUnmapMemory2KHR:{const struct vkUnmapMemory2KHR_params *q=args;if(q->pMemoryUnmapInfo)forget_memory_locked(q->pMemoryUnmapInfo->memory,FALSE);break;}
+ default:mapping_count=allocation_count=0;break; /* vkDestroyDevice */
+ }
+ ReleaseSRWLockExclusive(&mapping_lock);
+}
+static void remember_mapping(uint64_t memory,VkDeviceSize offset,VkDeviceSize size,void *data)
+{
+ uintptr_t begin=(uintptr_t)data;uint64_t extent=size;unsigned i;
+ if(!data)return;
+ AcquireSRWLockExclusive(&mapping_lock);
+ forget_memory_locked(memory,FALSE);
+ if(size==VK_WHOLE_SIZE){
+  extent=0;
+  for(i=0;i<allocation_count;i++)
+   if(allocations[i].memory==memory){extent=allocations[i].size>offset?allocations[i].size-offset:0;break;}
+ }
+ /* An allocation the table did not keep is never a deferral destination. */
+ if(extent&&extent<=UINTPTR_MAX-begin&&mapping_count<PW_VK_MAPPINGS){
+  mappings[mapping_count].memory=memory;mappings[mapping_count].begin=begin;
+  mappings[mapping_count].end=begin+(uintptr_t)extent;mapping_count++;
+ }
+ ReleaseSRWLockExclusive(&mapping_lock);
+}
+static void mapping_after(unsigned int code,void *args,NTSTATUS status)
+{
+ if(!defer_descriptors||status)return;
+ switch(code){
+ case unix_vkAllocateMemory:{
+  const struct vkAllocateMemory_params *q=args;
+  if(q->result!=VK_SUCCESS||!q->pMemory||!q->pAllocateInfo)break;
+  AcquireSRWLockExclusive(&mapping_lock);
+  if(allocation_count<PW_VK_ALLOCATIONS){
+   allocations[allocation_count].memory=*q->pMemory;allocations[allocation_count].size=q->pAllocateInfo->allocationSize;allocation_count++;
+  }
+  ReleaseSRWLockExclusive(&mapping_lock);break;}
+ case unix_vkMapMemory:{const struct vkMapMemory_params *q=args;if(q->result==VK_SUCCESS&&q->ppData)remember_mapping(q->memory,q->offset,q->size,*q->ppData);break;}
+ case unix_vkMapMemory2:{const struct vkMapMemory2_params *q=args;if(q->result==VK_SUCCESS&&q->ppData&&q->pMemoryMapInfo)remember_mapping(q->pMemoryMapInfo->memory,q->pMemoryMapInfo->offset,q->pMemoryMapInfo->size,*q->ppData);break;}
+ case unix_vkMapMemory2KHR:{const struct vkMapMemory2KHR_params *q=args;if(q->result==VK_SUCCESS&&q->ppData&&q->pMemoryMapInfo)remember_mapping(q->pMemoryMapInfo->memory,q->pMemoryMapInfo->offset,q->pMemoryMapInfo->size,*q->ppData);break;}
+ default:break;
+ }
+}
+/* Caller holds mapping_lock shared. */
+static BOOL descriptor_destination_mapped(void *args)
+{
+ const struct vkGetDescriptorEXT_params *q=args;uintptr_t begin=(uintptr_t)q->pDescriptor;unsigned i;
+ if(!begin||!q->dataSize||q->dataSize>UINTPTR_MAX-begin)return FALSE;
+ for(i=0;i<mapping_count;i++)
+  if(mappings[i].begin<=begin&&begin+q->dataSize<=mappings[i].end)return TRUE;
+ return FALSE;
+}
 NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
 {
- unsigned char *wire;size_t bytes;uint32_t opcode;struct producer *p;NTSTATUS status;int appended;
+ unsigned char *wire;size_t bytes;uint32_t opcode;struct producer *p;NTSTATUS status;int appended;BOOL deferred;
  InitOnceExecuteOnce(&once,initialize,NULL,NULL);
  /* Init and availability calls precede capability negotiation; old Unix never
   * receives the new table index. Disabled64 builds retain original macro. */
  if(!enabled||InterlockedCompareExchange(&sticky_disabled,0,0)){status=raw_call(code,args);snapshot(code,args);return status;}
+ mapping_before(code,args);
+ /* vkGetDescriptorEXT's output is deferred only into a live mapping, checked
+  * and appended under mapping_lock; otherwise it stays synchronous below. */
+ deferred=code==unix_vkGetDescriptorEXT;
+ if(deferred){
+  if(defer_descriptors)AcquireSRWLockShared(&mapping_lock);
+  if(!defer_descriptors||!descriptor_destination_mapped(args)){
+   if(defer_descriptors)ReleaseSRWLockShared(&mapping_lock);
+   deferred=FALSE;goto synchronous;
+  }
+ }
  /* The replay gate is not part of the normal producer path. */
  if(negotiated&&!pw_vk_stream_call_unsafe(code,args)&&!pw_vk_batch_allocator(code,args)&&(p=producer())){
   InterlockedExchange(&p->publishing,1);
@@ -327,6 +425,7 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
     * to encode destruction again. */
    if(bytes)retire_template(code,args);
    appended=bytes?pw_vk_spsc_append(&stream_sequence,&p->stream,opcode,wire,bytes):PW_VK_STREAM_INVALID;
+   if(deferred)ReleaseSRWLockShared(&mapping_lock);
    if(appended==PW_VK_STREAM_OK){
     InterlockedExchange(&p->publishing,0);return STATUS_SUCCESS;
    }
@@ -337,8 +436,9 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
     return pw_vk_batch_call(code,args);
    }
    if(appended!=PW_VK_STREAM_INVALID)fatal();
-  }else InterlockedExchange(&p->publishing,0);
- }
+  }else{InterlockedExchange(&p->publishing,0);if(deferred)ReleaseSRWLockShared(&mapping_lock);}
+ }else if(deferred)ReleaseSRWLockShared(&mapping_lock);
+synchronous:
  enter();
  if(InterlockedCompareExchange(&sticky_disabled,0,0)){leave();status=raw_call(code,args);snapshot(code,args);return status;}
  if(pw_vk_stream_call_unsafe(code,args)||pw_vk_batch_allocator(code,args)){
@@ -359,6 +459,7 @@ NTSTATUS pw_vk_batch_call(unsigned int code,void *args)
   return status;
  }
  status=negotiated?flush_call(code,args):raw_call(code,args);
+ mapping_after(code,args,status);
  retire_template(code,args);template_created(code,args);
  if(code==unix_vkCreateInstance&&!status){
   struct vkCreateInstance_params *q=args;

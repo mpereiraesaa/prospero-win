@@ -429,6 +429,7 @@ docs/vulkan-fallback-profile.md
 docs/vulkan-progress-gate.md
 tests/lab/vk_batch_masks.c
 tests/lab/vk_batch_pe.c
+tests/lab/vk_batch_defer.c
 tests/lab/vk_batch_progress.c
 tests/lab/vk_batch_runtime.py
 tests/test_summarize_vk_batch.py

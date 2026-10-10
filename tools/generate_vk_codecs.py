@@ -9,6 +9,10 @@ never copied as an opaque pointer.
 import argparse,contextlib,io,json,os,pathlib,re,runpy,logging
 
 class Codecs:
+ # Outputs written only at replay: the record carries the destination address,
+ # never its bytes. The PE adapter enqueues such a call only when nothing reads
+ # the destination before the next flush (pw_vk_batch_pe.c deferred_output_ok).
+ DEFERRED_OUTPUTS={'vkGetDescriptorEXT':'pDescriptor'}
  def __init__(self,model,names):
   self.m=model;self.T=model['Type'];self.R=model['Record'];self.F=model['Function'];self.records={};self.reasons={};self.names=names
  def type(self,name):return self.T.get(name)
@@ -77,6 +81,7 @@ if(present)for(uint64_t i=0;i<count;i++){{
    return '{ uint64_t bits=c->decode?0:(uint64_t)p->'+v.name+'; CHECK(pw_vk_codec_value(c,&bits,8,0)); if(bits>UINT64_C('+str((1<<width)-1)+'))goto fail; if(c->decode)p->'+v.name+'=bits; }'
   if v.name=='pData' and ('DescriptorSetWithTemplate' in parent.name):return f'CHECK(pw_vk_codec_template(c,(void *)({address}),p->descriptorUpdateTemplate));'
   if v.name=='pCheckpointMarker':return f'CHECK(pw_vk_codec_value(c,(void *)({address}),sizeof(p->{v.name}),1)); /* opaque marker identity: never dereferenced */'
+  if self.DEFERRED_OUTPUTS.get(parent.name)==v.name:return f'CHECK(pw_vk_codec_value(c,(void *)({address}),sizeof(p->{v.name}),1)); /* deferred output: the destination address, written at replay */'
   if v.name=='pAllocator':return f'if(p->{v.name})goto fail; CHECK(pw_vk_codec_array(c,(void *)({address}),0,1,1)==0);'
   if v.name=='pNext':return f'CHECK(codec_next(c,(void *)({address})));'
   selector='p->'+v.selector if v.selector else '0'
@@ -154,7 +159,7 @@ default:goto fail;}\n'''
   skip={};active=[]
   for f in funcs:
    if f.name in ['vkDebugReportMessageEXT','vkSubmitDebugUtilsMessageEXT']:skip[f.name]='callback delivery'
-   elif any(p.is_pointer() and not p.is_const() for p in f.params):skip[f.name]='immediate output storage'
+   elif any(p.is_pointer() and not p.is_const() and self.DEFERRED_OUTPUTS.get(f.name)!=p.name for p in f.params):skip[f.name]='immediate output storage'
    else:
     active.append(f)
     for p in f.params:
@@ -217,7 +222,9 @@ int pw_vk_generated_decode(unsigned code,const void *wire,size_t bytes,void *are
 '''
   audit=[]
   for f in funcs:
-   audit.append({'function':f.name,'codec_generated':f in active,'synchronous_reason':skip.get(f.name),'parameter_shape_reasons':self.reasons.get(f.name,[])})
+   entry={'function':f.name,'codec_generated':f in active,'synchronous_reason':skip.get(f.name),'parameter_shape_reasons':self.reasons.get(f.name,[])}
+   if f.name in self.DEFERRED_OUTPUTS and f in active:entry['deferred_output']=self.DEFERRED_OUTPUTS[f.name]
+   audit.append(entry)
   src=src.replace(')goto fail;','){goto fail;}')
   self.active=active
   return src,{'schema_version':1,'void_thunks':len(funcs),'generated_thunks':len(active),'functions':audit,'unsupported_structures':self.reasons,'pnext_structures':len(nexts)}
@@ -242,6 +249,7 @@ int pw_vk_generated_decode(unsigned code,const void *wire,size_t bytes,void *are
    selector_init='p->'+v.selector+'='+v.type.members[0].selection[0]+';'
   if v.name=='pData' and ('DescriptorSetWithTemplate' in parent.name):return '{ VkDescriptorBufferInfo *info=allocate(sizeof(*info));info->buffer=UINT64_C(0xfedcba9876543210);info->offset=4;info->range=4;p->pData=info; }'
   if v.name=='pCheckpointMarker':return 'p->pCheckpointMarker=(const void *)(uintptr_t)0x12345678;'
+  if self.DEFERRED_OUTPUTS.get(parent.name)==v.name:return 'p->'+v.name+'=(void *)(uintptr_t)0x12345678;'
   if self.pointer(v):
    if v.dyn_array_len=='null-terminated':return 'p->'+v.name+'="owned test string";'
    if v.type_name=='void' and (not v.dyn_array_len or isinstance(v.dyn_array_len,int)):return ''

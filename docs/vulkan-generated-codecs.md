@@ -19,7 +19,21 @@ Unknown chain types, callback structures and input blobs without a documented
 extent fail encoding before enqueue. `VkCuLaunchInfoNVX.pParams/pExtras` cannot
 be deep-copied because the API does not provide individual blob sizes.
 
-Immediate-output void getters require synchronous handling. Descriptor-template
+Immediate-output void getters require synchronous handling, with one opt-in
+exception. With `PW_VK_DEFER_DESCRIPTORS=1`, `vkGetDescriptorEXT` is
+enqueued: its record carries the input and the destination address, and the
+replay writes the descriptor there in stream order, before any later
+synchronous call, submit, unmap or free. The PE adapter defers only into a live
+`vkMapMemory` mapping (it tracks allocation sizes and mappings), where the GPU
+reads the descriptor after a submit, which flushes first; any other destination,
+such as a stack or heap buffer the caller may read back at once, stays
+synchronous. Zink's descriptor-buffer mode writes every descriptor straight
+into its mapped descriptor buffer and never reads it back: in Counter-Strike 1.6
+these calls were 99.3% of the 2542 synchronous crossings per present. A caller
+that reads its mapped descriptor buffer on the CPU before the next flush must not
+enable it. A producer checks the mapping and appends under a shared lock that an
+unmap or free takes exclusively before its own ticket, so a deferred write never
+lands after its memory is gone. Descriptor-template
 blob codecs need the existing template metadata cache. Manual PE destruction
 needs deferred client-allocation retirement before it can become asynchronous.
 These categories and the exact unresolved structures appear in the manifest;
