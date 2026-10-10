@@ -77,7 +77,7 @@ def main() -> int:
         real = sgs.run_addr2line
         sgs.run_addr2line = fake_addr2line
         try:
-            out = sgs.symbolize(lines, modules, "fake-addr2line")
+            out = sgs.symbolize(lines, modules, "fake-addr2line", None)
         finally:
             sgs.run_addr2line = real
         assert calls == [("fake-addr2line", str(base / "d3d9.dll"), [0x10000009, 0x10000040, 0x10002000, 0x101a2b3c])], calls
@@ -87,8 +87,8 @@ def main() -> int:
             "d3d9.dll!dxvk::DxvkCsThread::synchronize(unsignedlong;unsignedint),7bc00000,d3d9.dll+9,..."), out[0]
         assert out[0].startswith(EVENT.split("stack=")[0])
         assert out[1] == "other line" and out[2].endswith("stack=d3d9.dll+40,ntdll.dll+8")
-        assert sgs.symbolize([EVENT], {}, "unused") == [EVENT]      # no modules: nothing asked, nothing changed
-        assert sgs.resolve({}, modules, "unused") == {}
+        assert sgs.symbolize([EVENT], {}, "unused", None) == [EVENT]      # no modules: nothing asked, nothing changed
+        assert sgs.resolve({}, modules, "unused", None) == {}
 
         # run_addr2line parses function/location pairs from a stand-in addr2line.
         script = base / "addr2line"
@@ -101,20 +101,43 @@ def main() -> int:
         assert (base / "args").read_text().split() == ["-f", "-C", "-e", str(base / "d3d9.dll"), "0x10000009", "0x101a2b3c"]
         assert sgs.run_addr2line(str(script), str(base / "d3d9.dll"), []) == []
 
+        # A release build has no DWARF: addr2line says ?? and the nearest
+        # preceding nm symbol (within 64 KiB) names the entry as symbol+delta.
+        nm = base / "nm"
+        nm.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/nm-args\"\n"
+                      "printf '10000000 T start\\n10000030 t dxvk::DxvkContext::flushCommandList(VkDebugUtilsLabelEXT const*)\\n"
+                      "10001000 r rodata_not_code\\n10002000 T D3D9DeviceEx::Flush<true, 3>\\n10200000 W late\\n'\n")
+        nm.chmod(nm.stat().st_mode | stat.S_IEXEC)
+        symbols = sgs.run_nm(str(nm), str(base / "d3d9.dll"))
+        assert symbols == [(0x10000000, "start"), (0x10000030, "dxvk::DxvkContext::flushCommandList(VkDebugUtilsLabelEXT const*)"),
+                           (0x10002000, "D3D9DeviceEx::Flush<true, 3>"), (0x10200000, "late")], symbols
+        assert (base / "nm-args").read_text().split() == ["-C", "-n", "--defined-only", str(base / "d3d9.dll")]
+        assert sgs.nearest_symbol(symbols, 0x10000040) == "dxvk::DxvkContext::flushCommandList(VkDebugUtilsLabelEXT const*)+10"
+        assert sgs.nearest_symbol(symbols, 0x10002000) == "D3D9DeviceEx::Flush<true, 3>+0"
+        assert sgs.nearest_symbol(symbols, 0x10012000) is None      # 64 KiB past Flush: not it
+        assert sgs.nearest_symbol(symbols, 0x0fffffff) is None      # before the first symbol
+        sgs.run_addr2line = fake_addr2line
+        try:
+            out = sgs.symbolize(lines, modules, "fake-addr2line", str(nm))
+        finally:
+            sgs.run_addr2line = real
+        assert "d3d9.dll!dxvk::DxvkContext::flushCommandList(VkDebugUtilsLabelEXTconst*)+10," in out[2], out[2]
+        assert out[0].endswith(",d3d9.dll!start+9,..."), out[0]          # addr2line's ?? at +9, nm's start+9
+
         # The command line: a log file, stdin, --line, and the refusals.
         log = base / "session.log"
         log.write_text("\n".join(lines) + "\n")
         tool = [sys.executable, str(ROOT / "tools/symbolize_guest_stack.py")]
-        run = subprocess.run(tool + [str(log), "--module", f"d3d9.dll={base / 'd3d9.dll'}", "--addr2line", str(script)],
+        run = subprocess.run(tool + [str(log), "--module", f"d3d9.dll={base / 'd3d9.dll'}", "--addr2line", str(script), "--nm", ""],
                              capture_output=True, text=True)
         assert run.returncode == 0, run.stderr
         rows = run.stdout.splitlines()
         assert len(rows) == 3 and "d3d9.dll!fn_0x101a2b3c,d3d9.dll!fn_0x10002000,gtaiv.exe+3000" in rows[0], rows
         assert ",d3d9.dll+9,..." in rows[0] and rows[2].endswith("stack=d3d9.dll!fn_0x10000040,ntdll.dll+8")
-        run = subprocess.run(tool + ["-", "--module", f"d3d9.dll={base / 'd3d9.dll'}", "--addr2line", str(script)],
+        run = subprocess.run(tool + ["-", "--module", f"d3d9.dll={base / 'd3d9.dll'}", "--addr2line", str(script), "--nm", ""],
                              input=EVENT + "\n", capture_output=True, text=True)
         assert run.returncode == 0 and "d3d9.dll!fn_0x101a2b3c" in run.stdout
-        run = subprocess.run(tool + ["--line", EVENT, "--module", f"D3D9.DLL={base / 'd3d9.dll'}", "--addr2line", str(script)],
+        run = subprocess.run(tool + ["--line", EVENT, "--module", f"D3D9.DLL={base / 'd3d9.dll'}", "--addr2line", str(script), "--nm", ""],
                              capture_output=True, text=True)
         assert run.returncode == 0 and run.stdout.count("\n") == 1 and "d3d9.dll!fn_0x101a2b3c" in run.stdout
         run = subprocess.run(tool + ["--line", EVENT, "--module", f"d3d9.dll={base / 'text.txt'}"], capture_output=True, text=True)
@@ -124,7 +147,7 @@ def main() -> int:
         assert run.returncode == 2 and "missing.dll" in run.stderr
         run = subprocess.run(tool + ["--line", EVENT, "--module", f"d3d9.dll={base / 'd3d9.dll'}", "--addr2line",
                                      str(base / "no-such-addr2line")], capture_output=True, text=True)
-        assert run.returncode == 2 and "addr2line failed" in run.stderr
+        assert run.returncode == 2 and "addr2line or nm failed" in run.stderr
         run = subprocess.run(tool + [str(log), "--line", EVENT], capture_output=True, text=True)
         assert run.returncode == 2 and "not both" in run.stderr
         run = subprocess.run(tool + [str(log)], capture_output=True, text=True)

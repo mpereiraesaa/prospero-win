@@ -8,13 +8,15 @@ module's load address>. This rewrites every entry whose module was given
 with --module to <dll>!<function>, from addr2line over an unstripped build
 of that DLL: the address it asks for is the DLL's preferred ImageBase, read
 from its PE optional header, plus the offset. Entries of other modules, raw
-addresses, unresolved ones (addr2line's ??) and the ... of a cut line stay
-as they are, as does every other line, so a whole log can go through.
+addresses, unresolved ones and the ... of a cut line stay as they are, as
+does every other line, so a whole log can go through. A release build keeps
+its symbol table but no DWARF, so where addr2line answers ?? the nearest
+preceding symbol from `nm -C -n` names the entry as <dll>!<symbol>+<delta>.
 Spaces in a demangled name are dropped and commas become semicolons, so the
 list still splits on commas and the line on whitespace.
 
 Usage: symbolize_guest_stack.py (LOG | -) --module d3d9.dll=PATH [--module ...]
-                                 [--addr2line i686-w64-mingw32-addr2line]
+                                 [--addr2line i686-w64-mingw32-addr2line] [--nm i686-w64-mingw32-nm]
        symbolize_guest_stack.py --line TEXT --module d3d9.dll=PATH [...]
 """
 from __future__ import annotations
@@ -27,6 +29,7 @@ import sys
 from collections import defaultdict
 
 ADDR2LINE = "i686-w64-mingw32-addr2line"
+NM = "i686-w64-mingw32-nm"
 STACK = re.compile(r"(PW_NATIVE_SLOW_SYSCALL version=1 .*\bstack=)(\S*)")
 ENTRY = re.compile(r"^([^+!]+)\+([0-9a-f]+)$")
 
@@ -65,6 +68,27 @@ def run_addr2line(binary: str, path: str, addresses: list[int]) -> list[str | No
     return names
 
 
+def run_nm(binary: str, path: str) -> list[tuple[int, str]]:
+    """The defined code symbols of path, (address, name), sorted by address."""
+    run = subprocess.run([binary, "-C", "-n", "--defined-only", path],
+                         capture_output=True, text=True, check=True)
+    table = []
+    for line in run.stdout.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) == 3 and parts[1] in "tTwW" and parts[2]:
+            table.append((int(parts[0], 16), parts[2]))
+    return table
+
+
+def nearest_symbol(table: list[tuple[int, str]], address: int) -> str | None:
+    """symbol+delta for the last symbol at or before address, within 64 KiB."""
+    import bisect
+    index = bisect.bisect_right([entry[0] for entry in table], address) - 1
+    if index < 0 or address - table[index][0] >= 0x10000:
+        return None
+    return f"{table[index][1]}+{address - table[index][0]:x}"
+
+
 def parse_module(spec: str) -> tuple[str, str]:
     name, separator, path = spec.partition("=")
     if not separator or not name or not path:
@@ -91,15 +115,24 @@ def clean(name: str) -> str:
     return name.replace(" ", "").replace(",", ";")
 
 
-def resolve(wanted: dict, modules: dict, binary: str = ADDR2LINE) -> dict:
-    """(module, offset) -> function, one addr2line run per module."""
+def resolve(wanted: dict, modules: dict, binary: str = ADDR2LINE, nm: str | None = NM) -> dict:
+    """(module, offset) -> function: one addr2line run per module, then one
+    nm run for the offsets addr2line left unresolved (nm=None skips that)."""
     table = {}
     for module, offsets in wanted.items():
         path, base = modules[module]
         names = run_addr2line(binary, path, [base + offset for offset in offsets])
+        missing = []
         for offset, name in zip(offsets, names):
             if name:
                 table[(module, offset)] = clean(name)
+            else:
+                missing.append(offset)
+        if missing and nm:
+            symbols = run_nm(nm, path)
+            for offset in missing:
+                if name := nearest_symbol(symbols, base + offset):
+                    table[(module, offset)] = clean(name)
     return table
 
 
@@ -114,8 +147,8 @@ def rewrite(line: str, table: dict) -> str:
     return STACK.sub(replace, line, count=1)
 
 
-def symbolize(lines: list[str], modules: dict, binary: str = ADDR2LINE) -> list[str]:
-    table = resolve(wanted_offsets(lines, modules), modules, binary)
+def symbolize(lines: list[str], modules: dict, binary: str = ADDR2LINE, nm: str | None = NM) -> list[str]:
+    table = resolve(wanted_offsets(lines, modules), modules, binary, nm)
     return [rewrite(line, table) for line in lines]
 
 
@@ -126,6 +159,7 @@ def main(argv=None) -> int:
     parser.add_argument("--module", action="append", default=[], metavar="DLL=PATH",
                         help="an unstripped build of a 32-bit module named in the events; repeatable")
     parser.add_argument("--addr2line", default=ADDR2LINE)
+    parser.add_argument("--nm", default=NM, help="symbol-table fallback for release builds; '' disables it")
     args = parser.parse_args(argv)
     if (args.log is None) == (args.line is None):
         parser.error("give a log (or -) or --line, not both")
@@ -145,9 +179,9 @@ def main(argv=None) -> int:
         with open(args.log, errors="replace") as handle:
             lines = handle.read().splitlines()
     try:
-        out = symbolize(lines, modules, args.addr2line)
+        out = symbolize(lines, modules, args.addr2line, args.nm or None)
     except (OSError, subprocess.CalledProcessError) as error:
-        print(f"addr2line failed: {error}", file=sys.stderr)
+        print(f"addr2line or nm failed: {error}", file=sys.stderr)
         return 2
     sys.stdout.write("".join(line + "\n" for line in out))
     return 0
