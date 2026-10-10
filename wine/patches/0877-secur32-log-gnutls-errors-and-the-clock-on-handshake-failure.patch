@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 6 Oct 2026 10:00:00 +0200
+Subject: [PATCH] secur32: Log the GnuTLS error and the clock when a handshake fails.
+
+A handshake that fails for a reason schannel does not map returns
+SEC_E_INTERNAL_ERROR, and GnuTLS's own code only went to stderr through
+gnutls_perror; a client's log then shows the Windows status alone (one
+Battle.net request failed with a status that is not even a SEC_E code).
+Log the GnuTLS code and message through the err channel instead, and
+with it the clock: on the console a date behind the certificates' makes
+every chain not yet valid, since crypt32 verifies with Windows time,
+which is the console's. The fatal-alert path logs the clock too.
+
+ dlls/secur32/schannel_gnutls.c | 29 +++++++++++++++++++++++++++--
+ 1 file changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/secur32/schannel_gnutls.c b/dlls/secur32/schannel_gnutls.c
+index 83b9f8f..fb096e4 100644
+--- a/dlls/secur32/schannel_gnutls.c
++++ b/dlls/secur32/schannel_gnutls.c
+@@ -31,6 +31,7 @@
+ #include <stdlib.h>
+ #include <errno.h>
+ #include <sys/types.h>
++#include <time.h>
+ #include <dlfcn.h>
+ #ifdef SONAME_LIBGNUTLS
+ #include <gnutls/gnutls.h>
+@@ -113,6 +114,7 @@ MAKE_FUNCPTR(gnutls_record_send);
+ MAKE_FUNCPTR(gnutls_server_name_set);
+ MAKE_FUNCPTR(gnutls_session_channel_binding);
+ MAKE_FUNCPTR(gnutls_set_default_priority);
++MAKE_FUNCPTR(gnutls_strerror);
+ MAKE_FUNCPTR(gnutls_transport_get_ptr);
+ MAKE_FUNCPTR(gnutls_transport_set_errno);
+ MAKE_FUNCPTR(gnutls_transport_set_ptr);
+@@ -634,6 +636,24 @@ static NTSTATUS send_alert(gnutls_session_t session, unsigned int type, unsigned
+     return SEC_E_OK;
+ }
+
++/* The clock, for a handshake that failed: a date behind the certificates'
++ * makes every chain not yet valid (crypt32 verifies with Windows time, which
++ * on the console is the console's). The console's libc has no gmtime_r (the
++ * one libgnutls.prx carries for GnuTLS is that module's), and gmtime's shared
++ * result is only read here, for a log line, so a race costs one odd date. */
++static const char *clock_now( char *buf, size_t size )
++{
++    time_t now = time( NULL );
++#ifdef __PROSPERO__
++    struct tm *tm = gmtime( &now );
++#else
++    struct tm tm_buf, *tm = gmtime_r( &now, &tm_buf );
++#endif
++
++    if (!tm || !strftime( buf, size, "%Y-%m-%d %H:%M:%S UTC", tm )) snprintf( buf, size, "%lld", (long long)now );
++    return buf;
++}
++
+ static NTSTATUS schan_handshake( void *args )
+ {
+     const struct handshake_params *params = args;
+@@ -682,12 +700,16 @@ static NTSTATUS schan_handshake( void *args )
+         else if (err == GNUTLS_E_FATAL_ALERT_RECEIVED)
+         {
+             gnutls_alert_description_t alert = pgnutls_alert_get(s);
+-            WARN("FATAL ALERT: %d %s\n", alert, pgnutls_alert_get_name(alert));
++            char clock[32];
++            WARN("FATAL ALERT: %d %s, clock %s\n", alert, pgnutls_alert_get_name(alert), clock_now(clock, sizeof(clock)));
+             status = SEC_E_INTERNAL_ERROR;
+         }
+         else
+         {
+-            pgnutls_perror(err);
++            char clock[32];
++            /* What InitializeSecurityContext's SEC_E_INTERNAL_ERROR hides from
++             * the caller: GnuTLS's own code, which gnutls_perror only printed. */
++            ERR("handshake failed: gnutls %d (%s), clock %s\n", err, pgnutls_strerror(err), clock_now(clock, sizeof(clock)));
+             status = SEC_E_INTERNAL_ERROR;
+         }
+         break;
+@@ -1516,6 +1538,7 @@ static NTSTATUS process_attach( void *args )
+     LOAD_FUNCPTR(gnutls_server_name_set)
+     LOAD_FUNCPTR(gnutls_session_channel_binding)
+     LOAD_FUNCPTR(gnutls_set_default_priority)
++    LOAD_FUNCPTR(gnutls_strerror)
+     LOAD_FUNCPTR(gnutls_transport_get_ptr)
+     LOAD_FUNCPTR(gnutls_transport_set_errno)
+     LOAD_FUNCPTR(gnutls_transport_set_ptr)

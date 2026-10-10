@@ -21,6 +21,21 @@ submission/bind-sparse/present and host timeline signals. Command-buffer wait
 recording remains ordinary gated recording. This whitelist does not prove that
 all unknown/vendor driver APIs are nonblocking; additional APIs require auditing.
 
+Pipeline compiles get the same treatment. `vkCreateGraphicsPipelines`,
+`vkCreateComputePipelines`, `vkCreateRayTracingPipelinesKHR` and
+`vkCreateShadersEXT` run the driver's shader compiler for tens of milliseconds
+per call and only reference objects that earlier synchronous calls already
+created, so they need no ordering against pending records: the stream drains
+under the gate, the gate is released, and the compile runs on the calling
+thread like a progress call. Held under the gate, DXVK's compile workers
+serialised every other Vulkan-calling thread behind their compiles (the CS,
+submit and finish threads all parked until each worker's compile returned: GTA
+IV at cold cache showed 300-500 ms frames made of 10-50 ms waits in a chain,
+measured with the slow-syscall events of patch 0613). Pipeline caches are
+internally synchronised unless created externally synchronised, which this
+title's clients do not do; shader modules, layouts and render passes stay
+ordinary gated creators.
+
 Wait/progress operations have no template registration or retirement posthooks.
 Vulkan object lifetime and per-object external synchronization remain the
 application's responsibility. Independent queues/objects may progress concurrently;
@@ -37,7 +52,7 @@ Stats disabled adds no diagnostic crossing/counter update or return-side lock.
 No stream ABI, capability name, Unix table entry or 64-bit PE route changes.
 
 The actual i686 PE/Win32 concurrency fixture mocks only the Unix/driver boundary.
-It tests all 21 classifier entries with pending and empty batches: an old owned
+It tests all 21 progress entries and the 4 compile entries with pending and empty batches: an old owned
 record must replay before a wait starts; another thread records fresh work,
 flushes it and signals while the wait remains outstanding. Finite event waits
 prevent a stuck test. The fixture checks exact ordering, original owned bytes,

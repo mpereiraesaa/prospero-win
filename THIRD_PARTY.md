@@ -109,6 +109,42 @@ from the BDF driver. Their notices, from the FreeType source:
  * THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
+## TLS: `libgnutls.prx`, `secur32.prx` and `share/wine/ca-certificates.crt`
+
+A package built with `tools/build_tls_ps5.sh` gives Wine's schannel
+(`secur32.prx`, Wine's own code, covered above) its TLS library.
+`libgnutls.prx` statically links [GnuTLS](https://www.gnutls.org) 3.8.13,
+under the GNU Lesser General Public License version 2.1 or later
+(`LICENSES/gnutls/COPYING.LESSERv2`; `COPYING` is the GPL-3.0 text GnuTLS's
+other parts name, and `AUTHORS` its authors), with the libraries GnuTLS
+includes in that build:
+
+- [libtasn1](https://www.gnu.org/software/libtasn1/), LGPL-2.1-or-later
+  (the same text);
+- parts of [libunistring](https://www.gnu.org/software/libunistring/),
+  LGPL-2.1-or-later, its Unicode tables dual-licensed LGPL-3.0-or-later or
+  GPL-2.0-or-later;
+- inih, Ben Hoyt's INI parser, under the BSD-3-Clause licence
+  (`LICENSES/gnutls/lib-inih-LICENSE.txt`).
+
+It also links [GNU Nettle](https://www.lysator.liu.se/~nisse/nettle/)
+3.10.2, with its hogweed public-key library and its copy of GMP's mini-gmp,
+each dual-licensed LGPL-3.0-or-later (`LICENSES/nettle/COPYING.LESSERv3`)
+or GPL-2.0-or-later (`LICENSES/nettle/COPYINGv2`; `COPYINGv3` is the GPL-3
+text, `AUTHORS` its authors); prospero-win uses them under the LGPL. Like
+the other PS5 modules, `libgnutls.prx` links the payload SDK's emulated TLS
+from LLVM's runtime (above). Both are built in portable C, without nettle's
+assembler or GnuTLS's hardware acceleration, and with mini-gmp in place of
+GMP, which nettle documents as slower and not side-channel silent; the
+[TLS section](docs/WINE_PS5_BUILD.md#tls) of the build notes says what
+that means for the console.
+
+`share/wine/ca-certificates.crt` is Mozilla's root certificate store as
+[curl publishes it](https://curl.se/docs/caextract.html), under the Mozilla
+Public License 2.0 (`LICENSES/MPL-2.0.txt`); `SOURCES.txt` names the dated
+file and its SHA-256. A package without `libgnutls.prx` carries none of
+these.
+
 ## The Vulkan driver: `libvulkan.prx`
 
 `libvulkan.prx` is RADV, Mesa's Vulkan driver for AMD GPUs, from the

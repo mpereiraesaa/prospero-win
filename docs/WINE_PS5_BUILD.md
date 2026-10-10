@@ -101,6 +101,8 @@ before evaluating a candidate built from that cache.
 | 0611 | `wow64`: `WINE_PS5_WOW64_CPU` names the process's CPU backend (`wow64native.dll` or `wowprospero.dll`); when the named one cannot be loaded, the prefix's own choice is used instead of ending the process |
 | 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
 | 0790 | `server`, `ntdll`: opt-in immediate mutex acquire/release using the authoritative server object without request marshalling or waiter allocation; see [Immediate mutex calls](#immediate-mutex-calls) |
+| 0877 | `secur32`: a handshake GnuTLS fails for a reason schannel does not map logs the GnuTLS code and message and the clock through the err channel (and a fatal alert the clock), where the caller saw SEC_E_INTERNAL_ERROR and gnutls_perror went to stderr; on the console a date behind the certificates' makes every chain not yet valid |
+| 0878 | `crypt32`: on PS5 the root store is filled from `share/wine/ca-certificates.crt` beside the runtime, found from crypt32.prx's own path, before the system paths a title cannot see; a bundle that is not there is an error in the log, since no chain then verifies |
 | 0879 | `win32u`: the PS5 driver's ProcessEvents reports the wake pipe as handled whenever it read it; the pipe is every GUI thread's queue fd, so a thread whose events another thread had taken kept QS_DRIVER set with its fd unarmed, and a zero-timeout message wait (DirectInput's GetDeviceState) spun until the next input, so a game stalled while a button was held |
 | 0881 | `ntdll`: the number of processors is the CPUs the process may run on (`cpuset_getaffinity`), 13 for a game on the console, not the 16 online; threads of one priority there never share a CPU, so a program that started a worker per reported CPU had three that did not run until another blocked |
 | 0882 | `server`: Windows threads run SCHED_RR, so threads of one priority take turns on the CPUs, and priorities above normal raise the native priority one step per band (normal and below stay at the title's 700); a title's threads are otherwise SCHED_FIFO at one priority, where a 14th busy thread waits for one of the game's 13 CPUs and a Windows priority change does nothing. Opt-in: `WINE_PS5_SCHED=1` or the file `/data/prospero-win/pw_sched` |
@@ -116,6 +118,7 @@ before evaluating a candidate built from that cache.
 | 0897 | `ntdll`: a reservation at a fixed address outside the reserved areas is handed to the direct-memory allocator until it is unmapped, so committing it backs its pages; the console does not back a bare reservation when it is protected, and the first write to such a commit faulted (Steam's protection layer on 64-bit games) |
 | 0898 | `ntdll`: this process's memory counters (GetProcessMemoryInfo, ProcessVmCounters, SystemProcessInformation) come from its views, also for a handle opened on its own id; the console has no /proc or procstat, and every counter was zero |
 | 0899 | `include`: list the PS5 sync headers (0810, 0820, 0885, 0887) in `include/Makefile.in`, which makedep needs to resolve them; configure failed without it |
+| 0902 | `win32u`: the PS5 driver sends the arrows, Insert, Delete, Home, End, Page Up, Page Down, right Ctrl and Alt, the Windows and menu keys and keypad `/` with `KEYEVENTF_EXTENDEDKEY`; their scan codes are the keypad's without it, so DirectInput reported the keypad's 8 for the up arrow and a game's arrow-key bindings never fired |
 
 ## Allocator
 
@@ -781,6 +784,88 @@ Imports bound only to the WebKit process's `libkernel_web` or
 too (`webkit_unbound`), and the build prints a warning for each module that
 has any.
 
+## TLS
+
+Wine's schannel is its GnuTLS backend (`dlls/secur32/schannel_gnutls.c`),
+and the PS5 build was configured `--without-gnutls`: every HTTPS request a
+program made through Windows' own networking failed with
+`SEC_E_SECPKG_NOT_FOUND` (Battle.net's client, through libcurl's schannel),
+and Wine logged `no schannel support`. `tools/build_tls_ps5.sh` cross-builds
+nettle 3.10.2 (with its own mini-gmp, so no GMP) and GnuTLS 3.8.13 (with its
+included libtasn1 and libunistring; no p11-kit, IDN, TPM, zlib, brotli or
+zstd) with the payload SDK into static archives under
+`.deps/wine-ps5/tls/root`, each tarball pinned by SHA-256; the SDK has no
+libm, so an empty one stands in for the `-lm` the builds ask, as the Wine
+build already does for win32u. The pins are the newest 3.8.x and 3.10.x:
+GnuTLS 3.8.10 to 3.8.13 fixed faults in certificate, extension and
+handshake parsing that a client reading an untrusted server's certificates
+is exposed to (CVE-2025-32988, CVE-2025-32989, CVE-2025-6395, the
+2026-04-29 set), so a bump of `GNUTLS_VERSION` and its SHA-256 is the
+answer to the next advisory. Both libraries are portable C: nettle without
+its assembler (`--disable-assembler`) and GnuTLS without hardware
+acceleration, so AES and the hashes run without AES-NI, and public-key
+arithmetic is nettle's mini-gmp (`--enable-mini-gmp`) instead of GMP,
+which nettle documents as slower and not side-channel silent. That is
+acceptable for a client that verifies the server's signatures and makes
+one key exchange per connection with ephemeral keys, and is to be
+revisited before the console serves TLS or holds a long-lived private
+key. GnuTLS's entropy is read from `/dev/urandom`, the one source its
+configure finds for this target (the payload SDK has no `getrandom`,
+`getentropy` or `KERN_ARND`; the libc's `arc4random` is not one GnuTLS
+knows); a title can open it, since handshakes complete on the console.
+Compression is not built. When the archives exist,
+`build_wine_ps5.sh` configures Wine with them (soname `libgnutls.so`, which
+`pw_wine_dl` loads as `libgnutls.prx`), builds `secur32.so`, and links two
+more modules: `libgnutls.prx` from the archives, exporting what
+`schannel_gnutls.c` and crypt32's `unixlib.c` load with dlsym (the list is
+read from the patched sources, so a patch that loads one more symbol
+exports it), with `wine/ps5/pw_gnutls_libc.c` for the `__assert`,
+`gmtime_r`, `getpwuid_r` and `thrd_exit` the system libraries lack and the
+SDK's emulated TLS; and `secur32.prx`. The report covers both. Without the
+TLS build Wine is configured `--without-gnutls`, as before; either way the
+configure arguments differ from the earlier series, so a build tree from
+before this change reconfigures and rebuilds once.
+
+**Trust.** crypt32 fills its root store from system paths a title cannot
+see, so it stayed empty. Patch 0878 reads `share/wine/ca-certificates.crt`
+beside the runtime first, found from `crypt32.prx`'s own path with
+`dladdr`, and logs an error if it is not there. The bundle is Mozilla's
+root store as curl publishes it, a dated file pinned by URL and SHA-256 in
+`build_tls_ps5.sh` (`cacert-2026-09-25.pem`, 121 roots), so a release
+carries the same roots whoever builds it; `PROSPERO_CA_BUNDLE` names
+another, and `SOURCES.txt` then records only its SHA-256. The pinned bundle
+ages with Mozilla's store (roots are added and withdrawn a few times a
+year), so a release bumps `CA_BUNDLE_DATE` and its SHA-256 to curl's
+current extract first, see [Making a release](DEVELOPMENT.md#making-a-release).
+`build_tls_ps5.sh`
+also stages the licence texts of what `libgnutls.prx` links, which
+`package_release.sh` ships under `LICENSES/gnutls` and `LICENSES/nettle`
+with the bundle's `LICENSES/MPL-2.0.txt` (THIRD_PARTY.md). Wine's schannel
+does not verify the peer's chain itself: the program does, through crypt32
+(`CertGetCertificateChain`), which is why Chromium (Battle.net's login page)
+refused every connection with `ERR_CERT_AUTHORITY_INVALID` until the store
+had roots, and why the console's clock matters: validation uses Windows
+time, the console's, and a date behind the certificates' makes every chain
+not yet valid while the handshake itself still completes.
+
+**Diagnostics.** Patch 0877 logs the GnuTLS code and message and the clock
+through the err channel when a handshake fails for a reason schannel does
+not map (`err:secur32:schan_handshake handshake failed: gnutls -NN (...),
+clock 2026-10-06 ...`), and the clock with a fatal alert; before, the
+caller saw `SEC_E_INTERNAL_ERROR` and `gnutls_perror` wrote to stderr.
+`GNUTLS_DEBUG_LEVEL` in the environment turns on GnuTLS's own log in both
+secur32 and crypt32. One Battle.net request in one console run failed with
+status `0x824200B0`, which is no `SEC_E` code and not what `schan_handshake`
+returns; the next such failure names its GnuTLS code, or shows that the
+status did not come from the handshake at all.
+
+**Console checks still open.** A validating client (Chromium) against a
+host with an untrusted root, `untrusted-root.badssl.com`, must be refused
+while a normal site passes, which shows the store is consulted and not only
+that handshakes complete; `PFXImportCertStore` (crypt32's GnuTLS side,
+PKCS#12), which this build turns on too; and a strict-validation run with
+the console's date checked.
+
 ## Data directory
 
 A title can write only its own `/download0` sandbox, where `/data` is absent,
@@ -797,6 +882,19 @@ continuing. If elfldr or the helper does not complete successfully, the title
 logs the failure and returns to Home without loading profiles or starting
 Wine. Each launcher/game `LoadExec` process performs its own request through
 the same startup point.
+
+Some loaders show `/data` to every app without elevating it: ShadowMountPlus
+1.7beta4 mounts it into the sandbox, and PS5SXHelper's "mountroot" does the
+same. Such a title can `stat()` `/data` but gets `EPERM` from `lstat()` on
+every path, and Wine then exits in `server_init_process`. A `/data` that is
+already visible therefore counts as an existing grant only when `lstat()`
+works on it too (`lstat()` failing with `EPERM` is the only sign of "not
+elevated"); otherwise the title asks the helper as above and then waits for
+`lstat()` to work, not only for `/data` to be visible. If the helper refuses,
+or says yes but the title is still not elevated after the wait, the title keeps
+the visible `/data` and goes on as before (`data_mount data_before=1
+elevated_before=0 helper_completed=0` or `helper_completed=1 elevated_after=0`
+in the log).
 
 The title build fetches the helper and manifest from one pinned release of
 `mpereiraesaa/PS5-Lapy-JB-Daemon` every time: `lapy_release` in
@@ -1017,10 +1115,33 @@ The runtime is staged beside the title:
   `getnameinfo` and `gethostbyname` in `libScePosixForWebKit`, which only
   the WebKit process gets, so in a title they stayed NULL and every lookup
   faulted (GTA IV, tens of thousands a minute). `wine/ps5/pw_ws2_32_libc.c`
-  provides them, with `gethostbyaddr` and `h_errno`. There is no DNS: they
-  answer numeric addresses, the wildcard and loopback addresses, and
-  `localhost` and the console's own host name (loopback); any other name is
-  not found, and a service must be a port number; and `crypt32.prx`, CryptoAPI's
+  provides them, with `gethostbyaddr` and `h_errno`. They answer numeric
+  addresses, the wildcard and loopback addresses, and `localhost` and the
+  console's own host name (loopback) themselves, and take a name with a dot
+  in it to the console's own resolver, libSceNet's (`sceNetResolverStartNtoa`
+  and `Ntoa6`, a pool and a resolver per lookup, as the payload SDK's libc
+  does, 5 s and two retries per attempt, so a lookup ends within 15 s per
+  address family; the AAAA question is only asked when IPv6 was asked for
+  or there was no A, and one address per family is returned, so a program
+  does not fail over between a host's several A records). `gethostname`
+  reports the stable name `PS5`, which resolves to loopback before any
+  resolver is reached: a game's probe of its own host name (GTA IV, tens
+  of thousands of times a minute) stays local and instant. Any other name
+  without a dot is not found at once: the computer name a prefix made on a
+  PC carries is one, and a router that resolved it would make the game
+  believe it is online. A dotted name the console did not know, or did not
+  answer for in time, is not found either, and is remembered for 5 s (16
+  names, per address family) so asking again does not block on another
+  lookup. DNS answers are not authenticated, as for any client on a LAN;
+  what a program then trusts rests on TLS validation, schannel's
+  (`secur32.prx`) with crypt32's root store, see [TLS](#tls). A service
+  must be a port number. `ws2_32.prx` therefore needs `libSceNet.sprx`;
+  `secur32.prx`, schannel's Unix side, with `libgnutls.prx`, GnuTLS and
+  nettle built by `tools/build_tls_ps5.sh` into static archives that the
+  module exports from (what `schannel_gnutls.c` and crypt32's `unixlib.c`
+  load with dlsym), and `share/wine/ca-certificates.crt`, the root
+  certificates crypt32 reads on the console (patch 0878); without the TLS
+  build, as before, there is no schannel; and `crypt32.prx`, CryptoAPI's
   Unix side, without which `crypt32.dll` refuses to load: FFmpeg's
   `avformat` imports it, so LAV Filters, the DirectShow splitter and
   decoders Warcraft III's cinematics play through, need it (the console's

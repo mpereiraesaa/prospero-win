@@ -7,7 +7,8 @@
  * name per line; '#' and ';' start comments and blank lines are ignored.
  * The index replaces a directory scan, which the application image does
  * not support on this firmware. */
-enum { PW_PROFILE_CATALOG_MAX=16,PW_PROFILE_CATALOG_NAME=64 };
+/* The library holds PW_WINE_LIBRARY_MAX (32) games; the launcher shows six tiles a page. */
+enum { PW_PROFILE_CATALOG_MAX=32,PW_PROFILE_CATALOG_NAME=64 };
 typedef struct PwProfileCatalog {
     uint32_t count;
     char names[PW_PROFILE_CATALOG_MAX][PW_PROFILE_CATALOG_NAME];

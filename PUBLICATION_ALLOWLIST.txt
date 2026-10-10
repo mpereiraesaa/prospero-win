@@ -19,6 +19,7 @@ LICENSING.md
 LICENSES/Apache-2.0-WITH-LLVM-exception.txt
 LICENSES/GPL-3.0.txt
 LICENSES/Lapy-MIT.txt
+LICENSES/MPL-2.0.txt
 LICENSES/Mesa-MIT.txt
 Makefile
 native/pw_agc_ps5.c
@@ -482,6 +483,7 @@ wine/patches/0900-ntdll-ps5-validated-tsc-qpc-anchor.patch
 docs/shared-input-fastpath.md
 tests/test_pw_key_shared.c
 wine/patches/0901-win32u-ps5-shared-key-state-fastpath.patch
+wine/patches/0902-win32u-ps5-send-extended-keys-as-extended.patch
 wine/ps5/input/pw_key_shared.h
 tests/lab/pw_qpc_bridge.c
 tests/lab/pw_key_bridge.c
@@ -557,3 +559,9 @@ tools/native_profile_frames.py
 tests/test_symbolize_guest_stack.py
 tools/symbolize_guest_stack.py
 wine/patches/0879-win32u-ps5-report-a-drained-wake-pipe.patch
+wine/ps5/pw_ws2_32_resolver.h
+tools/build_tls_ps5.sh
+wine/patches/0878-crypt32-ps5-root-certificates-beside-the-runtime.patch
+wine/ps5/pw_gnutls_libc.c
+wine/patches/0877-secur32-log-gnutls-errors-and-the-clock-on-handshake-failure.patch
+tests/test_build_tls_ps5.py

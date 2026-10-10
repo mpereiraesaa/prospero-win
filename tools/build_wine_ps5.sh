@@ -42,6 +42,16 @@
 # OpenGL is not part of this build: games draw it through Mesa's Zink, a
 # Windows opengl32.dll built by tools/build_mesa_zink.sh, on top of Vulkan.
 #
+# TLS (patches 0877 and 0878): when tools/build_tls_ps5.sh has built its
+# static GnuTLS and nettle (<work>/tls/root, or PROSPERO_TLS_ROOT), Wine is
+# configured with them, secur32.so is built, and two more modules are
+# linked: libgnutls.prx from the archives, exporting what schannel and
+# crypt32 dlsym, and secur32.prx, schannel's Unix side. The root
+# certificates crypt32 reads beside the runtime come from the bundle that
+# build pinned (or PROSPERO_CA_BUNDLE), and the licence texts it staged
+# travel with the modules for tools/package_release.sh. Without the TLS
+# build Wine is configured --without-gnutls, as before.
+#
 # Usage:
 #   tools/build_wine_ps5.sh [--check-patches] [--patches DIR] [--work DIR]
 #       [--source DIR] [--host-tools DIR] [--foundation DIR] [--sdk DIR]
@@ -88,7 +98,7 @@ PE_MODULES="ntdll win32u xinput1_1 xinput1_2 xinput1_3 xinput1_4 xinputuap quart
 # not pick up host headers.
 CONFIGURE_ARGS="--host=x86_64-unknown-freebsd11 --build=x86_64-pc-linux-gnu
  --enable-archs=i386,x86_64 --disable-tests --without-x
- --without-fontconfig --without-gnutls --without-alsa --without-pulse
+ --without-fontconfig --without-alsa --without-pulse
  --without-dbus --without-gstreamer --without-sdl --without-udev --without-usb
  --without-v4l2 --without-wayland --without-opengl --without-oss
  --without-pcap --without-pcsclite --without-sane --without-krb5 --without-gphoto
@@ -204,6 +214,24 @@ EOF
     echo "$ft_stamp" > "$ft/.prospero-stamp"
     echo "built FreeType $FREETYPE_VERSION"
 fi
+# TLS for schannel (secur32) and crypt32's PKCS#12: tools/build_tls_ps5.sh's
+# static GnuTLS, linked into libgnutls.prx, which Wine's dlopen("libgnutls.so")
+# loads through pw_wine_dl. Without it, as before, there is no schannel.
+# Either way the configure arguments, and so the stamp, differ from the
+# series' earlier --without-gnutls: a build tree from before reconfigures
+# and rebuilds once.
+tls=${PROSPERO_TLS_ROOT:-$work/tls/root}
+ca_bundle=${PROSPERO_CA_BUNDLE:-$tls/ca-certificates.crt}
+if [ -f "$tls/lib/libgnutls.a" ]; then
+    # configure reads these from the environment (its precious variables).
+    GNUTLS_CFLAGS="-I$tls/include"
+    GNUTLS_LIBS="-L$tls/lib -lgnutls -lhogweed -lnettle"
+    export GNUTLS_CFLAGS GNUTLS_LIBS
+    gnutls_args="ac_cv_lib_soname_gnutls=libgnutls.so"
+    TARGETS="$TARGETS dlls/secur32/secur32.so"
+else
+    gnutls_args="--without-gnutls"
+fi
 tree=$work/source
 if [ ! -d "$tree/.git" ]; then
     git clone -q --shared --no-checkout "$source_dir" "$tree"
@@ -231,7 +259,7 @@ cflags=${CFLAGS:--g -O2}
 # Reconfigure whenever the patches, staged Vulkan sources or arguments change.
 stamp=$(
     { printf '%s\n' "$WINE_COMMIT" "$CONFIGURE_ARGS" "$sdk" "$FREETYPE_SHA256" \
-        "$cflags"
+        "$cflags" "$gnutls_args" "${GNUTLS_LIBS:-}"
       for patch in $ordered; do cat "$patches/$patch"; done
       cat "$root/tools/stage_vk_batch.py" "$root/tools/generate_vk_codecs.py" "$root"/wine/ps5/pw_vk_*.[ch] \
           "$root"/wine/ps5/vulkan/*.[ch] "$root/wine/ps5/time/pw_qpc_clock.h" "$root/wine/ps5/input/pw_key_shared.h"; } | sha256sum | cut -c1-64)
@@ -246,7 +274,7 @@ if [ ! -f "$build/Makefile" ] || [ "$(cat "$build/.prospero-stamp" 2>/dev/null)"
         CFLAGS="$cflags" \
         FREETYPE_CFLAGS="-I$ft/src/include" FREETYPE_LIBS="$ft/libfreetype.a" \
         ac_cv_lib_soname_freetype=libfreetype.so ac_cv_lib_soname_vulkan=libvulkan.so \
-        --with-wine-tools="$host_tools" > "$work/configure.log" 2>&1) ||
+        $gnutls_args --with-wine-tools="$host_tools" > "$work/configure.log" 2>&1) ||
         fail "configure failed; see $work/configure.log"
     echo "$stamp" > "$build/.prospero-stamp"
 fi
@@ -282,7 +310,8 @@ status=0
 (cd "$build" && rm -f $TARGETS)
 for step in "dlls/ntdll/ntdll.so|$heap $dmem" "dlls/win32u/win32u.so|" "server/wineserver|$heap" \
         "dlls/winevulkan/winevulkan.so|" "dlls/opengl32/opengl32.so|" "dlls/ws2_32/ws2_32.so|" \
-        "dlls/crypt32/crypt32.so|" "dlls/dwrite/dwrite.so|"; do
+        "dlls/crypt32/crypt32.so|" "dlls/dwrite/dwrite.so|" \
+        $([ -f "$tls/lib/libgnutls.a" ] && echo "dlls/secur32/secur32.so|"); do
     target=${step%%|*}; objects=${step#*|}
     make -C "$build" -k -j"$jobs" LDFLAGS="$objects $base" "$target" \
         >> "$work/make.log" 2>&1 || status=$?
@@ -319,7 +348,7 @@ fi
 # The revisions behind the PRXs, for the release's SOURCES.txt
 # (tools/package_release.sh): report.json's "sources".
 source_prx_foundation=$(git -C "$prx_foundation" rev-parse HEAD 2>/dev/null || true)
-source_ps5_mesa= source_ps5_vulkan= source_radv_payload_sdk= source_ps5vk=
+source_ps5_mesa= source_ps5_vulkan= source_radv_payload_sdk= source_ps5vk= source_ca_bundle=
 link_objects() {
     python3 - "$work/make.log" "$1" <<'PY'
 import shlex, sys
@@ -403,13 +432,22 @@ if [ "$prx_status" = 0 ]; then
         __wine_unix_call_funcs __wine_unix_call_wow64_funcs
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/dwrite_desc.c" \
         __wine_unix_call_funcs __wine_unix_call_wow64_funcs
+    if [ -f "$tls/lib/libgnutls.a" ]; then
+        python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/secur32_desc.c" \
+            __wine_unix_call_funcs __wine_unix_call_wow64_funcs
+        # What schannel_gnutls.c and crypt32's unixlib.c load with dlsym.
+        # shellcheck disable=SC2046
+        python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libgnutls_desc.c" \
+            $(grep -ohE 'LOAD_FUNCPTR\(gnutls_[a-z0-9_]+\)' "$tree/dlls/secur32/schannel_gnutls.c" \
+                "$tree/dlls/crypt32/unixlib.c" | sed 's/LOAD_FUNCPTR(//; s/)//' | LC_ALL=C sort -u)
+    fi
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libvulkan_desc.c" \
         vkGetInstanceProcAddr vkGetDeviceProcAddr
     # shellcheck disable=SC2086
     python3 "$root/tools/gen_prx_descriptor.py" "$prx/obj/libfreetype_desc.c" $FREETYPE_EXPORTS
     for unit in ntdll_desc win32u_desc wineserver_desc wowprospero_desc wineps5_desc \
             libfreetype_desc xinput_desc winevulkan_desc opengl32_desc ws2_32_desc crypt32_desc dwrite_desc \
-            libvulkan_desc; do
+            libvulkan_desc $([ -f "$tls/lib/libgnutls.a" ] && echo secur32_desc libgnutls_desc); do
         "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
             -c "$prx/obj/$unit.c" -o "$prx/obj/$unit.o" || fail "cannot compile $unit.c"
     done
@@ -489,6 +527,32 @@ if [ "$prx_status" = 0 ]; then
     # NULL table, and Chromium (Battle.net's login page) aborts laying out
     # text.
     link_prx dwrite dlls/dwrite/dwrite.so "$prx/obj/dwrite_desc.o" "$prx/ntdll.shared.elf"
+    if [ -f "$tls/lib/libgnutls.a" ]; then
+        # GnuTLS itself, with nettle: the descriptor's exports pull what
+        # schannel and crypt32 dlsym from the archives, and the rest follows.
+        "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC \
+            -c "$root/wine/ps5/pw_gnutls_libc.c" -o "$prx/obj/pw_gnutls_libc.o" ||
+            fail "cannot compile GnuTLS libc shims"
+        (cd "$prx/obj" && "$sdk/bin/llvm-ar" x "$sdk/target/lib/libc.a" emutls.o) ||
+            fail "no emutls.o in the payload SDK's libc.a"
+        link_prx libgnutls - "$prx/obj/libgnutls_desc.o $prx/obj/pw_gnutls_libc.o $prx/obj/emutls.o $tls/lib/libgnutls.a $tls/lib/libhogweed.a $tls/lib/libnettle.a"
+        # schannel's Unix side, which dlopens libgnutls.so (libgnutls.prx).
+        link_prx secur32 dlls/secur32/secur32.so "$prx/obj/secur32_desc.o" "$prx/ntdll.shared.elf"
+        # The root certificates crypt32 reads from beside the runtime (0878):
+        # the bundle build_tls_ps5.sh pinned, unless PROSPERO_CA_BUNDLE names
+        # another; its SHA-256 goes to report.json so SOURCES.txt can say
+        # which. Schannel without trust would be a broken release.
+        [ -f "$ca_bundle" ] ||
+            fail "no root certificate bundle at $ca_bundle; run tools/build_tls_ps5.sh again or set PROSPERO_CA_BUNDLE"
+        cp "$ca_bundle" "$prx/ca-certificates.crt"
+        source_ca_bundle=$(sha256sum "$prx/ca-certificates.crt" | cut -c1-64)
+        # The licence texts of what libgnutls.prx links, staged by
+        # build_tls_ps5.sh, for tools/package_release.sh.
+        [ -d "$tls/licenses/gnutls" ] && [ -d "$tls/licenses/nettle" ] ||
+            fail "no licence texts under $tls/licenses; run tools/build_tls_ps5.sh again"
+        rm -rf "$prx/licenses"
+        cp -R "$tls/licenses" "$prx/licenses"
+    fi
     # The Vulkan driver itself, from ps5vk's SDK: only what its two entry
     # points reach, since the archive repeats a member. Its import facades
     # join the SDK's stubs.
@@ -528,7 +592,7 @@ fi
 
 if PW_SOURCE_PRX_FOUNDATION=${source_prx_foundation:-} PW_SOURCE_PS5_MESA=${source_ps5_mesa:-} \
     PW_SOURCE_PS5_VULKAN=${source_ps5_vulkan:-} PW_SOURCE_RADV_PAYLOAD_SDK=${source_radv_payload_sdk:-} \
-    PW_SOURCE_PS5VK=${source_ps5vk:-} \
+    PW_SOURCE_PS5VK=${source_ps5vk:-} PW_SOURCE_CA_BUNDLE=${source_ca_bundle:-} \
     python3 - "$build" "$work/make.log" "$work/report.json" "$sdk" "$WINE_COMMIT" "$prx" "$prx_status" \
     $ordered <<'PY'
 import hashlib, json, os, re, shutil, subprocess, sys
@@ -539,7 +603,8 @@ text = Path(log).read_text(errors="replace")
 owners = {"dlls/ntdll/": "dlls/ntdll/ntdll.so", "dlls/win32u/": "dlls/win32u/win32u.so",
           "server/": "server/wineserver", "dlls/winevulkan/": "dlls/winevulkan/winevulkan.so",
           "dlls/opengl32/": "dlls/opengl32/opengl32.so", "dlls/ws2_32/": "dlls/ws2_32/ws2_32.so",
-          "dlls/crypt32/": "dlls/crypt32/crypt32.so", "dlls/dwrite/": "dlls/dwrite/dwrite.so"}
+          "dlls/crypt32/": "dlls/crypt32/crypt32.so", "dlls/dwrite/": "dlls/dwrite/dwrite.so",
+          "dlls/secur32/": "dlls/secur32/secur32.so"}
 unresolved = {target: set() for target in owners.values()}
 # lld prints each unresolved symbol, then ">>> referenced by" lines whose
 # continuation names the object ("dir/file.o:(function)"); the object's
@@ -586,11 +651,11 @@ objdump = shutil.which("llvm-objdump-18") or shutil.which("llvm-objdump") or f"{
 SYSCALL_ALLOWED = {"__wine_syscall_dispatcher", "__wine_unix_call_dispatcher"}
 ntdll_exports = exports("ntdll.shared.elf", prx) if (Path(prx) / "ntdll.shared.elf").is_file() else set()
 for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfreetype", "xinput1_3",
-             "winevulkan", "opengl32", "ws2_32", "crypt32", "dwrite", "libvulkan") if not prx_status.startswith("skipped") else ():
+             "winevulkan", "opengl32", "ws2_32", "crypt32", "dwrite", "libvulkan", "secur32", "libgnutls") if not prx_status.startswith("skipped") else ():
     module = Path(prx) / "sce_module" / f"{name}.prx"
     link_log = Path(prx) / f"{name}.link.log"
-    if name == "libvulkan" and not link_log.is_file():
-        continue    # neither a ps5vk SDK nor RADV given
+    if name in ("libvulkan", "secur32", "libgnutls") and not link_log.is_file():
+        continue    # neither a ps5vk SDK nor RADV given; no GnuTLS built
     link_text = link_log.read_text(errors="replace") if link_log.is_file() else ""
     entry = {"built": module.is_file(),
              "unresolved": sorted(set(re.findall(r"undefined symbol: (\S+)", link_text))),
@@ -609,7 +674,7 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
                    if len(fields) >= 8 and fields[6] == "UND"}
         provided = title_exports | (ntdll_exports if name in ("win32u", "wowprospero", "wineps5",
                                                               "xinput1_3", "winevulkan", "opengl32", "ws2_32",
-                                                              "crypt32", "dwrite") else set())
+                                                              "crypt32", "dwrite", "secur32") else set())
         entry["title_unbound"] = sorted((imports & exports("libkernel_sys.so")) - provided)
         # Nor does it get the WebKit process's libraries: ws2_32's getaddrinfo,
         # bound to libScePosixForWebKit, jumped to 0 in GTA IV (measured).
@@ -635,10 +700,10 @@ for name in ("ntdll", "win32u", "wineserver", "wowprospero", "wineps5", "libfree
 result["pe"] = {str(path.relative_to(Path(prx).parent / "pe")): hashlib.sha256(path.read_bytes()).hexdigest()
                 for path in sorted((Path(prx).parent / "pe").glob("*-windows/*.dll"))}
 # Commits of the PRX foundation, PS5_Mesa, PS5_Vulkan, the payload SDK RADV
-# was linked with; SHA-256 of the ps5vk archive. Null when not linked or not
-# recorded.
+# was linked with; SHA-256 of the ps5vk archive and of the root certificate
+# bundle staged for crypt32. Null when not linked or not recorded.
 result["sources"] = {key: os.environ.get(f"PW_SOURCE_{key.upper()}") or None
-                     for key in ("prx_foundation", "ps5_mesa", "ps5_vulkan", "radv_payload_sdk", "ps5vk")}
+                     for key in ("prx_foundation", "ps5_mesa", "ps5_vulkan", "radv_payload_sdk", "ps5vk", "ca_bundle")}
 Path(report).write_text(json.dumps(result, indent=2) + "\n")
 for target, entry in result["targets"].items():
     print(f"{target}: built={entry['built']} malloc={entry.get('malloc', '-')} "

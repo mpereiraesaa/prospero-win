@@ -35,4 +35,23 @@ static BOOL pw_vk_stream_progress_call(unsigned int code)
             return FALSE;
     }
 }
+/* Pipeline and shader-object creation runs the driver's compiler for tens of
+ * milliseconds per call and references only objects already created
+ * synchronously, so it needs no ordering against pending records either: the
+ * stream drains under the gate, then the compile runs outside it. Under the
+ * gate, DXVK's compile workers serialised every other Vulkan-calling thread
+ * behind their compiles (GTA IV cold cache: 300-500 ms frames). */
+static BOOL pw_vk_stream_compile_call(unsigned int code)
+{
+    switch (code)
+    {
+        case unix_vkCreateGraphicsPipelines:
+        case unix_vkCreateComputePipelines:
+        case unix_vkCreateRayTracingPipelinesKHR:
+        case unix_vkCreateShadersEXT:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
 #endif

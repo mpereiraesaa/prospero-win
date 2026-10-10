@@ -104,6 +104,12 @@ Saves and settings stay in the game's prefix on the PS5.
   files lack execute permission after an FTP upload: see
   [installing](#1-install-the-app). A kernel log (the klogsrv payload) names
   the refused file.
+- **Signing in fails, or a page that needs HTTPS never loads.** Check the
+  console's date and time in its settings first: certificates are valid
+  between two dates, and a clock set behind makes every site look not yet
+  valid, so validation fails though the connection works. The log then
+  carries `secur32` lines naming the clock, or a `crypt32` error if the
+  app's root certificates (`share/wine/ca-certificates.crt`) are missing.
 - **No games in the launcher.** Check that `profiles/profiles.lst` lists your
   profile's file name, and that the profile's `prefix =` matches the folder
   under `prefixes/`. Check that elfldr is listening on port 9021 and that the

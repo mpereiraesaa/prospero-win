@@ -91,6 +91,7 @@ are absent.
 
 ```sh
 tools/build_native.sh                     # the title: dist/PPSA99995/eboot.bin
+tools/build_tls_ps5.sh                    # GnuTLS and nettle for schannel (optional)
 tools/build_wine_ps5.sh --check-patches   # validate the Wine patch series
 tools/build_wine_ps5.sh                   # Wine's PRXs, fonts and report.json
 ```
@@ -186,7 +187,13 @@ tools/publish_release.sh --tag v0.1.0 --zip release/PPSA99995.zip --publish
 ```
 
 The zip is built on your machine because the PS5 builds need the payload SDK
-and take hours; GitHub only drafts the release and hosts the file.
+and take hours; GitHub only drafts the release and hosts the file. Before
+the PS5 build, bump `CA_BUNDLE_DATE` and `CA_BUNDLE_SHA256` in
+`tools/build_tls_ps5.sh` to curl's current extract of Mozilla's root store
+(<https://curl.se/docs/caextract.html>; the dated file and its SHA-256 are
+on that page), and check `GNUTLS_VERSION` and `NETTLE_VERSION` against
+their newest point releases: the roots a release trusts, and the TLS code
+behind them, are whatever was pinned when it was built.
 `publish_release.sh` uploads it as `prospero-win-<tag>.zip` with a
 `SHA256SUMS` file, and refuses a zip that holds a `dev.conf` or any `.exe`
 other than Wine's own programs, which sit beside its DLLs.

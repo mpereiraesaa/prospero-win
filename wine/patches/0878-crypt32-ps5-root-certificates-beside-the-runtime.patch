@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 5 Oct 2026 15:00:00 +0200
+Subject: [PATCH] crypt32: Load root certificates from beside the runtime on PS5.
+
+crypt32's Unix side fills the root store from the system's bundle at a
+few known paths (/etc/ssl/certs and the like). A title sees none of
+them, so the store stayed empty and every certificate chain failed to
+verify. The package now carries a bundle, share/wine/ca-certificates.crt
+beside the runtime's modules; crypt32.prx finds it from its own path
+(dladdr, lib/wine/x86_64-unix/crypt32.prx), before the known locations.
+A bundle that is not there is logged as an error, since nothing then
+verifies, and the path read is traced.
+
+ dlls/crypt32/unixlib.c | 42 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/dlls/crypt32/unixlib.c b/dlls/crypt32/unixlib.c
+index 4b9f0da..1df568f 100644
+--- a/dlls/crypt32/unixlib.c
++++ b/dlls/crypt32/unixlib.c
+@@ -954,6 +954,45 @@ static const char * const CRYPT_knownLocations[] = {
+  "/etc/security/cacerts",  /* Android */
+ };
+
++#ifdef __PROSPERO__
++/* The console has no certificate store of its own that a title can read,
++ * and the runtime's modules live beside the title: the bundle the package
++ * carries, share/wine/ca-certificates.crt, found from this module's own
++ * directory (lib/wine/x86_64-unix, whatever the loader calls the file).
++ * Without it the root store stays empty and no certificate chain verifies,
++ * so a bundle that is not there is an error, not a trace. */
++static void load_runtime_root_certs(void)
++{
++    static const char suffix[] = "lib/wine/x86_64-unix";
++    static const char bundle[] = "share/wine/ca-certificates.crt";
++    Dl_info info;
++    char path[1024];
++    const char *slash;
++    size_t len;
++
++    if (!dladdr( load_runtime_root_certs, &info ) || !info.dli_fname)
++    {
++        ERR( "no module path, so no runtime root certificates\n" );
++        return;
++    }
++    TRACE( "module %s\n", debugstr_a(info.dli_fname) );
++    if (!(slash = strrchr( info.dli_fname, '/' ))) return;
++    len = slash - info.dli_fname;
++    if (len < sizeof(suffix) - 1 || strncmp( info.dli_fname + len - (sizeof(suffix) - 1), suffix, sizeof(suffix) - 1 )) return;
++    len -= sizeof(suffix) - 1;
++    if (len + sizeof(bundle) > sizeof(path)) return;
++    memcpy( path, info.dli_fname, len );
++    memcpy( path + len, bundle, sizeof(bundle) );
++    if (access( path, R_OK ))
++    {
++        ERR( "no root certificates at %s: certificate chains will not verify\n", debugstr_a(path) );
++        return;
++    }
++    import_certs_from_path( path, TRUE );
++    TRACE( "root certificates read from %s\n", debugstr_a(path) );
++}
++#endif
++
+ static void load_root_certs(void)
+ {
+     unsigned int i;
+@@ -991,6 +1030,9 @@ static void load_root_certs(void)
+     }
+ #endif
+
++#ifdef __PROSPERO__
++    load_runtime_root_certs();
++#endif
+     for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations) && list_empty(&root_cert_list); i++)
+         import_certs_from_path( CRYPT_knownLocations[i], TRUE );
+ }

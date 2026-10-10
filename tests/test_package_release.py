@@ -5,6 +5,7 @@ left out (the builder's dev.conf, import libraries, PC-only drivers), what
 the PS5 build overrides, and the licences and source revisions it carries."""
 
 from pathlib import Path
+import hashlib
 import json
 import subprocess
 import sys
@@ -35,8 +36,15 @@ def main() -> int:
         write(title / "sce_sys" / "param.json", "{}")
         write(title / "sce_module" / "libc.prx", "libc")
         write(title / "dev.conf", "DEV_SERVER=builder-pc")
-        for name in ("ntdll.prx", "win32u.prx", "libvulkan.prx"):
+        for name in ("ntdll.prx", "win32u.prx", "libvulkan.prx", "libgnutls.prx", "secur32.prx"):
             write(ps5 / "prx" / "sce_module" / name, name)
+        # A build with schannel: the bundle it staged (not the pinned one
+        # here) and the licence texts tools/build_tls_ps5.sh copied.
+        write(ps5 / "prx" / "ca-certificates.crt", "roots")
+        for name in ("COPYING.LESSERv2", "COPYING", "AUTHORS", "lib-inih-LICENSE.txt"):
+            write(ps5 / "prx" / "licenses" / "gnutls" / name, f"gnutls {name}")
+        for name in ("COPYING.LESSERv3", "COPYINGv2", "COPYINGv3", "AUTHORS"):
+            write(ps5 / "prx" / "licenses" / "nettle" / name, f"nettle {name}")
         write(ps5 / "prx" / "fonts" / "tahoma.ttf", "font")
         write(ps5 / "pe" / "i386-windows" / "xinput1_3.dll", "patched")
         for arch in ("i386-windows", "x86_64-windows"):
@@ -95,9 +103,10 @@ def main() -> int:
         assert (lib / "x86_64-windows" / "wow64native.dll").read_text() == "native cpu"
         assert (lib / "x86_64-unix" / "wow64native.prx").read_text() == "native prx"
         assert sorted(p.name for p in (lib / "x86_64-unix").iterdir()) == \
-            ["libvulkan.prx", "ntdll.prx", "win32u.prx", "wow64native.prx"]
+            ["libgnutls.prx", "libvulkan.prx", "ntdll.prx", "secur32.prx", "win32u.prx", "wow64native.prx"]
         assert (share / "nls" / "locale.nls").exists() and (share / "fonts" / "tahoma.ttf").exists()
-        assert "PPSA99995: 39 files" in result.stdout, result.stdout
+        assert (share / "ca-certificates.crt").read_text() == "roots"
+        assert "PPSA99995: 51 files" in result.stdout, result.stdout
         # OpenGL: Mesa WGL/Zink for both architectures, with its manifest.
         zink = app / "win" / "mesa-zink"
         for arch in ("i386-windows", "x86_64-windows"):
@@ -111,7 +120,7 @@ def main() -> int:
             assert (app / name).read_bytes() == (ROOT / name).read_bytes(), name
         committed = sorted(p.name for p in (ROOT / "LICENSES").iterdir())
         assert committed == ["Apache-2.0-WITH-LLVM-exception.txt", "GPL-3.0.txt", "Lapy-MIT.txt",
-                             "Mesa-MIT.txt"], committed
+                             "MPL-2.0.txt", "Mesa-MIT.txt"], committed
         for name in committed:
             assert (app / "LICENSES" / name).read_bytes() == (ROOT / "LICENSES" / name).read_bytes(), name
         licences = app / "LICENSES"
@@ -122,6 +131,11 @@ def main() -> int:
         assert (licences / "wine" / "libs" / "faudio" / "LICENSE").read_text() == "faudio licence"
         assert (licences / "wine" / "libs" / "ldap" / "COPYRIGHT").read_text() == "ldap copyright"
         assert sorted(p.name for p in (licences / "freetype").iterdir()) == ["FTL.TXT", "LICENSE.TXT"]
+        assert sorted(p.name for p in (licences / "gnutls").iterdir()) == \
+            ["AUTHORS", "COPYING", "COPYING.LESSERv2", "lib-inih-LICENSE.txt"]
+        assert sorted(p.name for p in (licences / "nettle").iterdir()) == \
+            ["AUTHORS", "COPYING.LESSERv3", "COPYINGv2", "COPYINGv3"]
+        assert (licences / "gnutls" / "COPYING.LESSERv2").read_text() == "gnutls COPYING.LESSERv2"
         # SOURCES.txt: every revision the build recorded, Mesa's Zink included.
         sources = (app / "SOURCES.txt").read_text()
         head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
@@ -137,8 +151,19 @@ def main() -> int:
                          f"PS5_Mesa  commit {'c' * 40}", f"PS5_Vulkan  commit {'d' * 40}",
                          f"PS5_PayloadSDK  commit {'9' * 40}",
                          "Mesa WGL/Zink (PE32 and PE64)  https://github.com/mpereiraesaa/PS5_Mesa",
-                         f"  commit {'1' * 40}"):
+                         f"  commit {'1' * 40}",
+                         # schannel's pins, from tools/build_tls_ps5.sh; the bundle
+                         # here is not the pinned one, so only its hash is known.
+                         "GnuTLS 3.8.13 (libgnutls.prx)  https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/"
+                         "gnutls-3.8.13.tar.xz",
+                         "SHA-256 ffed8ec1bf09c2426d4f14aae377de4753b53e537d685e604e99a8b16ca9c97e",
+                         "nettle 3.10.2 (libgnutls.prx)  https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz",
+                         "SHA-256 fe9ff51cb1f2abb5e65a6b8c10a92da0ab5ab6eaf26e7fc2b675c45f1fb519b5",
+                         "Root certificates (share/wine/ca-certificates.crt)  the builder's own bundle,"
+                         " not curl's cacert-2026-09-25.pem",
+                         f"SHA-256 {hashlib.sha256(b'roots').hexdigest()}"):
             assert expected in sources, (expected, sources)
+        assert "https://curl.se/ca/" not in sources
         # The console refuses to exec an eboot or load a PRX without execute
         # permission, whatever mode the inputs had; data files stay as they were.
         for name in ("eboot.bin", "sce_module/libc.prx", "win/wine/lib/wine/x86_64-unix/ntdll.prx",
@@ -153,6 +178,26 @@ def main() -> int:
         assert run(*inputs, "--out", str(out)).returncode == 0
         assert not (app / "stale.txt").exists()
 
+        # A build with schannel but without the bundle or the licence texts
+        # it must ship is refused, naming what is missing.
+        (ps5 / "prx" / "ca-certificates.crt").rename(ps5 / "prx" / "bundle.bak")
+        bad = run(*inputs, "--out", str(out))
+        assert bad.returncode == 2 and "ca-certificates.crt" in bad.stderr, bad.stderr
+        (ps5 / "prx" / "bundle.bak").rename(ps5 / "prx" / "ca-certificates.crt")
+        (ps5 / "prx" / "licenses" / "nettle" / "COPYING.LESSERv3").unlink()
+        bad = run(*inputs, "--out", str(out))
+        assert bad.returncode == 2 and "nettle/COPYING.LESSERv3" in bad.stderr, bad.stderr
+
+        # A build without schannel ships neither its notices nor a bundle,
+        # and says so.
+        for name in ("sce_module/libgnutls.prx", "sce_module/secur32.prx", "ca-certificates.crt"):
+            (ps5 / "prx" / name).unlink()
+        assert run(*inputs, "--out", str(out)).returncode == 0
+        assert not (app / "LICENSES" / "gnutls").exists() and not (app / "LICENSES" / "nettle").exists()
+        assert not (share / "ca-certificates.crt").exists()
+        sources = (app / "SOURCES.txt").read_text()
+        assert "schannel (GnuTLS, nettle, root certificates)  not included" in sources, sources
+        assert "GnuTLS 3.8.13" not in sources
         # A libvulkan.prx that is not RADV has no notice here: refused.
         report["sources"].update(ps5_mesa=None, ps5_vulkan=None, ps5vk="f" * 64)
         write(ps5 / "report.json", json.dumps(report))
@@ -182,8 +227,9 @@ def main() -> int:
         bad = run(*inputs, "--out", str(out))
         assert bad.returncode == 2 and "NOTICES.md" in bad.stderr, bad.stderr
     print("package release passed: layout, dev.conf and PC-only modules left out, patched xinput, "
-          "eboot and PRX modules executable, licences and source revisions, Mesa Zink packaged, "
-          "non-RADV Vulkan refused, a clean folder each time, missing inputs and Zink named")
+          "eboot and PRX modules executable, licences and source revisions, schannel's notices and "
+          "bundle with it and not without, Mesa Zink packaged, non-RADV Vulkan refused, a clean "
+          "folder each time, missing inputs and Zink named")
     return 0
 
 
