@@ -46,10 +46,16 @@ for name in libSceAgc libSceAgcDriver; do
     "$sdk/bin/prospero-clang" -std=c11 -O2 -fPIC -c "$source_file" -o "$work/obj/${name}_stub.o"
     "$sdk/bin/prospero-lld" --shared -soname "$name.prx" -o "$work/stubs/$name.so" "$work/obj/${name}_stub.o"
 done
-"$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$install/include" \
+"$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$install/include" -I"$root/wine/ps5" \
     -c "$root/wine/ps5/pw_vulkan_radv.c" -o "$work/obj/pw_vulkan_radv.o"
+# The entry-point profile behind the shim (wine/ps5/pw_vk_radv_profile.h).
+for unit in pw_vk_radv_profile pw_vk_radv_profile_wrap; do
+    "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$install/include" -I"$root/wine/ps5" \
+        -c "$root/wine/ps5/$unit.c" -o "$work/obj/$unit.o"
+done
 python3 "$root/tools/gen_prx_descriptor.py" "$work/obj/libvulkan_desc.c" \
-    vkGetInstanceProcAddr vkGetDeviceProcAddr pw_videoout_idle pw_videoout_show_tiled pw_videoout_cursor
+    vkGetInstanceProcAddr vkGetDeviceProcAddr pw_videoout_idle pw_videoout_show_tiled pw_videoout_cursor \
+    pw_vk_radv_profile_set_frame_hook
 "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
     -c "$work/obj/libvulkan_desc.c" -o "$work/obj/libvulkan_desc.o"
 
@@ -57,7 +63,8 @@ python3 "$root/tools/gen_prx_descriptor.py" "$work/obj/libvulkan_desc.c" \
     --eh-frame-hdr -T "$work/build/mesa_optional_zero.ld" -soname libvulkan.prx -z defs \
     --wrap=sceVideoOutOpen \
     --warn-unresolved-symbols -o "$prx/libvulkan.shared.elf" \
-    "$work/obj/pw_vulkan_radv.o" "$work/obj/libvulkan_desc.o" \
+    "$work/obj/pw_vulkan_radv.o" "$work/obj/pw_vk_radv_profile.o" "$work/obj/pw_vk_radv_profile_wrap.o" \
+    "$work/obj/libvulkan_desc.o" \
     "$work/stubs/libSceAgc.so" "$work/stubs/libSceAgcDriver.so" \
     "${radv_link_flags[@]}" "${radv_link_inputs[@]}" \
     --as-needed "$sdk"/target/lib/*.so > "$log" 2>&1

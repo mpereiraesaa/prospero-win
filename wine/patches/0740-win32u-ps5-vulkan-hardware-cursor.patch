@@ -10,18 +10,21 @@ game through DXVK showed no pointer in its menus (Half-Life 2). After
 each present, win32u hands the cursor the application set (straight-alpha
 ARGB from the user driver, NULL when hidden) and its place on the desktop
 to libvulkan.prx's pw_videoout_cursor, which shows it with VideoOut's
-hardware cursor over the swapchain's frames.
+hardware cursor over the swapchain's frames. OpenGL games, which draw
+through Mesa's Zink and present with Vulkan, get their pointer the same
+way. The cursor image is read under the screen lock, as the driver's own
+composition reads it.
 ---
- dlls/win32u/ps5drv.c | 26 ++++++++++++++++++++++++++
+ dlls/win32u/ps5drv.c | 24 ++++++++++++++++++++++++
  dlls/win32u/vulkan.c |  7 +++++++
- 2 files changed, 33 insertions(+)
+ 2 files changed, 31 insertions(+)
 
 diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
-index c7d6f18..9c4ab5b 100644
+index 286d42d..ccc69c0 100644
 --- a/dlls/win32u/ps5drv.c
 +++ b/dlls/win32u/ps5drv.c
-@@ -738,6 +738,32 @@ void ps5drv_unlock_cursor(void)
-     pthread_mutex_unlock( &screen_lock );
+@@ -716,6 +716,30 @@ static void ps5_SetCursor( HWND hwnd, HCURSOR handle )
+     TRACE( "cursor %p: %ux%u\n", handle, width, height );
  }
  
 +#ifdef SONAME_LIBVULKAN
@@ -34,9 +37,6 @@ index c7d6f18..9c4ab5b 100644
 +{
 +    static int (*show)( const UINT32 *, UINT, UINT, INT, INT, UINT, UINT );
 +    static BOOL looked;
-+    const UINT32 *image;
-+    UINT width, height;
-+    POINT top_left;
 +
 +    if (!looked)
 +    {
@@ -44,9 +44,10 @@ index c7d6f18..9c4ab5b 100644
 +        show = dlsym( vulkan_handle, "pw_videoout_cursor" );
 +    }
 +    if (!show) return;
-+    image = ps5drv_lock_cursor( &width, &height, &top_left );
-+    show( width && height ? image : NULL, width, height, top_left.x, top_left.y, screen_width, screen_height );
-+    ps5drv_unlock_cursor();
++    pthread_mutex_lock( &screen_lock );
++    show( cursor_width && cursor_height ? cursor_image : NULL, cursor_width, cursor_height,
++          cursor.x - cursor_hotspot.x, cursor.y - cursor_hotspot.y, screen_width, screen_height );
++    pthread_mutex_unlock( &screen_lock );
 +}
 +#endif
 +
@@ -73,4 +74,3 @@ index cb64dc0..7fadce0 100644
          static unsigned long frames, frames_total;
 -- 
 2.43.0
-

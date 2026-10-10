@@ -1,0 +1,96 @@
+From: prospero-win contributors
+Subject: [PATCH] wow64: add opt-in named guest system-service diagnostics
+
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -1239,6 +1239,82 @@
+ #endif
+ 
+ 
++
++/* Diagnostic only: preserve the ordinary syscall dispatch and its result.
++ * Counts belong to this thread and cover guest 32-bit system-service entries,
++ * including calls that can be satisfied without a host syscall. */
++struct pw_syscall_histogram
++{
++    ULONGLONG counts[0x4000], reported[0x4000], total;
++    ULONG callers[64];
++    ULONGLONG caller_counts[64], caller_other;
++};
++static RTL_RUN_ONCE pw_syscall_once = RTL_RUN_ONCE_INIT;
++static struct { void *teb; struct pw_syscall_histogram *data; } pw_syscall_slots[64];
++static BOOL pw_syscall_enabled;
++static const char *const pw_syscall_names[] = {
++#define SYSCALL_ENTRY(id,name,args) #name,
++    ALL_SYSCALLS32
++#undef SYSCALL_ENTRY
++};
++static ULONG WINAPI pw_syscall_initialize(RTL_RUN_ONCE *once, void *arg, void **ctx)
++{
++    WCHAR buffer[8];
++    UNICODE_STRING name, value = {0, sizeof(buffer), buffer};
++    (void)once; (void)arg; (void)ctx;
++    RtlInitUnicodeString(&name, L"PW_NATIVE_SYSCALL_PROFILE");
++    pw_syscall_enabled = !RtlQueryEnvironmentVariable_U(NULL, &name, &value) && value.Length == sizeof(WCHAR) && buffer[0] == '1';
++    return TRUE;
++}
++static void pw_syscall_profile(UINT num, UINT *args)
++{
++    struct pw_syscall_histogram *p;
++    unsigned i;
++    ULONGLONG tsc;
++    RtlRunOnceExecuteOnce(&pw_syscall_once, pw_syscall_initialize, NULL, NULL);
++    if (!pw_syscall_enabled || num >= 0x4000) return;
++    for (i = 0; i < ARRAY_SIZE(pw_syscall_slots); ++i)
++    {
++        void *teb = InterlockedCompareExchangePointer(&pw_syscall_slots[i].teb, NtCurrentTeb(), NULL);
++        if (!teb || teb == NtCurrentTeb()) break;
++    }
++    if (i == ARRAY_SIZE(pw_syscall_slots)) return; /* Diagnostic bound only. */
++    p = pw_syscall_slots[i].data;
++    if (p == (void *)1) return; /* Heap growth may recursively enter a syscall. */
++    if (!p)
++    {
++        pw_syscall_slots[i].data = (void *)1;
++        p = RtlAllocateHeap(NtCurrentTeb()->Peb->ProcessHeap, HEAP_ZERO_MEMORY, sizeof(*p));
++        pw_syscall_slots[i].data = p ? p : (void *)1;
++        if (!p) return;
++    }
++    p->counts[num]++;
++    if (num < ARRAY_SIZE(pw_syscall_names) && !strcmp(pw_syscall_names[num], "NtProtectVirtualMemory"))
++    {
++        /* args points eight bytes above the compatibility-mode stack:
++         * args[-2] is the syscall thunk continuation; args[-1] is its caller. */
++        ULONG caller = args[-1];
++        for (i = 0; i < ARRAY_SIZE(p->callers); ++i)
++            if (!p->callers[i] || p->callers[i] == caller)
++            { p->callers[i] = caller; p->caller_counts[i]++; break; }
++        if (i == ARRAY_SIZE(p->callers)) p->caller_other++;
++    }
++    if (++p->total & 0x3fff) return;
++    __asm__ volatile("lfence; rdtsc" : "=a"(i), "=d"(num) :: "memory");
++    tsc = ((ULONGLONG)num << 32) | i;
++    MESSAGE("PW_NATIVE_SYSCALL version=1 tid=%04lx tsc=%llu calls=%llu scope=guest32-system-service\n", (ULONG)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, tsc, p->total);
++    for (i = 0; i < ARRAY_SIZE(p->counts); ++i)
++        if (p->counts[i] != p->reported[i])
++        {
++            MESSAGE("PW_NATIVE_SYSCALL_CALL tid=%04lx code=%04x name=%s interval=%llu total=%llu\n", (ULONG)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, i,
++                    i < ARRAY_SIZE(pw_syscall_names) ? pw_syscall_names[i] : "win32-or-other",
++                    p->counts[i] - p->reported[i], p->counts[i]);
++            p->reported[i] = p->counts[i];
++        }
++    for (i = 0; i < ARRAY_SIZE(p->callers); ++i)
++        if (p->caller_counts[i]) MESSAGE("PW_NATIVE_PROTECT_CALLER tid=%04lx caller=%08lx total=%llu other=%llu\n", (ULONG)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, p->callers[i], p->caller_counts[i], p->caller_other);
++}
++
+ /**********************************************************************
+  *           Wow64SystemServiceEx  (wow64.@)
+  */
+@@ -1253,6 +1329,7 @@
+         ERR( "unsupported syscall %04x\n", num );
+         return STATUS_INVALID_SYSTEM_SERVICE;
+     }
++    pw_syscall_profile(num, args);
+     status = wow64_syscall( args, table->ServiceTable[id] );
+     free_temp_data();
+     return status;

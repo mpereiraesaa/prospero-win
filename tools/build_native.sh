@@ -159,7 +159,8 @@ sources=(
     native/pw_wine_display.c native/pw_wine_library.c native/pw_hid_ps5.c native/pw_wine_prefix.c
     src/pw_result.c src/pw_wine_start.c src/pw_wine_launch.c src/pw_game_profile.c src/pw_prefix_temp.c
     src/pw_app_profile.c src/pw_profile_catalog.c src/pw_launcher_render.c src/pw_present.c
-    src/pw_pad.c src/pw_hid.c src/pw_spinner.c src/pw_script_input.c wine/ps5/pw_wine_prx.c
+    src/pw_pad.c src/pw_hid.c src/pw_spinner.c src/pw_script_input.c src/pw_tsc_calibrate.c
+    wine/ps5/pw_wine_prx.c
 )
 objects=()
 for source in "${sources[@]}"; do

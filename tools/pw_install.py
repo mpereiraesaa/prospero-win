@@ -22,13 +22,13 @@ DXVK follows Lutris's own keys (`wine: {dxvk: true, dxvk_version: 2.6.2}`):
 the release's DLLs go into the prefix's system32 and syswow64 and are set
 native, in the prefix's registry for the host and in the profile's
 dll_overrides for the title. Besides upstream releases, dxvk_version can name
-a custom build from https://github.com/mpereiraesaa/dxvk (2.6.2-prospero1,
+a custom build from https://github.com/mpereiraesaa/dxvk (2.6.2-prospero2,
 say) for a game that needs a fix upstream doesn't have; those are pinned by
 hash the same way.
 
 Usage:
     pw_install.py SCRIPT.yml --library DIR --wine PATH [--file ID=PATH ...]
-        [--input ID=VALUE ...] [--disc DIR] [--resolution WxH] [--keep-cache]
+        [--input ID=VALUE ...] [--mesa-zink DIR] [--disc DIR] [--resolution WxH] [--keep-cache]
 """
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ import re
 import shlex
 import shutil
 import struct
+import stat
 import subprocess
 import sys
 import tarfile
@@ -65,6 +66,12 @@ DXVK_RELEASES = {
     # 32-bit builds (GTA San Andreas with Proper Shaders).
     "2.6.2-prospero1": ("https://github.com/mpereiraesaa/dxvk/releases/download/v2.6.2-prospero1/dxvk-2.6.2-prospero1.tar.gz",
                         "72a4d7e279f522ad9bac420caf13665bcdd28b297337e1364c31c5bda24ef3f2"),
+    # prospero1 plus pipeline compiles outside the instance lock, three
+    # CS-thread cost cuts, and the options d3d9.weakRenderTargetFlushHint,
+    # dxvk.implicitFlushChunkScale, d3d9.padVsOutputs, dxvk.logFastLinkFailures
+    # and DXVK_CS_PROFILE=1 (GTA IV and San Andreas; release notes list them).
+    "2.6.2-prospero2": ("https://github.com/mpereiraesaa/dxvk/releases/download/v2.6.2-prospero2/dxvk-2.6.2-prospero2.tar.gz",
+                        "c00c1cd7df7ce70e89130b61c1fcd2d3a18ac473f274a219da4478147e4f3c90"),
 }
 DXVK_DLLS = ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi")
 WINETRICKS = ("20260125", "https://raw.githubusercontent.com/Winetricks/winetricks/20260125/src/winetricks",
@@ -128,6 +135,145 @@ def _refuse(message: str):
     raise InstallError(message)
 
 
+def stream_sha(file) -> str:
+    digest = hashlib.sha256(); total = 0
+    for chunk in iter(lambda: file.read(8192), b""):
+        total += len(chunk)
+        if total > 128 << 20:
+            raise InstallError("Mesa DLL grew beyond 128 MiB")
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def mesa_pe(path: Path, machine: int) -> list[str]:
+    """Bounded PE identity/import inspection; not a loader or trust signature."""
+    size = path.stat().st_size
+    with path.open("rb") as file:
+        def read(offset: int, count: int) -> bytes:
+            if offset < 0 or count < 0 or offset > size - count:
+                raise InstallError(f"{path}: truncated Mesa PE")
+            file.seek(offset)
+            data = file.read(count)
+            if len(data) != count:
+                raise InstallError(f"{path}: short Mesa PE read")
+            return data
+        dos = read(0, 64)
+        offset = struct.unpack_from("<I", dos, 60)[0]
+        coff = read(offset, 24)
+        if dos[:2] != b"MZ" or coff[:4] != b"PE\0\0" or struct.unpack_from("<H", coff, 4)[0] != machine:
+            raise InstallError(f"{path}: wrong Mesa PE architecture")
+        sections, optional_size = struct.unpack_from("<H", coff, 6)[0], struct.unpack_from("<H", coff, 20)[0]
+        directory = 96 if machine == 0x14c else 112
+        if sections > 96 or not directory <= optional_size <= 240:
+            raise InstallError(f"{path}: invalid Mesa PE header bounds")
+        optional = read(offset + 24, optional_size)
+        if struct.unpack_from("<H", optional)[0] != (0x10b if machine == 0x14c else 0x20b):
+            raise InstallError(f"{path}: mismatched Mesa PE magic")
+        headers = struct.unpack_from("<I", optional, 60)[0]
+        section_data = read(offset + 24 + optional_size, sections * 40)
+        def rva(at: int, count: int) -> bytes:
+            if at < 0 or count < 0 or at > 0xffffffff or count > 0x100000000 - at:
+                raise InstallError(f"{path}: wrapped Mesa import RVA")
+            if at + count <= headers:
+                return read(at, count)
+            for index in range(sections):
+                base = index * 40
+                virtual, raw_size, raw = struct.unpack_from("<III", section_data, base + 12)
+                if at >= virtual and at - virtual + count <= raw_size:
+                    return read(raw + at - virtual, count)
+            raise InstallError(f"{path}: unreadable Mesa import RVA")
+        if struct.unpack_from("<I", optional, directory - 4)[0] < 2:
+            return []
+        if optional_size < directory + 16:
+            raise InstallError(f"{path}: missing Mesa import directory")
+        table, extent = struct.unpack_from("<II", optional, directory + 8)
+        if not table and not extent:
+            return []
+        if not table or extent < 20 or extent > 1024 * 20:
+            raise InstallError(f"{path}: invalid Mesa import bounds")
+        imports = []
+        for index in range(extent // 20):
+            descriptor = rva(table + index * 20, 20)
+            if descriptor == bytes(20):
+                return imports
+            name = struct.unpack_from("<I", descriptor, 12)[0]
+            if not name:
+                raise InstallError(f"{path}: empty Mesa import name")
+            text = bytearray()
+            for byte in range(128):
+                value = rva(name + byte, 1)[0]
+                if not value:
+                    if not text:
+                        raise InstallError(f"{path}: empty Mesa import name")
+                    imports.append(text.decode("ascii").lower())
+                    break
+                if not 0x21 <= value <= 0x7e or chr(value) not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-":
+                    raise InstallError(f"{path}: invalid Mesa import name")
+                text.append(value)
+            else:
+                raise InstallError(f"{path}: unterminated Mesa import name")
+        raise InstallError(f"{path}: unterminated Mesa import descriptors")
+
+
+def mesa_provider(directory: Path) -> dict[str, dict[str, tuple[Path, str]]]:
+    """Validate the complete local two-architecture package before prefix writes.
+
+    The package must stay immutable during installation. Hashes bind files to
+    its manifest; authenticating the manifest/source is the caller's job.
+    """
+    try:
+        manifest_path = directory / "manifest.json"
+        if manifest_path.stat().st_size > 1 << 20:
+            raise InstallError("Mesa manifest exceeds 1 MiB")
+        manifest = json.loads(manifest_path.read_text())
+        if manifest.get("driver") != "zink" or manifest.get("architectures") != ["i386-windows", "x86_64-windows"]:
+            raise InstallError("Mesa package requires both Zink architectures")
+        if not re.fullmatch(r"[0-9a-f]{40}", manifest.get("mesa_commit", "")) or not re.fullmatch(r"[0-9a-f]{64}", manifest.get("llvm_mingw_archive_sha256", "")):
+            raise InstallError("Mesa package lacks pinned source/compiler provenance")
+        records = manifest.get("files")
+        if not isinstance(records, dict) or not 4 <= len(records) <= 64:
+            raise InstallError("Mesa package has invalid DLL count")
+        result = {}
+        for arch, machine in (("i386-windows", 0x14c), ("x86_64-windows", 0x8664)):
+            selected = {}; dependencies = set()
+            for relative, record in records.items():
+                parts = Path(relative).parts
+                if len(parts) != 2 or len(parts[1]) >= 128 or parts[0] not in ("i386-windows", "x86_64-windows") or not re.fullmatch(r"[A-Za-z0-9_.+-]{1,127}\.dll", parts[1], re.I | re.ASCII):
+                    raise InstallError("Unsafe Mesa artifact path")
+                if parts[0] != arch:
+                    continue
+                name = parts[1].lower(); path = directory / relative
+                if name in selected or len(selected) >= 32:
+                    raise InstallError("Duplicate/excessive Mesa DLL names")
+                info = path.lstat()
+                if not stat.S_ISREG(info.st_mode) or not 64 <= info.st_size <= 128 << 20:
+                    raise InstallError("Mesa DLL must be a bounded regular file")
+                digest = record.get("sha256", "")
+                if not re.fullmatch(r"[0-9a-f]{64}", digest) or record.get("machine") != machine:
+                    raise InstallError("Invalid Mesa artifact identity")
+                with path.open("rb") as file:
+                    actual_hash = stream_sha(file)
+                imports = mesa_pe(path, machine)
+                if actual_hash != digest or sorted(imports) != sorted(str(x).lower() for x in record.get("imports", [])):
+                    raise InstallError("Mesa artifact hash/import mismatch")
+                dependencies.update(imports); selected[name] = (path, digest)
+            with os.scandir(directory / arch) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= 256:
+                        raise InstallError("Mesa architecture directory entry limit exceeded")
+                    if entry.name.lower().endswith(".dll") and (entry.name.lower() not in selected or entry.name != selected[entry.name.lower()][0].name):
+                        raise InstallError("Unmanifested Mesa DLL companion")
+            if not {"opengl32.dll", "libgallium_wgl.dll"} <= selected.keys():
+                raise InstallError("Mesa package lacks WGL provider/core")
+            for name in dependencies & {"libgallium_wgl.dll", "libc++.dll", "libunwind.dll", "libwinpthread-1.dll"}:
+                if name not in selected:
+                    raise InstallError(f"Mesa package lacks imported companion {name}")
+            result[arch] = selected
+        return result
+    except (OSError, ValueError, TypeError, AttributeError) as error:
+        raise InstallError(f"Invalid Mesa package: {error}") from error
+
+
 class Installer:
     def __init__(self, document: dict, script_path: Path, args: argparse.Namespace):
         self.document = document
@@ -162,6 +308,8 @@ class Installer:
         wine_section = self.script.get("wine") or {}
         self.overrides = {str(k).removesuffix(".dll"): str(v) for k, v in (wine_section.get("overrides") or {}).items()}
         self.env = {str(k): self.expand(str(v)) for k, v in ((self.script.get("system") or {}).get("env") or {}).items()}
+        self.mesa_zink = Path(args.mesa_zink).resolve() if args.mesa_zink else None
+        self.mesa_files = None
         self.dxvk = wine_section.get("dxvk", False)
         self.dxvk_version = str(wine_section.get("dxvk_version", "2.6.2"))
 
@@ -438,9 +586,10 @@ class Installer:
     def graphics_mode(self) -> str:
         prospero = self.document.get("prospero") or self.script.get("prospero") or {}
         mode = prospero.get("graphics", "dxvk" if self.dxvk else "gdi")
-        if mode not in ("auto", "gdi", "dxvk", "opengl"):
+        if mode not in ("auto", "gdi", "dxvk", "opengl", "zink"):
             raise InstallError(f"prospero.graphics: unsupported backend {mode!r}")
-        return mode
+        # OpenGL draws through Mesa's Zink; zink is the older name for it.
+        return "opengl" if mode == "zink" else mode
 
     def install_dxvk(self) -> list[str]:
         mode = self.graphics_mode()
@@ -459,6 +608,46 @@ class Installer:
                      [f'"{dll}"="native"' for dll in DXVK_DLLS], None)
         log(f"DXVK {self.dxvk_version} installed in the prefix")
         return list(DXVK_DLLS)
+
+    def install_mesa_zink(self) -> None:
+        if self.graphics_mode() != "opengl":
+            return
+        game = self.script.get("game") or {}
+        exe = Path(self.expand(game.get("exe", "")))
+        exe = exe if exe.is_absolute() else self.gamedir / exe
+        arch = "i386-windows" if pe_architecture(exe) == "pe32" else "x86_64-windows"
+        destination = self.gamedir / "drive_c/windows" / ("syswow64" if arch == "i386-windows" else "system32")
+        if not destination.is_dir():
+            raise InstallError("Mesa installation requires an initialized Wine prefix")
+        for name, (source, digest) in self.mesa_files[arch].items():
+            temporary = destination / (name + ".mesa-new")
+            owned = False
+            try:
+                if temporary.exists() or temporary.is_symlink():
+                    raise InstallError("Stale Mesa installation temporary file")
+                count = source.stat().st_size
+                if not 64 <= count <= 128 << 20:
+                    raise InstallError("Mesa provider size changed during installation")
+                with source.open("rb") as input_file, temporary.open("xb") as output:
+                    owned = True
+                    while count:
+                        chunk = input_file.read(min(count, 8192))
+                        if not chunk:
+                            raise InstallError("Mesa provider truncated during installation")
+                        output.write(chunk); count -= len(chunk)
+                    if input_file.read(1):
+                        raise InstallError("Mesa provider grew during installation")
+                with temporary.open("rb") as file:
+                    if stream_sha(file) != digest:
+                        raise InstallError("Mesa package changed during installation")
+                os.replace(temporary, destination / name)
+            except OSError as error:
+                raise InstallError(f"Mesa provider installation failed: {error}") from error
+            finally:
+                if owned and temporary.is_file() and not temporary.is_symlink():
+                    temporary.unlink()
+        self.regedit(["[HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides]", '\"opengl32\"=\"native\"'], None)
+        log(f"Mesa WGL/Zink {arch} installed in the prefix")
 
     def windows_path(self, value: str) -> str:
         """A path under the prefix's drive_c as the game sees it (C:\\...)."""
@@ -481,7 +670,7 @@ class Installer:
         overrides = {dll: "n" for dll in dxvk_dlls}
         overrides.update(self.overrides)
         if self.graphics_mode() == "opengl":
-            overrides["opengl32"] = "b"
+            overrides["opengl32"] = "n"
         by_mode: dict[str, list[str]] = {}
         for dll, mode in overrides.items():
             by_mode.setdefault(mode, []).append(dll)
@@ -508,7 +697,18 @@ class Installer:
 
     # --- the whole install -----------------------------------------------------
     def install(self) -> Path:
-        self.graphics_mode()  # Reject an invalid backend before creating a prefix.
+        mode = self.graphics_mode()  # Reject invalid providers before prefix creation.
+        if mode == "opengl":
+            if not self.mesa_zink:
+                raise InstallError("graphics=opengl requires --mesa-zink local artifact directory")
+            for names, order in self.overrides.items():
+                if any(character.isspace() for character in names + order):
+                    raise InstallError("graphics=opengl DLL overrides cannot contain whitespace")
+                if any(name.lower().lstrip("*").removesuffix(".dll") == "opengl32" for name in names.split(",")) and order.lower() != "n":
+                    raise InstallError("graphics=opengl conflicts with explicit opengl32 load order")
+            self.mesa_files = mesa_provider(self.mesa_zink)
+        elif self.mesa_zink:
+            raise InstallError("--mesa-zink requires prospero.graphics=opengl")
         if self.gamedir.exists():
             raise InstallError(f"{self.gamedir} exists: remove it to reinstall {self.slug}")
         self.resolve_files()
@@ -520,6 +720,7 @@ class Installer:
         # Again, in case a later step ran wineboot and linked them back.
         self.unlink_home_folders(self.gamedir)
         dxvk_dlls = self.install_dxvk()
+        self.install_mesa_zink()
         profile = self.library / "profiles" / f"{self.slug}.profile"
         profile.parent.mkdir(parents=True, exist_ok=True)
         profile.write_text(self.profile(dxvk_dlls))
@@ -550,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--slug", help="the profile id, when the script has no game_slug")
     parser.add_argument("--file", action="append", default=[], metavar="ID=PATH")
     parser.add_argument("--input", action="append", default=[], metavar="ID=VALUE")
+    parser.add_argument("--mesa-zink", type=Path, help="validated local Mesa WGL/Zink artifact directory; requires graphics=opengl")
     parser.add_argument("--disc", help="a directory holding the disc's files")
     parser.add_argument("--resolution", default="1920x1080")
     parser.add_argument("--keep-cache", action="store_true")
