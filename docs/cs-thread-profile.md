@@ -14,6 +14,7 @@ in the frames that take 25 ms instead of 16. This profile does, per frame:
 | `PW_NATIVE_PROFILE version=3` | `wow64native.prx` | each native thread, each frame: ticks in Unix calls, syscalls, other host entries and FS switches since its previous line; the rest of `wall` is guest code |
 | `PW_VK_RADV_PROFILE` | `libvulkan.prx` | each thread that called the driver, each frame: calls and ticks by entry point, the twelve with the most time named and the rest as `other` |
 | `PW_VK_RADV_EVENT` | `libvulkan.prx` | one call that took longer than the event threshold (200 µs unless `PW_VK_RADV_EVENT_US` says otherwise), with its arguments when it creates, allocates or waits: pipeline flags, allocation size, image extent, timeouts |
+| `PW_NATIVE_SLOW_SYSCALL` | `wow64.dll` (`PW_NATIVE_SLOW_SYSCALL_US=<n>`, [native-system-service-profile.md](native-system-service-profile.md)) | one guest system service that took longer than n µs: its name, arguments, status and the guest stack by module, for the waits the buckets only count |
 | `DXVK_CS_PROFILE` | DXVK 2.6.2-prospero2 (`DXVK_CS_PROFILE=1`) | the CS thread, each frame: its busy ticks, chunks and commands, and ticks by command type, named by the D3D9 call that emitted it |
 
 All ticks are TSC ticks; `tsc_hz` is in the `PW_NATIVE_PROFILE` lines and in

@@ -466,6 +466,8 @@ tools/mesa_zink_requirements.txt
 docs/native-system-service-profile.md
 tests/test_native_system_service_profile.py
 wine/patches/0612-wow64-opt-in-named-system-service-profile.patch
+wine/patches/0613-wow64-slow-system-service-events.patch
+tests/test_native_slow_syscall_events.py
 tests/test_package_mesa_zink.py
 tools/package_mesa_zink.py
 
@@ -549,4 +551,6 @@ wine/ps5/pw_vk_radv_profile_wrap.h
 docs/cs-thread-profile.md
 tests/test_native_profile_frames.py
 tools/native_profile_frames.py
+tests/test_symbolize_guest_stack.py
+tools/symbolize_guest_stack.py
 wine/patches/0879-win32u-ps5-report-a-drained-wake-pipe.patch

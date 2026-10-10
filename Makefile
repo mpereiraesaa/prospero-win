@@ -194,6 +194,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_summarize_vk_batch.py
 	python3 tests/test_native_profile_split.py
 	python3 tests/test_native_profile_frames.py
+	python3 tests/test_symbolize_guest_stack.py
 	python3 tests/test_vk_radv_profile.py
 	CC="$(CC)" python3 tests/test_native_wow64_provider.py
 	python3 tests/test_wowprospero_contract.py
@@ -215,6 +216,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_pw_gameplay_run.py
 	python3 tests/test_gen_prx_descriptor.py
 	CC="$(CC)" python3 tests/test_native_system_service_profile.py
+	CC="$(CC)" python3 tests/test_native_slow_syscall_events.py
 	python3 tests/test_test_reachability.py
 	python3 tests/test_status_vocabulary.py
 	python3 tests/test_classify_x86.py

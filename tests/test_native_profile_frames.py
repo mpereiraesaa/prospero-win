@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """tools/native_profile_frames.py on a synthetic log: the frame lengths, the
 spike and normal sets, the CS thread's bucket split in each, the RADV
-entry points joined to it by TSC, the events, DXVK's commands, the CSV,
-and the refusals without a clock or presents."""
+entry points joined to it by TSC, the events, the slow system services and
+the frames they end in, DXVK's commands, the CSV, and the refusals without
+a clock or presents."""
 
 import io
 import os
@@ -38,6 +39,11 @@ def radv(frame, thread, tsc, entries, frames=1):
             f"tsc={tsc} wall=1000 calls={calls} ticks={ticks} {body}")
 
 
+def slow(tid, tsc, ticks, name, stack, code=4):
+    return (f"12\t34\tINFO\tWINE PW_NATIVE_SLOW_SYSCALL version=1 tid={tid:04x} tsc={tsc} ticks={ticks} code={code:04x} "
+            f"name={name} arg0=00000120 arg1=00000000 arg2=00000000 status=00000000 {stack}")
+
+
 def build_log():
     lines = ["12\t34\tINFO\tWINE PW_VK_RADV_PROFILE version=1 start tsc_hz=%d event_us=200 functions=173 enabled_by=env" % HZ,
              "PW_NATIVE_PROFILE version=2 tid=004c teb=1 tsc=5 tsc_hz=%d host_calls=1" % HZ]
@@ -66,6 +72,12 @@ def build_log():
     lines.append("12\t34\tINFO\tWINE DXVK_CS_PROFILE name id=7 text=dxvk::DxvkContext::bindShader")
     # A line spanning two frames is left out of the per-frame means.
     lines.append(native(41, 0x4c, tsc + 1000, 32 * MS, 8 * MS, 4 * MS, frames=2))
+    # Slow system services: one ending in spike frame 10 on the CS thread, one in frame 3 on another thread,
+    # one after the last present.
+    lines.append(slow(0x4c, 150 * MS, 30 * MS, "NtWaitForSingleObject", "stack=ntdll.dll+1234,d3d9.dll+1a2b3c,d3d9.dll+2000,"
+                      "gtaiv.exe+3000,d3d9.dll+4000"))
+    lines.append(slow(0x24, 40 * MS, 1 * MS, "NtWaitForAlertByThreadId", "stack=ntdll.dll+10,d3d9.dll+20"))
+    lines.append(slow(0x4c, tsc + 5 * MS, 2 * MS, "NtYieldExecution", "stack=ntdll.dll+10,7bc00000"))
     return lines
 
 
@@ -94,6 +106,13 @@ def main() -> int:
     assert log.dxvk_names == {3: "dxvk::DxvkContext::draw", 7: "dxvk::DxvkContext::bindShader"}
     assert len(log.dxvk) == 40 and log.dxvk[9][1][3] == (1000, 20 * MS)
     assert npf.percentile([1, 2, 3, 4, 5], 0.5) == 3 and npf.percentile([], 0.5) == 0
+    assert len(log.slow) == 3 and log.slow[0]["name"] == "NtWaitForSingleObject" and log.slow[0]["code"] == 4
+    assert log.slow[0]["stack"][:2] == ["ntdll.dll+1234", "d3d9.dll+1a2b3c"] and log.slow[0]["arg0"] == 0x120
+    assert log.slow[0]["tid"] == 0x4c and log.slow[0]["ticks"] == 30 * MS
+    aligned = npf.align_slow(log)
+    assert [(f["frame"], f["tid"]) for f in aligned] == [(3, 0x24), (10, 0x4c)], aligned
+    assert npf.align_slow(npf.Log()) == []
+    assert npf.parse([slow(1, 5, 5, "NtYieldExecution", "")]).slow[0]["stack"] == []
 
     out = io.StringIO()
     assert npf.report(log, 25, 20, None, 15, out) == 0
@@ -102,7 +121,14 @@ def main() -> int:
     assert "CS thread tid=004c" in text and "(1 spanning several frames, left out)" in text
     assert "guest" in text and "+20.00" in text          # the guest bucket grows by 20 ms in spikes
     assert "vkCmdDraw" in text and "vkCreateGraphicsPipelines" in text and "RADV thread 2" in text
-    assert "events over 200 us: 2 total, 1 in spike frames (waits left out: 0)" in text
+    assert "events over 200 us: 2 total, 1 in spike frames (waits left out: 0); slow syscalls: 2, 1 in spike frames" in text
+    assert "  syscall NtWaitForSingleObject                 1 calls     30.00 ms total   30.000 ms mean" in text, text
+    assert ("  frame 10 (spike, 40.0 ms) tid 004c syscall NtWaitForSingleObject 30.000 ms "
+            "stack=ntdll.dll+1234,d3d9.dll+1a2b3c,d3d9.dll+2000,gtaiv.exe+3000\n") in text, text
+    assert "frame 3 (normal, 16.0 ms) tid 0024 syscall NtWaitForAlertByThreadId 1.000 ms stack=ntdll.dll+10,d3d9.dll+20" in text
+    assert "NtYieldExecution" not in text
+    # The slowest list ranks them with the driver's events.
+    assert text.index("syscall NtWaitForSingleObject 30.000 ms") < text.index("vkCreateGraphicsPipelines 2.000 ms")
     aligned = npf.align_dxvk(log)
     assert [f["frame"] for f, _ in aligned] == list(range(1, 41)) and npf.align_dxvk(npf.Log()) == []
     assert "dxvk::DxvkContext::draw" in text and "DXVK CS thread: 40 frame lines, 36 normal, 4 spike" in text
@@ -115,6 +141,8 @@ def main() -> int:
     cut = npf.window(log, HZ, 0.3, 0.5)     # presents 19..31 of 16 ms, plus the spikes' extra
     assert min(cut.presents) > 1 and max(cut.presents) < 40 and all(f["frame"] in cut.presents for f, _ in cut.radv[1])
     assert npf.window(log, HZ, None, None) is log
+    assert [f["name"] for f in cut.slow] == [] and [f["name"] for f in npf.window(log, HZ, 0.0, 0.2).slow] == [
+        "NtWaitForSingleObject", "NtWaitForAlertByThreadId"]
     assert "busy ms: normal 12.00  spike 30.00" in text
     assert "worst frames: #10 40.0 ms" in text
     # --tid picks another thread; a thread without RADV lines says so.
@@ -136,8 +164,10 @@ def main() -> int:
                               "--csv", str(csv_path), "--top", "5"], capture_output=True, text=True)
         assert run.returncode == 0 and "CS thread tid=004c" in run.stdout, run
         rows = csv_path.read_text().splitlines()
-        assert rows[0].startswith("frame,length_ms,wall_ms,guest_ms") and len(rows) == 41
-        assert rows[10].startswith("10,40.000,40.000,29.000,8.000,2.000,0.000,1.000,100,8.000,401,30.000,9000"), rows[10]
+        assert rows[0].startswith("frame,length_ms,wall_ms,guest_ms") and rows[0].endswith(",dxvk_cmds,slow_syscall_ms")
+        assert len(rows) == 41
+        assert rows[10] == "10,40.000,40.000,29.000,8.000,2.000,0.000,1.000,100,8.000,401,30.000,9000,30.000", rows[10]
+        assert rows[3].endswith(",9000,") and rows[1].endswith(",9000,")     # another thread's wait is not the CS thread's
         run = subprocess.run([sys.executable, str(ROOT / "tools/native_profile_frames.py"), str(log_path),
                               "--tsc-hz", str(2 * HZ)], capture_output=True, text=True)
         assert run.returncode == 0 and "p50 8.0" in run.stdout, run.stdout

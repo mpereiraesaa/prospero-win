@@ -12,6 +12,10 @@ DXVK_CS_PROFILE=1) and joins, per frame:
                         guest code) since its previous frame line
   PW_VK_RADV_PROFILE    each thread's time in RADV, by entry point
   PW_VK_RADV_EVENT      single calls over the event threshold
+  PW_NATIVE_SLOW_SYSCALL  guest system services over PW_NATIVE_SLOW_SYSCALL_US
+                        (wow64 patch 0613), with the guest stack by module;
+                        a call belongs to the frame whose present follows
+                        its return
   DXVK_CS_PROFILE       DXVK's CS thread: busy time and time by command
 
 Frames at or over --spike-ms (25) are spikes; frames at or under
@@ -19,7 +23,11 @@ Frames at or over --spike-ms (25) are spikes; frames at or under
 distribution, then for the CS thread (the native thread with the most Unix
 calls per frame, or --tid) the mean per-frame split in normal and spike
 frames, the RADV entry points and DXVK commands that grow most in spikes,
-and the events that fell in spike frames. --csv writes one row per frame.
+and the events that fell in spike frames: the driver's slow calls and the
+slow system services, as `syscall <name>` with the first four stack entries
+(tools/symbolize_guest_stack.py turns those into functions). --csv writes
+one row per frame; its slow_syscall_ms is the CS thread's slow system
+services ending in the frame.
 
 Usage: native_profile_frames.py LOG [--spike-ms MS] [--normal-ms MS] [--tid HEX]
                                 [--tsc-hz HZ] [--csv FILE] [--top N]
@@ -43,10 +51,11 @@ PRESENT = re.compile(r"PW_VK_RADV_PRESENT version=1 (.*)$")
 RADV = re.compile(r"PW_VK_RADV_PROFILE version=1 (frame=.*)$")
 RADV_START = re.compile(r"PW_VK_RADV_PROFILE version=1 start (.*)$")
 EVENT = re.compile(r"PW_VK_RADV_EVENT version=1 (.*)$")
+SLOW = re.compile(r"PW_NATIVE_SLOW_SYSCALL version=1 (.*)$")
 DXVK = re.compile(r"DXVK_CS_PROFILE version=1 (frame=.*)$")
 DXVK_START = re.compile(r"DXVK_CS_PROFILE version=1 start (.*)$")
 DXVK_NAME = re.compile(r"DXVK_CS_PROFILE name id=(\d+) text=(.*)$")
-HEX_FIELDS = {"tid"}
+HEX_FIELDS = {"tid", "code", "arg0", "arg1", "arg2", "status"}
 NATIVE_BUCKETS = ("guest", "unix", "syscall", "other", "fs")
 
 
@@ -73,6 +82,7 @@ class Log:
     events: list = field(default_factory=list)            # [(fields, fn, detail)]
     dxvk: list = field(default_factory=list)              # [(fields, {id: (calls, ticks)})]
     dxvk_names: dict = field(default_factory=dict)        # id -> text
+    slow: list = field(default_factory=list)              # [fields + name, stack: [entries]]
     event_us: int = 0
 
 
@@ -105,6 +115,14 @@ def parse(lines) -> Log:
             detail = m[1].split(f"ticks={f.get('ticks', 0)}", 1)[-1].strip() if "ticks" in f else ""
             if fn and "frame" in f:
                 log.events.append((f, fn[1], detail))
+        elif (m := SLOW.search(line)):
+            f = fields(m[1])
+            name = re.search(r"name=(\S+)", m[1])
+            stack = re.search(r"stack=(\S*)", m[1])
+            if name and "tid" in f and "tsc" in f and "ticks" in f:
+                f["name"] = name[1]
+                f["stack"] = [e for e in stack[1].split(",") if e] if stack else []
+                log.slow.append(f)
         elif (m := DXVK_NAME.search(line)):
             log.dxvk_names[int(m[1])] = m[2].strip()
         elif (m := DXVK_START.search(line)):
@@ -139,6 +157,26 @@ def align_dxvk(log: Log) -> list:
             index += 1
         if index < len(presents):
             out.append(({**f, "frame": presents[index][1]}, c))
+    return out
+
+
+def align_slow(log: Log) -> list:
+    """The slow system services keyed by the driver's present number: each
+    belongs to the first present returned after the call returned (its start
+    TSC plus its ticks), the frame its wait made long. Calls after the last
+    present are left out."""
+    if not log.slow or not log.presents:
+        return []
+    presents = sorted((p["tsc"], frame) for frame, p in log.presents.items() if "tsc" in p)
+    if not presents:
+        return []
+    out, index = [], 0
+    for f in sorted(log.slow, key=lambda f: f["tsc"] + f["ticks"]):
+        end = f["tsc"] + f["ticks"]
+        while index < len(presents) and presents[index][0] < end:
+            index += 1
+        if index < len(presents):
+            out.append({**f, "frame": presents[index][1]})
     return out
 
 
@@ -178,6 +216,7 @@ def window(log: Log, hz: int, start: float | None, end: float | None) -> Log:
         cut.radv[thread] = [(f, per) for f, per in rows if f["frame"] in cut.presents]
     cut.events = [e for e in log.events if e[0]["frame"] in cut.presents]
     cut.dxvk = [(f, c) for f, c in log.dxvk if "tsc" in f and inside(f["tsc"])]
+    cut.slow = [f for f in log.slow if inside(f["tsc"] + f["ticks"])]
     return cut
 
 
@@ -320,16 +359,19 @@ def report(log: Log, spike_ms: float, normal_ms: float, tid: int | None, top: in
             print(f"RADV thread {thread}: {total_n:.3f} ms/frame normal, {total_s:.3f} spike; most in "
                   + ", ".join(busiest), file=out)
 
-    if log.events:
+    slow = [(f, f"syscall {f['name']}", "stack=" + ",".join(f["stack"][:4])) for f in align_slow(log)]
+    if log.events or slow:
         waits = [e for e in log.events if e[1] in WAITS]
         work = [e for e in log.events if e[1] not in WAITS]
         in_spikes = [e for e in work if e[0]["frame"] in spikes]
         by_fn: dict = defaultdict(lambda: [0, 0])
-        for f, fn, _ in work:
+        for f, fn, _ in work + slow:
             by_fn[fn][0] += 1
             by_fn[fn][1] += f.get("ticks", 0)
         print(f"\nevents over {log.event_us} us: {len(work)} total, {len(in_spikes)} in spike frames "
-              f"(waits left out: {len(waits)})", file=out)
+              f"(waits left out: {len(waits)})"
+              + (f"; slow syscalls: {len(slow)}, {sum(f['frame'] in spikes for f, _, _ in slow)} in spike frames"
+                 if slow else ""), file=out)
         for fn, (count, ticks) in sorted(by_fn.items(), key=lambda item: -item[1][1])[:top]:
             print(f"  {fn:<40} {count:>6} calls {ms(ticks, hz):>9.2f} ms total {ms(ticks, hz) / count:>8.3f} ms mean",
                   file=out)
@@ -340,11 +382,12 @@ def report(log: Log, spike_ms: float, normal_ms: float, tid: int | None, top: in
         for fn, (count, ticks) in sorted(by_wait.items(), key=lambda item: -item[1][1]):
             print(f"  wait {fn:<35} {count:>6} calls {ms(ticks, hz):>9.2f} ms total {ms(ticks, hz) / count:>8.3f} ms mean",
                   file=out)
-        slowest = sorted(work, key=lambda e: -e[0].get("ticks", 0))[:top]
+        slowest = sorted(work + slow, key=lambda e: -e[0].get("ticks", 0))[:top]
         print("slowest events:", file=out)
         for f, fn, detail in slowest:
             tag = "spike" if f["frame"] in spikes else ("normal" if f["frame"] in normal else "other")
-            print(f"  frame {f['frame']} ({tag}, {lengths.get(f['frame'], 0):.1f} ms) thread {f.get('thread', 0)} "
+            who = f"tid {f['tid']:04x}" if "name" in f else f"thread {f.get('thread', 0)}"
+            print(f"  frame {f['frame']} ({tag}, {lengths.get(f['frame'], 0):.1f} ms) {who} "
                   f"{fn} {ms(f.get('ticks', 0), hz):.3f} ms {detail}", file=out)
 
     if log.dxvk:
@@ -388,10 +431,14 @@ def write_csv(log: Log, path: str, tid: int | None) -> None:
     thread = radv_thread_for(log, tid) if tid is not None else None
     radv = {f["frame"]: (f, per_fn) for f, per_fn in log.radv.get(thread, []) if f.get("frames") == 1}
     dxvk = {f["frame"]: f for f, _ in align_dxvk(log) if f.get("frames", 1) == 1}
+    slow: dict = defaultdict(int)
+    for f in align_slow(log):
+        if f["tid"] == tid:
+            slow[f["frame"]] += f["ticks"]
     with open(path, "w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["frame", "length_ms", "wall_ms", "guest_ms", "unix_ms", "syscall_ms", "other_ms", "fs_ms",
-                         "unix_calls", "radv_ms", "radv_calls", "dxvk_busy_ms", "dxvk_cmds"])
+                         "unix_calls", "radv_ms", "radv_calls", "dxvk_busy_ms", "dxvk_cmds", "slow_syscall_ms"])
         for frame in sorted(log.presents):
             p = log.presents[frame]
             row = [frame, f"{p.get('interval', 0) * 1000 / hz:.3f}"]
@@ -408,6 +455,7 @@ def write_csv(log: Log, path: str, tid: int | None) -> None:
             row += [f"{ms(f[0].get('ticks', 0), hz):.3f}", f[0].get("calls", 0)] if f else ["", ""]
             d = dxvk.get(frame)
             row += [f"{ms(d.get('busy', 0), hz):.3f}", d.get("cmds", 0)] if d else ["", ""]
+            row.append(f"{ms(slow[frame], hz):.3f}" if frame in slow else "")
             writer.writerow(row)
 
 
