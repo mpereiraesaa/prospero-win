@@ -26,4 +26,17 @@ void *pw_wine_heap_memalign(size_t alignment,size_t bytes);
 size_t pw_wine_heap_usable_size(const void *pointer);
 void pw_wine_heap_stats(PwWineHeapStats *stats);
 
+/* Where new spans and large blocks come from. By default anonymous mappings;
+ * on the console those are flexible memory, of which a title has about
+ * 440 MiB, so pw_wine_dmem_ps5.c installs direct memory instead. map returns
+ * NULL to fall back to an anonymous mapping; unmap returns 0 when it owned
+ * the range and nonzero to have it unmapped as an anonymous mapping. Both
+ * are called with the heap's lock held and must not allocate from it. */
+typedef struct PwWineHeapBacking {
+    void *context;
+    void *(*map)(void *context,size_t bytes);
+    int (*unmap)(void *context,void *address,size_t bytes);
+} PwWineHeapBacking;
+void pw_wine_heap_set_backing(const PwWineHeapBacking *backing);
+
 #endif
