@@ -281,6 +281,8 @@ src/pw_prefix_temp.c
 src/pw_prefix_temp.h
 native/pw_wine_prefix.c
 native/pw_wine_prefix.h
+native/native_libkernel_resolver.c
+native/native_libkernel_resolver.h
 tests/test_pw_prefix_temp.c
 tests/test_pw_wine_prefix_cpu.c
 tests/test_pw_wine_start.c

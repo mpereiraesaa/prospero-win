@@ -11,6 +11,16 @@ signal registration and the standard x87/SSE/AVX layout checks pass. The
 native backend requires all three capability bits. Existing translated-code
 SIGSEGV hooks remain available for wowprospero.
 
+On any other libkernel build the backend ends the process at its first
+32-bit instruction, and patch 0611 does not fall back because the DLL itself
+loaded. The title shell therefore runs the same identity check
+(`native/native_libkernel_resolver.c`, kept byte-identical to the patch by
+`tests/test_native_wow64_provider.py`) and keeps the translator when it
+fails, logging `PW_WINE64 native_cpu supported=0` with the fingerprint it
+saw. FW 13.60's ordinary-title libkernel reports fingerprint
+`dc088297572186a79f13c8e227026d0d` with the same segment layout and
+`sigaction`/`sysarch` offsets as the measured one.
+
 Run `python3 tests/test_native_wow64_provider.py` for the host identity guard
 fixture. It accepts the supported module metadata and rejects malformed,
 unknown and ELF-loader identities with zero output pointers. This checks
