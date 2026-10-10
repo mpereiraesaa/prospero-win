@@ -1,20 +1,35 @@
 Subject: ntdll: support native WoW64 PS5 signal entry and verified xstate layout
 
 diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
-index ee77208..3c17143 100644
+index ee77208..884d70f 100644
 --- a/dlls/ntdll/unix/signal_x86_64.c
 +++ b/dlls/ntdll/unix/signal_x86_64.c
-@@ -90,6 +90,43 @@ WINE_DECLARE_DEBUG_CHANNEL(seh);
+@@ -90,6 +90,57 @@ WINE_DECLARE_DEBUG_CHANNEL(seh);
  
  #include "dwarf.h"
  
 +#ifdef __PROSPERO__
 +/* Publish readiness only after successful
-+ * signal registration and validation of the supported kernel layout. */
++ * signal registration and validation of the kernel's signal frame. */
 +#include "native_libkernel_resolver.c"
 +extern int sceKernelGetModuleInfo( int32_t handle, void *info );
 +static struct native_libkernel_entries pw_native_kernel;
 +static unsigned int pw_native_caps;
++
++/* Runs system call NUMBER through the syscall instruction at ENTRY, inside
++ * libkernel (the kernel refuses one anywhere else). The stub's own error
++ * path follows it, so a failure returns -1 with errno set. */
++extern long pw_native_syscall_at( uintptr_t entry, long number, long a1, long a2, long a3 );
++__ASM_GLOBAL_FUNC( pw_native_syscall_at,
++                   "movq %rsi,%rax\n\t"
++                   "movq %rdi,%r11\n\t"
++                   "movq %rdx,%rdi\n\t"
++                   "movq %rcx,%rsi\n\t"
++                   "movq %r8,%rdx\n\t"
++                   "subq $8,%rsp\n\t"
++                   "callq *%r11\n\t"
++                   "addq $8,%rsp\n\t"
++                   "ret" )
 +
 +__attribute__((visibility("default")))
 +unsigned int __wine_prospero_native_wow64_caps( unsigned int version )
@@ -26,19 +41,18 @@ index ee77208..3c17143 100644
 +{
 +    unsigned char info[0x160] = {0};
 +    uint64_t size = sizeof(info);
++    struct native_libkernel_ops ops = { pw_native_syscall_at, getpid(), getppid() };
 +    memcpy( info, &size, sizeof(size) );
 +    if (sceKernelGetModuleInfo( 0x2001, info )) return;
-+    native_libkernel_resolve( info, sizeof(info), (uintptr_t)sigaction,
-+                             (uintptr_t)sysarch, &pw_native_kernel );
++    native_libkernel_resolve( info, sizeof(info), (uintptr_t)getppid,
++                              (uintptr_t)sysarch, &ops, &pw_native_kernel );
 +}
 +static int pw_native_sigaction( int signal, const struct sigaction *action,
 +                                struct sigaction *previous )
 +{
-+    if (pw_native_kernel.sigaction)
-+    {
-+        int (*raw)(int, const struct sigaction *, struct sigaction *) = (void *)pw_native_kernel.sigaction;
-+        return raw( signal, action, previous );
-+    }
++    if (pw_native_kernel.syscall)
++        return pw_native_syscall_at( pw_native_kernel.syscall, NATIVE_LIBKERNEL_SYS_SIGACTION,
++                                     signal, (long)action, (long)previous );
 +    return sigaction( signal, action, previous );
 +}
 +#else
@@ -48,7 +62,7 @@ index ee77208..3c17143 100644
  static USHORT cs32_sel;  /* selector for %cs in 32-bit mode */
  static USHORT cs64_sel;  /* selector for %cs in 64-bit mode */
  static USHORT ds64_sel;  /* selector for %ds/%es/%ss in 64-bit mode */
-@@ -297,13 +334,11 @@ __ASM_GLOBAL_FUNC( modify_ldt,
+@@ -297,13 +348,11 @@ __ASM_GLOBAL_FUNC( modify_ldt,
  #define TRAP_sig(context)    (UCONTEXT_MC(context).mc_trapno)
  #define ERROR_sig(context)   (UCONTEXT_MC(context).mc_err)
  #ifdef __PROSPERO__
@@ -67,7 +81,7 @@ index ee77208..3c17143 100644
  #else
  #define FPU_sig(context)     ((void *)(UCONTEXT_MC(context).mc_fpstate))
  #define XState_sig(context)  NULL
-@@ -851,6 +886,64 @@ __ASM_GLOBAL_FUNC( clear_alignment_flag,
+@@ -851,6 +900,64 @@ __ASM_GLOBAL_FUNC( clear_alignment_flag,
                     "ret" )
  
  
@@ -123,7 +137,7 @@ index ee77208..3c17143 100644
 +PW_NATIVE_SIGNAL_ENTRY( trap )
 +PW_NATIVE_SIGNAL_ENTRY( segv )
 +#undef PW_NATIVE_SIGNAL_ENTRY
-+#define PW_SIGNAL_HANDLER(name) (pw_native_kernel.sigaction ? pw_native_##name##_handler : name##_handler)
++#define PW_SIGNAL_HANDLER(name) (pw_native_kernel.syscall ? pw_native_##name##_handler : name##_handler)
 +#else
 +#define PW_SIGNAL_HANDLER(name) name##_handler
 +#endif
@@ -132,7 +146,7 @@ index ee77208..3c17143 100644
  /***********************************************************************
   *           init_handler
   */
-@@ -889,6 +982,12 @@ static inline void leave_handler( struct thread_data *data, ucontext_t *sigconte
+@@ -889,6 +996,12 @@ static inline void leave_handler( struct thread_data *data, ucontext_t *sigconte
      struct amd64_thread_data *amd64_data = amd64_thread_data( data );
  
      if (!amd64_data) return;
@@ -145,7 +159,7 @@ index ee77208..3c17143 100644
  #ifdef __linux__
      if (!is_inside_signal_stack( data, (void *)RSP_sig(sigcontext )) &&
          !is_inside_syscall( data, RSP_sig(sigcontext) ))
-@@ -915,6 +1014,32 @@ static inline void leave_handler( struct thread_data *data, ucontext_t *sigconte
+@@ -915,6 +1028,77 @@ static inline void leave_handler( struct thread_data *data, ucontext_t *sigconte
  }
  
  
@@ -162,10 +176,55 @@ index ee77208..3c17143 100644
 +    return 320;
 +}
 +
++/* The signal frame offsets above were measured on one firmware. Before
++ * relying on them, take one signal through a raw registration and check
++ * that the frame holds this thread's MXCSR and FS base where FPU_sig and
++ * FSBASE_sig read them; otherwise the imported signal path is kept. */
++static volatile int pw_frame_hits;
++static volatile UINT pw_frame_mxcsr;
++static volatile UINT64 pw_frame_fsbase;
++
++static void pw_native_frame_handler( int signal, siginfo_t *siginfo, void *sigcontext )
++{
++    pw_frame_mxcsr = ((XSAVE_FORMAT *)FPU_sig( (ucontext_t *)sigcontext ))->MxCsr;
++    pw_frame_fsbase = FSBASE_sig( (ucontext_t *)sigcontext );
++    pw_frame_hits++;
++}
++
++static BOOL pw_native_frame_verified(void)
++{
++    struct sigaction probe = {0}, previous = {0};
++    sigset_t unblock, mask;
++    UINT64 fsbase = 0;
++    UINT mxcsr, marked;
++    BOOL ok;
++
++    if (amd64_get_fsbase( &fsbase ) || !fsbase) return FALSE;
++    probe.sa_sigaction = pw_native_frame_handler;
++    probe.sa_flags = SA_SIGINFO;
++    sigemptyset( &probe.sa_mask );
++    if (pw_native_sigaction( SIGUSR2, &probe, &previous ) == -1) return FALSE;
++    sigemptyset( &unblock );
++    sigaddset( &unblock, SIGUSR2 );
++    pthread_sigmask( SIG_UNBLOCK, &unblock, &mask );
++    __asm__ volatile( "stmxcsr %0" : "=m"(mxcsr) );
++    marked = (mxcsr & ~0x6000) | 0x2000;  /* round down: visible and harmless */
++    __asm__ volatile( "ldmxcsr %0" :: "m"(marked) );
++    pthread_kill( pthread_self(), SIGUSR2 );
++    __asm__ volatile( "ldmxcsr %0" :: "m"(mxcsr) );
++    pthread_sigmask( SIG_SETMASK, &mask, NULL );
++    pw_native_sigaction( SIGUSR2, &previous, NULL );
++    ok = pw_frame_hits == 1 && pw_frame_mxcsr == marked && pw_frame_fsbase == fsbase;
++    if (!ok)
++        ERR_(seh)( "PW_NATIVE_FRAME unverified hits=%d mxcsr=%#x/%#x fsbase=%#llx/%#llx\n", pw_frame_hits,
++                   pw_frame_mxcsr, marked, (unsigned long long)pw_frame_fsbase, (unsigned long long)fsbase );
++    return ok;
++}
++
 +static unsigned int pw_native_ready_caps(void)
 +{
 +    XSAVE_AREA_HEADER standard = {0};
-+    if (!pw_native_kernel.sigaction || !pw_native_kernel.sigreturn || !pw_native_kernel.sysarch)
++    if (!pw_native_kernel.syscall || !pw_native_kernel.sysarch)
 +        return 0;
 +    if (cs64_sel != 0x43 || ds64_sel != 0x3b ||
 +        user_shared_data->XState.EnabledFeatures != 7 ||
@@ -178,7 +237,7 @@ index ee77208..3c17143 100644
  /***********************************************************************
   *           save_context
   *
-@@ -965,15 +1090,26 @@ static void save_context( struct thread_data *data, struct xcontext *xcontext,
+@@ -965,15 +1149,26 @@ static void save_context( struct thread_data *data, struct xcontext *xcontext,
      if (FPU_sig(sigcontext))
      {
          XSAVE_AREA_HEADER *xs;
@@ -206,7 +265,7 @@ index ee77208..3c17143 100644
              assert( xcontext->c_ex.XState.Offset == (BYTE *)xs - (BYTE *)&xcontext->c_ex );
          }
      }
-@@ -2394,7 +2530,7 @@ DECLSPEC_EXPORT void __wine_ps5_set_segv_unresolved_hook( int (*hook)( siginfo_t
+@@ -2394,7 +2589,7 @@ DECLSPEC_EXPORT void __wine_ps5_set_segv_unresolved_hook( int (*hook)( siginfo_t
   *
   * Handler for SIGSEGV and related errors.
   */
@@ -215,7 +274,7 @@ index ee77208..3c17143 100644
  {
      ucontext_t *sigcontext = _sigcontext;
      struct thread_data *data;
-@@ -2497,7 +2633,7 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+@@ -2497,7 +2692,7 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
   *
   * Handler for SIGTRAP.
   */
@@ -224,7 +283,7 @@ index ee77208..3c17143 100644
  {
      ucontext_t *sigcontext = _sigcontext;
      struct thread_data *data = init_handler( sigcontext );
-@@ -2544,7 +2680,7 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+@@ -2544,7 +2739,7 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
   *
   * Handler for SIGFPE.
   */
@@ -233,7 +292,7 @@ index ee77208..3c17143 100644
  {
      ucontext_t *sigcontext = _sigcontext;
      struct thread_data *data = init_handler( sigcontext );
-@@ -2619,7 +2755,7 @@ static void fpe_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+@@ -2619,7 +2814,7 @@ static void fpe_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
   *
   * Handler for SIGINT.
   */
@@ -242,7 +301,7 @@ index ee77208..3c17143 100644
  {
      ucontext_t *sigcontext = _sigcontext;
      struct thread_data *data = init_handler( sigcontext );
-@@ -2640,7 +2776,7 @@ static void int_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+@@ -2640,7 +2835,7 @@ static void int_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
   *
   * Handler for SIGABRT.
   */
@@ -251,7 +310,7 @@ index ee77208..3c17143 100644
  {
      ucontext_t *sigcontext = _sigcontext;
      struct thread_data *data = init_handler( sigcontext );
-@@ -2659,7 +2795,7 @@ static void abrt_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+@@ -2659,7 +2854,7 @@ static void abrt_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
   *
   * Handler for SIGQUIT.
   */
@@ -260,7 +319,7 @@ index ee77208..3c17143 100644
  {
      ucontext_t *sigcontext = _sigcontext;
      struct thread_data *data = init_handler( sigcontext );
-@@ -2674,7 +2810,7 @@ static void quit_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+@@ -2674,7 +2869,7 @@ static void quit_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
   *
   * Handler for SIGUSR1, used to signal a thread that it got suspended.
   */
@@ -269,12 +328,14 @@ index ee77208..3c17143 100644
  {
      ucontext_t *sigcontext = _sigcontext;
      struct thread_data *data = init_handler( sigcontext );
-@@ -2987,28 +3123,31 @@ void signal_init_process( TEB *teb )
+@@ -2987,28 +3182,33 @@ void signal_init_process( TEB *teb )
      alloc_syscall_frame( (frame_size + 63) & ~63 );
      signal_alloc_thread( teb );
  
 +#ifdef __PROSPERO__
 +    pw_native_resolve_kernel();
++    if (pw_native_kernel.syscall && !pw_native_frame_verified())
++        memset( &pw_native_kernel, 0, sizeof(pw_native_kernel) );
 +#endif
      sig_act.sa_mask = server_block_set;
      sig_act.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
@@ -318,7 +379,7 @@ index ee77208..3c17143 100644
  #endif
  
  #ifdef __linux__
-@@ -3016,7 +3155,7 @@ void signal_init_process( TEB *teb )
+@@ -3016,7 +3216,7 @@ void signal_init_process( TEB *teb )
      {
          struct sigaction act;
  
@@ -327,7 +388,7 @@ index ee77208..3c17143 100644
          {
              WARN_(seh)( "failed to retrieve signal restorer trampoline\n" );
              syscall_dispatch_enabled = FALSE;
-@@ -3029,6 +3168,16 @@ void signal_init_process( TEB *teb )
+@@ -3029,6 +3229,16 @@ void signal_init_process( TEB *teb )
      }
  #endif
  
@@ -335,8 +396,8 @@ index ee77208..3c17143 100644
 +    /* All nine raw registrations succeeded. The CPU backend still checks
 +     * its own process/thread prerequisites before entering guest mode. */
 +    __atomic_store_n( &pw_native_caps, pw_native_ready_caps(), __ATOMIC_RELEASE );
-+    TRACE_(seh)( "PW_NATIVE_PROVIDER caps=%u raw=%p return=%p sysarch=%p cs=%x ss=%x features=%llx xstate=%u avx_offset=%u avx_size=%u\n",
-+                 pw_native_caps, (void *)pw_native_kernel.sigaction, (void *)pw_native_kernel.sigreturn,
++    TRACE_(seh)( "PW_NATIVE_PROVIDER caps=%u syscall=%p sysarch=%p cs=%x ss=%x features=%llx xstate=%u avx_offset=%u avx_size=%u\n",
++                 pw_native_caps, (void *)pw_native_kernel.syscall,
 +                 (void *)pw_native_kernel.sysarch, cs64_sel, ds64_sel,
 +                 (unsigned long long)user_shared_data->XState.EnabledFeatures, xstate_size,
 +                 user_shared_data->XState.Features[2].Offset, user_shared_data->XState.Features[2].Size );
@@ -344,7 +405,7 @@ index ee77208..3c17143 100644
      return;
  
   error:
-@@ -3063,9 +3212,17 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
+@@ -3063,9 +3273,17 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
                                             libc_addr, libc_size, &thread_data->syscall_dispatch ) < 0)
          WARN_(seh)( "could not enable syscall user dispatch\n" );
  #elif defined (__FreeBSD__) || defined (__FreeBSD_kernel__)
@@ -365,9 +426,10 @@ index ee77208..3c17143 100644
  #elif defined (__APPLE__)
 diff --git a/dlls/ntdll/unix/native_libkernel_resolver.c b/dlls/ntdll/unix/native_libkernel_resolver.c
 new file mode 100644
+index 0000000..ea0b682
 --- /dev/null
 +++ b/dlls/ntdll/unix/native_libkernel_resolver.c
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,57 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +#include "native_libkernel_resolver.h"
 +#include <string.h>
@@ -380,58 +442,82 @@ new file mode 100644
 +{
 +    uint32_t v; memcpy(&v,p,sizeof(v)); return v;
 +}
-+int native_libkernel_resolve(const void *record, size_t length,
-+                            uintptr_t sigaction_import, uintptr_t sysarch_import,
-+                            struct native_libkernel_entries *entries)
++/* the kernel's struct sigaction: handler, flags, 128-bit mask */
++struct native_kernel_sigaction {
++    uintptr_t handler;
++    int flags;
++    uint32_t mask[4];
++};
++int native_libkernel_resolve(const void *record, size_t length, uintptr_t getppid_import,
++                             uintptr_t sysarch_import, const struct native_libkernel_ops *ops,
++                             struct native_libkernel_entries *entries)
 +{
-+    /* Ordinary-title identity, bound to the external live positive-control
-+     * scan and in-title registration/fault-return proofs. ELF loader's
-+     * libkernel is a different module and is deliberately unsupported. */
-+    static const unsigned char fingerprint[20]={
-+        0x1c,0x44,0xcc,0xec,0xca,0x33,0x10,0x48,0xdb,0xd9,
-+        0x07,0x9f,0xcc,0x8c,0x5c,0x37,0,0,0,0
-+    };
-+    static const uint32_t offsets[4]={0,0x48000,0x68000,0x6c000};
-+    static const uint32_t sizes[4]={0x48000,0x20000,0x4000,0x38000};
-+    static const uint32_t protections[4]={4,1,1,3};
 +    const unsigned char *info=record;
-+    uintptr_t base;
++    struct native_kernel_sigaction action;
++    uintptr_t entry, text=0, text_end=0;
++    uint32_t count;
 +    if(!entries) return 0;
 +    memset(entries,0,sizeof(*entries));
-+    if(!info || length!=0x160) return 0;
++    if(!info || length!=0x160 || !ops || !ops->syscall_at || !getppid_import || !sysarch_import) return 0;
 +    if(read64(info)!=0 && read64(info)!=0x160) return 0;
-+    if(memcmp(info+8,"libkernel.sprx",sizeof("libkernel.sprx")) ||
-+       read32(info+0x148)!=4 || memcmp(info+0x14c,fingerprint,20)) return 0;
-+    base=read64(info+0x108);
-+    if(!base || (base&0x3fff) || base>UINTPTR_MAX-0xa4000) return 0;
-+    for(unsigned i=0;i<4;i++)
++    /* the ELF loader's libkernel is a different module and is not supported */
++    if(memcmp(info+8,"libkernel.sprx",sizeof("libkernel.sprx"))) return 0;
++    count=read32(info+0x148);
++    if(!count || count>4) return 0;
++    entry=getppid_import+NATIVE_LIBKERNEL_STUB_SYSCALL;
++    for(unsigned i=0;i<count;i++)
 +    {
 +        const unsigned char *s=info+0x108+i*16;
-+        if(read64(s)!=base+offsets[i] || read32(s+8)!=sizes[i] ||
-+           read32(s+12)!=protections[i]) return 0;
++        uint64_t start=read64(s), size=read32(s+8);
++        if(!(read32(s+12)&4) || start>UINTPTR_MAX-size) continue;
++        if(getppid_import>=start && entry+2<=start+size) { text=start; text_end=start+size; }
 +    }
-+    if(sigaction_import!=base+0xc3f0 || sysarch_import!=base+0xde0) return 0;
-+    entries->sigaction=base+0x1600;
-+    entries->sigreturn=base+0x2a0;
++    if(!text) return 0;
++    /* the instruction runs whichever call is in %rax: getpid and getppid
++     * swapped, which only a real syscall instruction can answer */
++    if(ops->pid<=0 || ops->ppid<0 || ops->pid==ops->ppid) return 0;
++    if(ops->syscall_at(entry,NATIVE_LIBKERNEL_SYS_GETPID,0,0,0)!=ops->pid ||
++       ops->syscall_at(entry,NATIVE_LIBKERNEL_SYS_GETPPID,0,0,0)!=ops->ppid) return 0;
++    /* a raw sigaction query sees the kernel's registration: none, or
++     * libkernel's own entry when its wrapper installed a handler */
++    memset(&action,0,sizeof(action));
++    if(ops->syscall_at(entry,NATIVE_LIBKERNEL_SYS_SIGACTION,11 /* SIGSEGV */,0,(long)(uintptr_t)&action)) return 0;
++    if(action.handler>1 && (action.handler<text || action.handler>=text_end)) return 0;
++    entries->syscall=entry;
 +    entries->sysarch=sysarch_import;
 +    return 1;
 +}
 diff --git a/dlls/ntdll/unix/native_libkernel_resolver.h b/dlls/ntdll/unix/native_libkernel_resolver.h
 new file mode 100644
+index 0000000..011e097
 --- /dev/null
 +++ b/dlls/ntdll/unix/native_libkernel_resolver.h
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,28 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +#ifndef NATIVE_LIBKERNEL_RESOLVER_H
 +#define NATIVE_LIBKERNEL_RESOLVER_H
 +#include <stddef.h>
 +#include <stdint.h>
++/* libkernel's plain system call stubs are "mov $N,%rax; mov %rcx,%r10;
++ * syscall; jb error; ret": the syscall instruction is 10 bytes in. */
++#define NATIVE_LIBKERNEL_STUB_SYSCALL 10
++#define NATIVE_LIBKERNEL_SYS_GETPID 20
++#define NATIVE_LIBKERNEL_SYS_GETPPID 39
++#define NATIVE_LIBKERNEL_SYS_SIGACTION 416
 +struct native_libkernel_entries {
-+    uintptr_t sigaction, sigreturn, sysarch;
++    uintptr_t syscall;  /* a syscall instruction inside libkernel's code */
++    uintptr_t sysarch;
 +};
-+/* Pure metadata guard: never reads code or calls a candidate. Unknown
-+ * identities fail closed and leave all output entries zero. */
-+int native_libkernel_resolve(const void *info, size_t length,
-+                            uintptr_t sigaction_import, uintptr_t sysarch_import,
-+                            struct native_libkernel_entries *entries);
++struct native_libkernel_ops {
++    /* runs the system call NUMBER through the instruction at ENTRY */
++    long (*syscall_at)( uintptr_t entry, long number, long a1, long a2, long a3 );
++    long pid, ppid;     /* getpid() and getppid() through the imports */
++};
++/* Finds a syscall instruction in libkernel's exported getppid stub and
++ * proves it runs other system calls before using it; any firmware whose
++ * stubs have that shape passes. The module record (sceKernelGetModuleInfo)
++ * gives libkernel's executable segment. Fails closed with zero entries. */
++int native_libkernel_resolve( const void *info, size_t length, uintptr_t getppid_import,
++                              uintptr_t sysarch_import, const struct native_libkernel_ops *ops,
++                              struct native_libkernel_entries *entries );
 +#endif

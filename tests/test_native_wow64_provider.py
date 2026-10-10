@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the exact identity resolver shipped by the native signal patch."""
+"""Exercise the libkernel syscall resolver shipped by the native signal patch."""
 from pathlib import Path
 import os
 import subprocess
