@@ -19,8 +19,10 @@ Unknown chain types, callback structures and input blobs without a documented
 extent fail encoding before enqueue. `VkCuLaunchInfoNVX.pParams/pExtras` cannot
 be deep-copied because the API does not provide individual blob sizes.
 
-Immediate-output void getters require synchronous handling, with one opt-in
-exception. With `PW_VK_DEFER_DESCRIPTORS=1`, `vkGetDescriptorEXT` is
+Immediate-output void getters require synchronous handling, with one
+exception. With `PW_VK_DEFER_DESCRIPTORS=1`, which the title sets for every
+Zink game (`[debug] env = PW_VK_DEFER_DESCRIPTORS=0` opts out),
+`vkGetDescriptorEXT` is
 enqueued: its record carries the input and the destination address, and the
 replay writes the descriptor there in stream order, before any later
 synchronous call, submit, unmap or free. The PE adapter defers only into a live

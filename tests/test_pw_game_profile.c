@@ -41,15 +41,20 @@ static void test_graphics_env(void)
                    PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX <= PW_WINE_START_MAX_ENV);
             /* refresh and opengl_thread no longer set anything */
             if (graphics == PW_APP_GRAPHICS_ZINK) {
-                assert(count == (size_t)(1 + fps));
+                assert(count == (size_t)(2 + fps));
                 assert(!strcmp(env[0].name, "GALLIUM_DRIVER") && !strcmp(env[0].value, "zink"));
-                if (fps) assert(!strcmp(env[1].name, "GALLIUM_HUD"));
+                assert(!strcmp(env[1].name, "PW_VK_DEFER_DESCRIPTORS") && !strcmp(env[1].value, "1"));
+                if (fps) assert(!strcmp(env[2].name, "GALLIUM_HUD"));
             } else {
                 assert(count == (size_t)fps);
                 if (fps) assert(!strcmp(env[0].name, "DXVK_HUD"));
             }
         }
     }
+    /* A Zink game's [debug] env decides the deferral itself: the title adds none. */
+    assert(parse(APP "[debug]\nenv = PW_VK_DEFER_DESCRIPTORS=0\n", &p) == PW_OK);
+    p.app.graphics = PW_APP_GRAPHICS_ZINK; p.display.show_fps = 0;
+    assert(pw_game_graphics_env(&p, env) == 1 && !strcmp(env[0].name, "GALLIUM_DRIVER"));
 }
 
 static void test_profile(void)

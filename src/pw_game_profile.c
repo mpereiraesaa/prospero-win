@@ -439,7 +439,17 @@ size_t pw_game_graphics_env(const PwGameProfile *profile, PwGameEnv *env)
     int zink;
     if (!profile || !env) return 0;
     zink = profile->app.graphics == PW_APP_GRAPHICS_ZINK;
-    if (zink) env[count++] = (PwGameEnv){ "GALLIUM_DRIVER", "zink" };
+    if (zink) {
+        int opted = 0;
+        env[count++] = (PwGameEnv){ "GALLIUM_DRIVER", "zink" };
+        /* Zink writes its descriptors into a mapped descriptor buffer and never
+         * reads them back, so winevulkan may defer vkGetDescriptorEXT (99% of
+         * its crossings in Counter-Strike 1.6). [debug] env = PW_VK_DEFER_DESCRIPTORS=0
+         * opts out. */
+        for (size_t i = 0; i < profile->debug_env_count; i++)
+            opted |= !strcmp(profile->debug_env[i].name, "PW_VK_DEFER_DESCRIPTORS");
+        if (!opted) env[count++] = (PwGameEnv){ "PW_VK_DEFER_DESCRIPTORS", "1" };
+    }
     if (profile->display.show_fps)
         env[count++] = zink ? (PwGameEnv){ "GALLIUM_HUD", "simple,fps" } : (PwGameEnv){ "DXVK_HUD", "fps" };
     return count;

@@ -127,7 +127,7 @@ typedef struct PwGameDebugEnv {
     char name[PW_GAME_DEBUG_ENV_NAME];
     char value[PW_GAME_DEBUG_ENV_VALUE];
 } PwGameDebugEnv;
-enum { PW_GAME_RUNTIME_ENV_MAX = 2, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 2,
+enum { PW_GAME_RUNTIME_ENV_MAX = 2, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 3,
        PW_GAME_CLOCK_ENV_MAX = 2 };
 
 typedef struct PwGameProfile {
@@ -160,8 +160,9 @@ int pw_game_cpu_native(const PwGameProfile *profile);
 size_t pw_game_cpu_env(const PwGameProfile *profile, PwGameEnv *env);
 
 /* Graphics-specific environment, at most PW_GAME_GRAPHICS_ENV_MAX entries.
- * graphics = opengl (or zink) selects GALLIUM_DRIVER=zink, with Mesa's FPS
- * HUD when show_fps is on; the launcher installs the architecture's Zink
+ * graphics = opengl (or zink) selects GALLIUM_DRIVER=zink and
+ * PW_VK_DEFER_DESCRIPTORS=1 (unless [debug] env sets that variable, the
+ * opt-out), with Mesa's FPS HUD when show_fps is on; the launcher installs the architecture's Zink
  * provider from win/mesa-zink/{i386-windows,x86_64-windows} and refuses the
  * launch when it is missing. */
 size_t pw_game_graphics_env(const PwGameProfile *profile, PwGameEnv *env);
