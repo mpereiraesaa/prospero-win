@@ -39,6 +39,9 @@ typedef struct PwDataMountResult {
     int data_after;    /* /data became reachable */
     int waited_ms;     /* time spent waiting for it */
     int settled_ms;    /* time waited after it appeared (a new grant only) */
+    int elevated_before; /* the title was elevated when it started: 1 also when
+                          * there is no probe, 0 when /data was only shown to it */
+    int elevated_after;  /* elevated once a helper request finished (same reading) */
 } PwDataMountResult;   /* what one request reached, for logging */
 
 /* Request /data for pid, waiting up to max_wait_ms after a successful helper

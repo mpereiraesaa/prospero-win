@@ -7,12 +7,14 @@
 
 static int request_calls, request_fail, visible_in, poll_calls, sleep_total;
 static int32_t requested_pid;
+static int elevated_now, grant_on_request;
 
 static int fake_request(int32_t pid)
 {
     request_calls++;
     requested_pid = pid;
     if (request_fail) { errno = ETIMEDOUT; return -1; }
+    if (grant_on_request) elevated_now = 1;
     return 0;
 }
 
@@ -25,7 +27,6 @@ static int fake_visible(void)
 
 static void fake_sleep(int ms) { sleep_total += ms; }
 
-static int elevated_now;
 static int fake_elevated(void) { return elevated_now; }
 
 int main(void)
@@ -75,17 +76,41 @@ int main(void)
     assert(r.data_before == 1 && r.data_after == 1 && request_calls == 0);
     assert(sleep_total == 0);
 
-    /* Visible but unelevated (another payload shows /data): ask the helper. */
+    assert(r.elevated_before == 1 && r.elevated_after == 1);
+
+    /* Visible but unelevated (another payload shows /data): ask the helper,
+     * and go on once the title is elevated. */
     request_calls = poll_calls = sleep_total = 0;
     elevated_now = 0;
+    grant_on_request = 1;
     assert(pw_data_mount_request_with(&checked, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
     assert(request_calls == 1 && requested_pid == 2595);
     assert(r.data_before == 1 && r.helper_completed == 1 && r.data_after == 1);
+    assert(r.elevated_before == 0 && r.elevated_after == 1);
     assert(r.waited_ms == 0 && r.settled_ms == PW_DATA_MOUNT_SETTLE_MS);
+    assert(sleep_total == PW_DATA_MOUNT_SETTLE_MS);
+
+    /* The helper says yes but the title stays unelevated: wait out the
+     * deadline with no settle delay, then keep the visible /data as before. */
+    request_calls = poll_calls = sleep_total = 0;
+    elevated_now = 0;
+    grant_on_request = 0;
+    assert(pw_data_mount_request_with(&checked, 2595, 300, &r) == 0);
+    assert(request_calls == 1 && r.helper_completed == 1 && r.data_before == 1);
+    assert(r.elevated_before == 0 && r.elevated_after == 0 && r.data_after == 0);
+    assert(r.waited_ms == 300 && r.settled_ms == 0 && sleep_total == 300);
+
+    /* No /data at all and no probe: the first wait still ends on visibility. */
+    request_calls = poll_calls = sleep_total = 0;
+    visible_in = 2;
+    assert(pw_data_mount_request_with(&checked, 7, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
+    assert(r.data_before == 0 && r.data_after == 1 && r.waited_ms == PW_DATA_MOUNT_POLL_MS);
+    visible_in = 0;
 
     /* The helper refusing leaves the visible /data usable, as before. */
     request_calls = poll_calls = sleep_total = 0;
     request_fail = 1;
+    elevated_now = 0;
     assert(pw_data_mount_request_with(&checked, 2595, PW_DATA_MOUNT_WAIT_MS, &r) == 0);
     assert(request_calls == 1 && r.helper_completed == 0 && r.helper_errno == ETIMEDOUT);
     assert(r.data_before == 1 && r.data_after == 1 && sleep_total == 0);

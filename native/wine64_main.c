@@ -645,9 +645,10 @@ static int open_library(void)
 
     status = pw_data_mount_request(&mount);
     if (status == 0) library_root = PW_WINE64_ROOT_DATA;
-    PS5LOG_LOG("PW_WINE64 data_mount data_before=%d helper_completed=%d helper_errno=%d data_after=%d "
-               "waited_ms=%d settled_ms=%d root=%s", mount.data_before,
-               mount.helper_completed, mount.helper_errno, mount.data_after, mount.waited_ms,
+    PS5LOG_LOG("PW_WINE64 data_mount data_before=%d elevated_before=%d helper_completed=%d "
+               "helper_errno=%d data_after=%d elevated_after=%d waited_ms=%d settled_ms=%d root=%s",
+               mount.data_before, mount.elevated_before, mount.helper_completed,
+               mount.helper_errno, mount.data_after, mount.elevated_after, mount.waited_ms,
                mount.settled_ms, status == 0 ? library_root : "unavailable");
     if (status != 0) return -1;
     status = pw_wine_library_load(&library, library_root);

@@ -16,6 +16,7 @@ int pw_data_mount_request_with(const PwDataMountOps *ops, int32_t pid,
     if (!detail) detail = &local;
     detail->data_before = detail->helper_completed = detail->helper_errno = 0;
     detail->data_after = detail->waited_ms = detail->settled_ms = 0;
+    detail->elevated_before = detail->elevated_after = 0;
     if (!ops || !ops->request || !ops->data_visible || !ops->sleep_ms ||
         pid <= 1 || max_wait_ms < 0) return -1;
 
@@ -26,6 +27,7 @@ int pw_data_mount_request_with(const PwDataMountOps *ops, int32_t pid,
     if (ops->data_visible()) {
         detail->data_before = 1;
         if (!ops->elevated || ops->elevated()) {
+            detail->elevated_before = detail->elevated_after = 1;
             detail->data_after = 1;
             return 0;
         }
@@ -45,13 +47,21 @@ int pw_data_mount_request_with(const PwDataMountOps *ops, int32_t pid,
         return 0;
     }
     for (;;) {
-        if (ops->data_visible()) {
+        /* On a /data that was already visible only the title's own elevation
+         * is news, so that is what the helper's reply has to bring about. */
+        if (detail->data_before ? (!ops->elevated || ops->elevated()) : ops->data_visible()) {
+            detail->elevated_after = !ops->elevated || ops->elevated();
             detail->data_after = 1;
             ops->sleep_ms(PW_DATA_MOUNT_SETTLE_MS);
             detail->settled_ms = PW_DATA_MOUNT_SETTLE_MS;
             return 0;
         }
-        if (detail->waited_ms >= max_wait_ms) return -1;
+        if (detail->waited_ms >= max_wait_ms) {
+            /* The helper said yes but the title was not elevated within the
+             * deadline: keep the visible /data as before the request, and
+             * leave data_after and elevated_after at 0 for the log. */
+            return detail->data_before ? 0 : -1;
+        }
         ops->sleep_ms(PW_DATA_MOUNT_POLL_MS);
         detail->waited_ms += PW_DATA_MOUNT_POLL_MS;
     }
@@ -75,11 +85,11 @@ static int native_data_visible(void)
 }
 
 /* An unelevated title gets EPERM from lstat() on every path while stat()
- * still works (prospero-win #376). */
+ * still works (prospero-win #376), so only that error says "unelevated". */
 static int native_elevated(void)
 {
     struct stat st;
-    return lstat(PW_DATA_MOUNT_PATH, &st) == 0;
+    return lstat(PW_DATA_MOUNT_PATH, &st) == 0 || errno != EPERM;
 }
 
 static void native_sleep_ms(int ms)
