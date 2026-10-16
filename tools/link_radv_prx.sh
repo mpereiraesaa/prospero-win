@@ -54,7 +54,7 @@ for unit in pw_vk_radv_profile pw_vk_radv_profile_wrap; do
         -c "$root/wine/ps5/$unit.c" -o "$work/obj/$unit.o"
 done
 python3 "$root/tools/gen_prx_descriptor.py" "$work/obj/libvulkan_desc.c" \
-    vkGetInstanceProcAddr vkGetDeviceProcAddr pw_videoout_idle pw_videoout_show_tiled pw_videoout_cursor \
+    vkGetInstanceProcAddr vkGetDeviceProcAddr pw_videoout_idle pw_videoout_show_tiled pw_videoout_cursor pw_videoout_quiesce \
     pw_vk_radv_profile_set_frame_hook
 "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$root/wine/ps5" \
     -c "$work/obj/libvulkan_desc.c" -o "$work/obj/libvulkan_desc.o"

@@ -360,6 +360,32 @@ static int wine_present(void *context, const void *bgra, uint32_t width, uint32_
  * output (patch 0460), which the title must close first. The main thread
  * owns the title's, so the driver's request waits for it to be closed. */
 static int display_request, display_closed;
+enum { PW_WINE64_QUIESCE_MS = 500 };
+
+/* Wine's dlsym, for the exports of the modules it loaded (libvulkan.prx). */
+static void *(*wine_dlsym_fn)(void *, const char *);
+
+/* Once the display is Vulkan's, the game's last flips are still on their
+ * way when Wine exits: RADV's own flip thread submits them after the game's
+ * threads are gone. A process replaced with such a flip queued stayed at
+ * the system's "Closing" screen (Project Eagle, 2026-10-12). libvulkan.prx
+ * drains them (pw_videoout_quiesce); an older driver has no such export. */
+static void display_quiesce(const char *reason)
+{
+    int (*quiesce)(unsigned, unsigned *, int *);
+    unsigned waited = 0;
+    int pending = 0, status;
+
+    if (!__atomic_load_n(&display_closed, __ATOMIC_ACQUIRE) || !wine_dlsym_fn) return;
+    quiesce = (int (*)(unsigned, unsigned *, int *))(uintptr_t)wine_dlsym_fn(NULL, "pw_videoout_quiesce");
+    if (!quiesce) {
+        PS5LOG_LOG("PW_WINE64 display quiesce reason=%s status=unavailable", reason);
+        return;
+    }
+    status = quiesce(PW_WINE64_QUIESCE_MS, &waited, &pending);
+    PS5LOG_LOG("PW_WINE64 display quiesce reason=%s status=%d waited_ms=%u pending=%d", reason, status,
+               waited, pending);
+}
 
 static int wine_release_display(void *context)
 {
@@ -615,6 +641,7 @@ static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reas
         PS5LOG_LOG("PW_WINE64 restart refused: arguments do not fit");
         return;
     }
+    display_quiesce(reason);
     for (size_t i = 0; i < sizeof(eboots) / sizeof(eboots[0]); i++) {
         PS5LOG_LOG("PW_WINE64 restart to=%s cycle=%u reason=%s eboot=%s", app ? app->id : "launcher",
                    (unsigned)cycle, reason, eboots[i]);
@@ -1150,6 +1177,8 @@ int main(int argc, char **argv)
                start.segment_count, start.module_start_result, start.adopted != NULL,
                start.virtual_stats != NULL);
     install_early_fault_report(&start);
+    if (status == PW_OK)
+        wine_dlsym_fn = (void *(*)(void *, const char *))(uintptr_t)pw_prx_lookup(start.descriptor, "dlsym");
     atexit(on_exit_report);
     if (status == PW_OK) {
         void (*set_sink)(void (*)(const char *, size_t)) = (void (*)(void (*)(const char *, size_t)))
