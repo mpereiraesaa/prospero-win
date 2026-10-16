@@ -27,7 +27,15 @@ typedef struct PwPadPs5Ops {
     int (*pad_close)(int32_t);
     /* Optional: scePadSetVibration(handle, {large, small}), NULL if none. */
     int (*pad_set_vibration)(int32_t,const uint8_t motors[2]);
+    /* Optional: scePadSetVibrationMode(handle, mode). A DualSense opens in
+     * advanced haptics mode, where scePadSetVibration's motor levels move
+     * nothing; called with PW_PAD_PS5_VIBRATION_COMPATIBLE right after open
+     * so the classic dual-motor path actually drives the actuators. NULL
+     * if unavailable; its result is not fatal to opening the pad. */
+    int (*pad_set_vibration_mode)(int32_t,int32_t);
 } PwPadPs5Ops;
+
+enum { PW_PAD_PS5_VIBRATION_COMPATIBLE=2 };
 
 typedef struct PwPadPs5 {
     PwPad core;PwPadPs5Ops ops;int32_t user_id,pad_handle;

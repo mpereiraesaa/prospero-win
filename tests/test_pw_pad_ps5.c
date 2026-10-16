@@ -18,8 +18,11 @@ static int pad_close(int32_t h){assert(h==7);close_calls++;return 0;}
 static int vibration_calls,vibration_rc;static uint8_t motors_seen[2];
 static int pad_set_vibration(int32_t h,const uint8_t m[2])
 {assert(h==7);vibration_calls++;memcpy(motors_seen,m,2);return vibration_rc;}
+static int vibration_mode_calls,vibration_mode_seen;
+static int pad_set_vibration_mode(int32_t h,int32_t m)
+{assert(h==7);vibration_mode_calls++;vibration_mode_seen=m;return 0;}
 static const PwPadPs5Ops ops={user_initialize,foreground,terminate,pad_init,pad_open,pad_read,pad_close,
-                              pad_set_vibration};
+                              pad_set_vibration,pad_set_vibration_mode};
 enum { CREATE=0x1,L1=0x400 };
 static const PwPadKeyMap map[]={{L1,'Z',0,0,"left-flipper"}};
 
@@ -29,6 +32,7 @@ int main(void)
     assert(pw_pad_ps5_open(&pad,&ops,map,1)==PW_OK && pad.opened && pad.pad_handle==7);
     assert(pad.left_stick.x==0x80 && pad.right_stick.y==0x80 && !pad.l2 && !pad.r2);
     assert(init_calls==1&&foreground_calls==1&&pad_init_calls==1&&open_calls==1);
+    assert(vibration_mode_calls==1 && vibration_mode_seen==PW_PAD_PS5_VIBRATION_COMPATIBLE);
     fixture[0]=(PwPadPs5Data){.buttons=L1|CREATE,.connected=1,.timestamp=1000,.connected_count=1};
     fixture_count=1;assert(pw_pad_ps5_read(&pad)==PW_OK);
     assert(pad.connected_samples==1 && pad.core.pressed_edges==(L1|CREATE));

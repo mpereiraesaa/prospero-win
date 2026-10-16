@@ -19,6 +19,7 @@ extern int scePadOpen(int32_t,int32_t,int32_t,const void *);
 extern int scePadRead(int32_t,PwPadPs5Data *,int32_t);
 extern int scePadClose(int32_t);
 extern int scePadSetVibration(int32_t,const uint8_t *);
+extern int scePadSetVibrationMode(int32_t,int32_t);
 static int platform_user_initialize(const void *p){return sceUserServiceInitialize(p);}
 static int platform_foreground_user(int32_t *u){return sceUserServiceGetForegroundUser(u);}
 static int platform_user_terminate(void){return sceUserServiceTerminate();}
@@ -29,6 +30,7 @@ static int platform_pad_read(int32_t h,PwPadPs5Data *s,int32_t n)
 {return scePadRead(h,s,n);}
 static int platform_pad_close(int32_t h){return scePadClose(h);}
 static int platform_pad_set_vibration(int32_t h,const uint8_t m[2]){return scePadSetVibration(h,m);}
+static int platform_pad_set_vibration_mode(int32_t h,int32_t m){return scePadSetVibrationMode(h,m);}
 #endif
 
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *ops)
@@ -39,7 +41,8 @@ int pw_pad_ps5_platform_ops(PwPadPs5Ops *ops)
 #else
     *ops=(PwPadPs5Ops){platform_user_initialize,platform_foreground_user,
         platform_user_terminate,platform_pad_init,platform_pad_open,
-        platform_pad_read,platform_pad_close,platform_pad_set_vibration};return PW_OK;
+        platform_pad_read,platform_pad_close,platform_pad_set_vibration,
+        platform_pad_set_vibration_mode};return PW_OK;
 #endif
 }
 
@@ -68,7 +71,10 @@ int pw_pad_ps5_open(PwPadPs5 *pad,const PwPadPs5Ops *ops,
     pad->pad_init_rc=pad->ops.pad_init();if(pad->pad_init_rc<0)goto failed;
     pad->pad_handle=pad->ops.pad_open(pad->user_id,0,0,NULL);
     if(pad->pad_handle<0)goto failed;
-    pad->opened=1;centre_analog(pad);return PW_OK;
+    pad->opened=1;centre_analog(pad);
+    if(pad->ops.pad_set_vibration_mode)
+        pad->ops.pad_set_vibration_mode(pad->pad_handle,PW_PAD_PS5_VIBRATION_COMPATIBLE);
+    return PW_OK;
 failed:
     if(pad->owns_user_service){pad->terminate_rc=pad->ops.user_terminate();pad->owns_user_service=0;}
     return PW_ERR_STATE;
