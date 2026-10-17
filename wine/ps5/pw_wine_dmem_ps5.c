@@ -156,6 +156,73 @@ static int self_check(uintptr_t address)
     return !pw_wine_dmem_replace(&dmem, address, PAGE, 0) && ok;
 }
 
+/* The Unix-side heap (pw_wine_heap) in direct memory: its spans and large
+ * blocks were anonymous mappings, which the console takes from the title's
+ * ~440 MiB of flexible memory, and GL drivers drained it (Slay the Spire 2:
+ * 237 MiB of heap spans, then 4 fps and a crash). Each block is main direct
+ * memory mapped where the kernel chooses; its offset is kept here so free can
+ * release it. Called with the heap's lock held. */
+enum { HEAP_SLOTS = 1 << 17 };
+typedef struct HeapBlock { uintptr_t address; size_t bytes; int64_t offset; } HeapBlock;
+static HeapBlock heap_blocks[HEAP_SLOTS];
+static unsigned heap_block_count;
+static uint64_t heap_direct_bytes;
+
+static size_t heap_slot(uintptr_t address) { return (size_t)((address / PAGE) * 0x9e3779b97f4a7c15ull >> 47) & (HEAP_SLOTS - 1); }
+
+static void *heap_map(void *context, size_t bytes)
+{
+    size_t span = (bytes + PAGE - 1) & ~(size_t)(PAGE - 1), slot;
+    int64_t offset;
+    void *at = NULL;
+    (void)context;
+    if (heap_block_count >= HEAP_SLOTS / 2) return NULL;
+    if (allocate(NULL, span, &offset)) return NULL;
+    if (sceKernelMapDirectMemory(&at, span, map_protection, 0, offset, PAGE) || !at) {
+        release(NULL, offset, span);
+        return NULL;
+    }
+    for (slot = heap_slot((uintptr_t)at); heap_blocks[slot].address; slot = (slot + 1) & (HEAP_SLOTS - 1)) {}
+    heap_blocks[slot] = (HeapBlock){ (uintptr_t)at, span, offset };
+    heap_block_count++;
+    heap_direct_bytes += span;
+    return at;
+}
+
+static int heap_unmap(void *context, void *address, size_t bytes)
+{
+    size_t slot, hole, next;
+    (void)context; (void)bytes;
+    for (slot = heap_slot((uintptr_t)address); heap_blocks[slot].address; slot = (slot + 1) & (HEAP_SLOTS - 1)) {
+        HeapBlock block = heap_blocks[slot];
+        if (block.address != (uintptr_t)address) continue;
+        unmap(NULL, block.address, block.bytes);
+        release(NULL, block.offset, block.bytes);
+        heap_block_count--;
+        heap_direct_bytes -= block.bytes;
+        /* Linear-probe deletion: move later entries of the run back. */
+        heap_blocks[slot].address = 0;
+        for (hole = slot, next = (slot + 1) & (HEAP_SLOTS - 1); heap_blocks[next].address;
+             next = (next + 1) & (HEAP_SLOTS - 1)) {
+            size_t home = heap_slot(heap_blocks[next].address);
+            if (((next - home) & (HEAP_SLOTS - 1)) >= ((next - hole) & (HEAP_SLOTS - 1))) {
+                heap_blocks[hole] = heap_blocks[next];
+                heap_blocks[next].address = 0;
+                hole = next;
+            }
+        }
+        return 0;
+    }
+    return 1;  /* not ours: an anonymous mapping from before direct memory */
+}
+
+static void heap_use_direct_memory(void)
+{
+    static const PwWineHeapBacking backing = { NULL, heap_map, heap_unmap };
+    pw_wine_heap_set_backing(&backing);
+    fprintf(stderr, "wine-ps5: heap in direct memory\n");
+}
+
 /* ntdll's reserved area [base, +size), already reserved: backed by direct
  * memory from now on. ntdll also gives each reservation it makes at a fixed
  * address outside those areas: the console does not back a bare reservation
@@ -173,6 +240,7 @@ void __wine_ps5_dmem_region(void *base, size_t size)
         state = self_check((uintptr_t)base) ? 1 : -1;
         fprintf(stderr, "wine-ps5: direct memory %s for anonymous memory (region %p, %zu MiB)\n",
                 state > 0 ? "in use" : "refused", base, size >> 20);
+        if (state > 0 && !getenv("WINE_PS5_HEAP_FLEXIBLE")) heap_use_direct_memory();
     }
 }
 
