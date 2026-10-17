@@ -19,6 +19,7 @@ static pthread_once_t wake_once=PTHREAD_ONCE_INIT;
 static int wake[2]={-1,-1};
 static PwWinePad pad_state;
 static uint32_t rumble_left,rumble_right,rumble_changed;
+static struct pw_title_menu menu_state={.version=PW_TITLE_MENU_VERSION};
 /* Audio has its own lock: its sink blocks for a grain, which must not hold
  * up frames or input. */
 static pthread_mutex_t audio_lock=PTHREAD_MUTEX_INITIALIZER;
@@ -214,4 +215,34 @@ int pw_wine_rumble(uint32_t *left,uint32_t *right)
     if(right)*right=rumble_right;
     pthread_mutex_unlock(&lock);
     return changed;
+}
+
+void pw_wine_set_menu(const struct pw_title_menu *menu)
+{
+    struct pw_title_menu next={.version=PW_TITLE_MENU_VERSION};
+    if(menu && menu->open) {
+        next.open=1;
+        next.lines=menu->lines<PW_TITLE_MENU_LINES?menu->lines:PW_TITLE_MENU_LINES;
+        next.selected=menu->selected>=0 && (uint32_t)menu->selected<next.lines?menu->selected:-1;
+        memcpy(next.title,menu->title,sizeof(next.title));
+        next.title[sizeof(next.title)-1]=0;
+        for(uint32_t i=0;i<next.lines;i++) {
+            memcpy(next.line[i],menu->line[i],sizeof(next.line[i]));
+            next.line[i][sizeof(next.line[i])-1]=0;
+        }
+    }
+    pthread_mutex_lock(&lock);
+    next.sequence=menu_state.sequence;
+    if(memcmp(&next,&menu_state,sizeof(next))) {
+        next.sequence=menu_state.sequence+1;
+        menu_state=next;
+    }
+    pthread_mutex_unlock(&lock);
+}
+void pw_wine_menu(struct pw_title_menu *menu)
+{
+    if(!menu)return;
+    pthread_mutex_lock(&lock);
+    *menu=menu_state;
+    pthread_mutex_unlock(&lock);
 }

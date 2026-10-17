@@ -283,6 +283,7 @@ def check_vk_runtime_staging() -> None:
         source.mkdir()
         headers = []
         for family, module, name in [('time', 'ntdll', 'pw_qpc_clock.h'),
+                                     ('menu', 'ntdll', 'pw_title_menu.h'),
                                      ('input', 'win32u', 'pw_key_shared.h')]:
             if f'wine/ps5/{family}/' not in block:
                 continue
@@ -290,7 +291,7 @@ def check_vk_runtime_staging() -> None:
             original.parent.mkdir(parents=True)
             original.write_text(f'{family} shared ABI fixture\n')
             target = source / f'dlls/{module}/{name}'
-            target.parent.mkdir(parents=True)
+            target.parent.mkdir(parents=True, exist_ok=True)
             headers.append((original, target))
         helper = base / 'tools/stage_vk_batch.py'
         helper.write_text('import sys, pathlib\nassert sys.argv[1:] == ["--source", '

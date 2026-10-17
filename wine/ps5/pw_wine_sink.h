@@ -2,6 +2,7 @@
 #ifndef PW_WINE_SINK_H
 #define PW_WINE_SINK_H
 #include <stdint.h>
+#include "menu/pw_title_menu.h"
 
 /* The meeting point between the title and Wine's PS5 user driver. ntdll
  * links it: the title reaches the set/post calls through ntdll.prx's
@@ -12,6 +13,8 @@
  * game's XInput controller is one more slot: the title keeps the newest
  * gamepad state in it, Wine's xinput reads it (its Unix library, patch
  * 0470, finds these calls with dlsym) and leaves the rumble it asks for.
+ * The title's in-game menu is another slot: the title stores what to draw
+ * and ntdll hands it to the game's renderer (menu/pw_title_menu.h).
  * A game that presents with Vulkan scans out itself (patch 0460): the
  * driver asks the title once to release the video output. Frames still
  * reach the title after that, which shows them through the Vulkan driver
@@ -73,6 +76,9 @@ void pw_wine_set_pad(const PwWinePad *pad);
 /* 1 and the newest motor speeds (0..65535) when they changed since the
  * last call, else 0. */
 int pw_wine_rumble(uint32_t *left,uint32_t *right);
+/* The menu to draw, or NULL to close it. The sink sets version and
+ * sequence, clamps lines and selected, and terminates every string. */
+void pw_wine_set_menu(const struct pw_title_menu *menu);
 
 /* Driver side. -1 when no sink is set or the arguments are invalid. */
 int pw_wine_present(const void *bgra,uint32_t width,uint32_t height,uint32_t stride);
@@ -88,6 +94,9 @@ int pw_wine_next_input(PwWineInput *event);
 int pw_wine_input_fd(void);
 /* 1 and the gamepad's state while one is connected, else 0. */
 int pw_wine_pad(PwWinePad *pad);
+/* The newest menu snapshot; a closed menu reads as zeros apart from
+ * version and sequence. */
+void pw_wine_menu(struct pw_title_menu *menu);
 /* The rumble a game asked for (XInputSetState); speeds are clamped. */
 void pw_wine_set_rumble(uint32_t left,uint32_t right);
 /* 1 when the title set an audio sink: the audio driver offers its device

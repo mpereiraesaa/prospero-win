@@ -259,6 +259,8 @@ python3 "$root/tools/stage_vk_batch.py" --source "$tree" --repo "$root" ||
 # Stage the pointer-free shared-clock ABI used by PE32 and the provider.
 cp "$root/wine/ps5/time/pw_qpc_clock.h" "$tree/dlls/ntdll/pw_qpc_clock.h" ||
     fail "cannot stage shared-clock ABI"
+cp "$root/wine/ps5/menu/pw_title_menu.h" "$tree/dlls/ntdll/pw_title_menu.h" ||
+    fail "cannot stage title-menu ABI"
 cp "$root/wine/ps5/input/pw_key_shared.h" "$tree/dlls/win32u/pw_key_shared.h" ||
     fail "cannot stage shared-input ABI"
 
@@ -270,7 +272,8 @@ stamp=$(
         "$cflags" "$gnutls_args" "${GNUTLS_LIBS:-}"
       for patch in $ordered; do cat "$patches/$patch"; done
       cat "$root/tools/stage_vk_batch.py" "$root/tools/generate_vk_codecs.py" "$root"/wine/ps5/pw_vk_*.[ch] \
-          "$root"/wine/ps5/vulkan/*.[ch] "$root/wine/ps5/time/pw_qpc_clock.h" "$root/wine/ps5/input/pw_key_shared.h"; } | sha256sum | cut -c1-64)
+          "$root"/wine/ps5/vulkan/*.[ch] "$root/wine/ps5/time/pw_qpc_clock.h" "$root/wine/ps5/input/pw_key_shared.h" \
+          "$root/wine/ps5/menu/pw_title_menu.h"; } | sha256sum | cut -c1-64)
 build=$work/build
 if [ ! -f "$build/Makefile" ] || [ "$(cat "$build/.prospero-stamp" 2>/dev/null)" != "$stamp" ]; then
     rm -rf "$build"
@@ -416,7 +419,7 @@ if [ "$prx_status" = 0 ]; then
         pw_wine_heap_stats pw_wine_heap_malloc pw_wine_heap_free \
         pw_wine_set_present_sink pw_wine_post_input pw_wine_sink_stats \
         pw_wine_present pw_wine_next_input pw_wine_input_fd \
-        pw_wine_set_pad pw_wine_rumble pw_wine_pad pw_wine_set_rumble \
+        pw_wine_set_pad pw_wine_rumble pw_wine_pad pw_wine_set_rumble pw_wine_set_menu pw_wine_menu \
         pw_wine_set_audio_sink pw_wine_audio_available pw_wine_audio_output \
         __wine_virtual_stats __wine_virtual_fault_top __wine_ps5_set_output_sink __wine_ps5_memory_stats pw_cwd_set \
         __wine_ps5_set_segv_hook __wine_ps5_set_segv_unresolved_hook pw_wine_set_display_release pw_wine_release_display \
