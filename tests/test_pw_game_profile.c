@@ -51,6 +51,23 @@ static void test_graphics_env(void)
             }
         }
     }
+    /* The menu is a DXVK HUD item beside or instead of the frame rate; Mesa's
+     * HUD has none. */
+    assert(parse(APP "[display]\nmenu = true\n", &p) == PW_OK && p.display.menu == 1 && p.display.show_fps == 1);
+    assert(pw_game_graphics_env(&p, env) == 1 && !strcmp(env[0].name, "DXVK_HUD") &&
+           !strcmp(env[0].value, "fps,menu"));
+    assert(parse(APP "[display]\nmenu = true\nshow_fps = false\n", &p) == PW_OK);
+    assert(pw_game_graphics_env(&p, env) == 1 && !strcmp(env[0].value, "menu"));
+    p.app.graphics = PW_APP_GRAPHICS_ZINK;
+    assert(pw_game_graphics_env(&p, env) == 2 && strcmp(env[1].name, "GALLIUM_HUD"));
+    assert(parse(APP "[display]\nmenu = false\n", &p) == PW_OK && p.display.menu == 0);
+    assert(pw_game_graphics_env(&p, env) == 1 && !strcmp(env[0].value, "fps"));
+    assert(parse(APP "[display]\nmenu = yes\n", &p) == PW_ERR_UNSUPPORTED);
+    assert(parse(APP "[display]\nmenu = true\nmenu = false\n", &p) == PW_ERR_MALFORMED);
+    /* A profile with the menu on cannot set the HUD variable itself. */
+    assert(parse(APP "[display]\nmenu = true\nshow_fps = false\n[debug]\nenv = DXVK_HUD=full\n", &p) ==
+           PW_ERR_UNSUPPORTED);
+    assert(parse(APP "[display]\nshow_fps = false\n[debug]\nenv = DXVK_HUD=full\n", &p) == PW_OK);
     /* A Zink game's [debug] env decides the deferral itself: the title adds none. */
     assert(parse(APP "[debug]\nenv = PW_VK_DEFER_DESCRIPTORS=0\n", &p) == PW_OK);
     p.app.graphics = PW_APP_GRAPHICS_ZINK; p.display.show_fps = 0;

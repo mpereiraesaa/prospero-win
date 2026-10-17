@@ -11,6 +11,9 @@
  *   view = window          ; window: show the game's windows; desktop: all of it
  *   show_fps = true        ; a frame-rate counter in the top left (default: true):
  *                          ; DXVK's HUD, or Mesa's for graphics = opengl
+ *   menu = true            ; L3+R3 opens prospero-win's menu over the game
+ *                          ; (pw_game_menu; drawn by DXVK's HUD, so DXVK games
+ *                          ; only); default false
  *   refresh = 120          ; accepted and ignored: it set the PS5 OpenGL SDK's
  *   opengl_thread = true   ; output rate and glthread, which Zink replaced
  *
@@ -35,7 +38,7 @@
  *                               ; and may not be one the title sets itself
  *                               ; (PW_VK_BATCH, PW_INPUT_SHARED_FAST,
  *                               ; PW_QPC_TSC_*, GALLIUM_DRIVER, and DXVK_HUD
- *                               ; or GALLIUM_HUD while show_fps is on);
+ *                               ; or GALLIUM_HUD while show_fps or menu is on);
  *                               ; values: letters, digits and _ + - , . = : /
  *
  *   [runtime]
@@ -103,6 +106,7 @@ typedef struct PwGameDisplay {
     PwGameScaling scaling;
     PwGameView view;            /* window by default: a small game fills the TV */
     int show_fps;               /* the graphics backend's frame-rate counter */
+    int menu;                   /* the in-game menu (pw_game_menu) */
     uint32_t refresh;           /* parsed (60 or 120) but unused since Zink */
     int opengl_thread;          /* parsed but unused since Zink */
 } PwGameDisplay;

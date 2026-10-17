@@ -132,6 +132,20 @@ to close as with Alt+F4, and you return to the launcher; if it doesn't close
 within a few seconds, the app leaves it. From a keyboard, Alt+F4 or the
 game's own quit option do the same.
 
+## The in-game menu
+
+A profile with `menu = true` in its `[display]` section opens prospero-win's
+menu over the game when you press **L3 + R3** (both sticks) together. While
+it is open the game sees the DualSense idle: the d-pad moves the cursor,
+Cross picks a line and Circle or L3 + R3 closes it. Buttons still held as it
+closes stay away from the game until you let go of them. Closing the game
+with Options + Create works with the menu open.
+
+DXVK's HUD draws the menu, so it appears in Direct3D games only, and only
+with the DXVK build that has the `menu` item (`2.6.2-prospero3` and later;
+an older DXVK draws nothing, and the pad is still the menu's while it is
+open). The menu has no entries of its own yet.
+
 ## Writing a preset
 
 A profile can name a preset (`preset = warcraft3` in its `[input]` section)
