@@ -4,7 +4,7 @@
 #include "../src/pw_pad.h"
 #include <stdint.h>
 
-enum { PW_PAD_PS5_BATCH=64 };
+enum { PW_PAD_PS5_BATCH=64,PW_PAD_PS5_USERS=4 };
 typedef struct PwPadPs5Stick { uint8_t x,y; } PwPadPs5Stick;
 typedef struct PwPadPs5Touch { uint16_t x,y;uint8_t finger,reserved[3]; } PwPadPs5Touch;
 typedef struct PwPadPs5TouchData {
@@ -27,6 +27,9 @@ typedef struct PwPadPs5Ops {
     int (*pad_close)(int32_t);
     /* Optional: scePadSetVibration(handle, {large, small}), NULL if none. */
     int (*pad_set_vibration)(int32_t,const uint8_t motors[2]);
+    /* Optional: sceUserServiceGetLoginUserIdList, the signed-in users' ids
+     * (-1 for an empty slot), NULL if none. */
+    int (*login_users)(int32_t ids[PW_PAD_PS5_USERS]);
     /* Optional: scePadSetVibrationMode(handle, mode). A DualSense opens in
      * advanced haptics mode, where scePadSetVibration's motor levels move
      * nothing; called with PW_PAD_PS5_VIBRATION_COMPATIBLE right after open
@@ -52,6 +55,15 @@ typedef struct PwPadPs5 {
 
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *);
 int pw_pad_ps5_open(PwPadPs5 *,const PwPadPs5Ops *,const PwPadKeyMap *,size_t);
+/* The pad of a signed-in user other than first's, for a second local
+ * player: the first such user after `after` in the sign-in list, going
+ * round (after<0: from the start), so a caller whose pick has no controller
+ * can try the next user. first must be open; the user service stays
+ * first's. PW_OK, PW_ERR_UNSUPPORTED without a login_users op,
+ * PW_ERR_NOT_FOUND when no other user is signed in, PW_ERR_STATE when that
+ * user's pad does not open. */
+int pw_pad_ps5_open_other(PwPadPs5 *,const PwPadPs5 *first,int32_t after,
+                          const PwPadKeyMap *,size_t);
 /* Held buttons, edges, sticks and triggers from the pending samples. */
 int pw_pad_ps5_read(PwPadPs5 *);
 int pw_pad_ps5_close(PwPadPs5 *);

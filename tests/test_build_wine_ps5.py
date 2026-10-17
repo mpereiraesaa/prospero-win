@@ -4,6 +4,7 @@
 from __future__ import annotations
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -75,6 +76,7 @@ make() {
 
 
 def main() -> int:
+    check_memory_status()
     check_vk_runtime_staging()
     check_patched_pe_staging()
     # The committed series itself.
@@ -110,6 +112,117 @@ def main() -> int:
         assert "WINE_COMMIT=490f6d5dcbb2a5047345b8af88d114bbcaad69a8" in (ROOT / "tools" / tool).read_text()
     print(f"wine ps5 patch series passed: {len(listed)} patch(es)")
     return 0
+
+
+def check_memory_status() -> None:
+    """Run the patched Wine queries and its Windows field conversion, if sourced."""
+    source = Path(os.environ.get("PROSPERO_WINE_SOURCE", ROOT / ".deps/wine/source"))
+    paths = ("dlls/ntdll/unix/system.c", "dlls/ntdll/unix/virtual.c")
+    if not all((source / path).is_file() for path in (*paths, "dlls/kernelbase/memory.c")):
+        print("wine memory status integration skipped: needs the pinned Wine source")
+        return
+
+    def function(text: str, signature: str) -> str:
+        start = text.index(signature)
+        end = text.index("\n{", start) + 2
+        depth = 1
+        while depth:
+            depth += (text[end] == "{") - (text[end] == "}")
+            end += 1
+        return text[start:end]
+
+    with tempfile.TemporaryDirectory() as directory:
+        tree = Path(directory)
+        for path in paths:
+            target = tree / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text((source / path).read_text())
+            for patch in sorted((ROOT / "wine/patches").glob("*.patch")):
+                if f"diff --git a/{path} " in patch.read_text():
+                    subprocess.run(["git", "apply", f"--include={path}", str(patch)],
+                                   cwd=tree, check=True)
+        perf = function((tree / paths[0]).read_text(), "static void get_performance_info(")
+        basic = function((tree / paths[1]).read_text(), "void virtual_get_system_info(")
+        memory = (source / "dlls/kernelbase/memory.c").read_text()
+        fields = memory[memory.index("    status->dwMemoryLoad     = 0;"):]
+        fields = fields[:fields.index("\n    TRACE_(virtual)")]
+        harness = r'''
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#undef linux
+#undef __APPLE__
+#define __PROSPERO__ 1
+#define max(a,b) ((a) > (b) ? (a) : (b))
+#define MESSAGE(...) fprintf(stderr, __VA_ARGS__)
+typedef unsigned long long ULONGLONG;
+typedef uintptr_t ULONG_PTR;
+typedef int BOOL;
+typedef struct {
+    unsigned MmHighestPhysicalPage, unknown, KeMaximumIncrement, PageSize;
+    unsigned MmLowestPhysicalPage, MmNumberOfPhysicalPages, AllocationGranularity;
+    void *LowestUserAddress, *HighestUserAddress;
+    uintptr_t ActiveProcessorsAffinityMask;
+    unsigned NumberOfProcessors;
+} SYSTEM_BASIC_INFORMATION;
+typedef struct {
+    struct { ULONGLONG QuadPart; } IdleTime;
+    unsigned AvailablePages, TotalCommittedPages, TotalCommitLimit;
+} SYSTEM_PERFORMANCE_INFORMATION;
+typedef struct {
+    unsigned dwMemoryLoad;
+    ULONGLONG ullTotalPhys, ullAvailPhys, ullTotalPageFile, ullAvailPageFile;
+    ULONGLONG ullTotalVirtual, ullAvailVirtual, ullAvailExtendedVirtual;
+} MEMORYSTATUSEX;
+static unsigned page_size = 4096, granularity_mask = 65535;
+static char *user_space_limit = (char *)0x7fff0000;
+static struct { unsigned NumberOfProcessors; } peb_value = {8}, *peb = &peb_value;
+static uintptr_t get_system_affinity_mask(void) { return 255; }
+static char *get_wow_user_space_limit(void) { return user_space_limit; }
+static ULONGLONG budget_total, budget_available;
+void __wine_ps5_memory_budget(ULONGLONG *total, ULONGLONG *available)
+{
+    *total = budget_total;
+    *available = budget_available;
+}
+'''
+        harness += perf + "\n" + basic + r'''
+static void memory_status(MEMORYSTATUSEX *status)
+{
+    SYSTEM_BASIC_INFORMATION basic_info;
+    SYSTEM_PERFORMANCE_INFORMATION perf_info;
+    struct { ULONGLONG WorkingSetSize; } vmc = {0};
+    virtual_get_system_info(&basic_info, 0);
+    get_performance_info(&perf_info);
+'''
+        harness += fields + r'''
+}
+int main(void)
+{
+    const ULONGLONG gib = 1024ull * 1024 * 1024;
+    const ULONGLONG cases[][2] = {{12 * gib, 10 * gib}, {256 * 1024 * 1024, 256 * 1024 * 1024}};
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        MEMORYSTATUSEX status = {0};
+        budget_total = cases[i][0]; budget_available = cases[i][1];
+        memory_status(&status);
+        assert(status.ullTotalPhys == cases[i][0]);
+        assert(status.ullAvailPhys == cases[i][1]);
+        assert(status.ullTotalPageFile == 2 * cases[i][0]);
+        assert(status.ullAvailPageFile == 2 * cases[i][1]);
+        assert(status.ullAvailPageFile >= 0x20000000);
+        assert(status.dwMemoryLoad <= 100);
+    }
+}
+'''
+        cfile, executable = tree / "memory_status.c", tree / "memory_status"
+        cfile.write_text(harness)
+        subprocess.run(shlex.split(os.environ.get("CC", "cc")) +
+                       ["-std=c11", "-Wall", "-Wextra", "-Werror", str(cfile), "-o", str(executable)],
+                       check=True)
+        result = subprocess.run([str(executable)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+    print("wine memory status integration passed: physical pages, commit budget and memory load")
 
 
 def check_vk_runtime_staging() -> None:

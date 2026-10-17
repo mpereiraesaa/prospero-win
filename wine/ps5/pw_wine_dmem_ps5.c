@@ -25,6 +25,9 @@ extern int sceKernelMapDirectMemory(void **address, size_t bytes, int protection
 extern int sceKernelMprotect(const void *address, size_t bytes, int protection);
 extern int sceKernelMunmap(void *address, size_t bytes);
 extern int sceKernelReleaseDirectMemory(int64_t offset, size_t bytes);
+extern size_t sceKernelGetDirectMemorySize(void);
+extern int sceKernelAvailableDirectMemorySize(int64_t start, int64_t end, size_t alignment, int64_t *address,
+                                              size_t *bytes);
 
 enum {
     PAGE = 0x4000,
@@ -275,4 +278,26 @@ unsigned int __wine_ps5_memory_stats(uint64_t *out, unsigned int count)
     values[7] = dmem_stats.peak_low_backed_bytes;
     for (unsigned int i = 0; i < count && i < 8; i++) out[i] = values[i];
     return 8;
+}
+
+/* Wine patch 0603 uses the title's direct-memory pool as physical memory.
+ * The largest free block estimates availability, with an optimistic 1 GiB
+ * floor to keep fragmented or unavailable readings from rejecting startup.
+ * If the pool query returns zero, report a 4 GiB fallback. These estimates
+ * do not reserve memory; the kernel still enforces allocation limits. */
+void __wine_ps5_memory_budget(unsigned long long *total, unsigned long long *available)
+{
+    enum { GIB = 1024 * 1024 * 1024 };
+    static int logged;
+    size_t pool = sceKernelGetDirectMemorySize(), free_bytes = 0;
+    int64_t where = 0;
+    int status = pool ? sceKernelAvailableDirectMemorySize(0, (int64_t)pool, PAGE, &where, &free_bytes) : -1;
+
+    if (status) free_bytes = 0;
+    if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
+        fprintf(stderr, "wine-ps5: direct memory %zu MiB, largest free block %zu MiB (status %#x)\n",
+                pool >> 20, free_bytes >> 20, (unsigned)status);
+    *total = pool ? pool : 4ull * GIB;
+    *available = free_bytes > GIB ? free_bytes : GIB;
+    if (*available > *total) *available = *total;
 }

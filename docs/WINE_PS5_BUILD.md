@@ -192,6 +192,27 @@ area, where the guest saw its base truncated to 32 bits. The host tests run the 
 for physical memory, reservations that refuse to overlap, execute refused at
 map time) with 20,000 random operations checked page by page.
 
+Patch 0603 reports the title's direct-memory pool to Windows memory queries
+instead of the BSD sysctls, which can return zero inside the title sandbox.
+`virtual_get_system_info` uses the pool for physical pages;
+`get_performance_info` uses it for physical memory and its page-file budget,
+with the largest free direct-memory block as the availability estimate.
+Wine adds the physical and synthetic page-file budgets when computing commit
+limits, so reported total and available commit are twice the corresponding
+physical estimates.
+The [Windows `MEMORYSTATUSEX` contract](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex)
+defines the page-file fields as commit limits and available commit, so this
+budget does not imply disk-backed swap on the console. The helper keeps an
+optimistic 1 GiB availability floor, capped at the total, and a 4 GiB total
+fallback when the pool query returns zero. Neither estimate reserves memory;
+allocation can still fail below the reported availability. Raw kernel and
+BSD readings are logged once. `tests/test_pw_wine_dmem_ps5.c` covers normal
+readings, failed queries, the fallback, the floor and the cap with host kernel
+stubs. With the pinned Wine source present, `tests/test_build_wine_ps5.py`
+also runs the patched queries and Windows field conversion, checking physical
+page counts, commit capacity and bounded memory load. Rebuild `ntdll.prx` to
+use the change.
+
 ## PRX modules
 
 The console does not load ELF shared objects, so after the ELF link the

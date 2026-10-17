@@ -24,10 +24,57 @@ void *__wine_ps5_mmap(void *address, size_t bytes, int protection, int flags, in
 int __wine_ps5_munmap(void *address, size_t bytes);
 int __wine_ps5_mprotect(void *address, size_t bytes, int protection);
 unsigned int __wine_ps5_memory_stats(uint64_t *out, unsigned int count);
+void __wine_ps5_memory_budget(unsigned long long *total, unsigned long long *available);
 
 enum { PAGE = 0x4000, PHYS_PAGES = 256 };
 static int phys_fd, refuse_map, cpu_only_refused;
 static unsigned char allocated[PHYS_PAGES];
+static size_t budget_pool, budget_free;
+static int budget_status, budget_queries;
+
+size_t sceKernelGetDirectMemorySize(void) { return budget_pool; }
+int sceKernelAvailableDirectMemorySize(int64_t start, int64_t end, size_t alignment, int64_t *address,
+                                      size_t *bytes)
+{
+    assert(start == 0 && end == (int64_t)budget_pool && alignment == PAGE);
+    budget_queries++;
+    *address = PAGE;
+    *bytes = budget_free;
+    return budget_status;
+}
+
+static void test_memory_budget(void)
+{
+    const unsigned long long gib = 1024ull * 1024 * 1024;
+    const struct {
+        size_t pool, free;
+        int status;
+        unsigned long long total, available;
+    } cases[] = {
+        /* Console readings replace the sandbox's zero BSD readings. */
+        { 12 * gib, 12232ull * 1024 * 1024, 0, 12 * gib, 12232ull * 1024 * 1024 },
+        /* Fragmentation or a failed query must not trigger the 512 MiB startup check. */
+        { 12 * gib, 256 * 1024 * 1024, 0, 12 * gib, gib },
+        { 12 * gib, 0, 0, 12 * gib, gib },
+        { 12 * gib, 10 * gib, -1, 12 * gib, gib },
+        /* An unavailable pool query uses the fallback without a free-block query. */
+        { 0, 0, 0, 4 * gib, gib },
+        /* Availability never exceeds the reported pool, even below the floor. */
+        { 256 * 1024 * 1024, 0, 0, 256 * 1024 * 1024, 256 * 1024 * 1024 },
+        { 2 * gib, 3 * gib, 0, 2 * gib, 2 * gib },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        unsigned long long total = 0, available = 0;
+        budget_pool = cases[i].pool;
+        budget_free = cases[i].free;
+        budget_status = cases[i].status;
+        budget_queries = 0;
+        __wine_ps5_memory_budget(&total, &available);
+        assert(total == cases[i].total && available == cases[i].available);
+        assert(budget_queries == (cases[i].pool != 0));
+    }
+}
 
 int sceKernelReserveVirtualRange(void **address, size_t bytes, int flags, size_t alignment)
 {
@@ -133,6 +180,7 @@ int main(void)
     char path[] = "/tmp/pw_wine_dmem_ps5_XXXXXX";
     int file;
 
+    test_memory_budget();
     phys_fd = memfd_create("pw_wine_dmem_ps5", 0);
     assert(phys_fd >= 0 && !ftruncate(phys_fd, (off_t)PHYS_PAGES * PAGE));
     test_refused();

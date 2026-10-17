@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 12 Oct 2026 16:00:00 +0200
+Subject: [PATCH] ntdll: Report the PS5 title's memory budget.
+
+The BSD memory sysctls and sysconf(_SC_PHYS_PAGES) can return zero
+inside a PS5 title sandbox. Together with Wine's one-page page-file
+fallback, this leaves Windows programs with almost no reported memory.
+Fallout: New Vegas rejects startup below 512 MiB of available page file.
+
+Use the title's direct-memory budget for physical memory and an equally
+sized synthetic page-file budget. Wine adds the two budgets when computing
+the commit limit; this does not provide disk-backed swap. The shared helper
+in wine/ps5/pw_wine_dmem_ps5.c also supplies the physical-page count. Log
+the kernel readings and the replaced BSD readings once for diagnosis.
+---
+ dlls/ntdll/unix/system.c  | 22 ++++++++++++++++++++++
+ dlls/ntdll/unix/virtual.c |  8 +++++++-
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -2633,6 +2633,11 @@
+     }
+ }
+ 
++#ifdef __PROSPERO__
++/* wine/ps5/pw_wine_dmem_ps5.c: the title's memory, not the console's. */
++extern void __wine_ps5_memory_budget( unsigned long long *total, unsigned long long *available );
++#endif
++
+ static void get_performance_info( SYSTEM_PERFORMANCE_INFORMATION *info )
+ {
+     unsigned long long totalram = 0, freeram = 0, totalswap = 0, freeswap = 0;
+@@ -2794,6 +2799,23 @@
+     }
+ #endif
+ 
++#ifdef __PROSPERO__
++    {
++        /* The sandbox's BSD readings may be zero. Use the title's memory
++         * budget and an equally sized synthetic page-file budget; this
++         * does not create disk-backed swap. */
++        static int logged;
++        unsigned long long sysctl_total = totalram, sysctl_free = freeram;
++
++        __wine_ps5_memory_budget( &totalram, &freeram );
++        totalswap = totalram;
++        freeswap = freeram;
++        if (!__atomic_exchange_n( &logged, 1, __ATOMIC_RELAXED ))
++            MESSAGE( "wine: memory %llu MiB, %llu MiB free, page file the same (sysctl %llu MiB, %llu MiB free)\n",
++                     totalram >> 20, freeram >> 20, sysctl_total >> 20, sysctl_free >> 20 );
++    }
++#endif
++
+     /* Titan Quest refuses to run if TotalPageFile <= TotalPhys */
+     if (!totalswap) totalswap = page_size;
+ 
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -4175,7 +4175,14 @@
+  */
+ void virtual_get_system_info( SYSTEM_BASIC_INFORMATION *info, BOOL wow64 )
+ {
+-#if defined(HAVE_SYSINFO) \
++#ifdef __PROSPERO__
++    /* Include MmLowestPhysicalPage below when reporting the title's budget. */
++    extern void __wine_ps5_memory_budget( unsigned long long *total, unsigned long long *available );
++    unsigned long long total, available;
++
++    __wine_ps5_memory_budget( &total, &available );
++    info->MmHighestPhysicalPage = max(1, total / page_size) + 1;
++#elif defined(HAVE_SYSINFO) \
+     && defined(HAVE_STRUCT_SYSINFO_TOTALRAM) && defined(HAVE_STRUCT_SYSINFO_MEM_UNIT)
+     struct sysinfo sinfo;
+ 

@@ -2,7 +2,8 @@
 #include "pw_game_profile.h"
 #include <string.h>
 
-enum { SET_MODE = 1u << 0, SET_MOUSE = 1u << 1, SET_SPEED = 1u << 2, SET_PRESET = 1u << 3 };
+enum { SET_MODE = 1u << 0, SET_MOUSE = 1u << 1, SET_SPEED = 1u << 2, SET_PRESET = 1u << 3,
+       SET_PLAYER2 = 1u << 4 };
 
 /* DualSense buttons in PW_GAME_BUTTON order, with their scePadRead bits. */
 static const struct { const char *name; uint32_t mask; } buttons[PW_GAME_BUTTON_COUNT] = {
@@ -97,20 +98,33 @@ static int binding(const uint8_t *v, size_t n, PwGameBinding *out)
     return PW_ERR_UNSUPPORTED;
 }
 
+/* A preset's name: the file name under input/ without .input. */
+static int preset_name(char *out, size_t capacity, const uint8_t *v, size_t n)
+{
+    if (!n || n >= capacity) return PW_ERR_MALFORMED;
+    for (size_t i = 0; i < n; i++) {
+        char c = (char)v[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
+            return PW_ERR_MALFORMED;
+        out[i] = c;
+    }
+    out[n] = 0;
+    return PW_OK;
+}
+
 static int input_field(PwGameInput *input, const uint8_t *key, size_t key_length,
                        const uint8_t *v, size_t n, int allow_preset)
 {
     if (is(key, key_length, "preset")) {
         if (!allow_preset || (input->set & SET_PRESET)) return PW_ERR_MALFORMED;
-        if (!n || n >= sizeof(input->preset)) return PW_ERR_MALFORMED;
-        for (size_t i = 0; i < n; i++) {
-            char c = (char)v[i];
-            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
-                return PW_ERR_MALFORMED;
-            input->preset[i] = c;
-        }
-        input->preset[n] = 0;
+        if (preset_name(input->preset, sizeof(input->preset), v, n) != PW_OK) return PW_ERR_MALFORMED;
         input->set |= SET_PRESET;
+        return PW_OK;
+    }
+    if (is(key, key_length, "player2")) {
+        if (!allow_preset || (input->set & SET_PLAYER2)) return PW_ERR_MALFORMED;
+        if (preset_name(input->player2, sizeof(input->player2), v, n) != PW_OK) return PW_ERR_MALFORMED;
+        input->set |= SET_PLAYER2;
         return PW_OK;
     }
     if (is(key, key_length, "mode")) {
