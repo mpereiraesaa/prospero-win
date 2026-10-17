@@ -1,7 +1,8 @@
 # Game compatibility
 
-Tested on one PS5 on firmware **12.02**. The app itself uses no
-firmware-specific offsets.
+The maintainer results below were tested on one PS5 on firmware **12.02**.
+Player reports are listed separately with their own firmware and tested
+scope. The app itself uses no firmware-specific offsets.
 
 Profiles, controller presets and install recipes live in
 [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles).
@@ -38,6 +39,32 @@ prospero-win-profiles explains the setup and the optional mods.
 
 OpenGL games draw through Mesa's Zink on top of Vulkan; see
 [the OpenGL build notes](docs/WINE_PS5_BUILD.md#opengl).
+
+## Player reports
+
+These results come from the linked reports and have not been independently
+reproduced by the maintainer.
+
+### Kerbal Space Program 1.12.5
+
+[Report #686](https://github.com/mpereiraesaa/prospero-win/issues/686)
+covers the base game, Windows 64-bit, on firmware **13.60** with EtaHEN,
+Kstuff lite and ShadowMount+. The player names prospero-win **v0.2.0**;
+the attached session log identifies title build
+`644e32e400c555e340d507383398c5d21b39b0b0`.
+
+With DXVK, USB keyboard and mouse, the player reached the main menu, used
+the Vehicle Assembly Building and completed a short test flight. Sound,
+icons, menus and saves were reported working. The frame counter read 60 at
+1280x720; no 1080p frame-rate measurement or extended play duration was
+provided. Slight graphical artifacts were reported, with the cause unknown.
+
+On first launch, KSP's `settings.cfg` selected 1280x720 despite the profile's
+1920x1080 desktop and launch arguments. With the game closed, setting
+`SCREEN_RESOLUTION_WIDTH = 1920` and `SCREEN_RESOLUTION_HEIGHT = 1080` in
+that file corrected the oversized UI, soft picture and confined mouse
+pointer. The mouse wheel remains unsupported; use keyboard alternatives
+for zoom and scrolling ([controls](docs/CONTROLS.md#usb-keyboard-and-mouse)).
 
 ## Benchmarks
 
