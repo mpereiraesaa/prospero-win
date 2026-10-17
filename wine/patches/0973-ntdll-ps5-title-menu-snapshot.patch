@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sat, 17 Oct 2026 18:00:00 +0200
+Subject: [PATCH] ntdll: Hand the PS5 title's menu to the game's renderer.
+
+The title shows an in-game menu over the game's image: it reads the
+DualSense, keeps the menu's text and cursor, and stores a snapshot in
+the sink that ntdll.prx links (wine/ps5/pw_wine_sink.c). The image is
+the game's own, drawn on the GPU, so the menu has to be drawn inside
+the game; DXVK's HUD does that.
+
+A private process information class, ProcessWineTitleMenu (0x50574D01),
+returns the snapshot, a pointer-free struct pw_title_menu with one
+layout for PE32, PE64 and the Unix side. WoW64 passes it through as it
+does the QPC anchor (patch 0900). Renderers ask once a frame, so the
+class is never traced (patch 0970). A Wine without the class fails the
+query and the renderer draws nothing.
+
+A PC has no title: there PW_TITLE_MENU_DEMO=1 returns a fixed menu
+whose cursor moves every second, so a renderer can be checked on a PC.
+---
+ dlls/ntdll/unix/process.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ dlls/wow64/process.c      |  4 ++++
+ include/winternl.h        |  1 +
+ 3 files changed, 49 insertions(+)
+
+diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
+index 394a46e..1b2e7a6 100644
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -1131,6 +1131,42 @@ static BOOL ps5_is_own_process( HANDLE handle )
+  */
+ extern NTSTATUS ps5_qpc_anchor( void *args );
+ #include "../pw_qpc_clock.h"
++#include "../pw_title_menu.h"
++
++#ifdef __PROSPERO__
++/* wine/ps5/pw_wine_sink.c: the menu the title wants drawn. */
++extern void pw_wine_menu( struct pw_title_menu *menu );
++#endif
++
++/* The title's in-game menu, for a renderer inside the game (DXVK's HUD)
++ * that asks once a frame. A PC has no title: there PW_TITLE_MENU_DEMO=1
++ * shows a fixed menu whose cursor moves every second, so a renderer's
++ * drawing can be checked without a console. */
++static NTSTATUS title_menu( struct pw_title_menu *menu )
++{
++#ifdef __PROSPERO__
++    pw_wine_menu( menu );
++    return STATUS_SUCCESS;
++#else
++    static const char *const lines[] = { "Infinite ammo           [off]", "All weapons", "Close" };
++    const char *demo = getenv( "PW_TITLE_MENU_DEMO" );
++    LARGE_INTEGER now;
++    unsigned int i, second;
++
++    if (!demo || strcmp( demo, "1" )) return STATUS_NOT_SUPPORTED;
++    NtQuerySystemTime( &now );
++    second = now.QuadPart / TICKSPERSEC;
++    memset( menu, 0, sizeof(*menu) );
++    menu->version = PW_TITLE_MENU_VERSION;
++    menu->sequence = second + 1;
++    menu->open = 1;
++    menu->lines = ARRAY_SIZE(lines);
++    menu->selected = second % ARRAY_SIZE(lines);
++    strcpy( menu->title, "prospero-win (demo)" );
++    for (i = 0; i < ARRAY_SIZE(lines); i++) strcpy( menu->line[i], lines[i] );
++    return STATUS_SUCCESS;
++#endif
++}
+ 
+ #ifdef __PROSPERO__
+ /* Games poll some classes every frame: Call of Juarez Gunslinger asks for
+@@ -1142,6 +1178,7 @@ static BOOL first_query( PROCESSINFOCLASS class )
+     static unsigned int queried[4];
+     unsigned int bit;
+ 
++    if (class == PW_TITLE_MENU_PROCESS_INFO) return FALSE;  /* every frame, by design */
+     if ((unsigned int)class >= 32 * ARRAY_SIZE(queried)) return TRUE;
+     bit = 1u << (class % 32);
+     return !(__atomic_fetch_or( &queried[class / 32], bit, __ATOMIC_RELAXED ) & bit);
+@@ -1168,6 +1205,13 @@ NTSTATUS WINAPI NtQueryInformationProcess( HANDLE handle, PROCESSINFOCLASS class
+         else if (!info) ret = STATUS_ACCESS_VIOLATION;
+         else ret = ps5_qpc_anchor( info );
+         break;
++    case PW_TITLE_MENU_PROCESS_INFO:
++        len = sizeof(struct pw_title_menu);
++        if (handle != NtCurrentProcess()) ret = STATUS_INVALID_HANDLE;
++        else if (size != len) ret = STATUS_INFO_LENGTH_MISMATCH;
++        else if (!info) ret = STATUS_ACCESS_VIOLATION;
++        else ret = title_menu( info );
++        break;
+     UNIMPLEMENTED_INFO_CLASS(ProcessBasePriority);
+     UNIMPLEMENTED_INFO_CLASS(ProcessRaisePriority);
+     UNIMPLEMENTED_INFO_CLASS(ProcessExceptionPort);
+diff --git a/dlls/wow64/process.c b/dlls/wow64/process.c
+index 1aefd87..28cc751 100644
+--- a/dlls/wow64/process.c
++++ b/dlls/wow64/process.c
+@@ -28,6 +28,7 @@
+ #include "ddk/ntddk.h"
+ #include "wow64_private.h"
+ #include "../ntdll/pw_qpc_clock.h"
++#include "../ntdll/pw_title_menu.h"
+ #include "wine/asm.h"
+ #include "wine/exception.h"
+ #include "wine/debug.h"
+@@ -587,6 +588,9 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
+         /* Pointer-free and identical layout on both sides. Older providers
+          * reject this class and the client retains the ordinary QPC path. */
+         return NtQueryInformationProcess( handle, class, ptr, len, retlen );
++    case PW_TITLE_MENU_PROCESS_INFO:
++        /* The same: pointer-free, one layout for PE32 and the Unix side. */
++        return NtQueryInformationProcess( handle, class, ptr, len, retlen );
+     case ProcessBasicInformation:  /* PROCESS_BASIC_INFORMATION */
+         if (len == sizeof(PROCESS_BASIC_INFORMATION32))
+         {
+diff --git a/include/winternl.h b/include/winternl.h
+index d45e9ea..28b52fe 100644
+--- a/include/winternl.h
++++ b/include/winternl.h
+@@ -2014,6 +2014,7 @@ typedef enum _PROCESSINFOCLASS {
+     ProcessWineMakeProcessSystem = 1000,
+     ProcessWineGrantAdminToken = 1002,
+     ProcessWineQpcAnchor = 0x50575101,
++    ProcessWineTitleMenu = 0x50574D01,
+ #endif
+ } PROCESSINFOCLASS;
+ 
