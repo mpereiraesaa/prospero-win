@@ -366,6 +366,7 @@ tests/test_wine_shared_mutex_client.py
 
 wine/patches/0880-wine-ps5-runtime-defaults.patch
 wine/patches/0870-server-ps5-release-image-view-fds.patch
+wine/patches/0871-server-ps5-park-directory-descriptors.patch
 tests/fixtures/wine_image_view_fds.c
 tests/test_wine_image_view_fds.py
 docs/IMAGE_VIEW_FD_LIFETIME.md
@@ -410,6 +411,8 @@ tests/wine_processor_times.c
 wine/patches/0889-ntdll-ps5-processor-times-from-the-process.patch
 tests/test_wine_directory_changes.py
 tests/wine_directory_changes.c
+tests/test_wine_directory_handles.py
+tests/wine_directory_handles.c
 wine/patches/0884-server-ps5-poll-for-directory-changes.patch
 tests/test_wine_sched_probe.py
 tests/wine_sched_probe.c
