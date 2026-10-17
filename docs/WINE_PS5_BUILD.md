@@ -130,6 +130,7 @@ before evaluating a candidate built from that cache.
 | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. Call of Juarez Gunslinger corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
 | 0973 | `ntdll`: a private process information class, `ProcessWineTitleMenu` (0x50574D01), returns the title's in-game menu (`wine/ps5/menu/pw_title_menu.h`): the text and cursor the title stored in the sink with `pw_wine_set_menu`, for DXVK's HUD to draw over the game once a frame. Pointer-free, one layout for PE32 and PE64; WoW64 passes it through as it does the QPC anchor (0900), and it is never traced (0970). On a PC, `PW_TITLE_MENU_DEMO=1` returns a fixed demo menu so the drawing can be checked without a console |
 | 0974 | `ntdll`: outside images, a page made read-only or inaccessible takes writing, or all access, away from its whole 16 KiB host page, so touching it faults as on Windows; the host page used to get the union of its pages' protections, and a write to a protected page beside a writable one raised nothing (DuckStation then ran stale recompiled code). An access that faults only because of such a neighbour is single-stepped with the host page open for that one instruction, unseen by the program. On a PC, `WINE_HOST_PAGE_SIZE=16384` keeps 16 KiB host pages to run this scheme (`tests/test_wine_subpage_protect.py`) |
+| 0982 | `ntdll`: the high reserved area at `0x1000000000` (0600) is as large as the kernel grants: 512 GiB first, halved down to 16 GiB, each try within the address space limits `map_view` honors, and reserved before the view heap's 64 MiB so the kernel cannot place that one inside the range. A 64-bit game's reservation of tens of GiB (Red Dead Redemption 2: 28 GiB, Cyberpunk 2077: 16 GiB, Fellowship: 48 GiB, a .NET runtime: 256 GiB) no longer falls through to `mmap( NULL )`, which the console refuses (`map_view anon mmap error Cannot allocate memory, size 700010000`). `PW_PS5_HIGH_RESERVE_GB` gives the first size tried (0 keeps the single 16 GiB reservation); one `wine-ps5: address space:` line at startup reports the host and user limits and the area granted. The page protection table's leaves (1 MiB per 4 GiB of views) come from the Unix heap, in direct memory, instead of flexible memory |
 
 ## Allocator
 
@@ -215,8 +216,9 @@ and frees it; if the console refuses any step, every call passes through as
 before and the log says so. The low reserved areas cover 0x10000-0x7fff0000
 whole (patch 0895): Linux's layout leaves 0x68000000-0x7f000000 to its own
 libraries, and there the i386 builtin DLLs and a game's DLLs were fixed
-mappings of flexible memory. A 16 GiB reserved area at `0x1000000000`, where
-the kernel grants the whole range at the hint, takes the views whose limits
+mappings of flexible memory. A reserved area at `0x1000000000`, as large as
+the kernel grants at the hint (512 GiB asked first, halved down to 16 GiB;
+patch 0982, `PW_PS5_HIGH_RESERVE_GB`), takes the views whose limits
 allow it before the low areas are searched, so the i386 guest keeps the low
 4 GiB. An i386 image's limit is 4 GiB (0601): the main exe is mapped where
 it can when its preferred base is taken, and before 0601 that was the high
