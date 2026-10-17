@@ -104,6 +104,13 @@ int pw_wine_dmem_replace(PwWineDmem *, uintptr_t address, size_t bytes, unsigned
  * a fixed mapping: the direct memory it replaced is released, and the
  * range is protected like the rest but never backed. 0, or -1. */
 int pw_wine_dmem_adopt(PwWineDmem *, uintptr_t address, size_t bytes);
+/* Direct memory the caller already holds, at offset, mapped over the range
+ * with this protection (0 maps it inaccessible), replacing whatever the
+ * range held. Several ranges may map the same direct memory (a shared
+ * section's views); the module never releases it. 0, or -1 with the range
+ * reserved. */
+int pw_wine_dmem_map_shared(PwWineDmem *, uintptr_t address, size_t bytes, int64_t offset,
+                            unsigned protection);
 /* Commit: the backed pages and the caller's mappings keep their contents
  * and take the protection; reserved pages are backed, zeroed, first,
  * unless protection is 0. 0, or -1. */
