@@ -31,6 +31,7 @@
 #include "../src/pw_launcher_render.h"
 #include "../src/pw_script_input.h"
 #include "../src/pw_wine_launch.h"
+#include "../src/pw_game_menu.h"
 #include "pw_data_mount.h"
 #include "pw_audio_ps5.h"
 #include "pw_pad_ps5.h"
@@ -978,6 +979,10 @@ int main(int argc, char **argv)
     int (*post_input)(const PwWineInput *) = NULL;
     void (*set_pad)(const PwWinePad *) = NULL;
     int (*rumble)(uint32_t *, uint32_t *) = NULL;
+    /* [display] menu: L3+R3 opens the menu, DXVK's HUD draws it (patch 0973). */
+    void (*set_menu)(const struct pw_title_menu *) = NULL;
+    static PwGameMenu game_menu;
+    static PwPadPs5 game_pad;   /* the pad as the game sees it while the menu has it */
     uint64_t vibrations = 0;
     uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
     VulkanFrames vulkan_frames = { 0 };
@@ -1207,6 +1212,11 @@ int main(int argc, char **argv)
             rumble = (int (*)(uint32_t *, uint32_t *))
                 (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_rumble");
         }
+        if (game && game->display.menu) {
+            set_menu = (void (*)(const struct pw_title_menu *))
+                (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_menu");
+            PS5LOG_LOG("PW_WINE64 menu=%s", set_menu ? "l3+r3" : "unavailable");
+        }
         video_status = pw_videoout_ps5_open(&video);
         pad_status = pw_pad_ps5_platform_ops(&pad_ops);
         if (pad_status == PW_OK)
@@ -1352,12 +1362,33 @@ int main(int argc, char **argv)
         }
 #endif
         int pad_read = pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK;
+        /* The menu takes the pad while it is open: the game then sees it
+         * idle, and the buttons that closed it stay the menu's until they
+         * are let go. Closing the game below still reads the real pad. */
+        const PwPadPs5 *seen = &pad;
+        if (pad_read && set_menu) {
+            struct pw_title_menu shown;
+            PwGameMenuView view;
+            pw_game_menu_tick(&game_menu, pad.core.previous_buttons, pad.core.pressed_edges,
+                              pad.core.released_edges, &shown, &view);
+            set_menu(&shown);
+            game_pad = pad;
+            game_pad.core.previous_buttons = view.held;
+            game_pad.core.pressed_edges = view.pressed;
+            game_pad.core.released_edges = view.released;
+            if (view.neutral) {
+                game_pad.left_stick.x = game_pad.left_stick.y = 0x80;
+                game_pad.right_stick.x = game_pad.right_stick.y = 0x80;
+                game_pad.l2 = game_pad.r2 = 0;
+            }
+            seen = &game_pad;
+        }
         /* XInput controller 0: the DualSense, and in a script build the
          * macro's controller added to it, every frame, so a scripted press
          * stays down until its release. */
         if (set_pad) {
             PwWinePad state;
-            int connected = pw_wine_game_pad(pad_read ? &pad : NULL, &state), scripted = 0;
+            int connected = pw_wine_game_pad(pad_read ? seen : NULL, &state), scripted = 0;
 #if PW_WINE64_SCRIPT
             scripted = script_input.pad_events != 0;
             connected = pw_wine_script_pad(&state, connected, &script_pad, scripted);
@@ -1365,12 +1396,12 @@ int main(int argc, char **argv)
             if (pad_read || scripted) set_pad(connected ? &state : NULL);
         }
         if (pad_read) {
-            size_t count = pw_wine_game_inputs(&game_input, pad.core.pressed_edges,
-                                               pad.core.released_edges, events,
+            size_t count = pw_wine_game_inputs(&game_input, seen->core.pressed_edges,
+                                               seen->core.released_edges, events,
                                                sizeof(events) / sizeof(events[0]) - 1);
             if (game_input.mouse != PW_GAME_STICK_NONE) {
                 const PwPadPs5Stick *stick = game_input.mouse == PW_GAME_STICK_LEFT ?
-                                             &pad.left_stick : &pad.right_stick;
+                                             &seen->left_stick : &seen->right_stick;
                 count += (size_t)pw_wine_pointer_step(&pointer, stick->x, stick->y,
                                                       game_input.mouse_speed,
                                                       PW_WINE64_TICK_US, &events[count]);

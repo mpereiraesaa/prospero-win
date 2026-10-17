@@ -213,6 +213,14 @@ static int display_field(PwGameDisplay *display, uint32_t *seen, const uint8_t *
         *seen |= 16u;
         return PW_OK;
     }
+    if (is(key, key_length, "menu")) {
+        if (*seen & 64u) return PW_ERR_MALFORMED;
+        if (is(v, n, "true")) display->menu = 1;
+        else if (is(v, n, "false")) display->menu = 0;
+        else return PW_ERR_UNSUPPORTED;
+        *seen |= 64u;
+        return PW_OK;
+    }
     if (is(key, key_length, "opengl_thread")) {
         if (*seen & 32u) return PW_ERR_MALFORMED;
         if (is(v, n, "true")) display->opengl_thread = 1;
@@ -464,8 +472,14 @@ size_t pw_game_graphics_env(const PwGameProfile *profile, PwGameEnv *env)
             opted |= !strcmp(profile->debug_env[i].name, "PW_VK_DEFER_DESCRIPTORS");
         if (!opted) env[count++] = (PwGameEnv){ "PW_VK_DEFER_DESCRIPTORS", "1" };
     }
-    if (profile->display.show_fps)
-        env[count++] = zink ? (PwGameEnv){ "GALLIUM_HUD", "simple,fps" } : (PwGameEnv){ "DXVK_HUD", "fps" };
+    /* DXVK's HUD draws the frame rate and the title's menu (its "menu" item,
+     * which an upstream DXVK ignores); Mesa's has no menu. */
+    if (zink) {
+        if (profile->display.show_fps) env[count++] = (PwGameEnv){ "GALLIUM_HUD", "simple,fps" };
+    } else if (profile->display.show_fps || profile->display.menu) {
+        env[count++] = (PwGameEnv){ "DXVK_HUD", !profile->display.menu ? "fps" :
+                                                profile->display.show_fps ? "fps,menu" : "menu" };
+    }
     return count;
 }
 
@@ -494,8 +508,8 @@ int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *pr
         return status;
     if ((status = pw_app_profile_parse(bytes, application_end, &parsed.app)) != PW_OK)
         return status;
-    /* show_fps sets the HUD variable itself (pw_game_graphics_env). */
-    for (size_t i = 0; parsed.display.show_fps && i < parsed.debug_env_count; i++)
+    /* show_fps and menu set the HUD variable themselves (pw_game_graphics_env). */
+    for (size_t i = 0; (parsed.display.show_fps || parsed.display.menu) && i < parsed.debug_env_count; i++)
         if (!strcmp(parsed.debug_env[i].name, "DXVK_HUD") || !strcmp(parsed.debug_env[i].name, "GALLIUM_HUD"))
             return PW_ERR_UNSUPPORTED;
     *profile = parsed;
