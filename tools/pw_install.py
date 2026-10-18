@@ -72,6 +72,11 @@ DXVK_RELEASES = {
     # and DXVK_CS_PROFILE=1 (GTA IV and San Andreas; release notes list them).
     "2.6.2-prospero2": ("https://github.com/mpereiraesaa/dxvk/releases/download/v2.6.2-prospero2/dxvk-2.6.2-prospero2.tar.gz",
                         "c00c1cd7df7ce70e89130b61c1fcd2d3a18ac473f274a219da4478147e4f3c90"),
+    # prospero2 plus the HUD item "menu" (the title's in-game menu) and D3D9
+    # texture packs: d3d9.texturePack, d3d9.textureDump and
+    # d3d9.textureDumpMaxSize (Dino Crisis; release notes list them).
+    "2.6.2-prospero3": ("https://github.com/mpereiraesaa/dxvk/releases/download/v2.6.2-prospero3/dxvk-2.6.2-prospero3.tar.gz",
+                        "e1596b4fd763c5f770634b133f798b5ef7df235cfbbbabc245050b4cca514d6b"),
 }
 DXVK_DLLS = ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi")
 WINETRICKS = ("20260125", "https://raw.githubusercontent.com/Winetricks/winetricks/20260125/src/winetricks",

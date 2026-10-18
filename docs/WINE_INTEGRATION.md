@@ -197,7 +197,10 @@ release named `v<version>-prospero<n>` in upstream's archive layout, with the
 changes listed in its release notes. GTA San Andreas and GTA IV use
 `2.6.2-prospero2` (`2.6.2-prospero1` plus the CS-thread work of 2026-10-10:
 compiles outside the pipeline lock, `d3d9.weakRenderTargetFlushHint` for GTA
-IV's submit count, `d3d9.padVsOutputs`, `DXVK_CS_PROFILE`).
+IV's submit count, `d3d9.padVsOutputs`, `DXVK_CS_PROFILE`). `2.6.2-prospero3`
+adds the HUD item `menu`, which draws the title's in-game menu
+([Controls](CONTROLS.md)), and Direct3D 9 texture packs (`d3d9.texturePack`,
+`d3d9.textureDump`, `d3d9.textureDumpMaxSize`); Dino Crisis runs with it.
 See [Installing games](INSTALLING_GAMES.md#custom-dxvk-builds) for how a
 recipe selects one and how to add a new one.
 
