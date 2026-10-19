@@ -26,6 +26,12 @@ a custom build from https://github.com/mpereiraesaa/dxvk (2.6.2-prospero2,
 say) for a game that needs a fix upstream doesn't have; those are pinned by
 hash the same way.
 
+vkd3d-proton, for Direct3D 12 games, follows Lutris too
+(`wine: {dxvk: true, vkd3d: true, vkd3d_version: 3.0.1}`): its d3d12 and
+d3d12core go into the same folders, set native. It draws through DXVK's
+dxgi, so it needs the dxvk backend. Whether the console's Vulkan driver has
+everything it asks for is not settled: this only installs the DLLs.
+
 Usage:
     pw_install.py SCRIPT.yml --library DIR --wine PATH [--file ID=PATH ...]
         [--input ID=VALUE ...] [--mesa-zink DIR] [--disc DIR] [--resolution WxH] [--keep-cache]
@@ -35,6 +41,7 @@ from __future__ import annotations
 import argparse
 import configparser
 import hashlib
+import io
 import json
 import os
 import re
@@ -79,6 +86,15 @@ DXVK_RELEASES = {
                         "e1596b4fd763c5f770634b133f798b5ef7df235cfbbbabc245050b4cca514d6b"),
 }
 DXVK_DLLS = ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi")
+# vkd3d-proton (Direct3D 12 over Vulkan): upstream releases, whose archives
+# are zstd tarballs holding x64/ and x86/. It draws through DXVK's dxgi, so a
+# recipe that asks for it also needs graphics = dxvk.
+VKD3D_PROTON_RELEASES = {
+    "3.0.1": ("https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v3.0.1/vkd3d-proton-3.0.1.tar.zst",
+              "3cf2315522af5e43605ef6d3c41dad91387040bf97199934f3f7ab76caaa2f0c"),
+}
+VKD3D_PROTON_DLLS = ("d3d12", "d3d12core")
+ZSTD_MAGIC = bytes.fromhex("28b52ffd")
 WINETRICKS = ("20260125", "https://raw.githubusercontent.com/Winetricks/winetricks/20260125/src/winetricks",
               "431f82fc74000e6c864409f1d8fb495d696c03928808e3e8acffc45179312a7b")
 # Wine Gecko, which Wine's mshtml needs (an installer's license shown in an
@@ -107,6 +123,32 @@ def dxvk_release(version: str) -> tuple[str, str]:
     if version not in DXVK_RELEASES:
         raise InstallError(f"dxvk_version {version} is not pinned (known: {sorted(DXVK_RELEASES)})")
     return DXVK_RELEASES[version]
+
+
+def vkd3d_proton_release(version: str) -> tuple[str, str]:
+    """The pinned URL and SHA-256 of a vkd3d-proton release."""
+    if version not in VKD3D_PROTON_RELEASES:
+        raise InstallError(f"vkd3d_version {version} is not pinned (known: {sorted(VKD3D_PROTON_RELEASES)})")
+    return VKD3D_PROTON_RELEASES[version]
+
+
+def open_release_tar(archive: Path) -> tarfile.TarFile:
+    """A release tarball, zstd-compressed or not (by its magic bytes).
+
+    Python reads zstd itself from 3.14; before that the zstd tool does."""
+    with open(archive, "rb") as handle:
+        zstd = handle.read(4) == ZSTD_MAGIC
+    if not zstd:
+        return tarfile.open(archive)
+    try:
+        from compression import zstd as zstd_module  # Python 3.14+
+    except ImportError:
+        tool = shutil.which("zstd")
+        if tool is None:
+            raise InstallError(f"{archive.name} is zstd-compressed: use Python 3.14 or install the zstd tool")
+        data = subprocess.run([tool, "-dc", str(archive)], check=True, stdout=subprocess.PIPE).stdout
+        return tarfile.open(fileobj=io.BytesIO(data))
+    return tarfile.open(fileobj=zstd_module.open(archive))
 
 
 def fetch(url: str, sha256: str, name: str, directory: Path | None = None) -> Path:
@@ -317,6 +359,8 @@ class Installer:
         self.mesa_files = None
         self.dxvk = wine_section.get("dxvk", False)
         self.dxvk_version = str(wine_section.get("dxvk_version", "2.6.2"))
+        self.vkd3d = wine_section.get("vkd3d", False)
+        self.vkd3d_version = str(wine_section.get("vkd3d_version", "3.0.1"))
 
     # --- variables and paths --------------------------------------------
     def expand(self, value):
@@ -614,6 +658,28 @@ class Installer:
         log(f"DXVK {self.dxvk_version} installed in the prefix")
         return list(DXVK_DLLS)
 
+    def install_vkd3d_proton(self, dxvk_dlls: list[str]) -> list[str]:
+        if not self.vkd3d:
+            return []
+        if "dxgi" not in dxvk_dlls:
+            raise InstallError("vkd3d needs DXVK's dxgi: set wine.dxvk and graphics = dxvk")
+        url, digest = vkd3d_proton_release(self.vkd3d_version)
+        archive = fetch(url, digest, url.rsplit("/", 1)[-1])
+        prefix = Path(self.wine_env()["WINEPREFIX"]) / "drive_c" / "windows"
+        with open_release_tar(archive) as release:
+            for bits, folder in (("x64", "system32"), ("x86", "syswow64")):
+                for dll in VKD3D_PROTON_DLLS:
+                    name = f"vkd3d-proton-{self.vkd3d_version}/{bits}/{dll}.dll"
+                    try:
+                        member = release.extractfile(name)
+                    except KeyError:
+                        raise InstallError(f"{archive.name} has no {name}") from None
+                    (prefix / folder / f"{dll}.dll").write_bytes(member.read())
+        self.regedit(["[HKEY_CURRENT_USER\Software\Wine\DllOverrides]"] +
+                     [f'"{dll}"="native"' for dll in VKD3D_PROTON_DLLS], None)
+        log(f"vkd3d-proton {self.vkd3d_version} installed in the prefix")
+        return list(VKD3D_PROTON_DLLS)
+
     def install_mesa_zink(self) -> None:
         if self.graphics_mode() != "opengl":
             return
@@ -725,6 +791,7 @@ class Installer:
         # Again, in case a later step ran wineboot and linked them back.
         self.unlink_home_folders(self.gamedir)
         dxvk_dlls = self.install_dxvk()
+        dxvk_dlls += self.install_vkd3d_proton(dxvk_dlls)
         self.install_mesa_zink()
         profile = self.library / "profiles" / f"{self.slug}.profile"
         profile.parent.mkdir(parents=True, exist_ok=True)
