@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import struct
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -160,6 +161,46 @@ def fake_dxvk(root: Path) -> tuple[Path, str]:
     return archive, hashlib.sha256(archive.read_bytes()).hexdigest()
 
 
+def fake_vkd3d(root: Path) -> tuple[Path, str]:
+    archive = root / "vkd3d.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for bits in ("x64", "x86"):
+            for dll in pw_install.VKD3D_PROTON_DLLS:
+                payload = f"{bits}/{dll}".encode()
+                info = tarfile.TarInfo(f"vkd3d-proton-9.9/{bits}/{dll}.dll")
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+    return archive, hashlib.sha256(archive.read_bytes()).hexdigest()
+
+
+def check_vkd3d_releases(root: Path) -> None:
+    url, digest = pw_install.vkd3d_proton_release("3.0.1")
+    assert url == ("https://github.com/HansKristian-Work/vkd3d-proton/releases/download/"
+                   "v3.0.1/vkd3d-proton-3.0.1.tar.zst")
+    assert re.fullmatch(r"[0-9a-f]{64}", digest)
+    for version in ("3.0.2", "latest"):
+        try:
+            pw_install.vkd3d_proton_release(version)
+        except pw_install.InstallError as error:
+            assert f"vkd3d_version {version} is not pinned" in str(error)
+        else:
+            raise AssertionError(f"vkd3d_version {version!r} should not resolve")
+    # Release tarballs open plain, and zstd-compressed when a reader exists.
+    archive, _ = fake_vkd3d(root)
+    with pw_install.open_release_tar(archive) as tar:
+        assert tar.extractfile("vkd3d-proton-9.9/x64/d3d12.dll").read() == b"x64/d3d12"
+    if shutil.which("zstd"):
+        plain = root / "plain.tar"
+        with tarfile.open(plain, "w") as tar:
+            info = tarfile.TarInfo("vkd3d-proton-9.9/x86/d3d12core.dll")
+            info.size = 3
+            tar.addfile(info, io.BytesIO(b"abc"))
+        compressed = root / "plain.tar.zst"
+        subprocess.run(["zstd", "-q", "-f", str(plain), "-o", str(compressed)], check=True)
+        with pw_install.open_release_tar(compressed) as tar:
+            assert tar.extractfile("vkd3d-proton-9.9/x86/d3d12core.dll").read() == b"abc"
+
+
 SCRIPT = r"""
 name: Test Game
 game_slug: test-game
@@ -237,6 +278,7 @@ def main() -> int:
     check_mesa()
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        check_vkd3d_releases(root)
         wine = root / "wine" / "wine"
         wine.parent.mkdir()
         wine.write_text(FAKE_WINE)
@@ -261,6 +303,9 @@ def main() -> int:
         pw_install.DOWNLOADS = root / "downloads"
         pw_install.DOWNLOADS.mkdir()
         os.link(archive, pw_install.DOWNLOADS / "dxvk-9.9.tar.gz")
+        vkd3d_archive, vkd3d_digest = fake_vkd3d(root)
+        pw_install.VKD3D_PROTON_RELEASES["9.9"] = ("file:///unused/vkd3d-proton-9.9.tar.gz", vkd3d_digest)
+        os.link(vkd3d_archive, pw_install.DOWNLOADS / "vkd3d-proton-9.9.tar.gz")
         script = root / "test.yml"
         script.write_text(SCRIPT)
         library = root / "library"
@@ -291,6 +336,7 @@ def main() -> int:
         assert '"d3d8"="native"' in registry and '"dxgi"="native"' in registry
         assert (prefix / "drive_c/windows/syswow64/d3d8.dll").read_bytes() == b"x32/d3d8"
         assert (prefix / "drive_c/windows/system32/d3d11.dll").read_bytes() == b"x64/d3d11"
+        assert "d3d12" not in registry and not (prefix / "drive_c/windows/system32/d3d12.dll").exists()
         assert "Height=1440" in (prefix / "drive_c/Games/Test/game.ini").read_text()
         assert not (library / ".cache" / "test-game").exists()
         profile = (library / "profiles" / "test-game.profile").read_text()
@@ -304,6 +350,22 @@ def main() -> int:
         # A PS5 backend choice overrides Lutris's DXVK setting for this game.
         # OpenGL draws through Zink, so it needs the Mesa package.
         mesa = fake_mesa(root / "mesa")
+        # vkd3d-proton adds Direct3D 12 on top of DXVK, and only on top of it.
+        vkd3d_script = root / "vkd3d.yml"
+        vkd3d_script.write_text(SCRIPT.replace('dxvk_version: "9.9"',
+                                               'dxvk_version: "9.9"\n    vkd3d: true\n    vkd3d_version: "9.9"'))
+        vkd3d_args = [str(vkd3d_script), "--library", str(library), "--wine", str(wine),
+                      "--file", f"setup={setup}", "--input", "LANG=en"]
+        assert pw_install.main(vkd3d_args + ["--slug", "vkd3d-game"]) == 0
+        vkd3d_prefix = library / "prefixes" / "vkd3d-game"
+        vkd3d_registry = (vkd3d_prefix / "user.reg").read_text()
+        assert '"d3d12"="native"' in vkd3d_registry and '"d3d12core"="native"' in vkd3d_registry
+        assert (vkd3d_prefix / "drive_c/windows/system32/d3d12.dll").read_bytes() == b"x64/d3d12"
+        assert (vkd3d_prefix / "drive_c/windows/syswow64/d3d12core.dll").read_bytes() == b"x86/d3d12core"
+        assert "dxgi,d3d12,d3d12core,ddraw=n" in (library / "profiles" / "vkd3d-game.profile").read_text()
+        no_dxvk = root / "vkd3d-no-dxvk.yml"
+        no_dxvk.write_text(vkd3d_script.read_text().replace("dxvk: true", "dxvk: false"))
+        assert pw_install.main([str(no_dxvk)] + vkd3d_args[1:] + ["--slug", "vkd3d-no-dxvk"]) == 1
         opengl_script = root / "opengl.yml"
         opengl_script.write_text(SCRIPT.replace("  display:", "  graphics: opengl\n  display:", 1)
                                  .replace("overrides: {ddraw.dll: n}",
