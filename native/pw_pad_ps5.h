@@ -4,7 +4,7 @@
 #include "../src/pw_pad.h"
 #include <stdint.h>
 
-enum { PW_PAD_PS5_BATCH=64,PW_PAD_PS5_USERS=4 };
+enum { PW_PAD_PS5_BATCH=64,PW_PAD_PS5_USERS=4,PW_PAD_PLAYERS=PW_PAD_PS5_USERS-1 };
 typedef struct PwPadPs5Stick { uint8_t x,y; } PwPadPs5Stick;
 typedef struct PwPadPs5Touch { uint16_t x,y;uint8_t finger,reserved[3]; } PwPadPs5Touch;
 typedef struct PwPadPs5TouchData {
@@ -72,5 +72,19 @@ int pw_pad_ps5_close(PwPadPs5 *);
  * vibration op, PW_ERR_PRECONDITION when the pad is not open, PW_ERR_STATE
  * when the call fails (its result is kept in vibration_rc). */
 int pw_pad_ps5_vibrate(PwPadPs5 *,uint8_t large,uint8_t small);
+
+/* The other signed-in users' DualSenses, for a game's local multiplayer
+ * through XInput: slot i is controller i+1, the title's own pad being
+ * controller 0. A user keeps their slot while signed in; one who signs in
+ * takes the first free slot. Each pad is opened in the compatible
+ * vibration mode, and read and vibrated as the title's is. */
+typedef struct PwPadPlayers { PwPadPs5 slot[PW_PAD_PLAYERS]; } PwPadPlayers;
+void pw_pad_players_init(PwPadPlayers *);
+/* Opens the pads of users who signed in and closes those of users who
+ * signed out, with the open title pad's ops; the user service and
+ * scePadInit stay the title pad's. Returns the number of open slots. A
+ * failed sign-in list, or no login_users op, changes nothing. */
+int pw_pad_players_scan(PwPadPlayers *,const PwPadPs5 *title_pad);
+void pw_pad_players_close(PwPadPlayers *);
 
 #endif

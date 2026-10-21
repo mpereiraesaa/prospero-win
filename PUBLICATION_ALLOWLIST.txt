@@ -84,6 +84,7 @@ tests/test_pw_audio_mix.c
 tests/test_pw_app_profile.c
 tests/test_pw_pad.c
 tests/test_pw_game_menu.c
+tests/test_pw_pad_players.c
 tests/test_pw_pad_ps5.c
 tests/test_status_vocabulary.py
 tests/test_classify_x86.py

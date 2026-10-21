@@ -103,6 +103,19 @@ preset instead. Keyboard and mouse input through DirectInput should work,
 since it comes from the same place as normal Windows input, but it hasn't
 been tested.
 
+### More players with controllers
+
+In xinput mode, the DualSenses of the other PS5 users who are signed in
+(a second account or a guest) are the game's XInput controllers 1, 2 and
+3, beside the first player's controller 0. A game's split screen or local
+multiplayer finds them as it would on a PC. Each player's controller
+rumbles on its own. A user who signs in while the game runs is found
+within two seconds and keeps the same controller until they sign out.
+Buttons, the pointer and closing the game stay the first player's, and
+while the in-game menu is open the other controllers read idle. A profile
+with a `player2` preset (below) gives the second player keys instead, and
+then no other controllers are opened.
+
 ### A second player
 
 A game that two people play on one PC keyboard, each with their own keys,
