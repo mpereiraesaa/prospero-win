@@ -1,0 +1,291 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Fri, 16 Oct 2026 21:00:00 +0000
+Subject: [PATCH] server: Park directory descriptors past a threshold on PS5.
+
+A PS5 title has few file descriptors, and the in-process server's count
+against them. .NET opens a handle to every subdirectory it finds while it
+lists a tree and keeps the handles queued until it lists each one, so a
+large tree (SMAPI's scan of a mods folder) failed with "Too many open
+files": each queued handle held a server descriptor. Past the first 64
+directories open at once, close a directory's descriptor once its open has
+been checked, and open it again by name the first time it is needed:
+get_unix_fd, dup_fd_object, locks, reparse points, disposition, rename and
+end of file. The name must lead to a directory with the same device and
+inode, opened with O_DIRECTORY, or the handle fails. A dismounted directory
+is never opened again. WINE_PS5_PARK_DIRECTORIES=0 parks nothing, =N moves
+the threshold.
+
+tests/test_wine_directory_handles.py lists 3001 directories with each
+one's handle queued, as .NET does. Under a host Wine and a 512-descriptor
+limit, the stock server fails it with STATUS_TOO_MANY_OPENED_FILES at about
+230 queued handles; one built with PS5_PARK_DIRECTORIES completes it.
+---
+ server/fd.c | 135 +++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 133 insertions(+), 2 deletions(-)
+
+diff --git a/server/fd.c b/server/fd.c
+index bce9a84..b6e92e1 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -132,6 +132,10 @@ struct closed_fd
+     char           *unix_name;  /* name to unlink on close, points to parent fd unix_name */
+ };
+ 
++#if defined(__PROSPERO__) && !defined(PS5_PARK_DIRECTORIES)
++#define PS5_PARK_DIRECTORIES
++#endif
++
+ struct fd
+ {
+     struct object        obj;         /* object header */
+@@ -161,8 +165,18 @@ struct fd
+     struct completion   *completion;  /* completion object attached to this fd */
+     apc_param_t          comp_key;    /* completion key to set in completion events */
+     unsigned int         comp_flags;  /* completion flags */
++#ifdef PS5_PARK_DIRECTORIES
++    unsigned int         ps5_parked :1;  /* a directory whose unix_fd is closed until needed */
++    unsigned int         ps5_counted :1; /* counted in ps5_directory_fds */
++    int                  ps5_park_flags; /* open() flags to open it again with */
++#endif
+ };
+ 
++#ifdef PS5_PARK_DIRECTORIES
++static unsigned int ps5_directory_fds;  /* directory fds alive, parked or not (see ps5_park_directory) */
++static int ps5_unpark_directory( struct fd *fd );
++#endif
++
+ static void fd_dump( struct object *obj, int verbose );
+ static struct object *fd_get_sync( struct object *obj );
+ static void fd_destroy( struct object *obj );
+@@ -1577,6 +1591,9 @@ obj_handle_t lock_fd( struct fd *fd, file_pos_t start, file_pos_t count, int sha
+         set_error( STATUS_INVALID_DEVICE_REQUEST );
+         return 0;
+     }
++#ifdef PS5_PARK_DIRECTORIES
++    if (ps5_unpark_directory( fd ) == -1) return 0;
++#endif
+ 
+     /* don't allow wrapping locks */
+     if (end && end < start)
+@@ -1654,6 +1671,9 @@ static void fd_destroy( struct object *obj )
+     free_async_queue( &fd->write_q );
+     free_async_queue( &fd->wait_q );
+ 
++#ifdef PS5_PARK_DIRECTORIES
++    if (fd->ps5_counted) ps5_directory_fds--;
++#endif
+     if (fd->map_addr) free_map_addr( fd->map_addr, fd->map_size );
+     if (fd->completion) release_object( fd->completion );
+     remove_fd_locks( fd );
+@@ -1764,6 +1784,9 @@ static inline void unmount_fd( struct fd *fd )
+     fd->unix_fd = -1;
+     fd->no_fd_status = STATUS_VOLUME_DISMOUNTED;
+     fd->closed->unix_fd = -1;
++#ifdef PS5_PARK_DIRECTORIES
++    fd->ps5_parked = 0;  /* dismounted for good: never open it again */
++#endif
+     fd->closed->disp_flags = 0;
+ 
+     /* stop using Unix locks on this fd (existing locks have been removed by close) */
+@@ -1794,6 +1817,11 @@ static struct fd *alloc_fd_object(void)
+     fd->cacheable  = 0;
+     fd->fs_locks   = 1;
+     fd->poll_index = -1;
++#ifdef PS5_PARK_DIRECTORIES
++    fd->ps5_parked = 0;
++    fd->ps5_counted = 0;
++    fd->ps5_park_flags = 0;
++#endif
+     fd->completion = NULL;
+     fd->comp_flags = 0;
+     init_async_queue( &fd->read_q );
+@@ -1839,6 +1867,11 @@ struct fd *alloc_pseudo_fd( const struct fd_ops *fd_user_ops, struct object *use
+     fd->completion = NULL;
+     fd->comp_flags = 0;
+     fd->no_fd_status = STATUS_BAD_DEVICE_TYPE;
++#ifdef PS5_PARK_DIRECTORIES
++    fd->ps5_parked = 0;
++    fd->ps5_counted = 0;
++    fd->ps5_park_flags = 0;
++#endif
+     init_async_queue( &fd->read_q );
+     init_async_queue( &fd->write_q );
+     init_async_queue( &fd->wait_q );
+@@ -1853,13 +1886,96 @@ struct fd *alloc_pseudo_fd( const struct fd_ops *fd_user_ops, struct object *use
+     return fd;
+ }
+ 
++#ifdef PS5_PARK_DIRECTORIES
++/* A PS5 title has few file descriptors, and the in-process server's count
++ * against them. .NET opens a handle to every subdirectory it finds while it
++ * lists a tree, and keeps the handles queued until it lists each one, so a
++ * large tree ran out of descriptors (EMFILE, "Too many open files"). Past
++ * the first PS5_PARK_THRESHOLD directories open at once, a directory's
++ * descriptor is closed once the open has been checked ("parked") and opened
++ * again by its name the first time it is needed, after which it stays open.
++ * The name must then lead to a directory with the same device and inode, or
++ * the handle fails. That check cannot tell a directory deleted and created
++ * again under a recycled inode number while it was parked, and a parked
++ * handle no longer follows a rename of a directory above it: hence the
++ * threshold, so ordinary use keeps Wine's behaviour.
++ * WINE_PS5_PARK_DIRECTORIES=0 parks nothing; =N moves the threshold to N. */
++#define PS5_PARK_THRESHOLD 64
++
++static int ps5_park_threshold(void)
++{
++    static int threshold = -1;
++    const char *value;
++
++    if (threshold == -1)
++    {
++        value = getenv( "WINE_PS5_PARK_DIRECTORIES" );
++        threshold = value && *value ? atoi( value ) : PS5_PARK_THRESHOLD;
++        if (threshold < 0) threshold = 0;
++    }
++    return threshold;
++}
++
++static void ps5_park_directory( struct fd *fd, int flags )
++{
++    int threshold = ps5_park_threshold();
++
++    if (!fd->ps5_counted)
++    {
++        fd->ps5_counted = 1;
++        ps5_directory_fds++;
++    }
++    if (!threshold || ps5_directory_fds <= (unsigned int)threshold) return;
++    if (fd->unix_fd == -1 || !fd->inode || !fd->closed || !fd->unix_name || fd->closed->disp_flags ||
++        !list_empty( &fd->inode->locks ))
++        return;
++    close( fd->unix_fd );
++    fd->unix_fd = fd->closed->unix_fd = -1;
++    fd->ps5_park_flags = O_RDONLY | (flags & ~(O_ACCMODE | O_CREAT | O_EXCL | O_TRUNC));
++#ifdef O_DIRECTORY
++    fd->ps5_park_flags |= O_DIRECTORY;  /* never block on, or open, whatever took the name */
++#endif
++    fd->ps5_parked = 1;
++}
++
++/* 0 when the fd has its unix_fd (again), -1 with the error set */
++static int ps5_unpark_directory( struct fd *fd )
++{
++    struct stat st;
++    int unix_fd;
++
++    if (!fd->ps5_parked) return 0;
++    if ((unix_fd = open( fd->unix_name, fd->ps5_park_flags )) == -1)
++    {
++        file_set_error();
++        return -1;
++    }
++    if (fstat( unix_fd, &st ) == -1 || !S_ISDIR( st.st_mode ) ||
++        st.st_dev != fd->inode->device->dev || st.st_ino != fd->inode->ino)
++    {
++        close( unix_fd );
++        set_error( STATUS_FILE_DELETED );
++        return -1;
++    }
++    fd->unix_fd = fd->closed->unix_fd = unix_fd;
++    fd->ps5_parked = 0;
++    return 0;
++}
++#define PS5_UNPARK_OR_RETURN(fd) do { if (ps5_unpark_directory( fd ) == -1) return; } while (0)
++#else
++#define PS5_UNPARK_OR_RETURN(fd) do { } while (0)
++#endif
++
+ /* duplicate an fd object for a different user */
+ struct fd *dup_fd_object( struct fd *orig, unsigned int access, unsigned int sharing, unsigned int options )
+ {
+     unsigned int err;
+-    struct fd *fd = alloc_fd_object();
++    struct fd *fd;
+ 
+-    if (!fd) return NULL;
++#ifdef PS5_PARK_DIRECTORIES
++    if (ps5_unpark_directory( orig ) == -1) return NULL;
++#endif
++    if (!(fd = alloc_fd_object())) return NULL;
+ 
+     fd->options    = options;
+     fd->cacheable  = orig->cacheable;
+@@ -2242,6 +2358,9 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+     }
+ #endif
+ 
++#ifdef PS5_PARK_DIRECTORIES
++    if (S_ISDIR( st.st_mode )) ps5_park_directory( fd, flags );
++#endif
+     if (root_fd != -1) fchdir( server_dir_fd ); /* go back to the server dir */
+     return fd;
+ 
+@@ -2297,6 +2416,9 @@ int is_fd_overlapped( struct fd *fd )
+ /* retrieve the unix fd for an object */
+ int get_unix_fd( struct fd *fd )
+ {
++#ifdef PS5_PARK_DIRECTORIES
++    if (ps5_unpark_directory( fd ) == -1) return -1;
++#endif
+     if (fd->unix_fd == -1) set_error( fd->no_fd_status );
+     return fd->unix_fd;
+ }
+@@ -2346,6 +2468,9 @@ int check_fd_events( struct fd *fd, int events )
+ {
+     struct pollfd pfd;
+ 
++#ifdef PS5_PARK_DIRECTORIES
++    if (fd->ps5_parked) return events;  /* a parked directory has an inode */
++#endif
+     if (fd->unix_fd == -1) return POLLERR;
+     if (fd->inode) return events;  /* regular files are always signaled */
+ 
+@@ -2617,6 +2742,7 @@ static void set_reparse_point( struct fd *fd, struct async *async )
+     struct stat st;
+     size_t len;
+ 
++    PS5_UNPARK_OR_RETURN( fd );
+     if (!fd->unix_name)
+     {
+         set_error( STATUS_OBJECT_TYPE_MISMATCH );
+@@ -2668,6 +2794,7 @@ static void get_reparse_point( struct fd *fd, struct async *async )
+     char buffer[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
+     int ret;
+ 
++    PS5_UNPARK_OR_RETURN( fd );
+     if (!fd->unix_name)
+     {
+         set_error( STATUS_OBJECT_TYPE_MISMATCH );
+@@ -2711,6 +2838,7 @@ static void delete_reparse_point( struct fd *fd, struct async *async )
+     char *base_name;
+     size_t len;
+ 
++    PS5_UNPARK_OR_RETURN( fd );
+     if (!fd->unix_name)
+     {
+         set_error( STATUS_OBJECT_TYPE_MISMATCH );
+@@ -2879,6 +3007,7 @@ static void set_fd_disposition( struct fd *fd, unsigned int flags )
+ {
+     struct stat st;
+ 
++    PS5_UNPARK_OR_RETURN( fd );
+     if (!fd->inode)
+     {
+         set_error( STATUS_OBJECT_TYPE_MISMATCH );
+@@ -2954,6 +3083,7 @@ static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, da
+     char *name;
+     const unsigned int replace = flags & FILE_RENAME_REPLACE_IF_EXISTS;
+ 
++    PS5_UNPARK_OR_RETURN( fd );
+     if (!fd->inode || !fd->unix_name)
+     {
+         set_error( STATUS_OBJECT_TYPE_MISMATCH );
+@@ -3096,6 +3226,7 @@ static void set_fd_eof( struct fd *fd, file_pos_t eof )
+         return;
+     }
+ 
++    PS5_UNPARK_OR_RETURN( fd );
+     if (fd->unix_fd == -1)
+     {
+         set_error( fd->no_fd_status );
