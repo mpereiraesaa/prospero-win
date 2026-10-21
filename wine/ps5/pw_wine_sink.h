@@ -27,11 +27,12 @@ typedef int (*PwWinePresentSink)(void *context,const void *bgra,uint32_t width,u
                                  uint32_t stride);
 
 enum { PW_WINE_INPUT_KEY=1,PW_WINE_INPUT_MOUSE_MOVE,PW_WINE_INPUT_MOUSE_BUTTON,
+       PW_WINE_INPUT_MOUSE_WHEEL,
        PW_WINE_INPUT_QUEUE=256 };
 typedef struct PwWineInput {
     uint32_t type;
     uint32_t code;      /* KEY: Windows virtual key; MOUSE_BUTTON: 0 left, 1 right, 2 middle */
-    int32_t x,y;        /* MOUSE_MOVE: relative motion in desktop pixels */
+    int32_t x,y;        /* MOUSE_MOVE: relative pixels; MOUSE_WHEEL: x = signed detents (up positive) */
     uint32_t down;      /* KEY, MOUSE_BUTTON: 1 pressed, 0 released */
 } PwWineInput;
 

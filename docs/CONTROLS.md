@@ -9,8 +9,9 @@ Plug them into the PS5 and they work in every game, alongside the
 controller. You can plug them in after the game has started; the app looks
 for them every few seconds. Keys reach the game just as they would on a PC,
 modifiers included (Ctrl, Shift, Alt, the Windows keys), and the mouse moves
-the same pointer the DualSense's stick does. The mouse wheel doesn't work
-yet.
+the same pointer the DualSense's stick does. The vertical mouse wheel is
+forwarded as Windows wheel input (one detent is 120 units). Horizontal scrolling and Logitech-specific gestures are not
+yet supported.
 
 ## The DualSense
 

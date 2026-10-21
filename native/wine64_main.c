@@ -1314,6 +1314,11 @@ int main(int argc, char **argv)
                 if (post_input(&input) == 0) posted++;
                 else refused++;
             }
+            if (poll.wheel) {
+                input = (PwWineInput){ PW_WINE_INPUT_MOUSE_WHEEL, 0, poll.wheel, 0, 0 };
+                if (post_input(&input) == 0) posted++;
+                else refused++;
+            }
             for (size_t i = 0; i < poll.count; i++) {
                 input = (PwWineInput){ poll.events[i].kind == PW_HID_EVENT_KEY ? PW_WINE_INPUT_KEY :
                                        PW_WINE_INPUT_MOUSE_BUTTON, poll.events[i].code, 0, 0,
