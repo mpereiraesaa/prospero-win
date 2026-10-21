@@ -1416,8 +1416,9 @@ int main(int argc, char **argv)
             if (rumble && rumble(&left, &right) == 1) {
                 int vibrate = pw_pad_ps5_vibrate(&pad, (uint8_t)(left >> 8), (uint8_t)(right >> 8));
                 if (!vibrations++ || vibrate != PW_OK)
-                    PS5LOG_LOG("PW_WINE64 rumble left=%u right=%u status=%s rc=%d", (unsigned)left,
-                               (unsigned)right, pw_result_name(vibrate), pad.vibration_rc);
+                    PS5LOG_LOG("PW_WINE64 rumble left=%u right=%u status=%s rc=%d trigger_rc=%d",
+                               (unsigned)left, (unsigned)right, pw_result_name(vibrate),
+                               pad.vibration_rc, pad.trigger_rc);
             }
         }
         /* The second player's pad: keys only, through its own preset, read

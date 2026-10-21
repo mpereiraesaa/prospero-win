@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "../native/pw_pad_ps5.h"
 #include <assert.h>
+#include <limits.h>
 #include <string.h>
 
 static PwPadPs5Data fixture[64];static int fixture_count,read_rc,user_init_rc;
@@ -25,13 +26,50 @@ static int login_users(int32_t ids[PW_PAD_PS5_USERS])
 static int vibration_mode_calls,vibration_mode_seen;
 static int pad_set_vibration_mode(int32_t h,int32_t m)
 {assert(h==7);vibration_mode_calls++;vibration_mode_seen=m;return 0;}
+static int trigger_calls,trigger_rc;static PwPadPs5TriggerEffect trigger_seen;
+static int pad_set_trigger_effect(int32_t h,const PwPadPs5TriggerEffect *e)
+{assert(h==7);trigger_calls++;trigger_seen=*e;return trigger_rc;}
 static const PwPadPs5Ops ops={user_initialize,foreground,terminate,pad_init,pad_open,pad_read,pad_close,
-                              pad_set_vibration,login_users,pad_set_vibration_mode};
+                              pad_set_vibration,login_users,pad_set_vibration_mode,
+                              pad_set_trigger_effect};
 enum { CREATE=0x1,L1=0x400 };
 static const PwPadKeyMap map[]={{L1,'Z',0,0,"left-flipper"}};
 
+/* L2 and R2 vibrate with the motors: amplitude 0..8 from the stronger one,
+ * 30 Hz when the large one leads and 60 Hz when the small one does, set only
+ * when that changes. A failed effect leaves the rumble's result alone and
+ * is tried again with the next rumble. */
+static void test_trigger_rumble(void)
+{
+    PwPadPs5 pad;
+    assert(pw_pad_ps5_open(&pad,&ops,map,1)==PW_OK && pad.trigger_rc==INT_MIN);
+    int calls=trigger_calls;
+    assert(pw_pad_ps5_vibrate(&pad,255,10)==PW_OK && trigger_calls==calls+1 && !pad.trigger_rc);
+    assert(trigger_seen.mask==(PW_PAD_PS5_TRIGGER_L2|PW_PAD_PS5_TRIGGER_R2));
+    for(int i=0;i<2;i++)
+        assert(trigger_seen.command[i].mode==PW_PAD_PS5_TRIGGER_VIBRATION &&
+               trigger_seen.command[i].data[0]==1 && trigger_seen.command[i].data[1]==8 &&
+               trigger_seen.command[i].data[2]==30);
+    assert(pw_pad_ps5_vibrate(&pad,254,0)==PW_OK && trigger_calls==calls+1);   /* unchanged */
+    assert(pw_pad_ps5_vibrate(&pad,0,40)==PW_OK && trigger_calls==calls+2 &&
+           trigger_seen.command[1].data[1]==2 && trigger_seen.command[1].data[2]==60);
+    trigger_rc=-1;
+    assert(pw_pad_ps5_vibrate(&pad,0,0)==PW_OK && pad.trigger_rc==-1 && trigger_calls==calls+3);
+    trigger_rc=0;
+    assert(pw_pad_ps5_vibrate(&pad,0,0)==PW_OK && trigger_calls==calls+4 &&
+           trigger_seen.command[0].mode==PW_PAD_PS5_TRIGGER_OFF && !trigger_seen.command[0].data[1]);
+    assert(pw_pad_ps5_vibrate(&pad,0,0)==PW_OK && trigger_calls==calls+4);
+    vibration_rc=-5;   /* a failed rumble is still the call's result */
+    assert(pw_pad_ps5_vibrate(&pad,100,0)==PW_ERR_STATE && trigger_calls==calls+5);
+    vibration_rc=0;
+    assert(pw_pad_ps5_close(&pad)==PW_OK);
+    init_calls=foreground_calls=pad_init_calls=open_calls=read_calls=close_calls=terminate_calls=0;
+    vibration_calls=vibration_mode_calls=0;
+}
+
 int main(void)
 {
+    test_trigger_rumble();
     PwPadPs5 pad;
     assert(pw_pad_ps5_open(&pad,&ops,map,1)==PW_OK && pad.opened && pad.pad_handle==7);
     assert(pad.left_stick.x==0x80 && pad.right_stick.y==0x80 && !pad.l2 && !pad.r2);
