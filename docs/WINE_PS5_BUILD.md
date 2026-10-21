@@ -85,6 +85,7 @@ before evaluating a candidate built from that cache.
 | 0457 | `win32u`: the WoW64 placed-map check reads its properties through `vkGetPhysicalDeviceProperties2KHR`; the core entry point is NULL on win32u's Vulkan 1.0 instances, so a host with `VK_EXT_map_memory_placed` (RADV) crashed every 32-bit process |
 | 0460 | `win32u`: the PS5 user driver's Vulkan driver: a win32 surface becomes a host display-plane surface in the display's native mode, after the title releases its video output (before the first display query); installing the driver from Vulkan's initialisation does not refresh the display cache, which would wait on that initialisation |
 | 0470 | `xinput`: controller 0 is the PS5 title's, read through a Unix library (`xinput1_3.so`) from the title's sink; elsewhere xinput uses HID as before; see [XInput controller](#xinput-controller) |
+| 0471 | `xinput`: controllers 1..3 are read from the title's sink as well, through `pw_wine_pad_at` and `pw_wine_set_rumble_at`; a slot the title never fills reads as disconnected; see [XInput controller](#xinput-controller) |
 | 0500 | `ntdll`: signal context at `ucontext`+64 (measured); GS = TEB through `sysarch`; FS stays the libc TLS base, so the syscall dispatcher never switches it; no LDT for WoW64 threads |
 | 0501 | `ntdll`: a signal's FP state is read at `ucontext`+320, where the PS5 kernel keeps its FXSAVE image (32 bytes past the SDK's `mc_fpstate`), with the XSAVE header and YMM upper halves after it (measured); a handled exception's `CONTEXT` used to carry MXCSR 0 and shifted XMM registers |
 | 0510 | `ntdll`: 16 KiB host pages under 4 KiB Windows pages, reusing the large-host-page path of `virtual.c` |
@@ -589,6 +590,12 @@ the title's DualSense instead:
     (`045e:028e`), which games look for.
 - The parameters hold no pointers, so a 32-bit game's calls go through the
   same functions under WoW64.
+- The sink has four controller slots, `XUSER_MAX_COUNT`. Patch 0471 has
+  the Unix library also find `pw_wine_pad_at` and `pw_wine_set_rumble_at`,
+  and report controllers 1..3 from slots 1..3, each with its own rumble.
+  The title fills them with `pw_wine_set_pad_at`; one it never fills reads
+  as disconnected. `pw_wine_set_pad` and the other unnumbered calls are
+  controller 0's.
 - The PRX stage links `xinput1_3.prx`. Its descriptor exports
   `__wine_unix_call_funcs` and `__wine_unix_call_wow64_funcs`, and it
   imports ntdll's `dlsym`, like `wowprospero.prx`.

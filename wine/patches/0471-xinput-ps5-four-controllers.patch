@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Tue, 20 Oct 2026 12:00:00 +0300
+Subject: [PATCH] xinput: Read the PS5 title's four controllers.
+
+Patch 0470 made controller 0 the title's DualSense. The title now also
+reads the other signed-in users' DualSenses and keeps each one's state
+and rumble in its sink by index (pw_wine_pad_at, pw_wine_set_rumble_at in
+ntdll.prx), so local multiplayer sees one XInput controller per player:
+- the Unix calls take the controller index, 0..3;
+- XInputGetState(Ex), XInputGetKeystroke and XInputGetCapabilities(Ex)
+  report each index the title has a connected pad for;
+- XInputSetState keeps each controller's rumble, and XInputEnable passes
+  all four on.
+---
+ dlls/xinput1_3/main.c    | 25 +++++++++++++++----------
+ dlls/xinput1_3/unixlib.c | 15 ++++++++-------
+ dlls/xinput1_3/unixlib.h |  8 ++++++++
+ 3 files changed, 31 insertions(+), 17 deletions(-)
+
+diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
+index 83cee15..9fd167b 100644
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -110,7 +110,7 @@ static XINPUT_STATE current_state[XUSER_MAX_COUNT];
+  * xinput uses HID. */
+ static unixlib_handle_t title_pad;
+ static BOOL title_pad_enabled = TRUE;
+-static XINPUT_VIBRATION title_pad_vibration;
++static XINPUT_VIBRATION title_pad_vibration[XUSER_MAX_COUNT];
+ 
+ static BOOL WINAPI find_title_pad(INIT_ONCE *once, void *param, void **context)
+ {
+@@ -130,7 +130,7 @@ static BOOL WINAPI find_title_pad(INIT_ONCE *once, void *param, void **context)
+         __wine_unload_unix_lib(module);
+         return TRUE;
+     }
+-    TRACE("controller 0 is the title's\n");
++    TRACE("controllers 0-3 are the title's\n");
+     title_pad = handle;
+     return TRUE;
+ }
+@@ -144,9 +144,13 @@ static BOOL has_title_pad(void)
+ 
+ static BOOL title_pad_state(DWORD index, XINPUT_STATE *state)
+ {
+-    struct xinput_pad_state pad = {0};
++    struct xinput_pad_params params = {0};
++    struct xinput_pad_state pad;
+ 
+-    if (index || __wine_unix_call(title_pad, unix_pad_state, &pad) || !pad.connected) return FALSE;
++    params.index = index;
++    if (index >= XUSER_MAX_COUNT || __wine_unix_call(title_pad, unix_pad_state, &params) ||
++        !params.state.connected) return FALSE;
++    pad = params.state;
+     memset(state, 0, sizeof(*state));
+     state->dwPacketNumber = pad.packet;
+     if (!title_pad_enabled) return TRUE;  /* XInputEnable(FALSE): neutral, still connected */
+@@ -161,14 +165,15 @@ static BOOL title_pad_state(DWORD index, XINPUT_STATE *state)
+ }
+ 
+ /* xinput_cs must be held */
+-static void title_pad_rumble(void)
++static void title_pad_rumble(DWORD index)
+ {
+     struct xinput_rumble_params params = {0};
+ 
++    params.index = index;
+     if (title_pad_enabled)
+     {
+-        params.left = title_pad_vibration.wLeftMotorSpeed;
+-        params.right = title_pad_vibration.wRightMotorSpeed;
++        params.left = title_pad_vibration[index].wLeftMotorSpeed;
++        params.right = title_pad_vibration[index].wRightMotorSpeed;
+     }
+     __wine_unix_call(title_pad, unix_pad_rumble, &params);
+ }
+@@ -894,7 +899,7 @@ void WINAPI DECLSPEC_HOTPATCH XInputEnable(BOOL enable)
+     {
+         EnterCriticalSection(&xinput_cs);
+         title_pad_enabled = enable;
+-        title_pad_rumble();
++        for (DWORD index = 0; index < XUSER_MAX_COUNT; index++) title_pad_rumble(index);
+         LeaveCriticalSection(&xinput_cs);
+         return;
+     }
+@@ -923,8 +928,8 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputSetState(DWORD index, XINPUT_VIBRATION *vib
+         if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
+         if (!title_pad_state(index, &state)) return ERROR_DEVICE_NOT_CONNECTED;
+         EnterCriticalSection(&xinput_cs);
+-        title_pad_vibration = *vibration;
+-        title_pad_rumble();
++        title_pad_vibration[index] = *vibration;
++        title_pad_rumble(index);
+         LeaveCriticalSection(&xinput_cs);
+         return ERROR_SUCCESS;
+     }
+diff --git a/dlls/xinput1_3/unixlib.c b/dlls/xinput1_3/unixlib.c
+index 54488c8..f45becc 100644
+--- a/dlls/xinput1_3/unixlib.c
++++ b/dlls/xinput1_3/unixlib.c
+@@ -37,22 +37,23 @@
+  * HID stack. The title keeps its controller's state in its sink
+  * (wine/ps5/pw_wine_sink.h), whose calls ntdll exports; anywhere else they
+  * are missing and xinput uses HID. */
+-static int (*title_pad)( struct xinput_pad_state *state );
+-static void (*title_rumble)( UINT32 left, UINT32 right );
++static int (*title_pad)( UINT32 index, struct xinput_pad_state *state );
++static void (*title_rumble)( UINT32 index, UINT32 left, UINT32 right );
+ 
++/* Every signed-in user's DualSense, controllers 0..3. */
+ static NTSTATUS pad_init( void *args )
+ {
+-    title_pad = dlsym( RTLD_DEFAULT, "pw_wine_pad" );
+-    title_rumble = dlsym( RTLD_DEFAULT, "pw_wine_set_rumble" );
++    title_pad = dlsym( RTLD_DEFAULT, "pw_wine_pad_at" );
++    title_rumble = dlsym( RTLD_DEFAULT, "pw_wine_set_rumble_at" );
+     return title_pad ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+ }
+ 
+ static NTSTATUS pad_state( void *args )
+ {
+-    struct xinput_pad_state *state = args;
++    struct xinput_pad_params *params = args;
+ 
+     if (!title_pad) return STATUS_NOT_SUPPORTED;
+-    if (!title_pad( state )) memset( state, 0, sizeof(*state) );
++    if (!title_pad( params->index, &params->state )) memset( &params->state, 0, sizeof(params->state) );
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -61,7 +62,7 @@ static NTSTATUS pad_rumble( void *args )
+     const struct xinput_rumble_params *params = args;
+ 
+     if (!title_rumble) return STATUS_NOT_SUPPORTED;
+-    title_rumble( params->left, params->right );
++    title_rumble( params->index, params->left, params->right );
+     return STATUS_SUCCESS;
+ }
+ 
+diff --git a/dlls/xinput1_3/unixlib.h b/dlls/xinput1_3/unixlib.h
+index b47d9cb..c35b390 100644
+--- a/dlls/xinput1_3/unixlib.h
++++ b/dlls/xinput1_3/unixlib.h
+@@ -38,8 +38,16 @@ struct xinput_pad_state
+     INT16 thumb_ry;
+ };
+ 
++/* Controller index (0..3) and its state. */
++struct xinput_pad_params
++{
++    UINT32 index;
++    struct xinput_pad_state state;
++};
++
+ struct xinput_rumble_params
+ {
++    UINT32 index;
+     UINT32 left;
+     UINT32 right;
+ };
+-- 
+2.56.0
+

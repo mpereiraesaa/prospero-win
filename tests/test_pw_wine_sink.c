@@ -310,6 +310,23 @@ int main(void)
     pw_wine_set_rumble(1000,0xffff);assert(!pw_wine_rumble(NULL,NULL));  /* unchanged */
     pw_wine_set_rumble(0x10000,0);assert(pw_wine_rumble(NULL,&right)==1 && right==0);
     assert(!pw_wine_rumble(&left,NULL) && left==0xffff);
+
+    /* Controllers 1..3: their own state, packets and rumble; 0 is the pad above. */
+    PwWinePad second=pad;second.buttons=0x4000;
+    assert(!pw_wine_pad_at(1,&got) && got.connected==0);
+    pw_wine_set_pad_at(1,&second);
+    assert(pw_wine_pad_at(1,&got) && got.packet==1 && got.buttons==0x4000);
+    assert(pw_wine_pad_at(0,&got) && got.packet==9 && got.thumb_ry==4);
+    assert(!pw_wine_pad_at(2,&got) && !pw_wine_pad_at(3,&got));
+    pw_wine_set_pad_at(1,NULL);assert(!pw_wine_pad_at(1,&got));
+    assert(pw_wine_pad(&got) && got.packet==9);
+    pw_wine_set_rumble_at(3,500,600);
+    assert(!pw_wine_rumble(&left,&right) && !pw_wine_rumble_at(1,&left,&right));
+    assert(pw_wine_rumble_at(3,&left,&right)==1 && left==500 && right==600);
+    /* No controller past the fourth. */
+    pw_wine_set_pad_at(PW_WINE_PADS,&second);pw_wine_set_rumble_at(PW_WINE_PADS,1,1);
+    assert(!pw_wine_pad_at(PW_WINE_PADS,&got) && got.connected==0);
+    assert(!pw_wine_rumble_at(PW_WINE_PADS,&left,&right));
     test_display_release();
     test_menu();
     return 0;

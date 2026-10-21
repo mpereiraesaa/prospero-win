@@ -53,6 +53,10 @@ typedef struct PwWineSinkStats {
     uint32_t display_released;            /* 1 once Vulkan took the video output */
 } PwWineSinkStats;
 
+/* XInput's controllers (XUSER_MAX_COUNT): 0 is the title's own user's
+ * DualSense, 1..3 the other signed-in users'. */
+enum { PW_WINE_PADS=4 };
+
 /* An XInput gamepad (XINPUT_GAMEPAD with the connection and a packet
  * number in front), laid out as xinput's Unix library reads it. */
 typedef struct PwWinePad {
@@ -76,6 +80,10 @@ void pw_wine_set_pad(const PwWinePad *pad);
 /* 1 and the newest motor speeds (0..65535) when they changed since the
  * last call, else 0. */
 int pw_wine_rumble(uint32_t *left,uint32_t *right);
+/* The same for controller index (< PW_WINE_PADS; others are ignored and
+ * read as disconnected); the calls above are controller 0's. */
+void pw_wine_set_pad_at(uint32_t index,const PwWinePad *pad);
+int pw_wine_rumble_at(uint32_t index,uint32_t *left,uint32_t *right);
 /* The menu to draw, or NULL to close it. The sink sets version and
  * sequence, clamps lines and selected, and terminates every string. */
 void pw_wine_set_menu(const struct pw_title_menu *menu);
@@ -99,6 +107,8 @@ int pw_wine_pad(PwWinePad *pad);
 void pw_wine_menu(struct pw_title_menu *menu);
 /* The rumble a game asked for (XInputSetState); speeds are clamped. */
 void pw_wine_set_rumble(uint32_t left,uint32_t right);
+int pw_wine_pad_at(uint32_t index,PwWinePad *pad);
+void pw_wine_set_rumble_at(uint32_t index,uint32_t left,uint32_t right);
 /* 1 when the title set an audio sink: the audio driver offers its device
  * only then. */
 int pw_wine_audio_available(void);
