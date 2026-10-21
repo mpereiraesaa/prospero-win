@@ -271,6 +271,21 @@ int main(void)
     assert(read(fd,drain,sizeof(drain))==1 && pw_wine_next_input(&out) && out.code==0x41);
     assert(pw_wine_post_input(&bad[0])==-1 && read(fd,drain,1)==-1);  /* refused: no wake */
 
+    /* Wheel-only reports wake the driver and retain both direction and count. */
+    for (int ticks=-3; ticks<=3; ticks++) {
+        if (!ticks) continue;
+        e=(PwWineInput){PW_WINE_INPUT_MOUSE_WHEEL,0,ticks,0,0};
+        assert(!pw_wine_post_input(&e));
+        assert(read(fd,drain,sizeof(drain))==1);
+        assert(pw_wine_next_input(&out) && out.type==PW_WINE_INPUT_MOUSE_WHEEL && out.x==ticks);
+    }
+    e=(PwWineInput){PW_WINE_INPUT_MOUSE_WHEEL,0,0,0,0};
+    assert(pw_wine_post_input(&e)==-1);
+    e=(PwWineInput){PW_WINE_INPUT_MOUSE_WHEEL,0,1,0,1};
+    assert(pw_wine_post_input(&e)==-1);
+
+    assert(read(fd,drain,1)==-1);  /* invalid wheel reports do not wake */
+
     /* A producer thread and this consumer: order kept, nothing lost. */
     pthread_t thread;assert(!pthread_create(&thread,NULL,poster,NULL));
     for(int expected=0;expected<100;) if(pw_wine_next_input(&out)) {assert(out.x==expected);expected++;}
