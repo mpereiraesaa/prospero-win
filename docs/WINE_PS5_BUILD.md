@@ -104,6 +104,7 @@ before evaluating a candidate built from that cache.
 | 0614 | `wow64`: when the environment's `wow64native.dll` does not start (ntdll reports no native readiness, patch 0883), the process loads `wowprospero.dll` and runs on the translator instead of ending at its first 32-bit instruction; the log has `wow64native.dll did not start (<status>); using wowprospero.dll` |
 | 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
 | 0790 | `server`, `ntdll`: opt-in immediate mutex acquire/release using the authoritative server object without request marshalling or waiter allocation; see [Immediate mutex calls](#immediate-mutex-calls) |
+| 0872 | `server`, `ntdll`: an anonymous section a process creates gets its own direct memory, which every view maps, wherever the view is, instead of 0730's shared memory object, whose views draw on the ~440 MiB of flexible memory (Battle.net's login page ran it to 0 KiB and its 2 MiB views failed); a view that cannot map it fails rather than falling back to the object; see [Anonymous sections in direct memory](#anonymous-sections-in-direct-memory) |
 | 0877 | `secur32`: a handshake GnuTLS fails for a reason schannel does not map logs the GnuTLS code and message and the clock through the err channel (and a fatal alert the clock), where the caller saw SEC_E_INTERNAL_ERROR and gnutls_perror went to stderr; on the console a date behind the certificates' makes every chain not yet valid |
 | 0878 | `crypt32`: on PS5 the root store is filled from `share/wine/ca-certificates.crt` beside the runtime, found from crypt32.prx's own path, before the system paths a title cannot see; a bundle that is not there is an error in the log, since no chain then verifies |
 | 0879 | `win32u`: the PS5 driver's ProcessEvents reports the wake pipe as handled whenever it read it; the pipe is every GUI thread's queue fd, so a thread whose events another thread had taken kept QS_DRIVER set with its fd unarmed, and a zero-timeout message wait (DirectInput's GetDeviceState) spun until the next input, so a game stalled while a button was held |
@@ -218,6 +219,50 @@ stubs. With the pinned Wine source present, `tests/test_build_wine_ps5.py`
 also runs the patched queries and Windows field conversion, checking physical
 page counts, commit capacity and bounded memory load. Rebuild `ntdll.prx` to
 use the change.
+
+### Anonymous sections in direct memory
+
+Patch 0730 backs an anonymous section (`NtCreateSection` without a file)
+with a POSIX shared memory object, and each view of one is a shared file
+mapping, which draws on the flexible memory. A browser creates hundreds:
+Battle.net's login page ran flexible memory to 0 KiB, its 2 MiB views
+failed with `ENOMEM` and the page reported `ERR_INSUFFICIENT_RESOURCES`,
+while 1.3 GiB of direct memory was in use with no failure.
+
+With patch 0872 the in-process server registers each anonymous section a
+process creates (`pw_wineserver_set_section_backing`, given ntdll's
+functions once the server is connected and before the process can ask for
+a section). The section gets its own direct memory, zeroed through a
+mapping the kernel places. Every view ntdll maps of it maps that memory,
+so all views show the same bytes: a view inside a region through the
+direct-memory module (`pw_wine_dmem_map_shared`, a run the module never
+releases, so a region holding a view is never dropped by 0897's unmapping
+while the view is there), a view outside the regions, one straddling a
+region's edge or one the kernel places straight from the kernel, piece by
+piece along the regions' edges. A copy-on-write view gets a copy: the
+module's direct memory inside the regions, ordinary anonymous memory
+outside. A view of a registered section never falls back to the shared
+memory object, which is not written again once the section has its direct
+memory and would show zeros while the other views show the contents; what
+cannot be mapped (a view past the section's end, a view table of 8192
+slots full, a kernel refusal) fails with `ENOMEM` instead, and a full table
+is logged once. The views are kept in a table scanned only up to its
+highest used slot. The memory is released once the section object is
+destroyed and its last view is unmapped or replaced. The server's own
+sections, the session block it grows and the user shared data, keep their
+shared memory object, since the server maps those itself.
+
+A section over 256 MiB keeps its object. So does every section when the
+console refuses to map one block of direct memory at two addresses, which
+is checked once, on the first section; the log says
+`wine-ps5: anonymous sections in direct memory: on` or `off`.
+`WINE_PS5_SECTION_DMEM=0` turns it off. The title's memory line counts the
+sections' direct memory as `sections=` and `sections_peak=`. The host
+tests (`tests/test_pw_wine_dmem_ps5.c`, with a 24-slot view table) cover
+views inside, outside and across a region's edge, views the kernel places,
+copy-on-write views, a view past the end and a full table refused, a region
+unmapped under a view, release with the last view, an oversize section and
+a console that refuses to alias.
 
 ## PRX modules
 
