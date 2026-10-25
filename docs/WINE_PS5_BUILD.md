@@ -997,7 +997,20 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     drawn by the game's own graphics backend. A DXVK game gets
     DXVK's counter (`DXVK_HUD=fps`). A `graphics = opengl` game gets Mesa's
     (`GALLIUM_HUD=simple,fps`), drawn by Zink. It's on by default;
-    `show_fps = false` turns it off;
+    `show_fps = false` turns it off. With `framegen` on, the counter is
+    frame generation's own instead (`PW_FRAMEGEN_HUD=1`), for any backend:
+    the game's frames and the pictures shown each second, `30 -> 60`;
+  - `[display] framegen = 2`, `3` or `4` (default `off`) sets `PW_FRAMEGEN`:
+    `libvulkan.prx` (`wine/ps5/pw_framegen.cpp`) gives the screen that many
+    pictures for each frame the game presents, the ones between made by
+    MihawkGen's neural interpolation (`third_party/mihawkgen`). It works
+    on any game that presents through Vulkan (DXVK, Zink or Vulkan itself),
+    adds extra images to the swapchain and forces FIFO, so the console's
+    60 Hz paces them: `2` takes a 30 fps game to 60. A game that already
+    presents 60 is slowed by it. The generated picture needs the next
+    frame, so the game's frames are shown about one frame later. Once a
+    second the log has `pw_framegen: N frames/s from the program, M
+    pictures/s presented`;
   - `[display] refresh` and `opengl_thread` set the PS5 OpenGL SDK's output
     rate and glthread worker. Zink has neither, so they are accepted for
     existing profiles and ignored; the launcher logs
@@ -1017,8 +1030,9 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     such as `ZINK_DESCRIPTORS=lazy`), `RADV_` or `VK_`; values take
     letters, digits and `_ + - , . = : /`. A name the title sets itself is
     refused, so these only add: `PW_VK_BATCH`, `PW_INPUT_SHARED_FAST`,
-    `PW_QPC_TSC_*`, `GALLIUM_DRIVER`, and `DXVK_HUD` or `GALLIUM_HUD` while
-    `show_fps` is on (set `show_fps = false` to choose the HUD). The log
+    `PW_QPC_TSC_*`, `GALLIUM_DRIVER`, `DXVK_HUD` or `GALLIUM_HUD` while
+    `show_fps` is on (set `show_fps = false` to choose the HUD), and
+    `PW_FRAMEGEN` and `PW_FRAMEGEN_HUD` while `framegen` is on. The log
     names them (`PW_WINE64 debug_env=`).
     Titles built before the limit went up to five accept four lines.
   - `[runtime]` sets runtime behavior for that game only:

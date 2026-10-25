@@ -165,7 +165,7 @@ name: Test Game
 game_slug: test-game
 runner: wine
 prospero:
-  display: {desktop: 1920x1080, scaling: fit, show_fps: true, refresh: 120, opengl_thread: true}
+  display: {desktop: 1920x1080, scaling: fit, show_fps: true, framegen: 2, refresh: 120, opengl_thread: true}
   input: {preset: mouse, player2: mouse-p2}
 script:
   game:
@@ -298,7 +298,7 @@ def main() -> int:
                      "working_directory = C:\\Games\\Test", "arguments = -window -opengl",
                      "dll_overrides = d3d8,d3d9,d3d10core,d3d11,dxgi,ddraw=n", "prefix = test-game",
                      "runtime = wine-wow64", "architecture = pe32", "graphics = dxvk",
-                     "[display]", "desktop = 1920x1080", "scaling = fit", "show_fps = true", "refresh = 120", "opengl_thread = true", "[input]", "preset = mouse", "player2 = mouse-p2"):
+                     "[display]", "desktop = 1920x1080", "scaling = fit", "show_fps = true", "framegen = 2", "refresh = 120", "opengl_thread = true", "[input]", "preset = mouse", "player2 = mouse-p2"):
             assert line in profile.splitlines(), (line, profile)
 
         # A PS5 backend choice overrides Lutris's DXVK setting for this game.
@@ -332,6 +332,13 @@ def main() -> int:
         forced_prefix = library / "prefixes" / "forced-dxvk"
         assert "graphics = dxvk" in (library / "profiles" / "forced-dxvk.profile").read_text()
         assert (forced_prefix / "drive_c/windows/syswow64/d3d8.dll").read_bytes() == b"x32/d3d8"
+
+        # framegen: off arrives from YAML as false and is written as off.
+        off_script = root / "framegen-off.yml"
+        off_script.write_text(SCRIPT.replace("framegen: 2", "framegen: off", 1))
+        assert pw_install.main([str(off_script), "--library", str(library), "--wine", str(wine),
+                                "--slug", "framegen-off", "--file", f"setup={setup}"]) == 0
+        assert "framegen = off" in (library / "profiles" / "framegen-off.profile").read_text().splitlines()
 
         invalid_script = root / "invalid-graphics.yml"
         invalid_script.write_text(SCRIPT.replace("  display:", "  graphics: metal\n  display:", 1))

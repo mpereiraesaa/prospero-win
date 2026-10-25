@@ -1176,10 +1176,11 @@ int main(int argc, char **argv)
         if (game->display.refresh != 60 || game->display.opengl_thread)
             PS5LOG_LOG("PW_WINE64 ignored display refresh=%u opengl_thread=%d (no longer supported)",
                        (unsigned)game->display.refresh, game->display.opengl_thread);
-        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s show_fps=%d input=%s "
-                   "preset=%s mode=%s mouse=%d dll_overrides=%s", game->app.id, prefix,
+        PS5LOG_LOG("PW_WINE64 profile id=%s prefix=%s desktop=%s scaling=%d view=%s show_fps=%d framegen=%u "
+                   "input=%s preset=%s mode=%s mouse=%d dll_overrides=%s", game->app.id, prefix,
                    desktop[0] ? desktop : "default",
-                   scaling, view, game->display.show_fps, pw_result_name(input_status),
+                   scaling, view, game->display.show_fps, game->display.framegen,
+                   pw_result_name(input_status),
                    game->input.preset[0] ? game->input.preset : "-",
                    game_input.mode == PW_GAME_INPUT_XINPUT ? "xinput" : "keyboard", (int)game_input.mouse,
                    effective_dll_overrides[0] ? effective_dll_overrides : "-");

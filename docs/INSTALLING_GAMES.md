@@ -220,8 +220,10 @@ prospero:
 the pinned DXVK release. `opengl` installs Mesa's WGL/Zink into the prefix
 and selects native `opengl32`, so the game draws OpenGL through Zink on top of
 Vulkan; `zink` is an older name for the same thing, and the profile says
-`graphics = opengl`. `display` also takes `view`, and `show_fps: false` hides
-the frame-rate counter a game shows in the top-left corner by default.
+`graphics = opengl`. `display` also takes `view`, `show_fps: false` hides
+the frame-rate counter a game shows in the top-left corner by default, and
+`framegen: 2` (or `3`, `4`; `off` by default) turns on frame generation for
+the game.
 `refresh` and `opengl_thread` belonged to the old PS5 OpenGL SDK; they are
 still accepted and have no effect.
 

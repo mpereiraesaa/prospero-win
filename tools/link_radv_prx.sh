@@ -9,7 +9,8 @@
 # two entry points. It writes PRX/libvulkan.shared.elf, the link log
 # PRX/libvulkan.link.log and PRX/sce_module/libvulkan.prx, and prints the
 # PS5_Mesa revision it linked. RADV's sceVideoOutOpen is wrapped so
-# pw_vulkan_radv.c learns the output's handle for the hardware cursor.
+# pw_vulkan_radv.c learns the output's handle for the hardware cursor. Frame
+# generation (wine/ps5/pw_framegen.cpp with MihawkGen) is linked in too.
 #
 # Usage: tools/link_radv_prx.sh RADV_CHECKOUT PRX_DIR NATIVE_TOOL PIE_SCRIPT
 set -euo pipefail
@@ -53,6 +54,27 @@ for unit in pw_vk_radv_profile pw_vk_radv_profile_wrap; do
     "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIC -I"$install/include" -I"$root/wine/ps5" \
         -c "$root/wine/ps5/$unit.c" -o "$work/obj/$unit.o"
 done
+# Frame generation (wine/ps5/pw_framegen.cpp, PW_FRAMEGEN): MihawkGen's
+# generator (third_party/mihawkgen), compiled with pw_framegen_vk.h first so
+# its Vulkan calls go through pointers the shim loads from RADV, and its
+# trained network embedded as data.
+framegen=$root/third_party/mihawkgen
+framegen_objects=()
+for unit in "$framegen"/src/*.cpp "$root/wine/ps5/pw_framegen.cpp"; do
+    object=$work/obj/framegen_$(basename "$unit" .cpp).o
+    # Both leave pNext and the rest to zero-initialisation ({sType}), on
+    # purpose; warnings stop only the shim, not the vendored sources.
+    case $unit in "$framegen"/*) strict=-Wno-error ;; *) strict=-Werror ;; esac
+    "$sdk/bin/prospero-clang++" -std=c++17 -O2 -Wall -Wextra -Wno-missing-field-initializers "$strict" \
+        -fPIC -fno-exceptions -fno-rtti \
+        -include "$root/wine/ps5/pw_framegen_vk.h" -I"$install/include" -I"$root/wine/ps5" \
+        -I"$framegen/include" -I"$framegen/src" -c "$unit" -o "$object"
+    framegen_objects+=("$object")
+done
+printf '\t.section .rodata\n\t.balign 16\n\t.globl pw_framegen_network\npw_framegen_network:\n\t.incbin "%s"\n\t.globl pw_framegen_network_end\npw_framegen_network_end:\n' \
+    "$framegen/models/network.fgw" > "$work/obj/pw_framegen_network.S"
+"$sdk/bin/prospero-clang" -fPIC -c "$work/obj/pw_framegen_network.S" -o "$work/obj/pw_framegen_network.o"
+framegen_objects+=("$work/obj/pw_framegen_network.o")
 python3 "$root/tools/gen_prx_descriptor.py" "$work/obj/libvulkan_desc.c" \
     vkGetInstanceProcAddr vkGetDeviceProcAddr pw_videoout_idle pw_videoout_show_tiled pw_videoout_cursor pw_videoout_quiesce \
     pw_vk_radv_profile_set_frame_hook
@@ -64,7 +86,7 @@ python3 "$root/tools/gen_prx_descriptor.py" "$work/obj/libvulkan_desc.c" \
     --wrap=sceVideoOutOpen \
     --warn-unresolved-symbols -o "$prx/libvulkan.shared.elf" \
     "$work/obj/pw_vulkan_radv.o" "$work/obj/pw_vk_radv_profile.o" "$work/obj/pw_vk_radv_profile_wrap.o" \
-    "$work/obj/libvulkan_desc.o" \
+    "$work/obj/libvulkan_desc.o" "${framegen_objects[@]}" \
     "$work/stubs/libSceAgc.so" "$work/stubs/libSceAgcDriver.so" \
     "${radv_link_flags[@]}" "${radv_link_inputs[@]}" \
     --as-needed "$sdk"/target/lib/*.so > "$log" 2>&1

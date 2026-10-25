@@ -21,6 +21,7 @@
 #include <x86intrin.h>
 #endif
 #include "pw_vk_radv_profile_wrap.h"
+#include "pw_framegen.h"
 
 PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char *name);
 PFN_vkVoidFunction VKAPI_CALL vk_common_GetDeviceProcAddr(VkDevice device, const char *name);
@@ -33,19 +34,21 @@ int pw_videoout_cursor(const uint32_t *argb, uint32_t width, uint32_t height, in
                        uint32_t space_width, uint32_t space_height);
 
 /* win32u asks the instance for vkGetDeviceProcAddr and then loads every
- * device entry point through it, so both lookups go through the profile's
- * resolver (pw_vk_radv_profile_wrap.c), which returns a timing wrapper for
- * the entry points it times while the profile is on, and the driver's own
- * pointer otherwise. */
+ * device entry point through it, so both lookups go through frame
+ * generation's step (pw_framegen.cpp: its wrappers when a profile turns it
+ * on) and then the profile's resolver (pw_vk_radv_profile_wrap.c), which
+ * returns a timing wrapper for the entry points it times while the profile
+ * is on, and the pointer it was given otherwise. */
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *name)
 {
     if (name && !strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)vkGetDeviceProcAddr;
-    return pw_vk_radv_profile_resolve(name, vk_icdGetInstanceProcAddr(instance, name));
+    return pw_vk_radv_profile_resolve(name, pw_framegen_resolve(instance, name, vk_icdGetInstanceProcAddr(instance, name)));
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device, const char *name)
 {
-    return pw_vk_radv_profile_resolve(name, vk_common_GetDeviceProcAddr(device, name));
+    return pw_vk_radv_profile_resolve(name, pw_framegen_resolve(VK_NULL_HANDLE, name,
+                                                                vk_common_GetDeviceProcAddr(device, name)));
 }
 
 /* 1 when a frame given to pw_videoout_show_tiled would show: the video

@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = ROOT / "PUBLICATION_ALLOWLIST.txt"
 TEXT_SUFFIXES = {
-    "", ".c", ".s", ".example", ".h", ".input", ".json", ".ld", ".md", ".patch", ".profile", ".py", ".sh", ".spec", ".svg", ".txt", ".yml",
+    "", ".c", ".cpp", ".s", ".example", ".h", ".input", ".json", ".ld", ".md", ".patch", ".profile", ".py", ".sh", ".spec", ".svg", ".txt", ".yml",
 }
 # Generated or vendored files that require an explicit provenance update.
 # They are pinned by digest and exempt from the text scan so an accidental
@@ -29,6 +29,10 @@ PINNED_SHA256 = {
     # committed file still matches what that generator produces.
     "sce_sys/icon0.png":
         "def1c924fcd9f74e4cb8dce2ae66ae2111f0f9c0be99973855d55bfdda1202d0",
+    # MihawkGen's trained network (third_party/mihawkgen/COMMIT), embedded
+    # in libvulkan.prx for frame generation.
+    "third_party/mihawkgen/models/network.fgw":
+        "31ecc7d69af1e9defd62b9abad71bc3430cd8a0a4d2f4eafcabaafa48c34bf6b",
     "native/ps5log/ps5log.h":
         "05373177e2c1cd348848014139646e8b35306da673ff5c0a9089c1247eda394f",
     "native/ps5log/ps5log.c":

@@ -158,6 +158,13 @@ revision in `SOURCES.txt`). It is linked for the console by
 layer, both GPL-3.0-or-later, so `libvulkan.prx` as a whole is distributed
 under the GPL, version 3.
 
+Frame generation (a profile's `[display] framegen`) is
+[PS5 MihawkGen](https://github.com/mihawk-99/PS5_MihawkGen) by Mihawk,
+GPL-3.0-or-later, vendored in `third_party/mihawkgen/` at the commit in its
+`COMMIT` file (the generator, its compute shaders and its trained network),
+and linked into `libvulkan.prx` only, with prospero-win's shim
+`wine/ps5/pw_framegen.cpp` (GPL-3.0-or-later too).
+
 ## OpenGL: Mesa WGL/Zink, `win/mesa-zink/`
 
 OpenGL games draw through Mesa's Windows WGL frontend and its Zink driver,

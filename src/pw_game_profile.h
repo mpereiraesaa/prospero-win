@@ -10,10 +10,18 @@
  *   scaling = fit          ; fit (keep aspect, fill the screen), integer, stretch
  *   view = window          ; window: show the game's windows; desktop: all of it
  *   show_fps = true        ; a frame-rate counter in the top left (default: true):
- *                          ; DXVK's HUD, or Mesa's for graphics = opengl
+ *                          ; DXVK's HUD, or Mesa's for graphics = opengl; with
+ *                          ; framegen, frame generation's own instead, the
+ *                          ; game's frames and the screen's pictures a second
+ *                          ; ("30 -> 60", PW_FRAMEGEN_HUD), for any backend
  *   menu = true            ; L3+R3 opens prospero-win's menu over the game
  *                          ; (pw_game_menu; drawn by DXVK's HUD, so DXVK games
  *                          ; only); default false
+ *   framegen = 2           ; frame generation: the screen gets 2, 3 or 4
+ *                          ; pictures for each frame the game draws, the ones
+ *                          ; between made by MihawkGen in the Vulkan driver
+ *                          ; (PW_FRAMEGEN); off by default. At the console's
+ *                          ; 60 Hz, 2 takes a 30 fps game to 60
  *   refresh = 120          ; accepted and ignored: it set the PS5 OpenGL SDK's
  *   opengl_thread = true   ; output rate and glthread, which Zink replaced
  *
@@ -37,8 +45,9 @@
  *                               ; DXVK_, MESA_, GALLIUM_, ZINK_, RADV_ or VK_,
  *                               ; and may not be one the title sets itself
  *                               ; (PW_VK_BATCH, PW_INPUT_SHARED_FAST,
- *                               ; PW_QPC_TSC_*, GALLIUM_DRIVER, and DXVK_HUD
- *                               ; or GALLIUM_HUD while show_fps or menu is on);
+ *                               ; PW_QPC_TSC_*, GALLIUM_DRIVER, DXVK_HUD
+ *                               ; or GALLIUM_HUD while show_fps or menu is on,
+ *                               ; and PW_FRAMEGEN* while framegen is on);
  *                               ; values: letters, digits and _ + - , . = : /
  *
  *   [runtime]
@@ -107,6 +116,7 @@ typedef struct PwGameDisplay {
     PwGameView view;            /* window by default: a small game fills the TV */
     int show_fps;               /* the graphics backend's frame-rate counter */
     int menu;                   /* the in-game menu (pw_game_menu) */
+    uint32_t framegen;          /* pictures per game frame, 2..4; 0 off (PW_FRAMEGEN) */
     uint32_t refresh;           /* parsed (60 or 120) but unused since Zink */
     int opengl_thread;          /* parsed but unused since Zink */
 } PwGameDisplay;
@@ -134,7 +144,7 @@ typedef struct PwGameDebugEnv {
     char name[PW_GAME_DEBUG_ENV_NAME];
     char value[PW_GAME_DEBUG_ENV_VALUE];
 } PwGameDebugEnv;
-enum { PW_GAME_RUNTIME_ENV_MAX = 2, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 3,
+enum { PW_GAME_RUNTIME_ENV_MAX = 2, PW_GAME_CPU_ENV_MAX = 2, PW_GAME_GRAPHICS_ENV_MAX = 4,
        PW_GAME_CLOCK_ENV_MAX = 2 };
 
 typedef struct PwGameProfile {

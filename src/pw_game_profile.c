@@ -205,6 +205,16 @@ static int display_field(PwGameDisplay *display, uint32_t *seen, const uint8_t *
         *seen |= 8u;
         return PW_OK;
     }
+    if (is(key, key_length, "framegen")) {
+        if (*seen & 128u) return PW_ERR_MALFORMED;
+        if (is(v, n, "off")) display->framegen = 0;
+        else if (is(v, n, "2")) display->framegen = 2;
+        else if (is(v, n, "3")) display->framegen = 3;
+        else if (is(v, n, "4")) display->framegen = 4;
+        else return PW_ERR_UNSUPPORTED;
+        *seen |= 128u;
+        return PW_OK;
+    }
     if (is(key, key_length, "refresh")) {
         if (*seen & 16u) return PW_ERR_MALFORMED;
         if (is(v, n, "60")) display->refresh = 60;
@@ -473,12 +483,21 @@ size_t pw_game_graphics_env(const PwGameProfile *profile, PwGameEnv *env)
         if (!opted) env[count++] = (PwGameEnv){ "PW_VK_DEFER_DESCRIPTORS", "1" };
     }
     /* DXVK's HUD draws the frame rate and the title's menu (its "menu" item,
-     * which an upstream DXVK ignores); Mesa's has no menu. */
+     * which an upstream DXVK ignores); Mesa's has no menu. With frame
+     * generation the frame rate is the generator's own counter: the backend
+     * counts only the game's frames, before the pictures between them. */
+    int framegen = profile->display.framegen >= 2 && profile->display.framegen <= 4;
+    int fps = profile->display.show_fps && !framegen;
     if (zink) {
-        if (profile->display.show_fps) env[count++] = (PwGameEnv){ "GALLIUM_HUD", "simple,fps" };
-    } else if (profile->display.show_fps || profile->display.menu) {
-        env[count++] = (PwGameEnv){ "DXVK_HUD", !profile->display.menu ? "fps" :
-                                                profile->display.show_fps ? "fps,menu" : "menu" };
+        if (fps) env[count++] = (PwGameEnv){ "GALLIUM_HUD", "simple,fps" };
+    } else if (fps || profile->display.menu) {
+        env[count++] = (PwGameEnv){ "DXVK_HUD", !profile->display.menu ? "fps" : fps ? "fps,menu" : "menu" };
+    }
+    /* Frame generation lives in the Vulkan driver (wine/ps5/pw_framegen.cpp). */
+    if (framegen) {
+        static const char *const factors[] = { "2", "3", "4" };
+        env[count++] = (PwGameEnv){ "PW_FRAMEGEN", factors[profile->display.framegen - 2] };
+        if (profile->display.show_fps) env[count++] = (PwGameEnv){ "PW_FRAMEGEN_HUD", "1" };
     }
     return count;
 }
@@ -512,6 +531,9 @@ int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *pr
     for (size_t i = 0; (parsed.display.show_fps || parsed.display.menu) && i < parsed.debug_env_count; i++)
         if (!strcmp(parsed.debug_env[i].name, "DXVK_HUD") || !strcmp(parsed.debug_env[i].name, "GALLIUM_HUD"))
             return PW_ERR_UNSUPPORTED;
+    /* and framegen sets PW_FRAMEGEN and PW_FRAMEGEN_HUD. */
+    for (size_t i = 0; parsed.display.framegen && i < parsed.debug_env_count; i++)
+        if (!strncmp(parsed.debug_env[i].name, "PW_FRAMEGEN", 11)) return PW_ERR_UNSUPPORTED;
     *profile = parsed;
     return PW_OK;
 }

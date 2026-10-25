@@ -68,6 +68,36 @@ static void test_graphics_env(void)
     assert(parse(APP "[display]\nmenu = true\nshow_fps = false\n[debug]\nenv = DXVK_HUD=full\n", &p) ==
            PW_ERR_UNSUPPORTED);
     assert(parse(APP "[display]\nshow_fps = false\n[debug]\nenv = DXVK_HUD=full\n", &p) == PW_OK);
+    /* framegen: PW_FRAMEGEN for the Vulkan driver, any backend; show_fps
+     * becomes the generator's counter (PW_FRAMEGEN_HUD), not the backend's. */
+    assert(parse(APP "[display]\nshow_fps = false\n", &p) == PW_OK && p.display.framegen == 0);
+    assert(pw_game_graphics_env(&p, env) == 0);
+    assert(parse(APP "[display]\nframegen = off\nshow_fps = false\n", &p) == PW_OK && p.display.framegen == 0);
+    assert(pw_game_graphics_env(&p, env) == 0);
+    static const char *const factors[] = { "2", "3", "4" };
+    for (int f = 2; f <= 4; f++) {
+        char text[256];
+        snprintf(text, sizeof(text), APP "[display]\nframegen = %d\n", f);
+        assert(parse(text, &p) == PW_OK && p.display.framegen == (uint32_t)f);
+        assert(pw_game_graphics_env(&p, env) == 2);
+        assert(!strcmp(env[0].name, "PW_FRAMEGEN") && !strcmp(env[0].value, factors[f - 2]));
+        assert(!strcmp(env[1].name, "PW_FRAMEGEN_HUD") && !strcmp(env[1].value, "1"));
+    }
+    assert(parse(APP "[display]\nframegen = 4\nshow_fps = false\n", &p) == PW_OK);
+    assert(pw_game_graphics_env(&p, env) == 1 && !strcmp(env[0].value, "4"));
+    /* The menu stays DXVK's, without its frame rate. */
+    assert(parse(APP "[display]\nframegen = 2\nmenu = true\n", &p) == PW_OK);
+    assert(pw_game_graphics_env(&p, env) == 3 && !strcmp(env[0].name, "DXVK_HUD") &&
+           !strcmp(env[0].value, "menu") && !strcmp(env[1].name, "PW_FRAMEGEN") &&
+           !strcmp(env[2].name, "PW_FRAMEGEN_HUD"));
+    p.app.graphics = PW_APP_GRAPHICS_ZINK;
+    assert(pw_game_graphics_env(&p, env) == PW_GAME_GRAPHICS_ENV_MAX &&
+           !strcmp(env[0].name, "GALLIUM_DRIVER") && !strcmp(env[2].name, "PW_FRAMEGEN") &&
+           !strcmp(env[2].value, "2") && !strcmp(env[3].name, "PW_FRAMEGEN_HUD"));
+    /* A profile with framegen on cannot set PW_FRAMEGEN itself; without, it can. */
+    assert(parse(APP "[display]\nframegen = 3\n[debug]\nenv = PW_FRAMEGEN=2\n", &p) == PW_ERR_UNSUPPORTED);
+    assert(parse(APP "[display]\nframegen = 3\n[debug]\nenv = PW_FRAMEGEN_HUD=0\n", &p) == PW_ERR_UNSUPPORTED);
+    assert(parse(APP "[debug]\nenv = PW_FRAMEGEN=2\n", &p) == PW_OK && p.display.framegen == 0);
     /* A Zink game's [debug] env decides the deferral itself: the title adds none. */
     assert(parse(APP "[debug]\nenv = PW_VK_DEFER_DESCRIPTORS=0\n", &p) == PW_OK);
     p.app.graphics = PW_APP_GRAPHICS_ZINK; p.display.show_fps = 0;
@@ -237,6 +267,11 @@ static void test_refusals(void)
         APP "[display]\nrefresh = 120\nrefresh = 60\n",         /* twice */
         APP "[display]\nopengl_thread = yes\n",                /* true or false only */
         APP "[display]\nopengl_thread = true\nopengl_thread = false\n", /* twice */
+        APP "[display]\nframegen = 1\n",                     /* off or 2..4 only */
+        APP "[display]\nframegen = 5\n",
+        APP "[display]\nframegen = on\n",
+        APP "[display]\nframegen =\n",
+        APP "[display]\nframegen = 2\nframegen = off\n",     /* twice */
         APP "[debug]\nwinedebug = +seh\n[debug]\n",            /* duplicate section */
         APP "[debug]\nwinedebug =\n",                         /* empty */
         APP "[debug]\nwinedebug = +seh;rm\n",                  /* not a channel list */
