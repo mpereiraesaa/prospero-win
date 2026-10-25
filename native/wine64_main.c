@@ -650,9 +650,12 @@ static PwWineLaunch launch;
 
 /* Replace this process with the title again: app's game, or the launcher
  * when app is NULL. /app0 is not visible once /data is granted, so the
- * sandbox's view of the same eboot is tried next. Returns only on failure,
- * or, in a single-program title, instead of going to the launcher: the
- * caller then lets the process end, which returns to the console's home. */
+ * sandbox's view of the same eboot is tried next. Returns only on failure.
+ * A single-program title has no launcher to go to: it ends the process for
+ * the console's home instead, with _exit(0). Letting the C runtime's exit
+ * finish (Wine's exit() is what calls on_exit_report) brought back "Something
+ * went wrong with this game or app"; _exit skips it and returns to the home
+ * screen without a dialog, as homebrew_ps5-optional-shsrv found on FW 12.02. */
 static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reason)
 {
     static const char *const eboots[] = { "/app0/eboot.bin", PW_SANDBOX_APP0 "/eboot.bin" };
@@ -661,7 +664,9 @@ static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reas
 
     if (!app && single_program()) {
         PS5LOG_LOG("PW_WINE64 leave to=home cycle=%u reason=%s", (unsigned)cycle, reason);
-        return;
+        display_quiesce(reason);
+        pw_diagnostics_close(reason);
+        _exit(0);
     }
 
     if (!pw_wine_launch_argv(app, cycle, storage, sizeof(storage), next, PW_WINE_LAUNCH_ARGS)) {
