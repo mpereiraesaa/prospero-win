@@ -127,7 +127,8 @@ Options + Create stays the first player's.
 
 ## Closing a game
 
-Hold **Options + Create** for a second on the DualSense. The game is asked
+Hold **Options + Create** for three seconds on the DualSense (games use
+Start + Select together, so a short press never closes). The game is asked
 to close as with Alt+F4, and you return to the launcher; if it doesn't close
 within a few seconds, the app leaves it. From a keyboard, Alt+F4 or the
 game's own quit option do the same.

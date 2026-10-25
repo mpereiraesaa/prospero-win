@@ -35,7 +35,7 @@ preset `input/pinball.input`:
 | Options | F3: pause or resume |
 | Square | F2: new game |
 
-Holding Options+Create closes the game (Alt+F4) and returns to the launcher.
+Holding Options+Create for three seconds closes the game (Alt+F4) and returns to the launcher.
 
 ## What the target taught the runtime
 

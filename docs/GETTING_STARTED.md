@@ -86,7 +86,7 @@ first start takes a while; a spinner shows while Wine and the game load.
   one. See [controls](CONTROLS.md).
 - **USB keyboard and mouse:** plug them into the PS5 and they work in any
   game, alongside the controller. You can plug them in after the game starts.
-- **Close a game:** hold **Options + Create** for a second. The game gets a
+- **Close a game:** hold **Options + Create** for three seconds. The game gets a
   chance to close normally (Alt+F4) and you return to the launcher. Quitting
   from the game's own menu works too.
 

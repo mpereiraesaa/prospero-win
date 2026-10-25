@@ -1069,7 +1069,7 @@ The title runs one game per process (`src/pw_wine_launch.h`):
       no pointer.
     - The game log's `PW_WINE64 display` line shows `xinput=1` when the
       runtime's ntdll has the gamepad slot.
-- **Closing.** Holding Options+Create for a second sends the game Alt+F4. When
+- **Closing.** Holding Options+Create for 3 s sends the game Alt+F4. When
   Wine exits, the title restarts into the launcher. If the game has not
   closed after 5 s, the title restarts into the launcher anyway.
 - **Unattended validation.** `-DPW_WINE64_SCRIPT=1` makes the launcher open

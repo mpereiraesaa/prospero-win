@@ -5,9 +5,9 @@
  * The title runs one game per process (src/pw_wine_launch.h). Started with
  * no game it shows the launcher, without loading Wine; choosing a game
  * restarts the title with sceSystemServiceLoadExec and the game's
- * arguments. Holding Options+Create in a game sends it Alt+F4; when Wine
- * exits, or the game does not close in time, the title restarts into the
- * launcher.
+ * arguments. Holding Options+Create for 3 s in a game sends it Alt+F4;
+ * when Wine exits, or the game does not close in time, the title restarts
+ * into the launcher.
  *
  * The launcher and a game request the /data mount, where the library is.
  * A game then loads ntdll.prx, prepares Wine's
@@ -241,7 +241,10 @@ static const char *library_root = PW_WINE64_ROOT_SANDBOX;
  * (WINE_PS5_DESKTOP overrides, 1920x1080 for Warcraft III); bigger frames
  * are counted and dropped. */
 enum { PW_WINE64_MAX_FRAME = 1920 * 1200 * 4, PW_WINE64_TICK_US = 16000,
-       PW_WINE64_TICKS_PER_S = 60, PW_WINE64_CLOSE_WAIT_S = 5 };
+       PW_WINE64_TICKS_PER_S = 60, PW_WINE64_CLOSE_WAIT_S = 5,
+       /* Options+Create are also Start+Select, which games use together:
+        * closing takes a hold no game asks for. */
+       PW_WINE64_CLOSE_HOLD_S = 3 };
 
 enum { PAD_CREATE = 0x1u, PAD_OPTIONS = 0x8u, PAD_UP = 0x10u, PAD_RIGHT = 0x20u,
        PAD_DOWN = 0x40u, PAD_LEFT = 0x80u, PAD_L1 = 0x400u, PAD_R1 = 0x800u,
@@ -1513,16 +1516,17 @@ int main(int argc, char **argv)
         }
         if (!presented) usleep(PW_WINE64_TICK_US);
 
-        /* Closing: Options+Create held for a second, or the deadline, asks
-         * the game to close with Alt+F4; Wine's exit then restarts the
-         * title (on_exit_report). A game that does not close is left. */
+        /* Closing: Options+Create held for PW_WINE64_CLOSE_HOLD_S, or the
+         * deadline, asks the game to close with Alt+F4; Wine's exit then
+         * restarts the title (on_exit_report). A game that does not close
+         * is left. */
         if (pad_status == PW_OK && (pad.core.pressed_edges & PAD_CREATE) &&
             !(pad.core.previous_buttons & PAD_OPTIONS))
             PS5LOG_LOG("PW_WINE64 marker by=player tick=%llu", (unsigned long long)tick);
         combo_ticks = pad_status == PW_OK && (pad.core.previous_buttons & PAD_CLOSE) == PAD_CLOSE ?
                       combo_ticks + 1 : 0;
         if (!close_requested &&
-            (combo_ticks >= PW_WINE64_TICKS_PER_S ||
+            (combo_ticks >= PW_WINE64_CLOSE_HOLD_S * PW_WINE64_TICKS_PER_S ||
              (PW_WINE64_SECONDS && now - started >= (uint64_t)PW_WINE64_SECONDS * 1000000000u))) {
             static const PwWineInput alt_f4[] = {
                 { PW_WINE_INPUT_KEY, 0x12, 0, 0, 1 }, { PW_WINE_INPUT_KEY, 0x73, 0, 0, 1 },
