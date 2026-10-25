@@ -1524,7 +1524,11 @@ int main(int argc, char **argv)
             !(pad.core.previous_buttons & PAD_OPTIONS))
             PS5LOG_LOG("PW_WINE64 marker by=player tick=%llu", (unsigned long long)tick);
         if (pad_status == PW_OK && (pad.core.pressed_edges & PW_PAD_PS5_TOUCHPAD))
-            PS5LOG_LOG("PW_WINE64 touchpad x=%u half=%s", (unsigned)pad.touch_x, pad.touch_left ? "left" : "right");
+            PS5LOG_LOG("PW_WINE64 touchpad x=%u y=%u fingers=%u from=%s half=%s", (unsigned)pad.touch_x,
+                       (unsigned)pad.touch_y, pad.touch_fingers,
+                       pad.touch_from == PW_PAD_PS5_TOUCH_FROM_CLICK ? "click" :
+                       pad.touch_from == PW_PAD_PS5_TOUCH_FROM_EARLIER ? "earlier" : "none",
+                       pad.touch_left ? "left" : "right");
         combo_ticks = pad_status == PW_OK && (pad.core.previous_buttons & PAD_CLOSE) == PAD_CLOSE ?
                       combo_ticks + 1 : 0;
         if (!close_requested &&

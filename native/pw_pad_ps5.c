@@ -57,17 +57,28 @@ static int valid_ops(const PwPadPs5Ops *ops)
 
 static void centre_analog(PwPadPs5 *pad)
 {
-    pad->left_stick=pad->right_stick=(PwPadPs5Stick){0x80,0x80};pad->l2=pad->r2=0;pad->touch_held=0;
+    pad->left_stick=pad->right_stick=(PwPadPs5Stick){0x80,0x80};pad->l2=pad->r2=0;pad->touch_held=pad->finger_down=0;
 }
 
 /* A connected sample's touchpad click: which half it began on. */
 static void track_touch(PwPadPs5 *pad,const PwPadPs5Data *raw)
 {
-    unsigned held=(raw->buttons&PW_PAD_PS5_TOUCHPAD)!=0;
+    unsigned held=(raw->buttons&PW_PAD_PS5_TOUCHPAD)!=0,fingers=raw->touch_data.fingers;
     if(held && !pad->touch_held) {
-        pad->touch_x=raw->touch_data.fingers?raw->touch_data.touch[0].x:(uint16_t)PW_PAD_PS5_TOUCH_MIDDLE;
+        pad->touch_fingers=fingers;
+        if(fingers) {
+            pad->touch_x=raw->touch_data.touch[0].x;pad->touch_y=raw->touch_data.touch[0].y;
+            pad->touch_from=PW_PAD_PS5_TOUCH_FROM_CLICK;
+        } else if(pad->finger_down) {
+            pad->touch_x=pad->finger_x;pad->touch_y=pad->finger_y;pad->touch_from=PW_PAD_PS5_TOUCH_FROM_EARLIER;
+        } else {
+            pad->touch_x=PW_PAD_PS5_TOUCH_MIDDLE;pad->touch_y=0;pad->touch_from=PW_PAD_PS5_TOUCH_FROM_NONE;
+        }
         pad->touch_left=pad->touch_x<PW_PAD_PS5_TOUCH_MIDDLE;
     }
+    /* A finger lifted ends its position; a click without a touch keeps it. */
+    if(fingers){pad->finger_down=1;pad->finger_x=raw->touch_data.touch[0].x;pad->finger_y=raw->touch_data.touch[0].y;}
+    else if(!held)pad->finger_down=0;
     pad->touch_held=held;
 }
 

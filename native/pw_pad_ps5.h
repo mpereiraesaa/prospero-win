@@ -8,6 +8,7 @@ enum { PW_PAD_PS5_BATCH=64,PW_PAD_PS5_USERS=4 };
 /* The touchpad's click, and the x that splits it in halves: touches report
  * x from 0 to 1919 across the pad. */
 enum { PW_PAD_PS5_TOUCHPAD=0x100000,PW_PAD_PS5_TOUCH_MIDDLE=960 };
+enum { PW_PAD_PS5_TOUCH_FROM_NONE,PW_PAD_PS5_TOUCH_FROM_CLICK,PW_PAD_PS5_TOUCH_FROM_EARLIER };
 typedef struct PwPadPs5Stick { uint8_t x,y; } PwPadPs5Stick;
 typedef struct PwPadPs5Touch { uint16_t x,y;uint8_t finger,reserved[3]; } PwPadPs5Touch;
 typedef struct PwPadPs5TouchData {
@@ -54,11 +55,16 @@ typedef struct PwPadPs5 {
     /* The newest connected sample's sticks (0..255, 0x80 centred) and
      * triggers; centred and released while disconnected or intercepted. */
     PwPadPs5Stick left_stick,right_stick;uint8_t l2,r2;
-    /* Where the held touchpad click began: touch_left when its first
-     * finger was on the left half, touch_x that finger's x (the middle
-     * when the sample had no touch), both kept until the click is
-     * released, so sliding the finger does not change it. */
-    unsigned touch_held,touch_left;uint16_t touch_x;
+    /* Where the held touchpad click began: touch_left when its finger was
+     * on the left half, touch_x and touch_y that finger's position, kept
+     * until the click is released, so sliding the finger does not change
+     * it. A click's own sample can come without a touch (touch_fingers 0):
+     * the finger's last position before it, while it stayed down, stands
+     * in; with neither, the middle, the right half. touch_from says which:
+     * PW_PAD_PS5_TOUCH_FROM_*. */
+    unsigned touch_held,touch_left,touch_from,touch_fingers;uint16_t touch_x,touch_y;
+    /* the finger's latest position while one is on the touchpad */
+    unsigned finger_down;uint16_t finger_x,finger_y;
 } PwPadPs5;
 
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *);
