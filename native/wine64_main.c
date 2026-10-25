@@ -241,7 +241,7 @@ static const char *library_root = PW_WINE64_ROOT_SANDBOX;
  * (WINE_PS5_DESKTOP overrides, 1920x1080 for Warcraft III); bigger frames
  * are counted and dropped. */
 enum { PW_WINE64_MAX_FRAME = 1920 * 1200 * 4, PW_WINE64_TICK_US = 16000,
-       PW_WINE64_TICKS_PER_S = 60, PW_WINE64_CLOSE_WAIT_S = 5,
+       PW_WINE64_TICKS_PER_S = 60, PW_WINE64_CLOSE_WAIT_S = 5, PW_WINE64_LEAVE_WAIT_S = 5,
        /* Options+Create are also Start+Select, which games use together:
         * closing takes a hold no game asks for. */
        PW_WINE64_CLOSE_HOLD_S = 3 };
@@ -255,6 +255,8 @@ static const PwPadKeyMap pad_open_map[] = { { PAD_CROSS, 0x20, 0, 0, "cross" } }
 
 
 int sceSystemServiceLoadExec(const char *path, char *const argv[]);
+int sceSystemServiceGetAppIdOfRunningBigApp(void);
+int sceSystemServiceKillApp(int app_id, int how, int reason, int core_dump);
 int32_t sceKernelLoadStartModule(const char *path, size_t argc, const void *argv,
                                  uint32_t flags, const void *option, int *result);
 int sceKernelGetModuleInfo(int32_t handle, void *info);
@@ -648,14 +650,35 @@ static int capture_fd(int fd, PwFdForward *forward)
 
 static PwWineLaunch launch;
 
+/* End a single-program title for the console's home. A process that ends
+ * by itself, by exit() or _exit(0) alike, is reported by the console as
+ * "Something went wrong with this game or app"; one the system closes is
+ * not. So the title asks the system to close it, as the PS button's Close
+ * does (sceSystemServiceKillApp, as homebrew_ps5-optional-shsrv's
+ * bigapp-control closes a title), after its last flips are drained; if the
+ * system refuses, or has not closed it in PW_WINE64_LEAVE_WAIT_S, it ends
+ * itself. Does not return. */
+static void leave_to_home(const char *reason)
+{
+    int app_id, rc = -1;
+
+    display_quiesce(reason);
+    app_id = sceSystemServiceGetAppIdOfRunningBigApp();
+    PS5LOG_LOG("PW_WINE64 leave close app_id=0x%x", (unsigned)app_id);
+    pw_diagnostics_close(reason);
+    if (app_id > 0 && (rc = sceSystemServiceKillApp(app_id, -1, 0, 0)) == 0)
+        for (unsigned i = 0; i < PW_WINE64_LEAVE_WAIT_S * 10u; i++) usleep(100000);
+    pw_diagnostics_resume();
+    PS5LOG_LOG("PW_WINE64 leave close rc=0x%08x: ending the process", (unsigned)rc);
+    pw_diagnostics_close(reason);
+    _exit(0);
+}
+
 /* Replace this process with the title again: app's game, or the launcher
  * when app is NULL. /app0 is not visible once /data is granted, so the
  * sandbox's view of the same eboot is tried next. Returns only on failure.
- * A single-program title has no launcher to go to: it ends the process for
- * the console's home instead, with _exit(0). Letting the C runtime's exit
- * finish (Wine's exit() is what calls on_exit_report) brought back "Something
- * went wrong with this game or app"; _exit skips it and returns to the home
- * screen without a dialog, as homebrew_ps5-optional-shsrv found on FW 12.02. */
+ * A single-program title has no launcher to go to: it closes itself for the
+ * console's home instead (leave_to_home). */
 static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reason)
 {
     static const char *const eboots[] = { "/app0/eboot.bin", PW_SANDBOX_APP0 "/eboot.bin" };
@@ -664,9 +687,7 @@ static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reas
 
     if (!app && single_program()) {
         PS5LOG_LOG("PW_WINE64 leave to=home cycle=%u reason=%s", (unsigned)cycle, reason);
-        display_quiesce(reason);
-        pw_diagnostics_close(reason);
-        _exit(0);
+        leave_to_home(reason);
     }
 
     if (!pw_wine_launch_argv(app, cycle, storage, sizeof(storage), next, PW_WINE_LAUNCH_ARGS)) {
