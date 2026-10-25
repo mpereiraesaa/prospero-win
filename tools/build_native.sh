@@ -21,6 +21,21 @@
 #                          two seconds, for diagnosing stalls (default 0)
 #   Lapy helper             fetched from the GitHub release pinned below
 #                          (lapy_release, lapy_elf_sha256)
+#
+# A single-program title (one Windows program, no launcher) is the same build
+# with its own identity:
+#   PW_TITLE_ID            title ID, AAAA00000 (default PPSA99995); dist/ is
+#                          named after it
+#   PW_TITLE_NAME          name on the home screen (default: sce_sys/param.json's)
+#   PW_TITLE_ICON          its 512x512 icon0.png (default: sce_sys/icon0.png)
+#   PW_DATA_ROOT           the title's data under /data (default
+#                          /data/prospero-win): profiles/, prefixes/, logs/
+#   PW_FIXED_PROFILE       the id of the profile it runs; it then shows no
+#                          launcher and closes to the home screen when the
+#                          program ends
+#   PW_LAPY_RELEASE, PW_LAPY_ELF_SHA256
+#                          the /data helper's release for that title: a helper
+#                          is built for one exact title ID
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -31,6 +46,8 @@ url=https://github.com/mpereiraesaa/ps5-native-app-boilerplate.git
 # together, after the new helper has run on a console.
 lapy_release=v0.3.2-experimental
 lapy_elf_sha256=43fab6d8045b525403f025a7b15e313aeaeac174bba6bff19a32b0000293c647
+lapy_release=${PW_LAPY_RELEASE:-$lapy_release}
+lapy_elf_sha256=${PW_LAPY_ELF_SHA256:-$lapy_elf_sha256}
 foundation=${PS5_NATIVE_FOUNDATION:-$root/.deps/ps5-native-app-boilerplate}
 dev_conf=${PS5LOG_DEV_CONF:-$root/dev.conf}
 native_mode=${PW_NATIVE_MODE:-wine64}
@@ -40,6 +57,11 @@ wine64_seconds=${PW_WINE64_SECONDS:-0}
 wine64_cycles=${PW_WINE64_SCRIPT_CYCLES:-2}
 wine64_watchdog=${PW_WINE64_WAIT_WATCHDOG:-0}
 title_id=PPSA99995
+title_id=${PW_TITLE_ID:-$title_id}
+title_name=${PW_TITLE_NAME:-}
+title_icon=${PW_TITLE_ICON:-}
+data_root=${PW_DATA_ROOT:-/data/prospero-win}
+fixed_profile=${PW_FIXED_PROFILE:-}
 
 [[ $native_mode == wine64 ]] || {
     echo "PW_NATIVE_MODE must be wine64: the direct Win32 runtime was removed" >&2; exit 2; }
@@ -49,6 +71,18 @@ title_id=PPSA99995
     [[ $wine64_cycles =~ ^[1-9][0-9]{0,3}$ ]] || {
     echo "PW_WINE64_SCRIPT must be 0 or 1, PW_WINE64_SECONDS a number and" \
          "PW_WINE64_SCRIPT_CYCLES 1-9999" >&2; exit 2; }
+[[ $title_id =~ ^[A-Z]{4}[0-9]{5}$ ]] || {
+    echo "PW_TITLE_ID must be four capital letters and five digits" >&2; exit 2; }
+[[ $data_root =~ ^/data/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || {
+    echo "PW_DATA_ROOT must be a folder under /data" >&2; exit 2; }
+[[ $fixed_profile =~ ^[a-z0-9-]*$ ]] || {
+    echo "PW_FIXED_PROFILE must be a profile id (a-z, 0-9, -)" >&2; exit 2; }
+[[ $title_name =~ ^[^\"]*$ ]] || {
+    echo "PW_TITLE_NAME must not contain double quotes" >&2; exit 2; }
+[[ -z $title_icon || -f $title_icon ]] || {
+    echo "PW_TITLE_ICON names no file" >&2; exit 2; }
+[[ $title_id == PPSA99995 || -n ${PW_LAPY_RELEASE:-} ]] || {
+    echo "PW_TITLE_ID needs PW_LAPY_RELEASE: the /data helper is built for one title" >&2; exit 2; }
 [[ $output_suffix =~ ^[A-Za-z0-9_-]*$ ]] || {
     echo "PW_OUTPUT_SUFFIX must contain only letters, digits, '_' or '-'" >&2
     exit 2
@@ -150,7 +184,10 @@ common=(-DPW_BUILD_ID=\""$build_id"\" -O2 -Wall -Wextra -Werror -ffunction-secti
         -I"$root/include" -I"$root/src" -I"$root/native"
         -I"$root/native/ps5log"
         -DPW_WINE64_SCRIPT="$wine64_script" -DPW_WINE64_SECONDS="$wine64_seconds"
-        -DPW_WINE64_SCRIPT_CYCLES="$wine64_cycles" -DPW_WINE64_WAIT_WATCHDOG="$wine64_watchdog")
+        -DPW_WINE64_SCRIPT_CYCLES="$wine64_cycles" -DPW_WINE64_WAIT_WATCHDOG="$wine64_watchdog"
+        -DPW_TITLE_ID=\""$title_id"\" -DPW_FIXED_PROFILE=\""$fixed_profile"\"
+        -DPW_WINE64_ROOT_DATA=\""$data_root"\"
+        -DPW_WINE64_ROOT_SANDBOX=\""/download0/${data_root##*/}"\")
 
 sources=(
     native/wine64_main.c native/pw_diagnostics.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c
@@ -204,6 +241,21 @@ objects+=("$build/obj/ps5log.o" "$build/obj/ps5log_ps5_net.o")
 # the whole registration if it is absent, so it is not optional.
 [[ -f $root/sce_sys/icon0.png ]] || python3 "$root/tools/make_icon.py"
 cp "$root/sce_sys/param.json" "$root/sce_sys/icon0.png" "$dist/sce_sys/"
+[[ -z $title_icon ]] || cp "$title_icon" "$dist/sce_sys/icon0.png"
+# Another title's identity: its ID, concept and content IDs, and its name.
+python3 - "$dist/sce_sys/param.json" "$title_id" "$title_name" <<'PY'
+import json, re, sys
+path, title_id, name = sys.argv[1:4]
+param = json.load(open(path))
+if title_id != param["titleId"] or name:
+    name = name or param["localizedParameters"]["en-US"]["titleName"]
+    label = (re.sub(r"[^A-Z0-9]", "", name.upper()) + "0" * 16)[:15] + "1"
+    param["titleId"] = title_id
+    param["conceptId"] = title_id[4:]
+    param["contentId"] = f"UP9000-{title_id}_00-{label}"
+    param["localizedParameters"]["en-US"]["titleName"] = name
+    json.dump(param, open(path, "w"), indent=2)
+PY
 cp "$foundation/runtime/libc.prx" "$dist/sce_module/libc.prx"
 cp "$lapy_helper_elf" "$dist/lapy.elf"
 # The console refuses to start a title whose eboot lacks execute permission

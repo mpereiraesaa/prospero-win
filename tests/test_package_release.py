@@ -33,7 +33,7 @@ def main() -> int:
         title, ps5, host = root / "title", root / "wine-ps5", root / "usr"
         write(title / "eboot.bin", "eboot")
         write(title / "lapy.elf", "helper")
-        write(title / "sce_sys" / "param.json", "{}")
+        write(title / "sce_sys" / "param.json", json.dumps({"titleId": "PPSA99995"}))
         write(title / "sce_module" / "libc.prx", "libc")
         write(title / "dev.conf", "DEV_SERVER=builder-pc")
         for name in ("ntdll.prx", "win32u.prx", "libvulkan.prx", "libgnutls.prx", "secur32.prx"):
@@ -219,6 +219,19 @@ def main() -> int:
         assert bad.returncode == 2 and "--mesa-zink" in bad.stderr, bad.stderr
         bad = run(*inputs[:-3], str(root / "nowhere"), *inputs[-2:], "--out", str(out))
         assert bad.returncode == 2 and "--mesa-zink" in bad.stderr, bad.stderr
+        # A single-program title: the folder and zip take its ID, and it may
+        # leave Zink out, but not name it and refuse it at once.
+        report["sources"].update(ps5_mesa="c" * 40, ps5_vulkan="d" * 40, ps5vk=None)
+        write(ps5 / "report.json", json.dumps(report))
+        write(title / "sce_sys" / "param.json", json.dumps({"titleId": "PPSA99990"}))
+        result = run(*inputs[:-4], *inputs[-2:], "--no-mesa-zink", "--out", str(out), "--zip")
+        assert result.returncode == 0, result.stderr
+        single = out / "PPSA99990"
+        assert (single / "eboot.bin").exists() and not (single / "win" / "mesa-zink").exists()
+        assert (out / "PPSA99990.zip").exists()
+        bad = run(*inputs, "--no-mesa-zink", "--out", str(out))
+        assert bad.returncode == 2 and "exclusive" in bad.stderr, bad.stderr
+        write(title / "sce_sys" / "param.json", json.dumps({"titleId": "PPSA99995"}))
         (native / "ps5" / "wow64native.prx").unlink()
         bad = run(*inputs, "--out", str(out))
         assert bad.returncode == 2 and "--native-cpu" in bad.stderr, bad.stderr
@@ -229,7 +242,7 @@ def main() -> int:
     print("package release passed: layout, dev.conf and PC-only modules left out, patched xinput, "
           "eboot and PRX modules executable, licences and source revisions, schannel's notices and "
           "bundle with it and not without, Mesa Zink packaged, non-RADV Vulkan refused, a clean "
-          "folder each time, missing inputs and Zink named")
+          "folder each time, missing inputs and Zink named, a single-program title's folder without Zink")
     return 0
 
 

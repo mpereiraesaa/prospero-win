@@ -173,6 +173,31 @@ describe. `--mesa-zink` is required: OpenGL games draw through it, and its
 manifest names the Mesa commit and compiler for `SOURCES.txt`
 ([tools/build_mesa_zink.md](../tools/build_mesa_zink.md)).
 
+### Single-program titles
+
+The same title can be built to run one Windows program with no launcher,
+under its own name and icon on the home screen. `tools/build_native.sh` takes
+its identity from the environment:
+
+| Variable | What it sets |
+|---|---|
+| `PW_TITLE_ID` | the title ID (`AAAA00000`); `dist/` and the app folder are named after it |
+| `PW_TITLE_NAME` | the name on the home screen; the content ID is derived from it |
+| `PW_TITLE_ICON` | its 512x512 `icon0.png` |
+| `PW_DATA_ROOT` | its data under `/data` in place of `/data/prospero-win`: `profiles/`, `prefixes/`, `logs/` |
+| `PW_FIXED_PROFILE` | the id of the profile it runs |
+| `PW_LAPY_RELEASE`, `PW_LAPY_ELF_SHA256` | the `/data` helper built for that title ID: a helper serves one exact title, so another ID needs its own release |
+
+Started from the home screen, such a title starts its profile as the
+launcher would (`PW_WINE64 ... reason=fixed-profile`). Where the launcher
+title would go back to the launcher (the program ended, it did not close in
+time, it failed to start) it closes instead and the console returns home
+(`PW_WINE64 leave to=home`). Without the profile it logs
+`reason=no-fixed-profile` and closes. `tools/package_release.sh` names the
+app folder and zip after the title ID in `sce_sys/param.json`, and takes
+`--no-mesa-zink` in place of `--mesa-zink` for a program that does not draw
+with OpenGL.
+
 ## Making a release
 
 Players download the app folder from the repository's Releases page. A

@@ -36,20 +36,25 @@
 #                    lapy.elf it fetched (build/native/lapy-helper-release.json).
 #   --mesa-zink DIR  tools/build_mesa_zink.sh's artifacts/ directory:
 #                    PE32/PE64 WGL/Zink, hashes and component licence texts.
-#                    OpenGL games draw through it (graphics = opengl).
-#   --out DIR        where PPSA99995/ is written (replaced).
-#   --zip            also write DIR/PPSA99995.zip.
+#                    OpenGL games draw through it (graphics = opengl). A
+#                    single-program title that does not use OpenGL may leave
+#                    it out with --no-mesa-zink.
+#   --out DIR        where the app folder is written (replaced), named after
+#                    the title's ID: PPSA99995/, or a single-program title's
+#                    (tools/build_native.sh, PW_TITLE_ID).
+#   --zip            also write DIR/<title ID>.zip.
 #
 # A game's prefix gets its own copy of wowprospero.dll from
 # tools/pw_prefix.py push --cpu-dll.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-mesa_zink= title= wine_ps5= host_wine= cpu_dll= native_cpu= lapy_release= out= zip=0
+mesa_zink= no_mesa_zink=0 title= wine_ps5= host_wine= cpu_dll= native_cpu= lapy_release= out= zip=0
 fail() { echo "package_release: $*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
     case $1 in
     --mesa-zink) mesa_zink=$2; shift 2 ;;
+    --no-mesa-zink) no_mesa_zink=1; shift ;;
     --title) title=$2; shift 2 ;;
     --wine-ps5) wine_ps5=$2; shift 2 ;;
     --host-wine) host_wine=$2; shift 2 ;;
@@ -90,10 +95,18 @@ if [ -f "$wine_ps5/prx/sce_module/libgnutls.prx" ]; then
     done
 fi
 [ -n "$out" ] || fail "--out DIR is required"
-[ -n "$mesa_zink" ] || fail "--mesa-zink DIR is required: OpenGL games draw through Zink"
-python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" || fail "--mesa-zink: invalid artifact directory '$mesa_zink'"
+if [ "$no_mesa_zink" = 1 ]; then
+    [ -z "$mesa_zink" ] || fail "--mesa-zink and --no-mesa-zink are exclusive"
+else
+    [ -n "$mesa_zink" ] || fail "--mesa-zink DIR is required: OpenGL games draw through Zink"
+    python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" || fail "--mesa-zink: invalid artifact directory '$mesa_zink'"
+fi
 
-app=$out/PPSA99995
+# The app folder is named after the title's ID (sce_sys/param.json).
+title_id=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["titleId"])' "$title/sce_sys/param.json") ||
+    fail "--title: unreadable sce_sys/param.json"
+printf '%s\n' "$title_id" | grep -Eq '^[A-Z]{4}[0-9]{5}$' || fail "--title: bad title ID '$title_id'"
+app=$out/$title_id
 rm -rf "$app"
 mkdir -p "$app"
 # The title, without the builder's log destination.
@@ -223,14 +236,16 @@ else:
 (app / "SOURCES.txt").write_text("\n".join(lines) + "\n")
 PY
 
-python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" --app "$app" || fail 'Mesa packaging failed'
+if [ "$no_mesa_zink" = 0 ]; then
+    python3 "$root/tools/package_mesa_zink.py" "$mesa_zink" --app "$app" || fail 'Mesa packaging failed'
+fi
 
 
 files=$(find "$app" -type f | wc -l)
 size=$(du -sh "$app" | cut -f1)
 echo "package_release: $app: $files files, $size"
 if [ "$zip" = 1 ]; then
-    rm -f "$out/PPSA99995.zip"
-    ( cd "$out" && zip -qr PPSA99995.zip PPSA99995 )
-    echo "package_release: $out/PPSA99995.zip"
+    rm -f "$out/$title_id.zip"
+    ( cd "$out" && zip -qr "$title_id.zip" "$title_id" )
+    echo "package_release: $out/$title_id.zip"
 fi

@@ -19,6 +19,10 @@
  * Wine's address-space counters until Wine exits the process or the run
  * deadline passes. Wine's audio driver plays its mix on the console's main
  * audio port through the title's audio sink.
+ *
+ * A single-program title (tools/build_native.sh, PW_FIXED_PROFILE) has no
+ * launcher: started with no game it starts its one profile, and where the
+ * title would go back to the launcher it closes, to the console's home.
  */
 #include "ps5log/ps5log.h"
 #include "pw_diagnostics.h"
@@ -57,8 +61,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifndef PW_TITLE_ID
 #define PW_TITLE_ID "PPSA99995"
+#endif
 #define PW_APP_NAME "prospero-win-wine64"
+#ifndef PW_FIXED_PROFILE
+/* The id of the one profile a single-program title runs; "" for the launcher. */
+#define PW_FIXED_PROFILE ""
+#endif
+static const char fixed_profile[] = PW_FIXED_PROFILE;
+static int single_program(void) { return fixed_profile[0] != '\0'; }
 
 /* Where the title's Wine runtime can be seen: /app0 inside the sandbox;
  * once /data is granted the process sees the real root, where /app0 does
@@ -69,8 +81,12 @@
 #define PW_SANDBOX_APP0 "/mnt/sandbox/" PW_TITLE_ID "_000/app0"
 static const char *const runtime_roots[] = { "/app0", PW_SANDBOX_APP0 };
 /* The title's data: profiles/, input/, prefix/ and prefixes/<name>. */
+#ifndef PW_WINE64_ROOT_DATA
 #define PW_WINE64_ROOT_DATA "/data/prospero-win"            /* when /data is granted */
+#endif
+#ifndef PW_WINE64_ROOT_SANDBOX
 #define PW_WINE64_ROOT_SANDBOX "/download0/prospero-win"    /* sandbox fallback */
+#endif
 #ifndef PW_WINE64_DEBUG
 /* No +seh: WoW64 callback returns unwind with 80000026 many times a second
  * and would flood the sink. */
@@ -631,12 +647,19 @@ static PwWineLaunch launch;
 
 /* Replace this process with the title again: app's game, or the launcher
  * when app is NULL. /app0 is not visible once /data is granted, so the
- * sandbox's view of the same eboot is tried next. Returns only on failure. */
+ * sandbox's view of the same eboot is tried next. Returns only on failure,
+ * or, in a single-program title, instead of going to the launcher: the
+ * caller then lets the process end, which returns to the console's home. */
 static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reason)
 {
     static const char *const eboots[] = { "/app0/eboot.bin", PW_SANDBOX_APP0 "/eboot.bin" };
     static char storage[2 * PW_WINE_LAUNCH_PATH_MAX + 64];
     char *next[PW_WINE_LAUNCH_ARGS];
+
+    if (!app && single_program()) {
+        PS5LOG_LOG("PW_WINE64 leave to=home cycle=%u reason=%s", (unsigned)cycle, reason);
+        return;
+    }
 
     if (!pw_wine_launch_argv(app, cycle, storage, sizeof(storage), next, PW_WINE_LAUNCH_ARGS)) {
         PS5LOG_LOG("PW_WINE64 restart refused: arguments do not fit");
@@ -1008,6 +1031,14 @@ int main(int argc, char **argv)
     PS5LOG_LOG("PW_WINE64 args argc=%d mode=%s profile=%s cycle=%u refused=%u", argc,
                launch.mode == PW_WINE_LAUNCH_GAME ? "game" : "launcher",
                launch.app ? launch.app->id : "-", (unsigned)launch.cycle, launch.refused);
+    if (launch.mode != PW_WINE_LAUNCH_GAME && single_program()) {
+        /* A single-program title starts its profile as the launcher would. */
+        for (uint32_t i = 0; i < catalog_count; i++)
+            if (!strcmp(catalog[i].id, fixed_profile)) restart_title(&catalog[i], launch.cycle, "fixed-profile");
+        PS5LOG_LOG("PW_WINE64 startup blocked reason=no-fixed-profile profile=%s", fixed_profile);
+        ps5log_close("no-fixed-profile");
+        return 1;
+    }
     if (launch.mode != PW_WINE_LAUNCH_GAME) run_launcher();
     wine_argv[1] = launch.executable;
     /* The game's profile: its prefix, desktop, scaling and input. A bare
