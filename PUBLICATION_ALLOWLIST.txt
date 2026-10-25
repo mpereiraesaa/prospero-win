@@ -394,6 +394,8 @@ wine/patches/0899-include-list-the-ps5-headers-for-makedep.patch
 tests/test_wine_decommit_zero.py
 tests/test_wine_protect_writecopy.py
 tests/wine_decommit_zero.c
+tests/test_wine_subpage_protect.py
+tests/wine_subpage_protect.c
 tests/test_wine_seh_fp_state.py
 tests/wine_protect_writecopy.c
 tests/wine_seh_fp_state.c
@@ -578,3 +580,4 @@ wine/patches/0970-ntdll-ps5-trace-each-process-query-class-once.patch
 wine/patches/0971-kernelbase-ps5-no-debugger-in-a-title.patch
 wine/patches/0972-faudio-keep-resampling-taps-within-the-samples.patch
 wine/patches/0973-ntdll-ps5-title-menu-snapshot.patch
+wine/patches/0974-ntdll-fault-on-protected-pages-that-share-a-host-page.patch

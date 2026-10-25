@@ -1,0 +1,359 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 25 Oct 2026 16:00:00 +0200
+Subject: [PATCH] ntdll: Fault on protected pages that share a host page with
+ writable ones.
+
+With host pages larger than Windows pages (16 KiB on the PS5), a host
+page's protection was the union of its four pages'. A page made
+read-only or inaccessible next to a writable one stayed writable, so a
+write to it raised nothing. Emulators that recompile code protect the
+4 KiB pages holding it and rely on that fault to drop stale code:
+DuckStation ran Dino Crisis 2's old code after the game loaded new code
+over it, and jumped into garbage.
+
+Outside images, a host page now loses writing (or all access) when one
+of its committed pages lacks it. An access that faults only because of
+such a neighbour is let through: the host page is opened for one
+instruction, single-stepped, and closed again on the trap, with no
+exception for the program. When a host page has had 256 such writes,
+the next one is reported as a write to its read-only page instead: a
+program that protects pages to learn when they change drops that
+protection, and the host page stops faulting (on the PS5 a step costs
+far more than on a PC, and DuckStation took twelve thousand a second
+beside one code page; it switches such a page to checking its code
+instead). The count starts again after a report, so a program that
+keeps the page read-only is not caught in a loop. Images keep the
+union, so code and data sections sharing a host page cost nothing.
+Guard and write-watch pages keep their existing handling.
+
+WINE_HOST_PAGE_SIZE (x86-64 PC builds only) makes the PC's Wine keep
+larger host pages, to run the console's scheme there:
+tests/test_wine_subpage_protect.py uses it.
+---
+  dlls/ntdll/unix/signal_x86_64.c |  13 +++-
+  dlls/ntdll/unix/unix_private.h  |   3 +
+  dlls/ntdll/unix/virtual.c       | 160 ++++++++++++++++++++++++++++++++++++++--
+  server/mapping.c                |   8 ++
+  4 files changed, 174 insertions(+), 10 deletions(-)
+
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index ee775eb..39868df 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -2658,6 +2658,8 @@ static void __attribute__((used)) segv_handler( int signal, siginfo_t *siginfo,
+         if (!virtual_handle_fault( data, &rec, (void *)RSP_sig(sigcontext) ) ||
+             check_invalid_gsbase( data, sigcontext ))
+         {
++            /* a neighbour's protection only: run the instruction, then close the host page */
++            if (data->subpage_step) EFL_sig(sigcontext) |= 0x100;
+             leave_handler( data, sigcontext );
+             return;
+         }
+@@ -2722,6 +2724,13 @@ static void __attribute__((used)) trap_handler( int signal, siginfo_t *siginfo,
+ 
+     if (handle_syscall_trap( data, sigcontext, siginfo )) return;
+ 
++    if (TRAP_sig(sigcontext) == TRAP_x86_TRCTRAP && virtual_subpage_step_done( data ))
++    {
++        EFL_sig(sigcontext) &= ~0x100;  /* the step virtual_handle_fault asked for */
++        leave_handler( data, sigcontext );
++        return;
++    }
++
+     save_context( data, &context, sigcontext );
+ 
+     switch (TRAP_sig(sigcontext))
+@@ -3167,13 +3176,13 @@ void signal_init_process( TEB *teb )
+ 
+     /* sneak in a syscall dispatcher pointer at a fixed address (7ffe1000) */
+     ptr = (char *)user_shared_data + page_size;
+-    if ((size_t)sysconf( _SC_PAGESIZE ) > page_size)
++    if (virtual_host_page_size() > page_size)
+     {
+         /* With host pages larger than 4 KiB (16 KiB on PS5) this slot shares
+          * a host page with KUSER_SHARED_DATA, which is already mapped as a
+          * read-only view of the USD section (the server sizes that section
+          * to a host page). Store the pointer through that view. */
+-        const size_t host_page = sysconf( _SC_PAGESIZE );
++        const size_t host_page = virtual_host_page_size();
+ 
+         mprotect( user_shared_data, host_page, PROT_READ | PROT_WRITE );
+         *(void **)ptr = __wine_syscall_dispatcher;
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index a1fcb5b..4108ec1 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -122,6 +122,7 @@ struct thread_data
+     unsigned int ps5_mutex_token; /* occupies the padding before ps5_sleep_asked on x86_64 */
+ #endif
+     LONGLONG     ps5_sleep_asked;   /* microseconds of sleep asked since then */
++    void        *subpage_step;      /* host page to close again after a single step (virtual_handle_fault) */
+     char         debug_info[0x800]; /* debug_info structure */
+     char         signal_stack[];    /* signal stack */
+     /* char kernel_stack[] */
+@@ -332,7 +333,9 @@ extern NTSTATUS virtual_alloc_thread_stack( INITIAL_TEB *stack, ULONG_PTR limit_
+                                             SIZE_T reserve_size, SIZE_T commit_size, BOOL guard_page );
+ extern void virtual_map_user_shared_data(void);
+ extern void virtual_init_user_shared_data(void);
++extern SIZE_T virtual_host_page_size(void);
+ extern NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec, void *stack );
++extern BOOL virtual_subpage_step_done( struct thread_data *data );
+ extern unsigned int virtual_locked_server_call( void *req_ptr );
+ extern ssize_t virtual_locked_read( int fd, void *addr, size_t size );
+ extern ssize_t virtual_locked_pread( int fd, void *addr, size_t size, off_t offset );
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 7d97745..dc7c269 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -401,8 +401,9 @@ static const UINT_PTR page_mask = 0xfff;
+ static const UINT_PTR granularity_mask = 0xffff;
+ 
+ /* PS5 hosts use 16 KiB pages: keep 4 KiB Windows pages over a larger host
+- * page, the same scheme as 16 KiB-page aarch64 hosts. */
+-#if defined(__aarch64__) || defined(__PROSPERO__)
++ * page, the same scheme as 16 KiB-page aarch64 hosts. An x86-64 PC can keep
++ * larger host pages too (WINE_HOST_PAGE_SIZE), to run the console's scheme. */
++#if defined(__aarch64__) || defined(__PROSPERO__) || defined(__x86_64__)
+ static UINT_PTR host_page_size;
+ static UINT_PTR host_page_mask;
+ #else
+@@ -668,6 +669,16 @@ static void mmap_add_reserved_area( void *addr, SIZE_T size )
+     struct list *ptr, *next;
+     void *end, *area_end;
+ 
++#if defined(__x86_64__) && !defined(__PROSPERO__)
++    if (host_page_size > page_size)  /* WINE_HOST_PAGE_SIZE: the preloader's areas are 4 KiB-aligned */
++    {
++        char *start = ROUND_ADDR( (char *)addr + host_page_mask, host_page_mask );
++        char *limit = ROUND_ADDR( (char *)addr + size, host_page_mask );
++        if (limit <= start) return;
++        size = limit - start;
++        addr = start;
++    }
++#endif
+     assert( !((UINT_PTR)addr & host_page_mask) );
+     assert( !(size & host_page_mask) );
+ 
+@@ -1387,6 +1398,17 @@ static BYTE get_page_vprot( const void *addr )
+ }
+ 
+ 
++/***********************************************************************
++ *           virtual_host_page_size
++ *
++ * The host page Wine keeps: the system's, or a larger one (WINE_HOST_PAGE_SIZE).
++ */
++SIZE_T virtual_host_page_size(void)
++{
++    return host_page_size;
++}
++
++
+ /***********************************************************************
+  *           get_host_page_vprot
+  *
+@@ -2281,6 +2303,40 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+ }
+ 
+ 
++/***********************************************************************
++ *           get_host_page_unix_prot
++ *
++ * The protection to give a host page that holds several pages. It is the union of
++ * theirs, except in memory that is not an image: there a committed page that is
++ * read-only, or inaccessible, takes writing, or all access, away from the whole
++ * host page, so that touching it faults as on Windows. Accesses that only fault
++ * because of such a neighbour are stepped over in virtual_handle_fault.
++ */
++static int get_host_page_unix_prot( const void *addr, const char *start, const char *end, BYTE set, BYTE clear )
++{
++    const char *page = ROUND_ADDR( addr, host_page_mask );
++    struct file_view *view;
++    int prot, page_prot;
++    BYTE vprot;
++    size_t i;
++
++    prot = get_unix_prot( (get_host_page_vprot( addr ) & ~clear) | set );
++    if (host_page_size == page_size || !(prot & (PROT_READ | PROT_WRITE))) return prot;
++    if (!(view = find_view( addr, 0 )) || (view->protect & SEC_IMAGE)) return prot;
++    for (i = 0; i < host_page_size; i += page_size)
++    {
++        vprot = get_page_vprot( page + i );
++        /* set and clear apply to the range being changed, not to its neighbours */
++        if (page + i >= start && page + i < end) vprot = (vprot & ~clear) | set;
++        if (!(vprot & VPROT_COMMITTED) || (vprot & (VPROT_GUARD | VPROT_WRITEWATCH))) continue;
++        page_prot = get_unix_prot( vprot );
++        if (!(page_prot & PROT_READ)) prot &= ~(PROT_READ | PROT_WRITE | PROT_EXEC);
++        else if (!(page_prot & PROT_WRITE)) prot &= ~PROT_WRITE;
++    }
++    return prot ? prot : PROT_NONE;
++}
++
++
+ /***********************************************************************
+  *           mprotect_range
+  *
+@@ -2290,17 +2346,15 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+ {
+     size_t i, count;
+     char *addr = ROUND_ADDR( base, host_page_mask );
++    char *start = ROUND_ADDR( base, page_mask ), *end = (char *)base + size;
+     int prot, next;
+-    BYTE vprot;
+ 
+     size = ROUND_SIZE( base, size, host_page_mask );
+ 
+-    vprot = get_host_page_vprot( addr );
+-    prot = get_unix_prot( (vprot & ~clear) | set );
++    prot = get_host_page_unix_prot( addr, start, end, set, clear );
+     for (count = i = 1; i < size / host_page_size; i++, count++)
+     {
+-        vprot = get_host_page_vprot( addr + count * host_page_size );
+-        next = get_unix_prot( (vprot & ~clear) | set );
++        next = get_host_page_unix_prot( addr + count * host_page_size, start, end, set, clear );
+         if (next == prot) continue;
+         if (mprotect_exec( addr, count * host_page_size, prot )) return -1;
+         addr += count * host_page_size;
+@@ -4090,8 +4144,15 @@ void virtual_init(void)
+     pthread_mutex_init( &virtual_mutex, &attr );
+     pthread_mutexattr_destroy( &attr );
+ 
+-#if defined(__aarch64__) || defined(__PROSPERO__)
++#if defined(__aarch64__) || defined(__PROSPERO__) || defined(__x86_64__)
+     host_page_size = sysconf( _SC_PAGESIZE );
++#if defined(__x86_64__) && !defined(__PROSPERO__)
++    {
++        const char *env = getenv( "WINE_HOST_PAGE_SIZE" );
++        UINT_PTR size = env ? strtoul( env, NULL, 0 ) : 0;
++        if (size > host_page_size && size <= 0x10000 && !(size & (size - 1))) host_page_size = size;
++    }
++#endif
+     host_page_mask = host_page_size - 1;
+     TRACE( "host page size: %uk\n", (UINT)host_page_size / 1024 );
+ #endif
+@@ -5028,6 +5089,45 @@ static NTSTATUS grow_thread_stack( struct thread_data *data, char *page, struct
+ }
+ 
+ 
++/* Steps over writes beside a read-only page before such writes count as hot. */
++#define SUBPAGE_HOT_STEPS 256
++
++static struct { const char *page; unsigned int steps; } subpage_heat[64];
++
++/***********************************************************************
++ *           subpage_hot_write
++ *
++ * Counts a write stepped over in a host page because a page in it is read-only.
++ * Once the host page has had SUBPAGE_HOT_STEPS of them, returns that read-only
++ * page, to report the write there instead; NULL to step this one. The count
++ * starts again after a report, so a program that keeps the page read-only gets
++ * one report per SUBPAGE_HOT_STEPS writes and the rest are stepped, not a loop.
++ */
++static char *subpage_hot_write( char *page )
++{
++    unsigned int slot = ((UINT_PTR)page / host_page_size) % ARRAY_SIZE(subpage_heat);
++    char *ro = NULL;
++    size_t i;
++    BYTE vprot;
++
++    if (subpage_heat[slot].page != page)
++    {
++        subpage_heat[slot].page = page;
++        subpage_heat[slot].steps = 0;
++    }
++    if (++subpage_heat[slot].steps < SUBPAGE_HOT_STEPS) return NULL;
++    for (i = 0; i < host_page_size && !ro; i += page_size)
++    {
++        vprot = get_page_vprot( page + i );
++        if ((vprot & VPROT_COMMITTED) && !(vprot & (VPROT_GUARD | VPROT_WRITEWATCH)) &&
++            (get_unix_prot( vprot ) & PROT_READ) && !(get_unix_prot( vprot ) & PROT_WRITE))
++            ro = page + i;
++    }
++    if (ro) subpage_heat[slot].steps = 0;
++    return ro;
++}
++
++
+ /***********************************************************************
+  *           virtual_handle_fault
+  */
+@@ -5086,6 +5186,31 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec,
+                 ret = STATUS_SUCCESS;
+         }
+     }
++    if (ret == STATUS_ACCESS_VIOLATION && host_page_size != page_size && !data->subpage_step)
++    {
++        /* The page itself allows the access and the host page only refuses it for a
++         * neighbour's sake: open the host page for one instruction, and close it
++         * again in virtual_subpage_step_done when the single step traps. */
++        int need = err == EXCEPTION_WRITE_FAULT ? PROT_WRITE : err == EXCEPTION_EXECUTE_FAULT ? PROT_EXEC : PROT_READ;
++        int prot = get_unix_prot( get_page_vprot( addr ) );
++        char *protected_page;
++
++        if (!(prot & need) || (get_host_page_unix_prot( page, NULL, NULL, 0, 0 ) & need))
++            ;
++        else if (err == EXCEPTION_WRITE_FAULT && (protected_page = subpage_hot_write( page )))
++        {
++            /* Writes beside a read-only page come too often to step each one: report a
++             * write to that page instead, as if this one had touched it. A program that
++             * protects pages to learn when they change (an emulator's recompiled code)
++             * then drops its protection, and the host page is writable again. */
++            rec->ExceptionInformation[1] = (ULONG_PTR)protected_page;
++        }
++        else if (!mprotect_exec( page, host_page_size, get_unix_prot( get_host_page_vprot( page ) ) ))
++        {
++            data->subpage_step = page;
++            ret = STATUS_SUCCESS;
++        }
++    }
+     fault_top_note( addr, err, get_page_vprot( addr ), vprot, ret, rec->ExceptionAddress );
+     mutex_unlock( &virtual_mutex );
+     rec->ExceptionCode = ret;
+@@ -5093,6 +5218,25 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec,
+ }
+ 
+ 
++/***********************************************************************
++ *           virtual_subpage_step_done
++ *
++ * Called on the single step after virtual_handle_fault opened a host page for
++ * one instruction: closes it again. Returns FALSE when no step was pending.
++ */
++BOOL virtual_subpage_step_done( struct thread_data *data )
++{
++    char *page = data->subpage_step;
++
++    if (!page) return FALSE;
++    mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
++    mprotect_range( page, host_page_size, 0, 0 );
++    data->subpage_step = NULL;
++    mutex_unlock( &virtual_mutex );
++    return TRUE;
++}
++
++
+ /***********************************************************************
+  *           virtual_setup_exception
+  */
+diff --git a/server/mapping.c b/server/mapping.c
+index 67a6c18..a66c23a 100644
+--- a/server/mapping.c
++++ b/server/mapping.c
+@@ -225,6 +225,14 @@ static inline mem_size_t round_size( mem_size_t size, mem_size_t mask )
+ void init_memory(void)
+ {
+     host_page_mask = sysconf( _SC_PAGESIZE ) - 1;
++#if defined(__x86_64__) && !defined(__PROSPERO__)
++    {
++        /* ntdll's WINE_HOST_PAGE_SIZE: sections are sized to the host page it keeps */
++        const char *env = getenv( "WINE_HOST_PAGE_SIZE" );
++        unsigned long size = env ? strtoul( env, NULL, 0 ) : 0;
++        if (size > host_page_mask + 1 && size <= 0x10000 && !(size & (size - 1))) host_page_mask = size - 1;
++    }
++#endif
+     free_map_addr( 0x60000000, 0x1c000000 );
+     free_map_addr( 0x600000000000, 0x100000000000 );
+ }
+-- 
+2.43.0
