@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 enum { PW_PAD_PS5_BATCH=64,PW_PAD_PS5_USERS=4 };
+/* The touchpad's click, and the x that splits it in halves: touches report
+ * x from 0 to 1919 across the pad. */
+enum { PW_PAD_PS5_TOUCHPAD=0x100000,PW_PAD_PS5_TOUCH_MIDDLE=960 };
 typedef struct PwPadPs5Stick { uint8_t x,y; } PwPadPs5Stick;
 typedef struct PwPadPs5Touch { uint16_t x,y;uint8_t finger,reserved[3]; } PwPadPs5Touch;
 typedef struct PwPadPs5TouchData {
@@ -51,6 +54,11 @@ typedef struct PwPadPs5 {
     /* The newest connected sample's sticks (0..255, 0x80 centred) and
      * triggers; centred and released while disconnected or intercepted. */
     PwPadPs5Stick left_stick,right_stick;uint8_t l2,r2;
+    /* Where the held touchpad click began: touch_left when its first
+     * finger was on the left half, touch_x that finger's x (the middle
+     * when the sample had no touch), both kept until the click is
+     * released, so sliding the finger does not change it. */
+    unsigned touch_held,touch_left;uint16_t touch_x;
 } PwPadPs5;
 
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *);

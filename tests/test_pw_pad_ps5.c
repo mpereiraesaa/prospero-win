@@ -27,7 +27,7 @@ static int pad_set_vibration_mode(int32_t h,int32_t m)
 {assert(h==7);vibration_mode_calls++;vibration_mode_seen=m;return 0;}
 static const PwPadPs5Ops ops={user_initialize,foreground,terminate,pad_init,pad_open,pad_read,pad_close,
                               pad_set_vibration,login_users,pad_set_vibration_mode};
-enum { CREATE=0x1,L1=0x400 };
+enum { CREATE=0x1,L1=0x400,TOUCHPAD=0x100000 };
 static const PwPadKeyMap map[]={{L1,'Z',0,0,"left-flipper"}};
 
 int main(void)
@@ -72,6 +72,26 @@ int main(void)
                       pad.core.released_edges==CREATE && !pad.core.previous_buttons &&
                       pad.right_stick.x==0x80);
     read_rc=0;
+    /* The touchpad click keeps the half it began on: the finger's x when
+     * pressed, not where it slides, and the middle without a touch. */
+    PwPadPs5Data touch={.buttons=TOUCHPAD,.connected=1,.timestamp=5000,.connected_count=1,
+                        .touch_data={.fingers=1,.touch={{.x=300,.y=500}}}};
+    fixture[0]=touch;fixture_count=1;assert(pw_pad_ps5_read(&pad)==PW_OK);
+    assert(pad.touch_held && pad.touch_left && pad.touch_x==300);
+    fixture[0].touch_data.touch[0].x=1800;fixture[0].timestamp=5100;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && pad.touch_left && pad.touch_x==300);
+    fixture[0].buttons=0;fixture[0].timestamp=5200;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && !pad.touch_held);
+    /* released and pressed again in one batch: the new press's x */
+    fixture[0]=touch;fixture[0].touch_data.touch[0].x=959;fixture[1]=touch;fixture[1].buttons=0;
+    fixture[2]=touch;fixture[2].touch_data.touch[0].x=960;fixture_count=3;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && pad.touch_held && !pad.touch_left && pad.touch_x==960);
+    /* an intercepted sample releases it; a press with no touch is the middle, the right */
+    fixture[0]=touch;fixture[0].buttons=0x80000000u|TOUCHPAD;fixture_count=1;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && !pad.touch_held);
+    fixture[0]=touch;fixture[0].touch_data.fingers=0;fixture[0].touch_data.touch[0].x=10;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && pad.touch_held && !pad.touch_left && pad.touch_x==960);
+    fixture_count=0;
     /* Vibration: both motors in order, a failure kept, nothing without the op. */
     assert(pw_pad_ps5_vibrate(&pad,200,10)==PW_OK && vibration_calls==1 &&
            motors_seen[0]==200 && motors_seen[1]==10 && !pad.vibration_rc);

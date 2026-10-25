@@ -194,12 +194,25 @@ static void test_pad(void)
         { 0x10u, 0x0001u /* up */ }, { 0x40u, 0x0002u /* down */ },
         { 0x80u, 0x0004u /* left */ }, { 0x20u, 0x0008u /* right */ },
         { 0x8u, 0x0010u /* options: start */ }, { 0x1u, 0x0020u /* create: back */ },
-        { 0x100000u, 0x0400u /* touchpad: guide */ },
+        { 0x100000u, 0x0400u /* touchpad, right half: guide */ },
     };
     for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
         pad.core.previous_buttons = buttons[i].dualsense;
         assert(pw_wine_game_pad(&pad, &xinput) == 1 && xinput.buttons == buttons[i].xinput);
     }
+    /* The touchpad's left half is Back, beside Create's or alone. */
+    pad.touch_left = 1;
+    pad.core.previous_buttons = 0x100000u;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1 && xinput.buttons == 0x0020u);
+    pad.core.previous_buttons = 0x100000u | 0x1u | 0x8u;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1 && xinput.buttons == (0x0020u | 0x0010u));
+    pad.touch_left = 0;
+    pad.core.previous_buttons = 0x100000u | 0x1u;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1 && xinput.buttons == (0x0400u | 0x0020u));
+    pad.touch_left = 1;
+    pad.core.previous_buttons = 0;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1 && !xinput.buttons);
+    pad.touch_left = 0;
     /* L2/R2 are analog triggers, not buttons; unknown bits are dropped. */
     pad.core.previous_buttons = 0x100u | 0x200u | 0x80000000u;
     pad.l2 = 1;

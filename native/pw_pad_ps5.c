@@ -57,7 +57,18 @@ static int valid_ops(const PwPadPs5Ops *ops)
 
 static void centre_analog(PwPadPs5 *pad)
 {
-    pad->left_stick=pad->right_stick=(PwPadPs5Stick){0x80,0x80};pad->l2=pad->r2=0;
+    pad->left_stick=pad->right_stick=(PwPadPs5Stick){0x80,0x80};pad->l2=pad->r2=0;pad->touch_held=0;
+}
+
+/* A connected sample's touchpad click: which half it began on. */
+static void track_touch(PwPadPs5 *pad,const PwPadPs5Data *raw)
+{
+    unsigned held=(raw->buttons&PW_PAD_PS5_TOUCHPAD)!=0;
+    if(held && !pad->touch_held) {
+        pad->touch_x=raw->touch_data.fingers?raw->touch_data.touch[0].x:(uint16_t)PW_PAD_PS5_TOUCH_MIDDLE;
+        pad->touch_left=pad->touch_x<PW_PAD_PS5_TOUCH_MIDDLE;
+    }
+    pad->touch_held=held;
 }
 
 int pw_pad_ps5_open(PwPadPs5 *pad,const PwPadPs5Ops *ops,
@@ -131,7 +142,7 @@ static int read_batch(PwPadPs5 *pad,PwPadSample samples[PW_PAD_PS5_BATCH])
         else if(raw[i].connected) {
             pad->connected_samples++;
             pad->left_stick=raw[i].left_stick;pad->right_stick=raw[i].right_stick;
-            pad->l2=raw[i].l2;pad->r2=raw[i].r2;
+            pad->l2=raw[i].l2;pad->r2=raw[i].r2;track_touch(pad,&raw[i]);
         }
         else{pad->disconnected_samples++;centre_analog(pad);}
     }

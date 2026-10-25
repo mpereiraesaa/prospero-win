@@ -79,9 +79,13 @@ Games from the Xbox 360 era and later read a controller through XInput. With
 | L3, R3 | stick clicks |
 | Options | Start |
 | Create | Back |
+| touchpad click, left half | Back |
+| touchpad click, right half | Guide (the Xbox button) |
 | sticks, d-pad | sticks, d-pad |
 
-Rumble works: the game's vibration drives the DualSense's motors. The
+The touchpad's left half gives Back without Create, whose press also opens
+the PS5's capture menu; the half is the one the click began on. Rumble
+works: the game's vibration drives the DualSense's motors. The
 `gamepad.input` preset is exactly this. You can still add button lines in an
 XInput preset to send keys as well.
 
