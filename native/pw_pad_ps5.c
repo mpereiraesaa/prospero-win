@@ -137,7 +137,7 @@ static int read_batch(PwPadPs5 *pad,PwPadSample samples[PW_PAD_PS5_BATCH])
      * consumed repeatedly by the title lifecycle adapter. */
     pad->core.pressed_edges=0;pad->core.released_edges=0;
     int count=pad->ops.pad_read(pad->pad_handle,raw,PW_PAD_PS5_BATCH);pad->last_read_rc=count;
-    if(count<0){pad->read_errors++;centre_analog(pad);return count;}
+    if(count<0){pad->read_errors++;pad->intercepted=0;centre_analog(pad);return count;}
     if(!count){pad->empty_reads++;return 0;}
     if(count>PW_PAD_PS5_BATCH)count=PW_PAD_PS5_BATCH;
     for(int i=0;i<count;i++) {
@@ -149,6 +149,7 @@ static int read_batch(PwPadPs5 *pad,PwPadSample samples[PW_PAD_PS5_BATCH])
             pad->last_generation=raw[i].connected_count;pad->generation_valid=1;
             pad->generation_changes++;
         }
+        pad->intercepted=intercepted;
         if(intercepted){pad->intercepted_samples++;centre_analog(pad);}
         else if(raw[i].connected) {
             pad->connected_samples++;

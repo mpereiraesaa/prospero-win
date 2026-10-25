@@ -52,6 +52,10 @@ typedef struct PwPadPs5 {
              intercepted_samples,generation_changes;
     uint8_t last_generation;
     unsigned owns_user_service,opened,generation_valid;
+    /* 1 while the newest sample is intercepted: the system has the pad
+     * (the PS button's menu, Create's capture menu). The controller is
+     * still there; core.connected is 0 and its buttons are released. */
+    unsigned intercepted;
     /* The newest connected sample's sticks (0..255, 0x80 centred) and
      * triggers; centred and released while disconnected or intercepted. */
     PwPadPs5Stick left_stick,right_stick;uint8_t l2,r2;

@@ -1423,6 +1423,14 @@ int main(int argc, char **argv)
         }
 #endif
         int pad_read = pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK;
+        if (pad_read) {
+            static int pad_state = -1;
+            int state = pad.intercepted ? 2 : pad.core.connected ? 1 : 0;
+            if (state != pad_state) {
+                PS5LOG_LOG("PW_WINE64 pad state=%s", state == 2 ? "system" : state ? "connected" : "disconnected");
+                pad_state = state;
+            }
+        }
         /* The menu takes the pad while it is open: the game then sees it
          * idle, and the buttons that closed it stay the menu's until they
          * are let go. Closing the game below still reads the real pad. */

@@ -44,13 +44,14 @@ int main(void)
                            !pad.core.pressed_edges && !pad.core.released_edges);
     fixture_count=1;fixture[0].buttons=0x80000000u|L1;fixture[0].timestamp=2000;
     assert(pw_pad_ps5_read(&pad)==PW_OK);
+    assert(pad.intercepted && !pad.core.connected);
     assert(pad.intercepted_samples==1 && pad.core.released_edges==(L1|CREATE) &&
            !pad.core.previous_buttons);
-    read_rc=-9;assert(pw_pad_ps5_read(&pad)==PW_OK&&pad.read_errors==1);
+    read_rc=-9;assert(pw_pad_ps5_read(&pad)==PW_OK&&pad.read_errors==1&&!pad.intercepted);
     read_rc=0;
     fixture[0]=(PwPadPs5Data){.buttons=CREATE,.connected=1,.timestamp=3000,.connected_count=1};
     fixture_count=1;assert(pw_pad_ps5_read(&pad)==PW_OK);
-    assert(pad.core.pressed_edges==CREATE && pad.core.previous_buttons==CREATE);
+    assert(pad.core.pressed_edges==CREATE && pad.core.previous_buttons==CREATE && !pad.intercepted);
     /* Sticks and triggers follow the newest connected sample... */
     fixture[0]=(PwPadPs5Data){.buttons=CREATE,.left_stick={10,250},.right_stick={200,40},
                               .l2=30,.r2=255,.connected=1,.timestamp=3100,.connected_count=1};

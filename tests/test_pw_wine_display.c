@@ -179,6 +179,20 @@ static void test_pad(void)
     assert(!xinput.connected && !xinput.buttons && !xinput.thumb_lx && !xinput.left_trigger);
     assert(pw_wine_game_pad(NULL, &xinput) == 0 && pw_wine_game_pad(&pad, NULL) == 0);
 
+    /* The system has it (intercepted): still connected, idle, whatever
+     * the last buttons and sticks were. */
+    pad.intercepted = 1;
+    pad.core.previous_buttons = 0x4000u | 0x100000u;
+    pad.left_stick = (PwPadPs5Stick){ 0, 0 };
+    pad.l2 = 200;
+    assert(pw_wine_game_pad(&pad, &xinput) == 1 && xinput.connected == 1);
+    assert(!xinput.buttons && !xinput.thumb_lx && !xinput.thumb_ly && !xinput.left_trigger);
+    pad.intercepted = 0;
+    pad.core.previous_buttons = 0;
+    pad.left_stick = (PwPadPs5Stick){ 0x80, 0x80 };
+    pad.l2 = 0;
+    assert(pw_wine_game_pad(&pad, &xinput) == 0 && !xinput.connected);
+
     /* Centred and released. */
     pad.core.connected = 1;
     assert(pw_wine_game_pad(&pad, &xinput) == 1 && xinput.connected == 1 && xinput.packet == 0);

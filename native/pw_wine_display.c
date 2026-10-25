@@ -115,8 +115,12 @@ int pw_wine_game_pad(const PwPadPs5 *pad, PwWinePad *out)
 {
     if (!out) return 0;
     memset(out, 0, sizeof(*out));
-    if (!pad || !pad->core.connected) return 0;
+    /* While the system has the pad the controller stays connected, idle: a
+     * game told it was unplugged pauses or drops it (DuckStation did, and
+     * did not take it back). */
+    if (!pad || (!pad->core.connected && !pad->intercepted)) return 0;
     out->connected = 1;
+    if (pad->intercepted) return 1;
     for (size_t i = 0; i < sizeof(pad_buttons) / sizeof(pad_buttons[0]); i++)
         if (pad->core.previous_buttons & pad_buttons[i].dualsense) out->buttons |= pad_buttons[i].xinput;
     /* The touchpad is two buttons: Back on its left half, so Select needs
