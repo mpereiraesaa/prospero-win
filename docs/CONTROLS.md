@@ -150,7 +150,29 @@ with Options + Create works with the menu open.
 DXVK's HUD draws the menu, so it appears in Direct3D games only, and only
 with the DXVK build that has the `menu` item (`2.6.2-prospero3` and later;
 an older DXVK draws nothing, and the pad is still the menu's while it is
-open). The menu has no entries of its own yet.
+open). Its lines are **Keyboard input**, which opens the console's keyboard
+(below), and **Close**.
+
+## The console's keyboard
+
+Press **Options + the touchpad click** in a game and the PS5's own
+on-screen keyboard opens over it, the same one the console shows for a
+search box. Write with the DualSense or with a USB keyboard, accept, and
+the line is typed into the game as key presses, with Enter at the end — a
+chat line or a console command arrives as it would from a PC keyboard.
+Cancelling types nothing.
+
+The game sees the DualSense idle while the keyboard is up, and the buttons
+you opened it with stay away from it until you let go of them. The line is
+typed a character at a time, over a second or so for a long one, so a game
+that reads its keyboard once a frame sees every key. Characters a US
+keyboard has no key for (accents, for instance) are skipped: the rest of
+the line is still typed. The in-game menu's "Keyboard input" opens the same
+keyboard, which is the way in for a game whose own controls use Options.
+
+The keyboard is the system's, drawn and driven by the console. A firmware
+that refuses it to this app leaves everything else as it is; the run's log
+says `osk=` and what the system answered.
 
 ## Writing a preset
 

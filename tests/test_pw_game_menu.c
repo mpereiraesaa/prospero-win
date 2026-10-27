@@ -39,16 +39,18 @@ int main(void)
     assert(tick(SQUARE | L3 | R3));
     assert_view(0, 0, SQUARE | L3, 1);
     assert(shown.open && shown.lines == 2 && !strcmp(shown.title, "prospero-win"));
-    assert(!strcmp(shown.line[0], "No cheats for this game yet") && !strcmp(shown.line[1], "Close"));
-    assert(shown.selected == 1);            /* the only line with an action */
+    assert(!strcmp(shown.line[0], "Keyboard input") && !strcmp(shown.line[1], "Close"));
+    assert(shown.selected == 0);            /* the first line with an action */
 
-    /* While open nothing reaches the game; the d-pad skips the info line. */
+    /* While open nothing reaches the game; the d-pad wraps around. */
     assert(tick(0));
     assert_view(0, 0, 0, 1);
     assert(tick(UP) && shown.selected == 1);
+    assert(tick(0) && tick(DOWN) && shown.selected == 0);
     assert(tick(0) && tick(DOWN) && shown.selected == 1);
     assert(!tick(CROSS | R2));
     assert(!menu.open && !shown.open);      /* Close picked */
+    assert(view.action == PW_GAME_MENU_ACTION_NONE);
     assert_view(0, 0, 0, 0);                /* Cross, R2 down and Down let go: hidden */
     assert(!tick(CROSS | R2 | SQUARE));
     assert_view(SQUARE, SQUARE, 0, 0);      /* a new press is the game's */
@@ -73,6 +75,15 @@ int main(void)
     assert(!tick(CIRCLE) && !menu.open && !tick(0));
     assert(!pw_game_menu_tick(&menu, 0, SQUARE, SQUARE, &shown, &view));
     assert_view(0, SQUARE, SQUARE, 0);
+
+    /* Keyboard input closes the menu and asks the title for the console's
+     * on-screen keyboard, for that tick only. */
+    held = 0;
+    assert(tick(L3 | R3) && shown.selected == 0);
+    assert(tick(0) && view.action == PW_GAME_MENU_ACTION_NONE);
+    assert(!tick(CROSS) && view.action == PW_GAME_MENU_ACTION_KEYBOARD);
+    assert(!menu.open && !shown.open);
+    assert(!tick(0) && view.action == PW_GAME_MENU_ACTION_NONE);
 
     /* Bad arguments do nothing. */
     assert(!pw_game_menu_tick(NULL, 0, 0, 0, &snapshot, &view));

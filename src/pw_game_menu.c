@@ -3,9 +3,9 @@
 #include <string.h>
 
 /* Lines in order; only those with an action can take the cursor. */
-enum { ACTION_NONE, ACTION_CLOSE };
+enum { ACTION_NONE, ACTION_CLOSE, ACTION_KEYBOARD };
 static const struct { const char *text; int action; } lines[] = {
-    { "No cheats for this game yet", ACTION_NONE },
+    { "Keyboard input", ACTION_KEYBOARD },
     { "Close", ACTION_CLOSE },
 };
 enum { LINE_COUNT = sizeof(lines) / sizeof(lines[0]) };
@@ -41,6 +41,7 @@ int pw_game_menu_tick(PwGameMenu *menu, uint32_t held, uint32_t pressed, uint32_
     uint32_t game;
 
     if (!menu || !snapshot || !view) return 0;
+    view->action = PW_GAME_MENU_ACTION_NONE;
     if (!menu->open) {
         if (combo) {
             menu->open = 1;
@@ -51,9 +52,11 @@ int pw_game_menu_tick(PwGameMenu *menu, uint32_t held, uint32_t pressed, uint32_
     } else {
         if (pressed & PW_GAME_MENU_UP) menu->cursor = move(menu->cursor, -1);
         if (pressed & PW_GAME_MENU_DOWN) menu->cursor = move(menu->cursor, 1);
-        if ((pressed & PW_GAME_MENU_CROSS) && selectable(menu->cursor) &&
-            lines[menu->cursor].action == ACTION_CLOSE)
-            menu->open = 0;
+        if ((pressed & PW_GAME_MENU_CROSS) && selectable(menu->cursor)) {
+            if (lines[menu->cursor].action == ACTION_KEYBOARD)
+                view->action = PW_GAME_MENU_ACTION_KEYBOARD;
+            menu->open = 0;             /* every entry closes the menu */
+        }
     }
     snapshot_of(menu, snapshot);
 

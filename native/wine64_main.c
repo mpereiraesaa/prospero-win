@@ -40,6 +40,7 @@
 #include "pw_audio_ps5.h"
 #include "pw_pad_ps5.h"
 #include "pw_hid_ps5.h"
+#include "pw_osk_ps5.h"
 #include "pw_videoout_ps5.h"
 #include "pw_wine_library.h"
 #include "pw_wine_prefix.h"
@@ -768,6 +769,12 @@ static void hid_log(const char *line)
     PS5LOG_LOG("PW_WINE64 hid %s", line);
 }
 
+/* The console's on-screen keyboard's. */
+static void osk_log(const char *line)
+{
+    PS5LOG_LOG("PW_WINE64 osk %s", line);
+}
+
 /* The process's CPU time, user and system, in milliseconds: a stall that
  * waits shows no growth, one that spins grows by a core a second. */
 static unsigned long long cpu_ms(void)
@@ -1035,6 +1042,12 @@ int main(int argc, char **argv)
     void (*set_menu)(const struct pw_title_menu *) = NULL;
     static PwGameMenu game_menu;
     static PwPadPs5 game_pad;   /* the pad as the game sees it while the menu has it */
+    /* Options + the touchpad click opens the console's own keyboard over
+     * the game, and the menu's "Keyboard input" does too; the accepted
+     * line is typed into the game (src/pw_osk.h). */
+    static PwOsk osk;
+    static PwOskPs5 osk_ps5;
+    int osk_status = PW_ERR_STATE;
     uint64_t vibrations = 0;
     uint64_t shown_sequence = 0, shown = 0, posted = 0, refused = 0;
     VulkanFrames vulkan_frames = { 0 };
@@ -1049,6 +1062,7 @@ int main(int argc, char **argv)
                            &log_config, NULL) == 0)
         ps5log_init(&log_config, PW_TITLE_ID, PW_APP_NAME, now_ns());
     pw_hid_ps5_preload(hid_log);   /* before the /data grant changes the title's credentials */
+    pw_osk_ps5_preload(osk_log);   /* the dialog's module is a system module too */
     if (open_library() != 0) {
         PS5LOG_LOG("PW_WINE64 startup blocked reason=data-helper-incomplete");
         ps5log_close("data-helper-incomplete");
@@ -1294,6 +1308,9 @@ int main(int argc, char **argv)
                 (void)pad_ops.foreground_user(&user);
             }
             hid_status = pw_hid_ps5_open(&hid, pw_hid_ps5_system_ops(hid_log), user);
+            /* The same user's on-screen keyboard: the system shows its
+             * dialog over the game and the title types what comes back. */
+            osk_status = pw_osk_ps5_open(&osk_ps5, pw_osk_ps5_system_ops(osk_log), user);
         }
         {
             uint8_t *storage = mmap(NULL, 2u * PW_WINE64_MAX_FRAME, PROT_READ | PROT_WRITE,
@@ -1310,10 +1327,11 @@ int main(int argc, char **argv)
             if (set_release) set_release(wine_release_display, NULL);
         }
         PS5LOG_LOG("PW_WINE64 display present_sink=%d frames=%d post_input=%d xinput=%d video=%s "
-                   "pad=%s hid=%s", set_present != NULL, frame_shown != NULL, post_input != NULL,
+                   "pad=%s hid=%s osk=%s", set_present != NULL, frame_shown != NULL, post_input != NULL,
                    set_pad != NULL,
                    pw_result_name(video_status),
-                   pw_result_name(pad_status), pw_result_name(hid_status));
+                   pw_result_name(pad_status), pw_result_name(hid_status),
+                   pw_result_name(osk_status));
         if (player2)
             PS5LOG_LOG("PW_WINE64 pad2 status=%s user=%d", pw_result_name(pad2_status),
                        (int)pad2.user_id);
@@ -1436,21 +1454,42 @@ int main(int argc, char **argv)
                 pad_state = state;
             }
         }
-        /* The menu takes the pad while it is open: the game then sees it
-         * idle, and the buttons that closed it stay the menu's until they
-         * are let go. Closing the game below still reads the real pad. */
+        /* The menu and the on-screen keyboard take the pad in turn while
+         * they are open: the game then sees it idle, and the buttons that
+         * closed them stay theirs until they are let go. Closing the game
+         * below still reads the real pad. */
         const PwPadPs5 *seen = &pad;
-        if (pad_read && set_menu) {
-            struct pw_title_menu shown;
-            PwGameMenuView view;
-            pw_game_menu_tick(&game_menu, pad.core.previous_buttons, pad.core.pressed_edges,
-                              pad.core.released_edges, &shown, &view);
-            set_menu(&shown);
+        if (pad_read && (set_menu || osk_status == PW_OK)) {
+            uint32_t held = pad.core.previous_buttons, pressed = pad.core.pressed_edges,
+                     released = pad.core.released_edges;
+            int neutral = 0;
+
+            if (set_menu) {
+                struct pw_title_menu shown;
+                PwGameMenuView view;
+
+                pw_game_menu_tick(&game_menu, held, pressed, released, &shown, &view);
+                set_menu(&shown);
+                held = view.held;
+                pressed = view.pressed;
+                released = view.released;
+                neutral = view.neutral;
+                if (view.action == PW_GAME_MENU_ACTION_KEYBOARD && osk_status == PW_OK)
+                    pw_osk_open(&osk);
+            }
+            if (osk_status == PW_OK) {
+                PwOskView view;
+
+                neutral |= pw_osk_tick(&osk, held, pressed, released, &view);
+                held = view.held;
+                pressed = view.pressed;
+                released = view.released;
+            }
             game_pad = pad;
-            game_pad.core.previous_buttons = view.held;
-            game_pad.core.pressed_edges = view.pressed;
-            game_pad.core.released_edges = view.released;
-            if (view.neutral) {
+            game_pad.core.previous_buttons = held;
+            game_pad.core.pressed_edges = pressed;
+            game_pad.core.released_edges = released;
+            if (neutral) {
                 game_pad.left_stick.x = game_pad.left_stick.y = 0x80;
                 game_pad.right_stick.x = game_pad.right_stick.y = 0x80;
                 game_pad.l2 = game_pad.r2 = 0;
@@ -1493,6 +1532,29 @@ int main(int argc, char **argv)
                     PS5LOG_LOG("PW_WINE64 rumble left=%u right=%u status=%s rc=%d trigger_rc=%d",
                                (unsigned)left, (unsigned)right, pw_result_name(vibrate),
                                pad.vibration_rc, pad.trigger_rc);
+            }
+        }
+        /* The console's own keyboard: the combo or the menu's entry asks
+         * the system for its dialog, which it draws over the game and
+         * drives itself; the accepted line is then typed into the game, a
+         * character a tick, with Enter after it. */
+        if (osk_status == PW_OK && post_input) {
+            char typed[PW_OSK_TEXT];
+            PwOskKey osk_keys[PW_OSK_KEYS_PER_CHARACTER];
+            size_t count;
+
+            if (pw_osk_request(&osk))
+                pw_osk_opened(&osk, pw_osk_ps5_show(&osk_ps5,
+                                                    game ? game->app.name : NULL) == PW_OK);
+            if (osk_ps5.showing) {
+                int ended = pw_osk_ps5_poll(&osk_ps5, typed, sizeof(typed));
+                if (ended) pw_osk_finished(&osk, ended == 1 ? typed : NULL);
+            }
+            count = pw_osk_keys(&osk, osk_keys, sizeof(osk_keys) / sizeof(osk_keys[0]));
+            for (size_t i = 0; i < count; i++) {
+                PwWineInput input = { PW_WINE_INPUT_KEY, osk_keys[i].vk, 0, 0, osk_keys[i].down };
+                if (post_input(&input) == 0) posted++;
+                else refused++;
             }
         }
         /* The second player's pad: keys only, through its own preset, read
