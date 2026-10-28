@@ -520,6 +520,12 @@ static void test_debug_env(void)
     assert(parse(APP "[debug]\nenv = ZINK_DESCRIPTORS=lazy\n", &p) == PW_OK);
     assert(p.debug_env_count == 1 && !strcmp(p.debug_env[0].name, "ZINK_DESCRIPTORS") &&
            !strcmp(p.debug_env[0].value, "lazy"));
+    /* vkd3d-proton's own options, the feature level a Direct3D 12 game
+     * insists on among them. */
+    assert(parse(APP "[debug]\nenv = VKD3D_FEATURE_LEVEL=12_0\nenv = VKD3D_CONFIG=nodxr\n", &p) == PW_OK);
+    assert(p.debug_env_count == 2 && !strcmp(p.debug_env[0].name, "VKD3D_FEATURE_LEVEL") &&
+           !strcmp(p.debug_env[0].value, "12_0") && !strcmp(p.debug_env[1].value, "nodxr"));
+    assert(parse(APP "[debug]\nenv = VKD3DX=1\n", &p) == PW_ERR_UNSUPPORTED);
     /* A value may itself hold '=': only the first one splits. */
     assert(parse(APP "[debug]\nenv = DXVK_CONFIG=d3d9.maxFrameRate=60\n", &p) == PW_OK);
     assert(!strcmp(p.debug_env[0].name, "DXVK_CONFIG") && !strcmp(p.debug_env[0].value, "d3d9.maxFrameRate=60"));

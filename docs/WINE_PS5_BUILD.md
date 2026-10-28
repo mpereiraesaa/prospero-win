@@ -734,6 +734,65 @@ back buffer back (`GetRenderTargetData`/`LockRect`, or a staging copy and
 | DXVK 2.6.2 D3D11, D3D10, D3D9, D3D8 pixel controls, x64 and x86 | Both frames read back with the expected centre pixel (`844c1cff`, then `1c4c84ff`) and no mismatches; every call returns `S_OK`; ps5vk logs a completed flip for each frame (`PS5VK_VIDEO_PRESENTED`, tokens 1 and 2) and no refusal |
 | ps5vk's `vkmap` probe, x86 | Two host-visible buffers map at 32-bit addresses (`0x818e0000`, `0x81900000`) through ps5vk's low CPU alias, and a 1,024-byte GPU copy between them has no mismatches |
 
+## Direct3D 12
+
+Direct3D 12 games use [vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton)'s
+`d3d12` and `d3d12core` beside DXVK's `dxgi`, which makes their swapchain:
+
+```text
+game (PE) -> vkd3d-proton d3d12/d3d12core + DXVK dxgi (PE, system32) -> winevulkan.dll
+  -> winevulkan.prx -> win32u.prx -> libvulkan.prx (RADV) -> AGC and VideoOut
+```
+
+`tools/pw_install.py` installs them with `wine: {dxvk: true, vkd3d: true}`
+(3.0.1, pinned by hash) and sets `d3d12,d3d12core=n` in the registry and
+the profile. A 64-bit game's Vulkan calls take Wine's plain thunks; only
+32-bit games go through the command-stream batching.
+
+What vkd3d-proton gets from RADV, read from PS5_Mesa's source (PS5_Vulkan's
+pin `1ba9874f`) and vkd3d-proton 3.0.1's device setup:
+
+- **Feature level 11_1.** RADV reports sparse binding and residency but not
+  `shaderResourceResidency` or `residencyNonResidentStrict` (the PS5
+  winsys has no PRT, `has_sparse_prt=false`), so vkd3d-proton offers tiled
+  resources tier 1, and feature level 12_0 needs tier 2. A game that asks
+  `D3D12CreateDevice` for 11_0 or 11_1 gets a device; one that asks for
+  12_0 or later gets `E_INVALIDARG`. Its profile can set
+  `[debug] env = VKD3D_FEATURE_LEVEL=12_0` (or `12_1`): vkd3d-proton then
+  reports tier 2, which is safe only for a game that never uses tiled
+  resources, since RADV maps every unbound page to one shared block.
+  12_2 also needs variable-rate shading, which this GPU does not have.
+- Shader model 6.8, resource binding tier 3, ROVs and conservative
+  rasterization tier 3, DXR 1.1 (`VKD3D_CONFIG=nodxr` turns it off), mesh
+  shaders tier 1 (emulated by RADV), ExecuteIndirect without
+  device-generated commands. Timeline semaphores are Mesa's emulation, and
+  the compute queues share the graphics ring, so async compute does not
+  overlap.
+- The in-game menu and the FPS counter are drawn by DXVK's HUD (patch
+  0973), which a Direct3D 12 game, drawing through vkd3d-proton, does not
+  have.
+
+`tests/d3d12_control.c` is the check: a device at feature level 11_0, its
+highest feature level, shader model and tiers, then two frames on a
+1920x1080 flip-model swapchain, each cleared, drawn with shaders compiled
+on the spot (`d3dcompiler_47`), read back at the centre (the triangle) and a
+corner (the clear colour), and presented. `tests/test_d3d12_control.py`
+runs it under the host Wine with `PROSPERO_TEST_D3D12=1`: on an RTX 3060
+it reports feature level 12_2 and shader model 6.8 and passes. On the
+console it runs as a game, in a prefix `pw_install.py` set up with
+`wine: {dxvk: true, vkd3d: true}`; its result line reaches the log as
+`STDOUT`.
+
+Console result (2026-10-28, the runtime then installed, RADV 26.2.0):
+
+| Check | Result |
+| --- | --- |
+| Device at feature level 11_0 | `S_OK`, on vkd3d-proton's descriptor-buffer path with mutable descriptors |
+| Highest feature level, shader model | 11_1 (`0xb100`) and 6.8, as read from the source above |
+| Tiers | resource binding 3, tiled resources 1, ROVs, conservative rasterization 3, DXR 1.1; no mesh shaders (that runtime's RADV predates barycentrics) and no VRS |
+| Two frames, 1920x1080 flip-model swapchain | both drawn, read back (triangle `ffff0000`, corners `ff1c4c84` then `ff844c1c`) and presented `S_OK`; `KHR_present_wait` in use |
+| Run | no vkd3d-proton warning or error; the program exited and the title went back to the launcher |
+
 ## OpenGL
 
 OpenGL games draw through Mesa's Zink, which runs OpenGL on top of the
@@ -1027,8 +1086,9 @@ The title runs one game per process (`src/pw_wine_launch.h`):
   - `[debug] env = NAME=VALUE` adds one variable to Wine's environment for
     that game, up to five lines, for diagnostics such as
     `env = PW_NATIVE_PROFILE=1` or `env = PW_VK_BATCH_STATS=1`. Names start
-    with `PW_`, `DXVK_`, `MESA_`, `GALLIUM_`, `ZINK_` (Zink's own options,
-    such as `ZINK_DESCRIPTORS=lazy`), `RADV_` or `VK_`; values take
+    with `PW_`, `DXVK_`, `VKD3D_` (vkd3d-proton's, such as
+    `VKD3D_FEATURE_LEVEL=12_0`), `MESA_`, `GALLIUM_`, `ZINK_` (Zink's own
+    options, such as `ZINK_DESCRIPTORS=lazy`), `RADV_` or `VK_`; values take
     letters, digits and `_ + - , . = : /`. A name the title sets itself is
     refused, so these only add: `PW_VK_BATCH`, `PW_INPUT_SHARED_FAST`,
     `PW_QPC_TSC_*`, `GALLIUM_DRIVER`, `DXVK_HUD` or `GALLIUM_HUD` while

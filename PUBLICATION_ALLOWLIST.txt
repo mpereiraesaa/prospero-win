@@ -422,6 +422,8 @@ tests/test_wine_directory_changes.py
 tests/wine_directory_changes.c
 tests/test_wine_directory_handles.py
 tests/wine_directory_handles.c
+tests/test_d3d12_control.py
+tests/d3d12_control.c
 wine/patches/0884-server-ps5-poll-for-directory-changes.patch
 tests/test_wine_sched_probe.py
 tests/wine_sched_probe.c

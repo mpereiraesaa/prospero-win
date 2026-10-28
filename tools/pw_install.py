@@ -151,6 +151,28 @@ def open_release_tar(archive: Path) -> tarfile.TarFile:
     return tarfile.open(fileobj=zstd_module.open(archive))
 
 
+def extract_dxvk(archive: Path, version: str, windows: Path) -> None:
+    """DXVK's DLLs from a release archive into a prefix's windows folder."""
+    with tarfile.open(archive) as release:
+        for bits, folder in (("x64", "system32"), ("x32", "syswow64")):
+            for dll in DXVK_DLLS:
+                member = release.extractfile(f"dxvk-{version}/{bits}/{dll}.dll")
+                (windows / folder / f"{dll}.dll").write_bytes(member.read())
+
+
+def extract_vkd3d_proton(archive: Path, version: str, windows: Path) -> None:
+    """vkd3d-proton's DLLs from a release archive into a prefix's windows folder."""
+    with open_release_tar(archive) as release:
+        for bits, folder in (("x64", "system32"), ("x86", "syswow64")):
+            for dll in VKD3D_PROTON_DLLS:
+                name = f"vkd3d-proton-{version}/{bits}/{dll}.dll"
+                try:
+                    member = release.extractfile(name)
+                except KeyError:
+                    raise InstallError(f"{archive.name} has no {name}") from None
+                (windows / folder / f"{dll}.dll").write_bytes(member.read())
+
+
 def fetch(url: str, sha256: str, name: str, directory: Path | None = None) -> Path:
     """A pinned download, kept in the user's cache and checked each time."""
     directory = directory or DOWNLOADS
@@ -646,13 +668,7 @@ class Installer:
             return []
         url, digest = dxvk_release(self.dxvk_version)
         archive = fetch(url, digest, f"dxvk-{self.dxvk_version}.tar.gz")
-        env = self.wine_env()
-        prefix = Path(env["WINEPREFIX"]) / "drive_c" / "windows"
-        with tarfile.open(archive) as release:
-            for bits, folder in (("x64", "system32"), ("x32", "syswow64")):
-                for dll in DXVK_DLLS:
-                    member = release.extractfile(f"dxvk-{self.dxvk_version}/{bits}/{dll}.dll")
-                    (prefix / folder / f"{dll}.dll").write_bytes(member.read())
+        extract_dxvk(archive, self.dxvk_version, Path(self.wine_env()["WINEPREFIX"]) / "drive_c" / "windows")
         self.regedit(["[HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides]"] +
                      [f'"{dll}"="native"' for dll in DXVK_DLLS], None)
         log(f"DXVK {self.dxvk_version} installed in the prefix")
@@ -665,17 +681,9 @@ class Installer:
             raise InstallError("vkd3d needs DXVK's dxgi: set wine.dxvk and graphics = dxvk")
         url, digest = vkd3d_proton_release(self.vkd3d_version)
         archive = fetch(url, digest, url.rsplit("/", 1)[-1])
-        prefix = Path(self.wine_env()["WINEPREFIX"]) / "drive_c" / "windows"
-        with open_release_tar(archive) as release:
-            for bits, folder in (("x64", "system32"), ("x86", "syswow64")):
-                for dll in VKD3D_PROTON_DLLS:
-                    name = f"vkd3d-proton-{self.vkd3d_version}/{bits}/{dll}.dll"
-                    try:
-                        member = release.extractfile(name)
-                    except KeyError:
-                        raise InstallError(f"{archive.name} has no {name}") from None
-                    (prefix / folder / f"{dll}.dll").write_bytes(member.read())
-        self.regedit(["[HKEY_CURRENT_USER\Software\Wine\DllOverrides]"] +
+        extract_vkd3d_proton(archive, self.vkd3d_version,
+                             Path(self.wine_env()["WINEPREFIX"]) / "drive_c" / "windows")
+        self.regedit(["[HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides]"] +
                      [f'"{dll}"="native"' for dll in VKD3D_PROTON_DLLS], None)
         log(f"vkd3d-proton {self.vkd3d_version} installed in the prefix")
         return list(VKD3D_PROTON_DLLS)
