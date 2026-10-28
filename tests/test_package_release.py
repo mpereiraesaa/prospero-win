@@ -160,7 +160,7 @@ def main() -> int:
                          "nettle 3.10.2 (libgnutls.prx)  https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz",
                          "SHA-256 fe9ff51cb1f2abb5e65a6b8c10a92da0ab5ab6eaf26e7fc2b675c45f1fb519b5",
                          "Root certificates (share/wine/ca-certificates.crt)  the builder's own bundle,"
-                         " not curl's cacert-2026-09-25.pem",
+                         " not curl's cacert-2026-10-20.pem",
                          f"SHA-256 {hashlib.sha256(b'roots').hexdigest()}"):
             assert expected in sources, (expected, sources)
         assert "https://curl.se/ca/" not in sources

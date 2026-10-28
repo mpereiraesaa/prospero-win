@@ -952,7 +952,7 @@ see, so it stayed empty. Patch 0878 reads `share/wine/ca-certificates.crt`
 beside the runtime first, found from `crypt32.prx`'s own path with
 `dladdr`, and logs an error if it is not there. The bundle is Mozilla's
 root store as curl publishes it, a dated file pinned by URL and SHA-256 in
-`build_tls_ps5.sh` (`cacert-2026-09-25.pem`, 121 roots), so a release
+`build_tls_ps5.sh` (`cacert-2026-10-20.pem`, 118 roots), so a release
 carries the same roots whoever builds it; `PROSPERO_CA_BUNDLE` names
 another, and `SOURCES.txt` then records only its SHA-256. The pinned bundle
 ages with Mozilla's store (roots are added and withdrawn a few times a
