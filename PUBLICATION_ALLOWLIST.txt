@@ -224,6 +224,7 @@ wine/patches/0600-ntdll-ps5-direct-memory-for-anonymous-memory.patch
 wine/patches/0601-ntdll-ps5-keep-i386-images-below-4gib.patch
 wine/patches/0602-ntdll-map-unaligned-shared-sections-private.patch
 wine/patches/0603-ntdll-report-the-ps5-title-s-memory.patch
+wine/patches/0604-ntdll-ps5-commit-stacks-as-windows-does.patch
 wine/patches/0610-ntdll-ps5-segv-hook-for-the-wow64-cpu.patch
 wine/patches/0611-wow64-ps5-take-the-cpu-from-the-environment.patch
 wine/patches/0620-ntdll-generic-processor-topology.patch
@@ -428,6 +429,8 @@ tests/test_wine_directory_changes.py
 tests/wine_directory_changes.c
 tests/test_wine_directory_handles.py
 tests/wine_directory_handles.c
+tests/test_wine_fiber_stacks.py
+tests/wine_fiber_stacks.c
 tests/test_d3d12_control.py
 tests/d3d12_control.c
 wine/patches/0884-server-ps5-poll-for-directory-changes.patch
