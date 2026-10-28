@@ -12,10 +12,12 @@
  *
  * Its entries are "Keyboard input", which asks the title for the console's
  * on-screen keyboard (src/pw_osk.h), and Close. Picking either closes the
- * menu. */
+ * menu. Without the console's keyboard (keyboard 0, which the title sets)
+ * the first line says there are no cheats yet and only Close is offered. */
 typedef struct PwGameMenu {
     int open;
     int cursor;
+    int keyboard;           /* 1: the console's keyboard can be opened */
     uint32_t withheld;      /* buttons the game must not see yet */
     uint32_t game_held;     /* what the game saw held last tick */
 } PwGameMenu;

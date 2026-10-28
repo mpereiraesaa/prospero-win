@@ -72,7 +72,9 @@ static void track_touch(PwPadPs5 *pad,const PwPadPs5Data *raw)
 {
     unsigned held=(raw->buttons&PW_PAD_PS5_TOUCHPAD)!=0,fingers=raw->touch_data.fingers;
     if(held && !pad->touch_held) {
-        pad->touch_fingers=fingers;
+        /* The fingers that made the click: the click's own sample's, or,
+         * when it comes without a touch, those still down before it. */
+        pad->touch_fingers=fingers?fingers:pad->finger_down?pad->finger_count:0;
         if(fingers) {
             pad->touch_x=raw->touch_data.touch[0].x;pad->touch_y=raw->touch_data.touch[0].y;
             pad->touch_from=PW_PAD_PS5_TOUCH_FROM_CLICK;
@@ -84,7 +86,8 @@ static void track_touch(PwPadPs5 *pad,const PwPadPs5Data *raw)
         pad->touch_left=pad->touch_x<PW_PAD_PS5_TOUCH_MIDDLE;
     }
     /* A finger lifted ends its position; a click without a touch keeps it. */
-    if(fingers){pad->finger_down=1;pad->finger_x=raw->touch_data.touch[0].x;pad->finger_y=raw->touch_data.touch[0].y;}
+    if(fingers){pad->finger_down=1;pad->finger_count=fingers;
+                pad->finger_x=raw->touch_data.touch[0].x;pad->finger_y=raw->touch_data.touch[0].y;}
     else if(!held)pad->finger_down=0;
     pad->touch_held=held;
 }

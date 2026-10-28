@@ -25,7 +25,13 @@
  * libSceCommonDialog, which has no sysmodule id of its own and comes in
  * behind libSceImeDialog; each way of reaching it is tried and logged, and
  * the dialog is opened even when none worked, so a console run says which
- * one the firmware wanted rather than refusing in advance.
+ * one the firmware wanted rather than refusing in advance. It is brought up
+ * the first time the keyboard is shown, not when the game starts, so a game
+ * that never opens the keyboard pays nothing for it; without the dialog's
+ * module it is never tried.
+ *
+ * The preload logs the title's free flexible memory before and after it,
+ * which is what the module costs every game.
  *
  * The flow is the published one: sceImeDialogInit, then sceImeDialogGetStatus
  * until it reports FINISHED, then sceImeDialogGetResult and sceImeDialogTerm.
@@ -93,7 +99,8 @@ typedef struct PwOskPs5 {
     PwOskPs5Ops ops;
     int32_t user_id, module;
     int ready;                  /* the symbols resolved */
-    int common_dialog_rc;       /* what sceCommonDialogInitialize said */
+    int common_tried;           /* sceCommonDialogInitialize was called */
+    int common_dialog_rc;       /* what it said */
     int showing;
     int (*dialog_init)(const PwOskPs5Param *param, const void *extended);
     int (*dialog_status)(void);
@@ -108,13 +115,18 @@ typedef struct PwOskPs5 {
     uint16_t title[PW_OSK_PS5_TITLE];
 } PwOskPs5;
 
-/* Looks the dialog's functions up and brings the common-dialog family up;
- * logs each step. PW_OK when a dialog can be opened. */
+/* Looks the dialog's functions up and logs it. PW_OK when a dialog can be
+ * opened. */
 int pw_osk_ps5_open(PwOskPs5 *osk, const PwOskPs5Ops *ops, int32_t user_id);
 
-/* Shows the keyboard with title above it, starting empty. PW_OK when the
- * system took it; the title then polls. */
+/* Shows the keyboard with title above it, starting empty, bringing the
+ * common-dialog family up the first time. PW_OK when the system took it;
+ * the title then polls. */
 int pw_osk_ps5_show(PwOskPs5 *osk, const char *title);
+
+/* Ends a dialog that is still up (the title is leaving the game); nothing
+ * otherwise. */
+void pw_osk_ps5_close(PwOskPs5 *osk);
 
 /* One poll. 0 while the dialog is up; 1 once it closed, with the accepted
  * line in text as UTF-8 (empty when it was cancelled or aborted); a

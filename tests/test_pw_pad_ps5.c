@@ -139,7 +139,7 @@ int main(void)
     fixture[0]=touch;fixture[0].buttons=0;fixture[0].touch_data.touch[0]=(PwPadPs5Touch){.x=120,.y=700};
     fixture[1]=fixture[0];fixture[1].buttons=TOUCHPAD;fixture[1].touch_data.fingers=0;fixture_count=2;
     assert(pw_pad_ps5_read(&pad)==PW_OK && pad.touch_held && pad.touch_left && pad.touch_x==120 &&
-           pad.touch_y==700 && pad.touch_from==PW_PAD_PS5_TOUCH_FROM_EARLIER);
+           pad.touch_y==700 && pad.touch_from==PW_PAD_PS5_TOUCH_FROM_EARLIER && pad.touch_fingers==1);
     /* ... not once it was lifted; the click's own touch comes first. */
     fixture[0].touch_data.fingers=0;fixture[1].buttons=0;fixture[1].touch_data.fingers=0;
     fixture[2]=fixture[1];fixture[2].buttons=TOUCHPAD;fixture_count=3;
@@ -148,6 +148,24 @@ int main(void)
     fixture[0]=touch;fixture[0].buttons=0;fixture[1]=touch;fixture[1].touch_data.touch[0].x=1500;fixture_count=2;
     assert(pw_pad_ps5_read(&pad)==PW_OK && !pad.touch_left && pad.touch_x==1500 && pad.touch_fingers==1 &&
            pad.touch_from==PW_PAD_PS5_TOUCH_FROM_CLICK);
+    /* Two fingers make the click (the keyboard's gesture): from its own
+     * sample, or from the fingers still down before a sample without one. */
+    fixture[0]=touch;fixture[0].buttons=0;fixture_count=1;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && !pad.touch_held);
+    fixture[0]=touch;fixture[0].touch_data.fingers=2;fixture[0].touch_data.touch[1]=(PwPadPs5Touch){.x=900,.y=400};
+    assert(pw_pad_ps5_read(&pad)==PW_OK && pad.touch_held && pad.touch_fingers==2);
+    fixture[0].buttons=0;assert(pw_pad_ps5_read(&pad)==PW_OK && !pad.touch_held);
+    fixture[0]=touch;fixture[0].buttons=0;fixture[0].touch_data.fingers=2;
+    fixture[1]=fixture[0];fixture[1].buttons=TOUCHPAD;fixture[1].touch_data.fingers=0;fixture_count=2;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && pad.touch_held && pad.touch_fingers==2 &&
+           pad.touch_from==PW_PAD_PS5_TOUCH_FROM_EARLIER);
+    /* ... but not once both were lifted before it. */
+    fixture[0].buttons=0;fixture[0].touch_data.fingers=0;fixture[1].buttons=0;fixture_count=2;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && !pad.touch_held);
+    fixture[0]=touch;fixture[0].buttons=0;fixture[0].touch_data.fingers=2;
+    fixture[1]=fixture[0];fixture[1].touch_data.fingers=0;
+    fixture[2]=fixture[1];fixture[2].buttons=TOUCHPAD;fixture_count=3;
+    assert(pw_pad_ps5_read(&pad)==PW_OK && pad.touch_held && !pad.touch_fingers);
     fixture_count=0;
     /* Vibration: both motors in order, a failure kept, nothing without the op. */
     assert(pw_pad_ps5_vibrate(&pad,200,10)==PW_OK && vibration_calls==1 &&

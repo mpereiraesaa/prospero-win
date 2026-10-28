@@ -80,10 +80,12 @@ typedef struct PwPadPs5 {
      * it. A click's own sample can come without a touch (touch_fingers 0):
      * the finger's last position before it, while it stayed down, stands
      * in; with neither, the middle, the right half. touch_from says which:
-     * PW_PAD_PS5_TOUCH_FROM_*. */
+     * PW_PAD_PS5_TOUCH_FROM_*. touch_fingers is how many fingers made the
+     * click, counted the same way (0 with neither). */
     unsigned touch_held,touch_left,touch_from,touch_fingers;uint16_t touch_x,touch_y;
-    /* the finger's latest position while one is on the touchpad */
-    unsigned finger_down;uint16_t finger_x,finger_y;
+    /* the first finger's latest position, and how many there were, while
+     * one is on the touchpad */
+    unsigned finger_down,finger_count;uint16_t finger_x,finger_y;
 } PwPadPs5;
 
 int pw_pad_ps5_platform_ops(PwPadPs5Ops *);

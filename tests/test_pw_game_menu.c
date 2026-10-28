@@ -28,6 +28,7 @@ static void assert_view(uint32_t h, uint32_t p, uint32_t r, int neutral)
 int main(void)
 {
     struct pw_title_menu snapshot;
+    menu.keyboard = 1;                      /* the title has the console's keyboard */
     /* Closed: the game gets the pad as it is, edges included. */
     assert(!tick(SQUARE));
     assert_view(SQUARE, SQUARE, 0, 0);
@@ -84,6 +85,16 @@ int main(void)
     assert(!tick(CROSS) && view.action == PW_GAME_MENU_ACTION_KEYBOARD);
     assert(!menu.open && !shown.open);
     assert(!tick(0) && view.action == PW_GAME_MENU_ACTION_NONE);
+
+    /* Without the console's keyboard its line is the placeholder, which the
+     * cursor skips: only Close is offered, and nothing asks for a keyboard. */
+    memset(&menu, 0, sizeof(menu));
+    held = 0;
+    assert(tick(L3 | R3));
+    assert(!strcmp(shown.line[0], "No cheats for this game yet") && !strcmp(shown.line[1], "Close"));
+    assert(shown.selected == 1);
+    assert(tick(0) && tick(UP) && shown.selected == 1);
+    assert(tick(0) && !tick(CROSS) && view.action == PW_GAME_MENU_ACTION_NONE && !menu.open);
 
     /* Bad arguments do nothing. */
     assert(!pw_game_menu_tick(NULL, 0, 0, 0, &snapshot, &view));

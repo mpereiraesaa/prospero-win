@@ -34,8 +34,8 @@ Built to bridge generations of Windows gaming—from 2000s classics to newer
 - **Custom controller mappings** for games originally designed for
   keyboard and mouse.
 - **USB keyboard and mouse**, usable alongside the controller.
-- **The console's on-screen keyboard** in a game, opened with Options and
-  the touchpad click, typed into the game as keys.
+- **The console's on-screen keyboard** in a game, opened with a two-finger
+  touchpad click, typed into the game as keys.
 - **Game audio** through the PS5's audio output.
 - **A game launcher** with individual profiles, graphics settings and
   control presets.

@@ -155,24 +155,36 @@ open). Its lines are **Keyboard input**, which opens the console's keyboard
 
 ## The console's keyboard
 
-Press **Options + the touchpad click** in a game and the PS5's own
+Click the touchpad with **two fingers** in a game and the PS5's own
 on-screen keyboard opens over it, the same one the console shows for a
 search box. Write with the DualSense or with a USB keyboard, accept, and
 the line is typed into the game as key presses, with Enter at the end — a
 chat line or a console command arrives as it would from a PC keyboard.
 Cancelling types nothing.
 
-The game sees the DualSense idle while the keyboard is up, and the buttons
-you opened it with stay away from it until you let go of them. The line is
-typed a character at a time, over a second or so for a long one, so a game
-that reads its keyboard once a frame sees every key. Characters a US
+The two-finger click never reaches the game, not even for a moment: the
+pad says how many fingers made a click in the click itself, so nothing
+has to wait for a second button, and a one-finger click is the game's as
+before (Back or Guide, or the preset's key). The game sees the DualSense
+idle while the keyboard is up, and the buttons still down when it closes
+stay away from it until you let go of them. A USB keyboard types into the
+console's keyboard while it is up, not into the game.
+
+The line is typed a key at a time, each held down for one tick (16 ms), so
+a game that reads its keyboard once a frame sees every key, and a letter
+typed twice in a row is let go in between: a 20-character line takes about
+a third of a second, the longest (255) about four. Characters a US
 keyboard has no key for (accents, for instance) are skipped: the rest of
 the line is still typed. The in-game menu's "Keyboard input" opens the same
-keyboard, which is the way in for a game whose own controls use Options.
+keyboard; it is shown only when the console's keyboard is available.
 
-The keyboard is the system's, drawn and driven by the console. A firmware
-that refuses it to this app leaves everything else as it is; the run's log
-says `osk=` and what the system answered.
+The keyboard is the system's, drawn and driven by the console. Its module
+is loaded when the app starts (system modules have to be, before the app
+gets its data folder), and the log's `preload libSceImeDialog` line says
+how much flexible memory that took; the rest of the dialog's setup waits
+for the first time the keyboard is opened. A firmware that refuses it to
+this app leaves everything else as it is; the run's log says `osk=` and
+what the system answered.
 
 ## Writing a preset
 

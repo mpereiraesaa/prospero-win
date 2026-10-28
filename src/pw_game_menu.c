@@ -2,22 +2,37 @@
 #include "pw_game_menu.h"
 #include <string.h>
 
-/* Lines in order; only those with an action can take the cursor. */
+/* Lines in order; only those with an action can take the cursor. Without
+ * the console's keyboard its line says there is nothing else yet. */
 enum { ACTION_NONE, ACTION_CLOSE, ACTION_KEYBOARD };
-static const struct { const char *text; int action; } lines[] = {
+typedef struct MenuLine { const char *text; int action; } MenuLine;
+static const MenuLine with_keyboard[] = {
     { "Keyboard input", ACTION_KEYBOARD },
     { "Close", ACTION_CLOSE },
 };
-enum { LINE_COUNT = sizeof(lines) / sizeof(lines[0]) };
+static const MenuLine without_keyboard[] = {
+    { "No cheats for this game yet", ACTION_NONE },
+    { "Close", ACTION_CLOSE },
+};
+enum { LINE_COUNT = sizeof(with_keyboard) / sizeof(with_keyboard[0]) };
+_Static_assert(sizeof(without_keyboard) == sizeof(with_keyboard), "both menus have the same lines");
 
-static int selectable(int line) { return line >= 0 && line < LINE_COUNT && lines[line].action != ACTION_NONE; }
+static const MenuLine *lines_of(const PwGameMenu *menu)
+{
+    return menu->keyboard ? with_keyboard : without_keyboard;
+}
+
+static int selectable(const PwGameMenu *menu, int line)
+{
+    return line >= 0 && line < LINE_COUNT && lines_of(menu)[line].action != ACTION_NONE;
+}
 
 /* The next selectable line from the cursor in direction step, wrapping. */
-static int move(int cursor, int step)
+static int move(const PwGameMenu *menu, int cursor, int step)
 {
     for (int i = 1; i <= LINE_COUNT; i++) {
         int line = ((cursor + step * i) % LINE_COUNT + LINE_COUNT) % LINE_COUNT;
-        if (selectable(line)) return line;
+        if (selectable(menu, line)) return line;
     }
     return cursor;
 }
@@ -31,7 +46,7 @@ static void snapshot_of(const PwGameMenu *menu, struct pw_title_menu *snapshot)
     snapshot->lines = LINE_COUNT;
     snapshot->selected = menu->cursor;
     strcpy(snapshot->title, "prospero-win");
-    for (int i = 0; i < LINE_COUNT; i++) strcpy(snapshot->line[i], lines[i].text);
+    for (int i = 0; i < LINE_COUNT; i++) strcpy(snapshot->line[i], lines_of(menu)[i].text);
 }
 
 int pw_game_menu_tick(PwGameMenu *menu, uint32_t held, uint32_t pressed, uint32_t released,
@@ -45,15 +60,15 @@ int pw_game_menu_tick(PwGameMenu *menu, uint32_t held, uint32_t pressed, uint32_
     if (!menu->open) {
         if (combo) {
             menu->open = 1;
-            menu->cursor = move(-1, 1);
+            menu->cursor = move(menu, -1, 1);
         }
     } else if (combo || (pressed & PW_GAME_MENU_CIRCLE)) {
         menu->open = 0;
     } else {
-        if (pressed & PW_GAME_MENU_UP) menu->cursor = move(menu->cursor, -1);
-        if (pressed & PW_GAME_MENU_DOWN) menu->cursor = move(menu->cursor, 1);
-        if ((pressed & PW_GAME_MENU_CROSS) && selectable(menu->cursor)) {
-            if (lines[menu->cursor].action == ACTION_KEYBOARD)
+        if (pressed & PW_GAME_MENU_UP) menu->cursor = move(menu, menu->cursor, -1);
+        if (pressed & PW_GAME_MENU_DOWN) menu->cursor = move(menu, menu->cursor, 1);
+        if ((pressed & PW_GAME_MENU_CROSS) && selectable(menu, menu->cursor)) {
+            if (lines_of(menu)[menu->cursor].action == ACTION_KEYBOARD)
                 view->action = PW_GAME_MENU_ACTION_KEYBOARD;
             menu->open = 0;             /* every entry closes the menu */
         }

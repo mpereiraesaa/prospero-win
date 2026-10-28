@@ -86,7 +86,7 @@ first start takes a while; a spinner shows while Wine and the game load.
   one. See [controls](CONTROLS.md).
 - **USB keyboard and mouse:** plug them into the PS5 and they work in any
   game, alongside the controller. You can plug them in after the game starts.
-- **Type in a game:** press **Options + the touchpad click** and the PS5's own
+- **Type in a game:** click the touchpad with **two fingers** and the PS5's own
   on-screen keyboard opens over it; what you accept is typed into the game,
   with Enter at the end. See [controls](CONTROLS.md).
 - **Close a game:** hold **Options + Create** for three seconds. The game gets a

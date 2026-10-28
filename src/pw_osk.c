@@ -76,23 +76,26 @@ void pw_osk_finished(PwOsk *osk, const char *text)
     else osk->cancelled++;
 }
 
-int pw_osk_tick(PwOsk *osk, uint32_t held, uint32_t pressed, uint32_t released, PwOskView *view)
+int pw_osk_tick(PwOsk *osk, uint32_t held, uint32_t pressed, uint32_t released, int gesture,
+                PwOskView *view)
 {
-    int combo = (held & PW_OSK_COMBO) == PW_OSK_COMBO && (pressed & PW_OSK_COMBO);
     uint32_t game;
     int taken;
 
     if (!osk || !view) return 0;
-    if (combo) pw_osk_open(osk);
+    gesture = gesture && (pressed & PW_OSK_TOUCHPAD);
+    if (gesture) pw_osk_open(osk);
     taken = osk->state == PW_OSK_OPENING || osk->state == PW_OSK_SHOWN;
 
     osk->withheld = taken ? ~0u : osk->withheld & held;
+    if (gesture) osk->withheld |= PW_OSK_TOUCHPAD & held;
     game = held & ~osk->withheld;
     view->held = game;
-    view->pressed = (pressed & ~osk->withheld) | (game & ~osk->game_held);
+    view->pressed = (pressed & ~osk->withheld & ~(gesture ? PW_OSK_TOUCHPAD : 0u)) |
+                    (game & ~osk->game_held);
     /* A release is the game's only for a button it saw down, or one pressed
      * and let go within this tick that it is shown pressed. */
-    view->released = (osk->game_held & ~game) | (released & pressed & ~osk->withheld & ~game);
+    view->released = (osk->game_held & ~game) | (released & view->pressed & ~game);
     view->neutral = taken;
     osk->game_held = game;
     return taken;
@@ -101,28 +104,36 @@ int pw_osk_tick(PwOsk *osk, uint32_t held, uint32_t pressed, uint32_t released, 
 size_t pw_osk_keys(PwOsk *osk, PwOskKey *out, size_t max)
 {
     size_t count = 0;
+    uint16_t let_go = 0;
 
-    if (!osk || !out || osk->state != PW_OSK_TYPING) return 0;
-    /* One character a tick: a game reads its keyboard once a frame, and a
-     * whole line posted at once would reach it as a single press. */
-    while (!count && osk->at + 1 < PW_OSK_TEXT && osk->text[osk->at]) {
+    if (!osk || !out || osk->state != PW_OSK_TYPING || max < PW_OSK_KEYS_PER_TICK) return 0;
+    /* Last tick's key goes up before the next goes down, so each one is
+     * held for a whole tick: a game that reads its keyboard once a frame
+     * sees it, where a press and release in one tick could fall between
+     * two of its reads. */
+    if (osk->ups) let_go = osk->up[0].vk;
+    for (unsigned i = 0; i < osk->ups; i++) out[count++] = osk->up[i];
+    osk->ups = 0;
+    while (osk->at + 1 < PW_OSK_TEXT && osk->text[osk->at]) {
         int shift = 0;
         uint16_t vk = pw_osk_character_vk(osk->text[osk->at], &shift);
-        size_t needed = shift ? 4u : 2u;
 
+        if (!vk) { osk->at++; continue; }   /* no key types it; the rest still does */
+        /* The same key again: up this tick, down the next, or it would
+         * read as held through both. */
+        if (vk == let_go) return count;
         osk->at++;
-        if (!vk) continue;              /* no key types it; the rest still does */
-        if (needed > max) { osk->at--; return 0; }
         if (shift) out[count++] = (PwOskKey){ VK_SHIFT, 1 };
         out[count++] = (PwOskKey){ vk, 1 };
-        out[count++] = (PwOskKey){ vk, 0 };
-        if (shift) out[count++] = (PwOskKey){ VK_SHIFT, 0 };
+        osk->up[osk->ups++] = (PwOskKey){ vk, 0 };
+        if (shift) osk->up[osk->ups++] = (PwOskKey){ VK_SHIFT, 0 };
+        return count;
     }
-    if (!count && osk->enter) {
-        if (max < 2) return 0;
+    if (osk->enter && let_go != VK_RETURN) {
         out[count++] = (PwOskKey){ VK_RETURN, 1 };
-        out[count++] = (PwOskKey){ VK_RETURN, 0 };
+        osk->up[osk->ups++] = (PwOskKey){ VK_RETURN, 0 };
         osk->enter = 0;
+        return count;
     }
     if (!count) {
         osk->state = PW_OSK_CLOSED;

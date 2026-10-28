@@ -36,6 +36,8 @@ static int fake_term(void) { system_.terminated++; return 0; }
 
 static int fake_common_dialog(void) { system_.initialized++; return 0; }
 
+static int32_t fake_refuse(const char *name) { (void)name; return (int32_t)0x80020063; }
+
 static int32_t fake_load(const char *name)
 {
     if (strcmp(name, "libSceImeDialog")) return -1;
@@ -111,12 +113,14 @@ static void test_dialog(void)
 
     memset(&system_, 0, sizeof(system_));
     assert(pw_osk_ps5_open(&osk, &ops, 42) == PW_OK);
-    assert(system_.loaded == 1 && system_.initialized == 1 && osk.ready && osk.module == 7);
-    assert(!strcmp(logged, "keyboard module=0x7 ready=1 common=0 user=42"));
+    /* The dialog family waits for the first dialog. */
+    assert(system_.loaded == 1 && !system_.initialized && osk.ready && osk.module == 7);
+    assert(!strcmp(logged, "keyboard module=0x7 ready=1 user=42"));
     assert(pw_osk_ps5_poll(&osk, text, sizeof(text)) == PW_ERR_STATE);  /* nothing is up */
 
     system_text("prospero");
     assert(pw_osk_ps5_show(&osk, "Half-Life 2") == PW_OK && osk.showing && osk.shown == 1);
+    assert(system_.initialized == 1 && osk.common_dialog_rc == 0);
     assert(pw_osk_ps5_show(&osk, "again") == PW_ERR_STATE && system_.inits == 1);
     /* The system was given the title's own buffers and the user's id. */
     assert(system_.param == &osk.param);
@@ -195,8 +199,23 @@ static void test_unavailable(void)
     broken = ops;
     broken.common_dialog_init = NULL;   /* no way to reach the dialog family */
     assert(pw_osk_ps5_open(&osk, &broken, 1) == PW_OK);
+    assert(osk.common_dialog_rc == PW_ERR_STATE);  /* not tried yet */
+    assert(pw_osk_ps5_show(&osk, "x") == PW_OK);   /* the dialog is still tried */
     assert(osk.common_dialog_rc == PW_ERR_NOT_FOUND);
-    assert(pw_osk_ps5_show(&osk, "x") == PW_OK);   /* it is still tried */
+    /* A game that leaves with the dialog up ends it; once is enough. */
+    pw_osk_ps5_close(&osk);
+    assert(!osk.showing && system_.terminated == 1 && !strcmp(logged, "keyboard ended by=title"));
+    pw_osk_ps5_close(&osk);
+    pw_osk_ps5_close(NULL);
+    assert(system_.terminated == 1);
+
+    /* Without the dialog's module the family is never brought up. */
+    memset(&system_, 0, sizeof(system_));
+    broken = ops;
+    broken.load_module = fake_refuse;
+    assert(pw_osk_ps5_open(&osk, &broken, 1) == PW_ERR_NOT_FOUND && !osk.ready);
+    assert(pw_osk_ps5_show(&osk, "x") == PW_ERR_STATE);
+    assert(!system_.initialized && !osk.common_tried);
 
     memset(&osk, 0, sizeof(osk));
     assert(pw_osk_ps5_show(&osk, "x") == PW_ERR_STATE);

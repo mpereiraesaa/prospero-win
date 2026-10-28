@@ -107,11 +107,9 @@ int pw_osk_ps5_open(PwOskPs5 *osk, const PwOskPs5Ops *ops, int32_t user_id)
         !ops->resolve(module, "sceImeDialogGetStatus", (void **)&osk->dialog_status) &&
         !ops->resolve(module, "sceImeDialogGetResult", (void **)&osk->dialog_result) &&
         !ops->resolve(module, "sceImeDialogTerm", (void **)&osk->dialog_term);
-    /* The dialog family is brought up once; a second caller is told it
-     * already is, which is the state this needs. */
-    osk->common_dialog_rc = ops->common_dialog_init ? ops->common_dialog_init() : PW_ERR_NOT_FOUND;
-    snprintf(line, sizeof(line), "keyboard module=%#x ready=%d common=%#x user=%d",
-             (unsigned)module, osk->ready, (unsigned)osk->common_dialog_rc, (int)user_id);
+    osk->common_dialog_rc = PW_ERR_STATE;   /* brought up with the first dialog */
+    snprintf(line, sizeof(line), "keyboard module=%#x ready=%d user=%d",
+             (unsigned)module, osk->ready, (int)user_id);
     logf_(osk, line);
     return osk->ready ? PW_OK : PW_ERR_NOT_FOUND;
 }
@@ -123,6 +121,15 @@ int pw_osk_ps5_show(PwOskPs5 *osk, const char *title)
     if (!osk) return PW_ERR_PRECONDITION;
     if (!osk->ready) return PW_ERR_STATE;
     if (osk->showing) return PW_ERR_STATE;
+    if (!osk->common_tried) {
+        /* The dialog family is brought up once; a second caller is told it
+         * already is, which is the state this needs. */
+        osk->common_tried = 1;
+        osk->common_dialog_rc = osk->ops.common_dialog_init ? osk->ops.common_dialog_init() :
+                                PW_ERR_NOT_FOUND;
+        snprintf(line, sizeof(line), "keyboard common=%#x", (unsigned)osk->common_dialog_rc);
+        logf_(osk, line);
+    }
     memset(osk->text, 0, sizeof(osk->text));
     pw_osk_ps5_utf16(title ? title : "prospero-win", osk->title, PW_OSK_PS5_TITLE);
     memset(&osk->param, 0, sizeof(osk->param));
@@ -149,6 +156,13 @@ static int finish(PwOskPs5 *osk, int result)
     osk->showing = 0;
     (void)osk->dialog_term();
     return result;
+}
+
+void pw_osk_ps5_close(PwOskPs5 *osk)
+{
+    if (!osk || !osk->showing) return;
+    logf_(osk, "keyboard ended by=title");
+    (void)finish(osk, 0);
 }
 
 int pw_osk_ps5_poll(PwOskPs5 *osk, char *text, size_t capacity)
@@ -192,6 +206,7 @@ int sceSysmoduleGetModuleHandleInternal(uint32_t id, int32_t *handle);
 int sceKernelDlsym(int32_t handle, const char *symbol, void **address);
 int32_t sceKernelLoadStartModule(const char *path, size_t argc, const void *argv,
                                  uint32_t flags, const void *option, int *result);
+int sceKernelAvailableFlexibleMemorySize(size_t *size);
 
 static int32_t sysmodule_handle(uint16_t id)
 {
@@ -241,12 +256,16 @@ static int common_dialog_init(void)
 
 void pw_osk_ps5_preload(void (*log)(const char *line))
 {
-    char line[96];
-    int status = sceSysmoduleLoadModule(PW_OSK_PS5_MODULE);
+    char line[160];
+    size_t before = 0, after = 0;
+    int status;
 
-    snprintf(line, sizeof(line), "preload libSceImeDialog id=%#x status=%#x handle=%d",
-             (unsigned)PW_OSK_PS5_MODULE, (unsigned)status,
-             (int)sysmodule_handle(PW_OSK_PS5_MODULE));
+    (void)sceKernelAvailableFlexibleMemorySize(&before);
+    status = sceSysmoduleLoadModule(PW_OSK_PS5_MODULE);
+    (void)sceKernelAvailableFlexibleMemorySize(&after);
+    snprintf(line, sizeof(line), "preload libSceImeDialog id=%#x status=%#x handle=%d "
+             "flexible_free=%zuK->%zuK", (unsigned)PW_OSK_PS5_MODULE, (unsigned)status,
+             (int)sysmodule_handle(PW_OSK_PS5_MODULE), before >> 10, after >> 10);
     if (log) log(line);
 }
 
