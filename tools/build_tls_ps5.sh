@@ -31,8 +31,8 @@ GNUTLS_SHA256=ffed8ec1bf09c2426d4f14aae377de4753b53e537d685e604e99a8b16ca9c97e
 GNUTLS_URL=https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-$GNUTLS_VERSION.tar.xz
 # Mozilla's root store, extracted by curl's mk-ca-bundle (MPL-2.0); the
 # dated files at https://curl.se/docs/caextract.html do not change.
-CA_BUNDLE_DATE=2026-09-25
-CA_BUNDLE_SHA256=a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
+CA_BUNDLE_DATE=2026-10-20
+CA_BUNDLE_SHA256=796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe
 CA_BUNDLE_URL=https://curl.se/ca/cacert-$CA_BUNDLE_DATE.pem
 fail() { echo "build_tls_ps5: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
