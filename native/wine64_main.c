@@ -1040,6 +1040,7 @@ int main(int argc, char **argv)
     const PwGameProfile *game = NULL;
     int scaling = PW_PRESENT_SCALE_FIT;
     PwWinePointer pointer = { 0, 0 };
+    PwWineKeyboardStick keyboard_stick_state = { 0 };
     int (*post_input)(const PwWineInput *) = NULL;
     void (*set_pad)(const PwWinePad *) = NULL;
     int (*rumble)(uint32_t *, uint32_t *) = NULL;
@@ -1404,7 +1405,8 @@ int main(int argc, char **argv)
         uint64_t now = now_ns();
         pw_diagnostics_tick(now);
         PwPresentView view;
-        PwWineInput events[2 * PW_GAME_BUTTON_COUNT + 1];
+        /* +4 stick transitions (keyboard_stick) and +1 pointer move. */
+        PwWineInput events[2 * PW_GAME_BUTTON_COUNT + 5];
         int presented = 0;
 
         /* The USB keyboard and mouse; one plugged in later is found by a
@@ -1596,7 +1598,18 @@ int main(int argc, char **argv)
         if (pad_read) {
             size_t count = pw_wine_game_inputs(&game_input, seen->core.pressed_edges,
                                                seen->core.released_edges, events,
-                                               sizeof(events) / sizeof(events[0]) - 1);
+                                               sizeof(events) / sizeof(events[0]) - 5);
+            /* [input] keyboard_stick: one stick drives the four direction
+             * keys (WASD by default), for games that read the keyboard for
+             * movement and cannot use a stick axis. */
+            if (game_input.keyboard_stick != PW_GAME_STICK_NONE) {
+                const PwPadPs5Stick *key_stick =
+                    game_input.keyboard_stick == PW_GAME_STICK_LEFT ?
+                    &seen->left_stick : &seen->right_stick;
+                count += pw_wine_keyboard_stick_step(&game_input, key_stick->x, key_stick->y, 1,
+                                                    &keyboard_stick_state, &events[count],
+                                                    sizeof(events) / sizeof(events[0]) - count - 1);
+            }
             if (game_input.mouse != PW_GAME_STICK_NONE) {
                 const PwPadPs5Stick *stick = game_input.mouse == PW_GAME_STICK_LEFT ?
                                              &seen->left_stick : &seen->right_stick;
@@ -1619,6 +1632,16 @@ int main(int argc, char **argv)
                     PS5LOG_LOG("PW_WINE64 rumble left=%u right=%u scale=%u status=%s rc=%d trigger_rc=%d",
                                (unsigned)left, (unsigned)right, (unsigned)game_input.rumble,
                                pw_result_name(vibrate), pad.vibration_rc, pad.trigger_rc);
+            }
+        } else if (keyboard_stick_state.held && post_input) {
+            /* The pad stopped reporting with directions held: release them
+             * so the game is not left walking into a wall. */
+            size_t count = pw_wine_keyboard_stick_step(&game_input, 0x80, 0x80, 0,
+                                                       &keyboard_stick_state, events,
+                                                       sizeof(events) / sizeof(events[0]));
+            for (size_t j = 0; j < count; j++) {
+                if (post_input(&events[j]) == 0) posted++;
+                else refused++;
             }
         }
         /* The console's own keyboard: the two-finger click or the menu's

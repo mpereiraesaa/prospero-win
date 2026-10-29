@@ -52,6 +52,17 @@ int pw_wine_frame_box_take(PwWineFrameBox *box, uint64_t *seen, uint8_t *out,
 size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t released,
                            PwWineInput *out, size_t max);
 
+/* Digital key emulation for one analog stick. Direction bits are retained
+ * across frames so key-down is sent only on a threshold crossing, and every
+ * held direction is released when the controller disconnects.
+ *
+ * For titles that read the keyboard for movement and cannot be configured
+ * to use a stick axis: one stick drives the four direction keys. */
+typedef struct PwWineKeyboardStick { uint8_t held; } PwWineKeyboardStick;
+size_t pw_wine_keyboard_stick_step(const PwGameInput *input, uint8_t stick_x, uint8_t stick_y,
+                                  int connected, PwWineKeyboardStick *state,
+                                  PwWineInput *out, size_t max);
+
 /* The DualSense as an XInput gamepad: its held buttons (Cross A, Circle B,
  * Square X, Triangle Y, L1/R1 shoulders, L3/R3 thumbs, Options Start,
  * Create Back, a touchpad click Back on its left half and Guide on its
