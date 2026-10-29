@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Thu, 29 Oct 2026 16:00:00 +0200
+Subject: [PATCH] ntdll: Name the occupant of a refused reservation on PS5.
+
+sceKernelReserveVirtualRange() answers ENOMEM (0x8002000c) both for a
+range another mapping holds and for one it cannot grant, so its return
+code does not say which happened, and anon_mmap_tryfixed()'s callers
+need EEXIST for a collision in either case (map_view relocates on it;
+reserve_area skips the block). The errno is therefore kept as it is and
+the cause is logged instead.
+
+sceKernelVirtualQuery() separates them: a record with a protection,
+flags and a name describes a mapping that holds the range, while a
+cleared record reaching past the end of the request describes a hole,
+which means the reservation was refused rather than blocked.
+
+This matters at a fixed base. 0130 notes that the title's own image may
+occupy a program's preferred base (0x400000 for most executables) and
+relocates the program when it does; without this line that case and an
+exhausted address space produce the same EEXIST, and an image whose
+relocations were stripped at link time -- which cannot be relocated and
+must have its preferred base -- fails with STATUS_CONFLICTING_ADDRESSES
+and nothing saying why.
+
+Uses the query structure already declared in native/wine64_main.c.
+---
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 5e601568fd..8125865cef 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -836,6 +836,7 @@ static size_t unmap_area_above_user_limit( void *addr, size_t size )
+  * mmap( NULL ), whose placement region fills after a few hundred MiB, a
+  * reservation can cover the whole low 4 GiB that WoW64 needs. */
+ extern int sceKernelReserveVirtualRange( void **addr, size_t size, int flags, size_t align );
++extern int sceKernelVirtualQuery( const void *addr, int flags, void *info, size_t size );
+ #define PS5_MAP_FIXED        0x10
+ #define PS5_MAP_NO_OVERWRITE 0x80
+ #define PS5_HEAP_RESERVE     0x4000000
+@@ -864,6 +865,29 @@ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
+     ptr = start;
+     if (sceKernelReserveVirtualRange( &ptr, size, PS5_MAP_FIXED | PS5_MAP_NO_OVERWRITE, host_page_size ))
+     {
++        /* The kernel answers ENOMEM (0x8002000c) both for a range another
++         * mapping holds and for one it cannot grant, so the return code
++         * alone does not say which, and the callers below must see EEXIST
++         * for a collision either way. Name the occupant instead, so a log
++         * tells the two apart: a query reporting protection, flags and a
++         * name describes a mapping, while a cleared record covering the
++         * whole request describes a hole, meaning the reservation was
++         * refused rather than blocked. This matters most at a fixed base,
++         * where a title's own image lying across a program's preferred base
++         * is indistinguishable from an exhausted address space. */
++        struct { void *start, *end; int64_t offset; int32_t protection, memory_type;
++                 uint8_t flags; char name[32]; } info;
++        int query;
++
++        memset( &info, 0, sizeof(info) );
++        query = sceKernelVirtualQuery( start, 1, &info, sizeof(info) );
++        if (query || (!info.protection && !info.flags && (char *)info.end >= (char *)start + size))
++            ERR( "reservation refused for %p-%p, which no mapping holds (query %d)\n",
++                 start, (char *)start + size, query );
++        else
++            ERR( "reservation refused for %p-%p: %p-%p is \"%.31s\", protection %#x, flags %#x\n",
++                 start, (char *)start + size, info.start, info.end, info.name,
++                 info.protection, info.flags );
+         errno = EEXIST;
+         return MAP_FAILED;
+     }
