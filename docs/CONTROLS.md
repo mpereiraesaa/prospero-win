@@ -64,6 +64,26 @@ touchpad = space
   - `mouse_left`, `mouse_right` or `mouse_middle`;
   - `none`.
 - **`mouse`:** `left_stick`, `right_stick` or `none`.
+- **`keyboard_stick`:** `left_stick`, `right_stick` or `none`. Some games
+  read the keyboard for movement and cannot be told to use a stick axis, so
+  a stick does nothing in them. This one presses the four direction keys
+  instead, which lets the other stick stay on the pointer:
+
+  ```ini
+  ; the left stick walks (W/A/S/D), the right stick aims
+  keyboard_stick = left_stick
+  mouse = right_stick
+  stick_deadzone = 25
+  ```
+
+- **`stick_up`, `stick_down`, `stick_left`, `stick_right`:** the keys
+  `keyboard_stick` sends, from the same list the buttons use. They default
+  to `w`, `s`, `a` and `d`; set them to the arrows for a game that walks
+  with those instead.
+- **`stick_deadzone`:** how far the stick must be pushed before a key is
+  sent, as a percentage of full deflection, `5` to `70` (default `25`). A
+  direction already held is kept slightly past the release point, so a stick
+  resting on the edge does not tap the key.
 
 `mouse.input` is a starting point for games played with the mouse alone.
 
