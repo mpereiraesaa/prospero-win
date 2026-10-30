@@ -1,0 +1,32 @@
+From: Prospero Win <prospero-win@invalid>
+Subject: [PATCH] gdi32: keep a window's pixel format with a native opengl32
+
+On Windows a window keeps the pixel format it was given first: setting
+the same format again succeeds and another one fails. Wine's builtin
+opengl32 (win32u) does this itself, but gdi32 hands SetPixelFormat to
+whichever opengl32 is loaded, and Mesa's WGL, loaded natively for the
+PS5's Zink path, refuses every second call on a window. Godot 4 sets the
+format of its main window twice, once in window_create and again in
+_create_context, so its OpenGL renderer stopped at "Failed to create an
+OpenGL window". gdi32 now answers a repeated call from the window's
+current format before reaching the driver.
+---
+diff --git a/dlls/gdi32/opengl.c b/dlls/gdi32/opengl.c
+index 0fbd851..2094da1 100644
+--- a/dlls/gdi32/opengl.c
++++ b/dlls/gdi32/opengl.c
+@@ -92,6 +92,14 @@ BOOL WINAPI SetPixelFormat( HDC hdc, INT fmt, const PIXELFORMATDESCRIPTOR *pfd )
+         if (!(wglSetPixelFormat = (void *)GetProcAddress( opengl32, "wglSetPixelFormat" )))
+             return FALSE;
+     }
++    /* As on Windows, a window that already has a pixel format keeps it:
++     * setting the same one again succeeds, another one fails. Wine's own
++     * opengl32 does this itself, but a native one such as Mesa's WGL
++     * refuses any second call, which Godot 4 makes on its main window. */
++    {
++        INT current = GetPixelFormat( hdc );
++        if (current) return current == fmt;
++    }
+     return wglSetPixelFormat( hdc, fmt, pfd );
+ }
+ 

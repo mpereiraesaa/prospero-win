@@ -627,6 +627,7 @@ wine/patches/0878-crypt32-ps5-root-certificates-beside-the-runtime.patch
 wine/ps5/pw_gnutls_libc.c
 wine/patches/0877-secur32-log-gnutls-errors-and-the-clock-on-handshake-failure.patch
 tests/test_build_tls_ps5.py
+wine/patches/0956-gdi32-keep-a-window-s-pixel-format-with-a-native-opengl32.patch
 wine/patches/0957-kernelbase-fall-back-to-the-stored-computer-name.patch
 wine/patches/0965-win32u-ps5-no-pixel-format-message-loop-on-the-desktop.patch
 wine/patches/0970-ntdll-ps5-trace-each-process-query-class-once.patch
