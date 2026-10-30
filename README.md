@@ -7,6 +7,7 @@
   <img src="https://img.shields.io/badge/platform-PlayStation%205-1677E8" alt="Platform: PlayStation 5">
   <img src="https://img.shields.io/badge/status-experimental-orange" alt="Experimental">
   <img src="https://img.shields.io/badge/license-LGPL--2.1--or--later-blue" alt="License: LGPL-2.1-or-later">
+  <a href="https://ko-fi.com/mpereiraesaa"><img src="https://img.shields.io/badge/Ko--fi-buy%20me%20a%20coffee-ff5e5b?logo=ko-fi&logoColor=white" alt="Buy me a coffee on Ko-fi"></a>
 </p>
 
 **prospero-win — Windows gaming on your PS5**
@@ -128,6 +129,15 @@ rules.
 It doesn't bypass DRM or anti-cheat, it doesn't load kernel drivers, and it
 doesn't ship games. Please don't open issues or pull requests with Windows
 binaries, game files or keys.
+
+## Support the project
+
+prospero-win is a hobby project, built and tested in spare time on one
+console. If it got a game running for you and you feel like saying thanks,
+you can [buy me a coffee on Ko-fi](https://ko-fi.com/mpereiraesaa). It is
+never expected, and nothing is locked behind it: every feature stays free
+and open for everyone. Game reports, bug reports and pull requests are just
+as welcome.
 
 ## Credits
 
