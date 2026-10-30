@@ -79,8 +79,9 @@ Useful readings:
 - `cpu_ms` tells a wait from a spin: during a stall, a spinning thread adds
   about 1000 a second, a waiting process almost nothing.
 
-If a stall disappears as soon as you turn on Wine's channels, build the app
-with `PW_WINE64_WAIT_WATCHDOG=1` instead ([what it logs](TELEMETRY.md)).
+If a stall disappears as soon as you turn on Wine's channels, add
+`env = PW_WAIT_WATCHDOG=1` to the game's `[debug]` section, or build the app
+with `PW_WINE64_WAIT_WATCHDOG=1` ([what it logs](TELEMETRY.md)).
 Every two seconds it shows what each thread waits on, in a few lines, so the
 timing barely changes. A thread outside any wait is blocked in host code: the
 snapshot then gives its i386 stack and the lock it waits on, with the lock's
