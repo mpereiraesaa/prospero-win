@@ -581,6 +581,58 @@ static void test_debug_env(void)
            PW_GAME_CPU_ENV_MAX + PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX <= PW_WINE_START_MAX_ENV);
 }
 
+/* keyboard_stick, its dead zone and the four direction keys. */
+static void test_keyboard_stick(void)
+{
+    PwGameProfile p;
+    PwGameInput in;
+    static const char *refused[] = {
+        "keyboard_stick = middle_stick",            /* not a stick */
+        "keyboard_stick = left_stick\nkeyboard_stick = right_stick",  /* twice */
+        "stick_deadzone = 4",                       /* below the range */
+        "stick_deadzone = 71",                      /* above it */
+        "stick_deadzone = left_stick",              /* not a number */
+        "stick_deadzone = 25\nstick_deadzone = 30", /* twice */
+        "stick_up = mouse_left",                    /* a key, not a button */
+    };
+
+    /* Defaults: no stick drives the keys, dead zone 25, WASD. */
+    assert(parse(APP "[input]\nmode = keyboard\n", &p) == PW_OK);
+    assert(p.input.keyboard_stick == PW_GAME_STICK_NONE);
+    assert(p.input.stick_deadzone == 25);
+    assert(p.input.stick_keys[0] == 'W' && p.input.stick_keys[1] == 'S' &&
+           p.input.stick_keys[2] == 'A' && p.input.stick_keys[3] == 'D');
+
+    /* Named stick, dead zone and remapped keys. */
+    assert(parse(APP "[input]\nmode = keyboard\nkeyboard_stick = left_stick\n"
+                     "stick_deadzone = 40\nstick_up = up\nstick_down = down\n"
+                     "stick_left = left\nstick_right = right\n", &p) == PW_OK);
+    assert(p.input.keyboard_stick == PW_GAME_STICK_LEFT);
+    assert(p.input.stick_deadzone == 40);
+    assert(p.input.stick_keys_set == 0xf);
+    assert(p.input.stick_keys[0] != 'W' && p.input.stick_keys[3] != 'D');
+
+    assert(parse(APP "[input]\nkeyboard_stick = right_stick\n", &p) == PW_OK &&
+           p.input.keyboard_stick == PW_GAME_STICK_RIGHT);
+    assert(parse(APP "[input]\nkeyboard_stick = none\n", &p) == PW_OK &&
+           p.input.keyboard_stick == PW_GAME_STICK_NONE);
+
+    for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        char text[2048];
+        snprintf(text, sizeof(text), APP "[input]\n%s\n", refused[i]);
+        assert(parse(text, &p) != PW_OK);
+    }
+
+    /* A shared preset's stick settings, overridden by the profile. */
+    pw_game_input_init(&in);
+    assert(preset("[input]\nkeyboard_stick = right_stick\nstick_deadzone = 60\n", &in) == PW_OK);
+    assert(in.keyboard_stick == PW_GAME_STICK_RIGHT && in.stick_deadzone == 60);
+    assert(parse(APP "[input]\nkeyboard_stick = left_stick\n", &p) == PW_OK);
+    pw_game_input_overlay(&in, &p.input);
+    assert(in.keyboard_stick == PW_GAME_STICK_LEFT);
+    assert(in.stick_deadzone == 60);   /* the profile said nothing, so the preset holds */
+}
+
 int main(void)
 {
     test_graphics_env();
@@ -592,7 +644,8 @@ int main(void)
     test_refusals();
     test_presets();
     test_default_mode();
+    test_keyboard_stick();
     printf("game profile passed: application plus display and input, every binding kind, "
-           "runtime settings and their environment, the CPU backend choice, debug env variables, refusals, shared presets overridden by the profile\n");
+           "runtime settings and their environment, the CPU backend choice, debug env variables, refusals, shared presets overridden by the profile, a stick driving the direction keys\n");
     return 0;
 }

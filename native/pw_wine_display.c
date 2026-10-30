@@ -95,6 +95,53 @@ size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t 
     return add_edges(input, pressed, 1, out, used, max);
 }
 
+enum { KEY_STICK_UP = 1u << 0, KEY_STICK_DOWN = 1u << 1,
+       KEY_STICK_LEFT = 1u << 2, KEY_STICK_RIGHT = 1u << 3 };
+
+static int stick_direction(uint8_t value, int negative, int was_held, unsigned deadzone)
+{
+    /* Five raw stick counts of hysteresis keep a noisy axis from tapping the
+     * key repeatedly at the edge of its dead zone. */
+    int threshold = (int)(127u * deadzone / 100u);
+    int delta = (int)value - 128;
+    if (negative) return delta < -(threshold - (was_held ? 5 : 0));
+    return delta > threshold - (was_held ? 5 : 0);
+}
+
+size_t pw_wine_keyboard_stick_step(const PwGameInput *input, uint8_t stick_x, uint8_t stick_y,
+                                  int connected, PwWineKeyboardStick *state,
+                                  PwWineInput *out, size_t max)
+{
+    static const uint8_t bits[4] = { KEY_STICK_UP, KEY_STICK_DOWN, KEY_STICK_LEFT, KEY_STICK_RIGHT };
+    uint8_t wanted = 0, previous;
+    size_t used = 0;
+
+    if (!input || !state || !out) return 0;
+    previous = state->held;
+    if (connected && input->keyboard_stick != PW_GAME_STICK_NONE) {
+        if (stick_direction(stick_y, 1, !!(previous & KEY_STICK_UP), input->stick_deadzone))
+            wanted |= KEY_STICK_UP;
+        if (stick_direction(stick_y, 0, !!(previous & KEY_STICK_DOWN), input->stick_deadzone))
+            wanted |= KEY_STICK_DOWN;
+        if (stick_direction(stick_x, 1, !!(previous & KEY_STICK_LEFT), input->stick_deadzone))
+            wanted |= KEY_STICK_LEFT;
+        if (stick_direction(stick_x, 0, !!(previous & KEY_STICK_RIGHT), input->stick_deadzone))
+            wanted |= KEY_STICK_RIGHT;
+    }
+    /* Release first so a direct direction reversal cannot momentarily hold
+     * both keys. The caller reserves room for all four transitions. */
+    for (size_t i = 0; i < 4 && used < max; i++) {
+        if ((previous & bits[i]) && !(wanted & bits[i]))
+            out[used++] = (PwWineInput){ PW_WINE_INPUT_KEY, input->stick_keys[i], 0, 0, 0 };
+    }
+    for (size_t i = 0; i < 4 && used < max; i++) {
+        if (!(previous & bits[i]) && (wanted & bits[i]))
+            out[used++] = (PwWineInput){ PW_WINE_INPUT_KEY, input->stick_keys[i], 0, 0, 1 };
+    }
+    state->held = wanted;
+    return used;
+}
+
 static const struct { uint32_t dualsense; uint16_t xinput; } pad_buttons[] = {
     { 0x4000u, 0x1000u }, { 0x2000u, 0x2000u }, { 0x8000u, 0x4000u }, { 0x1000u, 0x8000u },
     { 0x400u, 0x0100u }, { 0x800u, 0x0200u }, { 0x2u, 0x0040u }, { 0x4u, 0x0080u },

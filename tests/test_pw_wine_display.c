@@ -326,6 +326,55 @@ static void test_script_pad(void)
     }
 }
 
+/* keyboard_stick: one stick drives the four direction keys. Deadzone 25 of
+ * 127 counts gives a threshold of 31, with five counts of hysteresis once a
+ * direction is held, and a release is emitted before the opposite press. */
+static void test_keyboard_stick(void)
+{
+    PwWineKeyboardStick state = { 0 };
+    PwWineInput out[4];
+    PwGameInput in;
+
+    pw_game_input_init(&in);
+    in.keyboard_stick = PW_GAME_STICK_LEFT;
+    in.stick_deadzone = 25;                       /* threshold 31 */
+
+    /* Centred: nothing held, nothing emitted. */
+    assert(pw_wine_keyboard_stick_step(&in, 0x80, 0x80, 1, &state, out, 4) == 0);
+    assert(state.held == 0);
+
+    /* Inside the dead zone stays silent; past it presses the up key (W). */
+    assert(pw_wine_keyboard_stick_step(&in, 0x80, 128 - 31, 1, &state, out, 4) == 0);
+    assert(pw_wine_keyboard_stick_step(&in, 0x80, 0x00, 1, &state, out, 4) == 1);
+    assert(out[0].type == PW_WINE_INPUT_KEY && out[0].code == 'W' && out[0].down == 1);
+
+    /* Hysteresis: held needs only threshold-5 to stay down, so a value that
+     * would not have pressed it does not release it either. */
+    assert(pw_wine_keyboard_stick_step(&in, 0x80, 128 - 28, 1, &state, out, 4) == 0);
+    assert(state.held != 0);
+
+    /* Reversing emits the release before the opposite press, so the title
+     * never sees both directions held in one tick. */
+    assert(pw_wine_keyboard_stick_step(&in, 0x80, 0xff, 1, &state, out, 4) == 2);
+    assert(out[0].code == 'W' && out[0].down == 0);
+    assert(out[1].code == 'S' && out[1].down == 1);
+
+    /* A disconnected pad releases what it was holding. */
+    assert(pw_wine_keyboard_stick_step(&in, 0x80, 0xff, 0, &state, out, 4) == 1);
+    assert(out[0].code == 'S' && out[0].down == 0 && state.held == 0);
+
+    /* Without the setting the stick drives no keys at all. */
+    in.keyboard_stick = PW_GAME_STICK_NONE;
+    assert(pw_wine_keyboard_stick_step(&in, 0x80, 0x00, 1, &state, out, 4) == 0);
+
+    /* Both axes at once, and the refusals. */
+    in.keyboard_stick = PW_GAME_STICK_LEFT;
+    assert(pw_wine_keyboard_stick_step(&in, 0x00, 0x00, 1, &state, out, 4) == 2);
+    assert(!pw_wine_keyboard_stick_step(NULL, 0, 0, 1, &state, out, 4));
+    assert(!pw_wine_keyboard_stick_step(&in, 0, 0, 1, NULL, out, 4));
+    assert(!pw_wine_keyboard_stick_step(&in, 0, 0, 1, &state, NULL, 4));
+}
+
 int main(void)
 {
     test_frames();
@@ -333,10 +382,11 @@ int main(void)
     test_inputs();
     test_pointer();
     test_pointer_fraction();
+    test_keyboard_stick();
     test_pad();
     test_script_pad();
     printf("wine display passed: frame box copy, newest frame, refusals, concurrent put/take, "
-           "profile bindings to keys and mouse buttons, stick pointer, resized frames, "
+           "profile bindings to keys and mouse buttons, stick pointer, a stick driving the direction keys, resized frames, "
            "DualSense as XInput, scripted controller added to it\n");
     return 0;
 }
