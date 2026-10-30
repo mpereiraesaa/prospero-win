@@ -136,6 +136,7 @@ before evaluating a candidate built from that cache.
 | 0974 | `ntdll`: outside images, a page made read-only or inaccessible takes writing, or all access, away from its whole 16 KiB host page, so touching it faults as on Windows; the host page used to get the union of its pages' protections, and a write to a protected page beside a writable one raised nothing (DuckStation then ran stale recompiled code). An access that faults only because of such a neighbour is single-stepped with the host page open for that one instruction, unseen by the program. On a PC, `WINE_HOST_PAGE_SIZE=16384` keeps 16 KiB host pages to run this scheme (`tests/test_wine_subpage_protect.py`) |
 | 0981 | `win32u`: the builtin window classes are registered without a `pthread_once`. Its body takes the loader lock (cursors through a user32 callback, then user32 loads `uxtheme.dll`), so a thread creating its first window under the loader lock waited forever for a thread inside the once that waited for the loader lock. Now each thread registers the classes still missing (looking up one another thread registered first) and the first one runs user32's part. Source games hung at startup this way: `vgui2.dll`'s static initializer calls `OleInitialize` in its DllMain while another thread created its first window |
 | 0982 | `ntdll`: the high reserved area at `0x1000000000` (0600) is as large as the kernel grants: 512 GiB first, halved down to 16 GiB, each try within the address space limits `map_view` honors, and reserved before the view heap's 64 MiB so the kernel cannot place that one inside the range. A 64-bit game's reservation of tens of GiB (Red Dead Redemption 2: 28 GiB, Cyberpunk 2077: 16 GiB, Fellowship: 48 GiB, a .NET runtime: 256 GiB) no longer falls through to `mmap( NULL )`, which the console refuses (`map_view anon mmap error Cannot allocate memory, size 700010000`). `PW_PS5_HIGH_RESERVE_GB` gives the first size tried (0 keeps the single 16 GiB reservation); one `wine-ps5: address space:` line at startup reports the host and user limits and the area granted. The page protection table's leaves (1 MiB per 4 GiB of views) come from the Unix heap, in direct memory, instead of flexible memory |
+| 0984 | `win32u`: when the title's gamepad connects or disconnects (`pw_wine_pad_changes`, which also wakes the input fd), the PS5 user driver posts `WM_DEVICECHANGE` with `DBT_DEVNODES_CHANGED` to the top-level windows, as Windows does through the plug and play service a title cannot run. Some games only look for a lost XInput controller again when told (Unreal Engine 4); see [XInput controller](#xinput-controller) |
 | 0986 | `ntdll`: accesses that 0974 steps over beside a protected page are counted, reads too. When a host page has had 256 of them, a write beside a read-only page is still reported there, and any other access gives the host page the union of its pages' protections, as before 0974, until a protection in it changes. Beside an inaccessible page nothing ended the stepping: Unity's Mono garbage collector (Darkwood) took about 13,000 steps a second and ran at 5 fps |
 
 ## Allocator
@@ -634,6 +635,13 @@ the title's DualSense instead:
   game polling all four every frame crosses to the Unix side for controller
   0 alone. `pw_wine_set_pad` and the other unnumbered calls are controller
   0's.
+- The title keeps controller 0 connected, with nothing pressed, while the
+  system overlay has the DualSense (the PS or Create button), as a PS5
+  game keeps its pad. A DualSense that turns off disconnects it. Each time
+  any controller connects or disconnects, the sink counts it and wakes the
+  driver, which posts `WM_DEVICECHANGE` (`DBT_DEVNODES_CHANGED`) to the
+  game's windows (patch 0984): some games look for a lost controller again
+  only then.
 - The PRX stage links `xinput1_3.prx`. Its descriptor exports
   `__wine_unix_call_funcs` and `__wine_unix_call_wow64_funcs`, and it
   imports ntdll's `dlsym`, like `wowprospero.prx`.

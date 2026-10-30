@@ -422,7 +422,7 @@ if [ "$prx_status" = 0 ]; then
         pw_wine_set_present_sink pw_wine_post_input pw_wine_sink_stats \
         pw_wine_present pw_wine_next_input pw_wine_input_fd \
         pw_wine_set_pad pw_wine_rumble pw_wine_pad pw_wine_set_rumble pw_wine_set_menu pw_wine_menu \
-        pw_wine_set_pad_at pw_wine_rumble_at pw_wine_pad_at pw_wine_set_rumble_at pw_wine_pads_wanted \
+        pw_wine_set_pad_at pw_wine_rumble_at pw_wine_pad_at pw_wine_set_rumble_at pw_wine_pads_wanted pw_wine_pad_changes \
         pw_wine_set_audio_sink pw_wine_audio_available pw_wine_audio_output \
         __wine_virtual_stats __wine_virtual_fault_top __wine_ps5_set_output_sink __wine_ps5_memory_stats pw_cwd_set \
         __wine_ps5_set_segv_hook __wine_ps5_set_segv_unresolved_hook pw_wine_set_display_release pw_wine_release_display \

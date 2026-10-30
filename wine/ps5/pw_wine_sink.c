@@ -18,6 +18,7 @@ static PwWineSinkStats stats;
 static pthread_once_t wake_once=PTHREAD_ONCE_INIT;
 static int wake[2]={-1,-1};
 static PwWinePad pad_state[PW_WINE_PADS];
+static uint32_t pad_changes;
 static uint32_t rumble_left[PW_WINE_PADS],rumble_right[PW_WINE_PADS],rumble_changed[PW_WINE_PADS];
 static uint32_t pads_wanted;
 static struct pw_title_menu menu_state={.version=PW_TITLE_MENU_VERSION};
@@ -42,6 +43,13 @@ int pw_wine_input_fd(void)
 {
     pthread_once(&wake_once,create_wake_pipe);
     return wake[0];
+}
+/* A full pipe is already readable: nothing is lost. */
+static void wake_driver(void)
+{
+    char byte=1;
+    pthread_once(&wake_once,create_wake_pipe);
+    if(wake[1]!=-1 && write(wake[1],&byte,1)<0){}
 }
 
 void pw_wine_set_present_sink(PwWinePresentSink new_sink,void *context)
@@ -113,12 +121,7 @@ int pw_wine_post_input(const PwWineInput *event)
     }
     else stats.inputs_dropped++;
     pthread_mutex_unlock(&lock);
-    if(!status) {
-        char byte=1;
-        pthread_once(&wake_once,create_wake_pipe);
-        /* a full pipe is already readable: nothing is lost */
-        if(wake[1]!=-1 && write(wake[1],&byte,1)<0){}
-    }
+    if(!status)wake_driver();
     return status;
 }
 int pw_wine_next_input(PwWineInput *event)
@@ -178,9 +181,12 @@ static int same_pad(const PwWinePad *a,const PwWinePad *b)
 }
 void pw_wine_set_pad_at(uint32_t index,const PwWinePad *pad)
 {
+    int changed;
     if(index>=PW_WINE_PADS)return;
     PwWinePad *state=&pad_state[index];
     pthread_mutex_lock(&lock);
+    changed=(pad!=NULL)!=(state->connected!=0);
+    if(changed)__atomic_add_fetch(&pad_changes,1,__ATOMIC_RELAXED);
     if(!pad)state->connected=0;
     else if(!state->connected || !same_pad(pad,state)) {
         uint32_t packet=state->packet+1;
@@ -188,6 +194,12 @@ void pw_wine_set_pad_at(uint32_t index,const PwWinePad *pad)
         state->packet=packet?packet:1;   /* 0 is never a packet */
     }
     pthread_mutex_unlock(&lock);
+    if(changed)wake_driver();   /* the driver tells the game's windows */
+}
+/* No lock: the driver asks at every ProcessEvents. */
+uint32_t pw_wine_pad_changes(void)
+{
+    return __atomic_load_n(&pad_changes,__ATOMIC_RELAXED);
 }
 void pw_wine_set_pad(const PwWinePad *pad){pw_wine_set_pad_at(0,pad);}
 int pw_wine_pad_at(uint32_t index,PwWinePad *pad)

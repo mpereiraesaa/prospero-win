@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Fri, 23 Oct 2026 12:00:00 +0200
+Subject: [PATCH] win32u: Tell windows when a PS5 title's controller comes or
+ goes.
+
+A PS5 title cannot run the plug and play service (patch 0550), which
+tells every top-level window that devices changed (WM_DEVICECHANGE with
+DBT_DEVNODES_CHANGED) when one is added or removed. Some games only look
+for a lost XInput controller again when told: an Unreal Engine 4 game
+whose controller went off kept it lost after it came back.
+
+The title counts each time its gamepad connects or disconnects
+(pw_wine_pad_changes) and wakes the driver's input fd. ProcessEvents
+then posts WM_DEVICECHANGE with DBT_DEVNODES_CHANGED to the top-level
+windows, once for any number of changes since it last looked. Without
+the title's call, as anywhere but in a title, nothing changes.
+---
+ dlls/win32u/ps5drv.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
+index 78f0839..cc63480 100644
+--- a/dlls/win32u/ps5drv.c
++++ b/dlls/win32u/ps5drv.c
+@@ -51,6 +51,7 @@
+ #include "ntstatus.h"
+ #include "ntgdi_private.h"
+ #include "ntuser_private.h"
++#include "dbt.h"
+ #include "wine/server.h"
+ #include "wine/debug.h"
+ #ifdef SONAME_LIBVULKAN
+@@ -83,6 +84,7 @@ struct ps5_window
+ static int (*present_frame)( const void *bgra, UINT width, UINT height, UINT stride );
+ static int (*next_input)( struct ps5_input *input );
+ static int (*input_fd)(void);
++static UINT32 (*pad_changes)(void);
+ 
+ static pthread_mutex_t screen_lock = PTHREAD_MUTEX_INITIALIZER;
+ static UINT screen_width = 800, screen_height = 600;
+@@ -585,6 +587,23 @@ static BOOL is_extended_key( WORD vk )
+     return FALSE;
+ }
+ 
++/* The title's gamepad connected or disconnected since the last look
++ * (pw_wine_pad_changes). Windows then tells every top-level window that
++ * devices changed, through the plug and play service a title cannot run.
++ * Some games (Unreal Engine 4) only look for a lost XInput controller
++ * again when told. */
++static void notify_pad_changes(void)
++{
++    static UINT32 seen;
++    UINT32 changes;
++
++    if (!pad_changes) return;
++    changes = pad_changes();
++    if (__atomic_exchange_n( &seen, changes, __ATOMIC_RELAXED ) == changes) return;
++    TRACE( "gamepad connected or disconnected (%u): WM_DEVICECHANGE\n", changes );
++    NtUserPostMessage( HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0 );
++}
++
+ static BOOL ps5_ProcessEvents( DWORD mask )
+ {
+     static const DWORD button_flags[3][2] =
+@@ -638,6 +657,7 @@ static BOOL ps5_ProcessEvents( DWORD mask )
+             break;
+         }
+     }
++    notify_pad_changes();
+     /* The wake pipe is every GUI thread's queue fd, so a byte sets QS_DRIVER
+      * on all their queues while one of them drains it and takes the events;
+      * a byte can also come after its event was taken here. Either way this
+@@ -984,6 +1004,7 @@ void ps5_install_user_driver(void)
+     present_frame = dlsym( RTLD_DEFAULT, "pw_wine_present" );
+     next_input = dlsym( RTLD_DEFAULT, "pw_wine_next_input" );
+     input_fd = dlsym( RTLD_DEFAULT, "pw_wine_input_fd" );
++    pad_changes = dlsym( RTLD_DEFAULT, "pw_wine_pad_changes" );
+ #ifdef SONAME_LIBVULKAN
+     release_display = dlsym( RTLD_DEFAULT, "pw_wine_release_display" );
+ #endif

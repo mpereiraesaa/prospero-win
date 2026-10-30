@@ -12,7 +12,8 @@
  * fills from the DualSense and the driver drains in ProcessEvents. A
  * game's XInput controller is one more slot: the title keeps the newest
  * gamepad state in it, Wine's xinput reads it (its Unix library, patch
- * 0470, finds these calls with dlsym) and leaves the rumble it asks for.
+ * 0470, finds these calls with dlsym) and leaves the rumble it asks for;
+ * the driver tells the game's windows when it comes or goes (patch 0984).
  * The title's in-game menu is another slot: the title stores what to draw
  * and ntdll hands it to the game's renderer (menu/pw_title_menu.h).
  * A game that presents with Vulkan scans out itself (patch 0460): the
@@ -109,6 +110,11 @@ int pw_wine_pad(PwWinePad *pad);
 /* The newest menu snapshot; a closed menu reads as zeros apart from
  * version and sequence. */
 void pw_wine_menu(struct pw_title_menu *menu);
+
+/* How many times a controller (any slot) connected or disconnected. Each time also
+ * wakes the input fd, so the driver can tell the game's windows that a
+ * device came or went (WM_DEVICECHANGE), as Windows does. */
+uint32_t pw_wine_pad_changes(void);
 /* The rumble a game asked for (XInputSetState); speeds are clamped. */
 void pw_wine_set_rumble(uint32_t left,uint32_t right);
 int pw_wine_pad_at(uint32_t index,PwWinePad *pad);
