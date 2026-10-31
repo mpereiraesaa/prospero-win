@@ -7,6 +7,7 @@ prefix: wineboot writes the registry files, regedit appends its .reg, and an
 installer .exe runs the shell script beside it."""
 from __future__ import annotations
 
+import configparser
 import hashlib
 import io
 import json
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -273,6 +275,114 @@ def check_dxvk_releases() -> None:
             raise AssertionError(f"dxvk_version {version!r} should not resolve")
 
 
+def fake_reshade_setup(path: Path) -> str:
+    """A ReShade setup as reshade.me serves it: an .exe with a zip appended."""
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("ReShade32.dll", b"reshade-32")
+        archive.writestr("ReShade64.dll", b"reshade-64")
+        archive.writestr("ReShade32.json", b"{}")
+    path.write_bytes(b"MZ the .NET installer itself" + payload.getvalue())
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+RESHADE_WINE = '''    dxvk: true
+    dxvk_version: "9.9"
+    overrides: {ddraw.dll: n}
+    reshade: true
+    reshade_version: "9.9"
+    reshade_api: d3d9
+    reshade_config:
+      GENERAL: {PresetPath: '.\\Presets\\My Look.ini', PreprocessorDefinitions: RESHADE_DEPTH_INPUT_IS_REVERSED=1}
+      DEPTH: {DepthCopyBeforeClears: 1}
+'''
+# The preset, and the ReShade.ini a preset archive brings along, which the
+# installer replaces.
+RESHADE_STEPS = r'''  - write_file: {file: "$GAMEDIR/drive_c/Games/Test/Presets/My Look.ini", content: "Techniques=Bloom@Bloom.fx\n"}
+  - write_file: {file: $GAMEDIR/drive_c/Games/Test/ReShade.ini, content: "[ADDON]\nAddonPath=I:\\Games\\Theirs\\\n"}
+'''
+
+
+def check_reshade(root: Path, wine: Path, setup: Path, log: Path) -> None:
+    url, digest = pw_install.reshade_release("6.7.3")
+    assert url == "https://reshade.me/downloads/ReShade_Setup_6.7.3.exe"
+    assert re.fullmatch(r"[0-9a-f]{64}", digest)
+    try:
+        pw_install.reshade_release("6.0")
+    except pw_install.InstallError as error:
+        assert "reshade_version 6.0 is not pinned" in str(error)
+    else:
+        raise AssertionError("an unpinned ReShade should not resolve")
+    pw_install.RESHADE_RELEASES["9.9"] = ("file:///unused/ReShade_Setup_9.9.exe",
+                                          fake_reshade_setup(pw_install.DOWNLOADS / "ReShade_Setup_9.9.exe"))
+    # winetricks installs Microsoft's compiler; this one only says it ran.
+    winetricks = pw_install.DOWNLOADS / "winetricks-9.9"
+    winetricks.write_text('echo "winetricks $*" >> "$FAKE_LOG"\n')
+    pw_install.WINETRICKS = ("9.9", "file:///unused/winetricks",
+                             hashlib.sha256(winetricks.read_bytes()).hexdigest())
+    script_text = SCRIPT.replace('''    dxvk: true
+    dxvk_version: "9.9"
+    overrides: {ddraw.dll: n}
+''', RESHADE_WINE).replace("  - write_config:", RESHADE_STEPS + "  - write_config:", 1)
+    library = root / "reshade-library"
+
+    def install(slug: str, text: str) -> int:
+        script = root / f"{slug}.yml"
+        script.write_text(text)
+        return pw_install.main([str(script), "--library", str(library), "--wine", str(wine),
+                                "--slug", slug, "--file", f"setup={setup}", "--input", "LANG=en"])
+
+    log.write_text("")
+    assert install("reshade-game", script_text) == 0
+    prefix = library / "prefixes" / "reshade-game"
+    game = prefix / "drive_c/Games/Test"
+    # The 32-bit build for a 32-bit game, under the API's name.
+    assert (game / "d3d9.dll").read_bytes() == b"reshade-32"
+    assert "winetricks -q d3dcompiler_47" in log.read_text()
+    config = configparser.RawConfigParser()
+    config.optionxform = str
+    config.read(game / "ReShade.ini")
+    assert config.get("GENERAL", "PresetPath") == ".\\Presets\\My Look.ini"
+    assert config.get("GENERAL", "PreprocessorDefinitions") == "RESHADE_DEPTH_INPUT_IS_REVERSED=1"
+    assert config.get("GENERAL", "EffectSearchPaths") == ".\\reshade-shaders\\Shaders\\**"
+    assert config.get("GENERAL", "SkipLoadingDisabledEffects") == "1"
+    assert config.get("GENERAL", "PerformanceMode") == "1"
+    assert config.get("GENERAL", "IntermediateCachePath") == ".\\reshade-cache"
+    assert config.get("DEPTH", "DepthCopyBeforeClears") == "1"
+    assert config.get("OVERLAY", "TutorialProgress") == "4"
+    assert not config.has_section("ADDON")
+    assert (game / "reshade-cache").is_dir()
+    registry = (prefix / "user.reg").read_text()
+    assert '"d3d9"="native"' in registry and '"d3dcompiler_47"="native"' in registry
+    assert '"ProxyServer"="127.0.0.1:9"' in registry and '"ProxyEnable"=dword:00000001' in registry
+    profile = (library / "profiles" / "reshade-game.profile").read_text()
+    assert "dll_overrides = d3d8,d3d9,d3d10core,d3d11,dxgi,d3dcompiler_47,ddraw=n" in profile.splitlines(), profile
+
+    # A 64-bit game gets the 64-bit build.
+    (root / "setup64.exe").write_bytes(pe(64))
+    (root / "setup64.exe.sh").write_text((root / "setup.exe.sh").read_text().replace(str(setup), str(root / "setup64.exe")))
+    script64 = root / "reshade-64.yml"
+    script64.write_text(script_text)
+    assert pw_install.main([str(script64), "--library", str(library), "--wine", str(wine), "--slug", "reshade-64",
+                            "--file", f"setup={root / 'setup64.exe'}", "--input", "LANG=en"]) == 0
+    assert (library / "prefixes/reshade-64/drive_c/Games/Test/d3d9.dll").read_bytes() == b"reshade-64"
+
+    # reshade_update_check leaves the prefix's network settings alone.
+    assert install("reshade-online", script_text.replace("    reshade_api: d3d9\n",
+                                                         "    reshade_api: d3d9\n    reshade_update_check: true\n")) == 0
+    assert "ProxyServer" not in (library / "prefixes/reshade-online/user.reg").read_text()
+
+    # Refused: no API, an API ReShade does not load as, an unpinned version, a
+    # preset the recipe names but did not install, a section that is not one.
+    for slug, old, new in (("no-api", "    reshade_api: d3d9\n", ""),
+                           ("bad-api", "reshade_api: d3d9", "reshade_api: opengl32"),
+                           ("bad-version", 'reshade_version: "9.9"', 'reshade_version: "0.1"'),
+                           ("no-preset", "My Look.ini', Pre", "Missing.ini', Pre"),
+                           ("bad-section", "DEPTH: {DepthCopyBeforeClears: 1}", "DEPTH: 1")):
+        assert old in script_text, slug
+        assert install(slug, script_text.replace(old, new)) == 1, slug
+
+
 def main() -> int:
     check_dxvk_releases()
     check_mesa()
@@ -479,6 +589,8 @@ def main() -> int:
             bad = root / "bad.yml"
             bad.write_text(text)
             assert pw_install.main([str(bad), "--library", str(root / "badlib"), "--wine", str(wine)]) == 1
+
+        check_reshade(root, wine, setup, log)
 
         # A Wine without a wineserver beside it is refused up front.
         (root / "lonely").mkdir()

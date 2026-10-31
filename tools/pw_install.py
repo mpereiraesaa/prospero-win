@@ -32,6 +32,14 @@ d3d12core go into the same folders, set native. It draws through DXVK's
 dxgi, so it needs the dxvk backend. Whether the console's Vulkan driver has
 everything it asks for is not settled: this only installs the DLLs.
 
+ReShade, the post-processing injector, is ours, not Lutris's
+(`wine: {reshade: true, reshade_version: 6.7.3, reshade_api: d3d9}`): the
+official build, pinned by hash, goes beside the game's exe under the name of
+the API it draws with, and loads the prefix's own DLL of that name (DXVK's)
+underneath. Under Wine it needs Microsoft's shader compiler, which winetricks
+installs. It gets a ReShade.ini meant for the console, which `reshade_config`
+(sections of keys) can change: see RESHADE_CONFIG and docs/INSTALLING_GAMES.md.
+
 Usage:
     pw_install.py SCRIPT.yml --library DIR --wine PATH [--file ID=PATH ...]
         [--input ID=VALUE ...] [--mesa-zink DIR] [--disc DIR] [--resolution WxH] [--keep-cache]
@@ -94,6 +102,45 @@ VKD3D_PROTON_RELEASES = {
               "3cf2315522af5e43605ef6d3c41dad91387040bf97199934f3f7ab76caaa2f0c"),
 }
 VKD3D_PROTON_DLLS = ("d3d12", "d3d12core")
+# ReShade (https://github.com/crosire/reshade): the official setup from
+# reshade.me, a .NET installer that carries ReShade32.dll and ReShade64.dll
+# in a zip appended to it.
+RESHADE_RELEASES = {
+    "6.7.3": ("https://reshade.me/downloads/ReShade_Setup_6.7.3.exe",
+              "56791fd065358e899c581ebefe2ad871399b7c7ae83fb85e1154c08a75a44147"),
+}
+# The names ReShade loads under, by the API the game draws with: d3d9 for
+# Direct3D 9, dxgi for 10 to 12. It then loads the system DLL of that name,
+# which DXVK's is in a dxvk prefix, and draws on what that one presents.
+RESHADE_APIS = ("d3d9", "dxgi")
+# ReShade.ini for the console. ReShade otherwise compiles every effect in its
+# search paths at start, a few hundred in a big shader pack, with the
+# console's translated CPU; here only the preset's (SkipLoadingDisabledEffects),
+# with their settings built in as constants (PerformanceMode, which the
+# overlay can turn off to edit them). Compiled shaders go in the game's own
+# folder (IntermediateCachePath, a relative path is the exe's folder), so
+# running the game once on the PC before pushing leaves nothing to compile on
+# the console. No tutorial and no FPS counter. A recipe's reshade_config
+# changes any of it.
+RESHADE_CONFIG = {
+    "GENERAL": {"EffectSearchPaths": ".\\reshade-shaders\\Shaders\\**",
+                "TextureSearchPaths": ".\\reshade-shaders\\Textures\\**",
+                "PresetPath": ".\\ReShadePreset.ini",
+                "IntermediateCachePath": ".\\reshade-cache",
+                "SkipLoadingDisabledEffects": "1", "PerformanceMode": "1", "NoDebugInfo": "1"},
+    "OVERLAY": {"TutorialProgress": "4", "ShowFPS": "0", "ShowClock": "0", "ShowFrameTime": "0"},
+    "SCREENSHOT": {"SavePath": ".\\screenshots"},
+}
+# ReShade asks GitHub for its latest version at every start, on the render
+# thread, with nothing in ReShade.ini to stop it. The console has DNS and TLS,
+# so that is a lookup and a handshake each time, and up to 15 s on a network
+# that does not answer. The prefix's wininet is pointed at a proxy that
+# refuses (nothing listens on the discard port), so the check fails at once;
+# reshade_update_check: true leaves the prefix's network settings alone.
+RESHADE_OFFLINE = ["[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings]",
+                   '"ProxyEnable"=dword:00000001', '"ProxyServer"="127.0.0.1:9"', '"ProxyOverride"=""']
+# reshade.me refuses Python's default User-Agent.
+USER_AGENT = "prospero-win-pw_install"
 ZSTD_MAGIC = bytes.fromhex("28b52ffd")
 WINETRICKS = ("20260125", "https://raw.githubusercontent.com/Winetricks/winetricks/20260125/src/winetricks",
               "431f82fc74000e6c864409f1d8fb495d696c03928808e3e8acffc45179312a7b")
@@ -130,6 +177,13 @@ def vkd3d_proton_release(version: str) -> tuple[str, str]:
     if version not in VKD3D_PROTON_RELEASES:
         raise InstallError(f"vkd3d_version {version} is not pinned (known: {sorted(VKD3D_PROTON_RELEASES)})")
     return VKD3D_PROTON_RELEASES[version]
+
+
+def reshade_release(version: str) -> tuple[str, str]:
+    """The pinned URL and SHA-256 of a ReShade setup."""
+    if version not in RESHADE_RELEASES:
+        raise InstallError(f"reshade_version {version} is not pinned (known: {sorted(RESHADE_RELEASES)})")
+    return RESHADE_RELEASES[version]
 
 
 def open_release_tar(archive: Path) -> tarfile.TarFile:
@@ -180,7 +234,8 @@ def fetch(url: str, sha256: str, name: str, directory: Path | None = None) -> Pa
     if not path.is_file():
         directory.mkdir(parents=True, exist_ok=True)
         log(f"downloading {url}")
-        with urllib.request.urlopen(url) as response, open(f"{path}.part", "wb") as out:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(request) as response, open(f"{path}.part", "wb") as out:
             shutil.copyfileobj(response, out)
         os.replace(f"{path}.part", path)
     if hashlib.sha256(path.read_bytes()).hexdigest() != sha256:
@@ -383,6 +438,11 @@ class Installer:
         self.dxvk_version = str(wine_section.get("dxvk_version", "2.6.2"))
         self.vkd3d = wine_section.get("vkd3d", False)
         self.vkd3d_version = str(wine_section.get("vkd3d_version", "3.0.1"))
+        self.reshade = wine_section.get("reshade", False)
+        self.reshade_version = str(wine_section.get("reshade_version", "6.7.3"))
+        self.reshade_api = wine_section.get("reshade_api")
+        self.reshade_config = wine_section.get("reshade_config") or {}
+        self.reshade_update_check = bool(wine_section.get("reshade_update_check", False))
 
     # --- variables and paths --------------------------------------------
     def expand(self, value):
@@ -688,12 +748,65 @@ class Installer:
         log(f"vkd3d-proton {self.vkd3d_version} installed in the prefix")
         return list(VKD3D_PROTON_DLLS)
 
+    def game_exe(self) -> Path:
+        game = self.script.get("game") or {}
+        if not game.get("exe"):
+            raise InstallError("the script's game section names no exe")
+        exe = Path(self.expand(game["exe"]))
+        return exe if exe.is_absolute() else self.gamedir / exe
+
+    def install_reshade(self) -> list[str]:
+        if not self.reshade:
+            return []
+        if self.reshade_api not in RESHADE_APIS:
+            raise InstallError(f"wine.reshade_api: one of {list(RESHADE_APIS)}, the API the game draws with")
+        exe = self.game_exe()
+        if not exe.is_file():
+            raise InstallError(f"the game's exe {exe} was not installed")
+        url, digest = reshade_release(self.reshade_version)
+        setup = fetch(url, digest, f"ReShade_Setup_{self.reshade_version}.exe")
+        bits = "32" if pe_architecture(exe) == "pe32" else "64"
+        with zipfile.ZipFile(setup) as payload:
+            (exe.parent / f"{self.reshade_api}.dll").write_bytes(payload.read(f"ReShade{bits}.dll"))
+        # ReShade compiles its effects to HLSL for D3DCompiler_47 to build,
+        # and under Wine skips the system one, whose builtin lacks what it
+        # needs (dll_main.cpp): Microsoft's, which winetricks sets native.
+        self.task({"name": "winetricks", "app": "d3dcompiler_47"})
+        config = configparser.RawConfigParser(strict=False, interpolation=None)
+        config.optionxform = str
+        for section, values in [*RESHADE_CONFIG.items(), *self.reshade_config.items()]:
+            if not isinstance(values, dict):
+                raise InstallError(f"wine.reshade_config.{section}: a section of keys")
+            if not config.has_section(section):
+                config.add_section(section)
+            for key, value in values.items():
+                config.set(section, str(key), str(value))
+        def beside_exe(value: str) -> Path | None:
+            """A .\\ path in ReShade.ini, which ReShade takes from its DLL's folder."""
+            return exe.parent.joinpath(*PureWindowsPath(value[2:]).parts) if value.startswith(".\\") else None
+        preset = config.get("GENERAL", "PresetPath")
+        if "PresetPath" in (self.reshade_config.get("GENERAL") or {}):
+            path = beside_exe(preset)
+            if path is None or not path.is_file():
+                raise InstallError(f"ReShade's preset {preset} is not in {exe.parent}")
+        cache = beside_exe(config.get("GENERAL", "IntermediateCachePath"))
+        if cache:
+            cache.mkdir(parents=True, exist_ok=True)
+        # A ReShade.ini a preset brought along is replaced: theirs names
+        # folders on the PC it was made on.
+        with open(exe.parent / "ReShade.ini", "w", encoding="utf-8") as out:
+            config.write(out, space_around_delimiters=False)
+        self.regedit(["[HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides]",
+                      f'"{self.reshade_api}"="native"', '"d3dcompiler_47"="native"'], None)
+        if not self.reshade_update_check:
+            self.regedit(RESHADE_OFFLINE, None)
+        log(f"ReShade {self.reshade_version} installed as {exe.parent / self.reshade_api}.dll")
+        return [self.reshade_api, "d3dcompiler_47"]
+
     def install_mesa_zink(self) -> None:
         if self.graphics_mode() != "opengl":
             return
-        game = self.script.get("game") or {}
-        exe = Path(self.expand(game.get("exe", "")))
-        exe = exe if exe.is_absolute() else self.gamedir / exe
+        exe = self.game_exe()
         arch = "i386-windows" if pe_architecture(exe) == "pe32" else "x86_64-windows"
         destination = self.gamedir / "drive_c/windows" / ("syswow64" if arch == "i386-windows" else "system32")
         if not destination.is_dir():
@@ -738,10 +851,7 @@ class Installer:
 
     def profile(self, dxvk_dlls: list[str]) -> str:
         game = self.script.get("game") or {}
-        if not game.get("exe"):
-            raise InstallError("the script's game section names no exe")
-        exe = Path(self.expand(game["exe"]))
-        exe = exe if exe.is_absolute() else self.gamedir / exe
+        exe = self.game_exe()
         if not exe.is_file():
             raise InstallError(f"the game's exe {exe} was not installed")
         prospero = self.document.get("prospero") or self.script.get("prospero") or {}
@@ -802,6 +912,7 @@ class Installer:
         self.unlink_home_folders(self.gamedir)
         dxvk_dlls = self.install_dxvk()
         dxvk_dlls += self.install_vkd3d_proton(dxvk_dlls)
+        dxvk_dlls += self.install_reshade()
         self.install_mesa_zink()
         profile = self.library / "profiles" / f"{self.slug}.profile"
         profile.parent.mkdir(parents=True, exist_ok=True)

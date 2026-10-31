@@ -167,6 +167,7 @@ things differ from Lutris:
   `[debug] env = VKD3D_FEATURE_LEVEL=12_0` in its profile, and the in-game
   menu and FPS counter don't show in Direct3D 12 games: see
   [Direct3D 12](WINE_PS5_BUILD.md#direct3d-12).
+- **ReShade presets** install with the game: see [ReShade](#reshade).
 - **32-bit games** (`arch: win32`) still get a 64-bit prefix. The PS5's Wine
   is WoW64 only, and it runs 32-bit programs inside a 64-bit prefix.
 - **Installers that show a web page** (a license, for example) need
@@ -208,6 +209,63 @@ To add one:
    listing every change. Keep DXVK's zlib `LICENSE`.
 3. Add the version, URL and SHA-256 to `DXVK_RELEASES` in
    `tools/pw_install.py`, and point the game's recipe at it.
+
+### ReShade
+
+[ReShade](https://github.com/crosire/reshade) draws post-processing effects
+over a game: colour grading, sharpening, bloom, ambient occlusion. Presets
+made on Windows work on the PS5 too. A recipe turns it on in its `wine`
+section; Lutris has no such key, so such a recipe installs with
+`pw_install.py` only:
+
+```yaml
+wine:
+  dxvk: true
+  reshade: true
+  reshade_version: "6.7.3"    # pinned by hash in RESHADE_RELEASES
+  reshade_api: d3d9           # d3d9 for Direct3D 9, dxgi for 10 to 12
+  reshade_config:             # changes to the ReShade.ini below
+    GENERAL: {PresetPath: .\MyPreset.ini}
+```
+
+The installer takes the official build from reshade.me, the 32-bit or 64-bit
+one to match the game, and puts it beside the game's executable under the
+API's name (`d3d9.dll`). ReShade loads the prefix's own DLL of that name
+underneath, which is DXVK's, so it draws on what DXVK presents. Under Wine,
+ReShade needs Microsoft's shader compiler, so the installer also runs
+`winetricks d3dcompiler_47` and sets it native.
+
+The recipe copies the preset's `.ini` and its `reshade-shaders` folder into
+the game's folder with ordinary `extract` and `copy` steps. It should not
+copy a preset's own DLLs or `ReShade.ini`: the installer writes a
+`ReShade.ini` made for the console, and replaces any other one. Its
+settings, which `reshade_config` can change:
+
+- **Only the preset's effects are compiled** (`SkipLoadingDisabledEffects`).
+  Otherwise ReShade compiles every effect in its search paths at each start,
+  a few hundred in a big shader pack, on the console's translated CPU.
+- **Effect settings are compiled in as constants** (`PerformanceMode`), which
+  is faster on the GPU. Turn it off in ReShade's overlay to edit them live.
+- **Compiled shaders are kept in `reshade-cache`** beside the executable.
+  Run the game once on the PC before pushing, at the console's resolution,
+  and the console finds every shader already compiled.
+- **No tutorial and no FPS counter**, and screenshots go to `screenshots`
+  beside the executable.
+- **No update check.** ReShade asks GitHub for its latest version at every
+  start, before the first frame, and nothing in `ReShade.ini` turns that off.
+  The installer points the prefix's wininet at a proxy that refuses, so the
+  check fails at once. A game in the same prefix that uses wininet to go
+  online would be refused too: `reshade_update_check: true` leaves the
+  prefix's network settings alone.
+
+A preset's search paths, `PreprocessorDefinitions` and `[DEPTH]` settings go
+into `reshade_config`, with the paths relative to the executable (`.\`).
+Keep the preset's search path order when its pack holds two effects with the
+same name in different folders.
+
+ReShade's overlay opens with **L1 + R1 + Options** on the DualSense (or
+Home on a keyboard). The game sees those buttons too, so you'll usually
+leave the preset as it is.
 
 ### The `prospero` block
 
