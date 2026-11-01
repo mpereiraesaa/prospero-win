@@ -645,3 +645,6 @@ wine/patches/0983-ntdll-ps5-name-the-occupant-of-a-refused-reservation.patch
 wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patch
 wine/patches/0986-ntdll-keep-a-host-page-whole-when-accesses-beside-an-inaccessible-page-run-hot.patch
 tests/test_wine_mouse_wheel.py
+
+wine/patches/0472-xinput-ps5-device-capabilities.patch
+tests/test_xinput_device_caps.py
