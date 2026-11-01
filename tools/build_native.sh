@@ -11,6 +11,7 @@
 #                          and verifies its artifacts instead of rebuilding
 #                          its dependencies, which would mutate a tree the
 #                          laboratory's other projects share (default 0)
+#   PW_USB360_CAPTURE     1 captures raw wired-360 controls with separate button/analog budgets (default 0)
 #   PW_NATIVE_MODE         wine64, the only mode (accepted for older scripts)
 #   PW_OUTPUT_SUFFIX       isolated build/dist suffix, e.g. -wine-smoke
 #   PW_WINE64_SCRIPT       1 drives the launcher unattended (validation)
@@ -180,7 +181,7 @@ if build_id=$(git -C "$root" rev-parse HEAD 2>/dev/null); then
 else
     build_id=unknown
 fi
-common=(-DPW_BUILD_ID=\""$build_id"\" -O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
+common=(-DPW_USB360_CAPTURE="${PW_USB360_CAPTURE:-0}" -DPW_BUILD_ID=\""$build_id"\" -O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections
         -I"$root/include" -I"$root/src" -I"$root/native"
         -I"$root/native/ps5log"
         -DPW_WINE64_SCRIPT="$wine64_script" -DPW_WINE64_SECONDS="$wine64_seconds"
@@ -193,12 +194,12 @@ sources=(
     native/wine64_main.c native/pw_diagnostics.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c
     native/pw_agc_submit_lifecycle.c native/pw_videoout_ps5.c native/pw_data_mount.c
     native/pw_lapy_elevation.c
-    native/pw_wine_display.c native/pw_wine_library.c native/pw_hid_ps5.c native/pw_osk_ps5.c
+    native/pw_wine_display.c native/pw_wine_library.c native/pw_hid_ps5.c native/pw_xinput_usb_freebsd.c native/pw_xinput_usb_wine.c native/pw_osk_ps5.c
     native/pw_wine_prefix.c
     src/pw_result.c src/pw_wine_start.c src/pw_wine_launch.c src/pw_game_profile.c src/pw_prefix_temp.c
     src/pw_app_profile.c src/pw_profile_catalog.c src/pw_launcher_render.c src/pw_present.c
     src/pw_pad.c src/pw_game_menu.c src/pw_osk.c src/pw_hid.c src/pw_spinner.c src/pw_script_input.c
-    src/pw_tsc_calibrate.c
+    src/pw_tsc_calibrate.c src/pw_xinput_usb.c
     wine/ps5/pw_wine_prx.c
 )
 objects=()
