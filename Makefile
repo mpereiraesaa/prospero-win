@@ -72,6 +72,9 @@ $(eval $(call test_rule,test_pw_wine_library,tests/test_pw_wine_library.c native
 $(eval $(call test_rule,test_pw_hid,tests/test_pw_hid.c src/pw_hid.c,))
 $(eval $(call test_rule,test_pw_spinner,tests/test_pw_spinner.c src/pw_spinner.c,))
 $(eval $(call test_rule,test_pw_hid_ps5,tests/test_pw_hid_ps5.c native/pw_hid_ps5.c src/pw_hid.c,-DPW_HID_PS5_HOST_TEST))
+$(eval $(call test_rule,test_pw_xinput_usb_wine,tests/test_pw_xinput_usb_wine.c native/pw_xinput_usb_wine.c native/pw_xinput_usb_freebsd.c src/pw_xinput_usb.c wine/ps5/pw_wine_sink.c,-pthread))
+$(eval $(call test_rule,test_pw_xinput_usb_freebsd,tests/test_pw_xinput_usb_freebsd.c native/pw_xinput_usb_freebsd.c src/pw_xinput_usb.c,))
+$(eval $(call test_rule,test_pw_xinput_usb,tests/test_pw_xinput_usb.c src/pw_xinput_usb.c,))
 $(eval $(call test_rule,test_pw_wine_display,tests/test_pw_wine_display.c native/pw_wine_display.c src/pw_game_profile.c src/pw_app_profile.c src/pw_script_input.c,-pthread))
 $(eval $(call test_rule,test_pw_wine_dl,tests/test_pw_wine_dl.c wine/ps5/pw_wine_dl.c wine/ps5/pw_wine_prx.c,-pthread))
 # The modules and the test are linked with --wrap for every __wrap_ name
@@ -148,7 +151,7 @@ $(eval $(call test_rule,test_pw_key_shared,tests/test_pw_key_shared.c,))
 
 TESTS := test_pw_qpc_clock test_pw_key_shared test_pw_diagnostics test_pw_x86_hostexec test_pw_app_profile test_pw_profile_catalog test_pw_present \
 	test_pw_wine_heap test_pw_wine_dmem test_pw_wine_dmem_ps5 test_pw_wine_prx test_pw_wine_start test_pw_wine_launch test_pw_script_input test_pw_game_profile test_pw_prefix_temp test_pw_tsc_calibrate test_pw_wine_prefix_cpu test_vk_command_stream test_vk_spsc test_vk_replay test_vk_wire test_vk_codec \
-	test_pw_wine_library test_pw_wine_display test_pw_hid test_pw_hid_ps5 test_pw_spinner test_pw_wine_dl test_pw_wine_sink \
+	test_pw_wine_library test_pw_wine_display test_pw_hid test_pw_hid_ps5 test_pw_xinput_usb test_pw_xinput_usb_freebsd test_pw_xinput_usb_wine test_pw_spinner test_pw_wine_dl test_pw_wine_sink \
 	test_pw_wine_threads test_pw_wine_compat test_pw_wine_cwd test_pw_wine_cwd_listing test_pw_ws2_32_libc test_pw_launcher_render test_pw_pad test_pw_game_menu test_pw_osk test_pw_osk_ps5 \
 	test_pw_guest_fp test_pw_vm test_pw_x86_block test_pw_x86_flat test_pw_x86_cache test_pw_x86_code_pages test_pw_wow_smc_pages test_pw_wow_thread_budget test_pw_wow_tsc_clock test_pw_wow_call_top \
 	test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_global_residency test_pw_x86_reencode test_pw_x86_smc test_pw_x86_fault_markers test_pw_x86_lazyflags \
@@ -211,6 +214,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wowprospero_service_return.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wine_image_view_fds.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_wine_mouse_wheel.py
+	CC="$(CC)" python3 tests/test_xinput_device_caps.py
 	python3 tests/test_build_wine_ps5.py
 	python3 tests/test_build_tls_ps5.py
 	CC="$(CC)" CFLAGS="$(CFLAGS)" python3 tests/test_ws2_fqdn.py

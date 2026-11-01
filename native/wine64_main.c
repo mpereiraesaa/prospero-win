@@ -40,6 +40,10 @@
 #include "pw_audio_ps5.h"
 #include "pw_pad_ps5.h"
 #include "pw_hid_ps5.h"
+#include "pw_xinput_usb_wine.h"
+#ifndef PW_USB360_CAPTURE
+#define PW_USB360_CAPTURE 0
+#endif
 #include "pw_osk_ps5.h"
 #include "pw_videoout_ps5.h"
 #include "pw_wine_library.h"
@@ -780,6 +784,18 @@ static void osk_log(const char *line)
     PS5LOG_LOG("PW_WINE64 osk %s", line);
 }
 
+/* Generic wired-360 backend and optional raw input capture. */
+static void usb_log(const char *line)
+{
+    PS5LOG_LOG("PW_WINE64 usb %s", line);
+}
+
+static void usb_backend_log(void *context, const char *line)
+{
+    (void)context;
+    usb_log(line);
+}
+
 /* The process's CPU time, user and system, in milliseconds: a stall that
  * waits shows no growth, one that spins grows by a core a second. */
 static unsigned long long cpu_ms(void)
@@ -1031,6 +1047,7 @@ int main(int argc, char **argv)
     static PwVideoOutPs5 video;
     static PwPadPs5 pad;
     static PwHidPs5 hid;
+    static PwXinputUsbWine usb_guitars;
     static PwGameInput game_input;
     /* [input] player2: a second signed-in user's DualSense as more keys. */
     static PwPadPs5 pad2;
@@ -1401,6 +1418,15 @@ int main(int argc, char **argv)
     if (script_input.pad_events && !set_pad)
         PS5LOG_LOG("PW_WINE64 script pad events ignored: the profile's [input] mode is not xinput");
 #endif
+    /* The generic indexed sink is optional with an older runtime. A
+     * capture build can still qualify raw USB without claiming XInput. */
+    PwXinputUsbSetSlot set_usb_slot = NULL;
+    if (set_pad) set_usb_slot = (PwXinputUsbSetSlot)(uintptr_t)
+        pw_prx_lookup(start.descriptor, "pw_wine_set_pad_device_at");
+    PwXinputUsbOps usb_ops = *pw_xinput_usb_freebsd_system_ops();
+    usb_ops.log = usb_backend_log;
+    (void)pw_xinput_usb_wine_init(&usb_guitars, &usb_ops,
+                                 PW_USB360_CAPTURE ? NULL : set_usb_slot, usb_log, PW_USB360_CAPTURE);
     for (uint64_t tick = 1; status == PW_OK; tick++) {
         uint64_t now = now_ns();
         pw_diagnostics_tick(now);
@@ -1569,6 +1595,12 @@ int main(int argc, char **argv)
                     PS5LOG_LOG("PW_WINE64 players login_users_us=%u", (unsigned)(players.login_ns / 1000u));
                 players_open = open;
             }
+            /* Vacate USB users before a newly signed-in DualSense writes them.
+             * Keep departing users reserved until their final disconnect below. */
+            uint32_t reserved = 1u;
+            for (uint32_t i = 0; i < PW_PAD_PLAYERS; i++)
+                if (players.slot[i].opened || players_fed[i]) reserved |= 1u << (i + 1);
+            pw_xinput_usb_wine_reserve(&usb_guitars, reserved);
             for (uint32_t i = 0; i < PW_PAD_PLAYERS; i++) {
                 PwPadPs5 *player = &players.slot[i];
                 PwPadPs5 idle;
@@ -1594,6 +1626,14 @@ int main(int argc, char **argv)
                     (void)pw_pad_ps5_vibrate(player, (uint8_t)((left >> 8) * game_input.rumble / PW_GAME_RUMBLE_MAX),
                                              (uint8_t)((right >> 8) * game_input.rumble / PW_GAME_RUMBLE_MAX));
             }
+        }
+        {
+            uint32_t reserved = 1u;
+            for (uint32_t i = 0; i < PW_PAD_PLAYERS; i++)
+                if (players.slot[i].opened) reserved |= 1u << (i + 1);
+            pw_xinput_usb_wine_reserve(&usb_guitars, reserved);
+            pw_xinput_usb_wine_block(&usb_guitars, menu_open || pad.intercepted || (osk.state == PW_OSK_OPENING || osk.state == PW_OSK_SHOWN));
+            pw_xinput_usb_wine_poll(&usb_guitars, tick, 5 * PW_WINE64_TICKS_PER_S);
         }
         if (pad_read) {
             size_t count = pw_wine_game_inputs(&game_input, seen->core.pressed_edges,
@@ -1833,6 +1873,7 @@ int main(int argc, char **argv)
             }
         }
     }
+    pw_xinput_usb_wine_close(&usb_guitars);
     PS5LOG_LOG("PW_WINE64 done status=%d stage=%d", status, start.stage);
     if (status != PW_OK) restart_title(NULL, launch.cycle + 1u, "start-failed");
     pw_diagnostics_close(status == PW_OK ? "wine64-restart-failed" : "wine64-start-failed");
