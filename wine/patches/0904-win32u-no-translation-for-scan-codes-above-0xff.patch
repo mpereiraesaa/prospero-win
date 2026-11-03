@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Mon, 2 Nov 2026 18:30:00 +0100
+Subject: [PATCH] win32u: No translation for scan codes above 0xff that are
+ not extended.
+
+MapVirtualKeyEx documents MAPVK_VSC_TO_VK and MAPVK_VSC_TO_VK_EX as
+taking a scan code whose high byte is 0, or 0xe0 or 0xe1 for an extended
+key, and returning 0 when there is no translation; user32's test_key_map
+already expects 0 for 0x011d and 0x021d. Wine translated such codes
+anyway: winex11 compares only their low byte, and the generic path reads
+0x100-0x2ff as its own extended-key table. A game that names its
+controller's bindings with MapVirtualKeyExA(code, MAPVK_VSC_TO_VK, ...)
+for codes 0x100 and up (expecting 0, then its own name for the code) got
+keyboard keys instead, wrote them into its bindings file, and lost its
+controller bindings on the next start (Wine bug 20834).
+
+Check it once, at the public entry, before the driver is called: the
+drivers get 0x1xx codes for extended keys from inside win32u and winex11
+on purpose (winex11's GetKeyNameText keeps the extended bit in the code;
+win32u's map_scan_to_kbd_vkey, the keyboard input path, passes extended
+keys as 0xe0xx), and every internal caller of NtUserMapVirtualKeyEx asks
+a VK_TO_* mode or masks the code to 0xff. Clear the todo of the six
+test_key_map rows this makes pass and add MAPVK_VSC_TO_VK rows; the
+user32 tests were not run with this change (they inject keystrokes into
+the session).
+---
+ dlls/user32/tests/input.c | 15 +++++++++------
+ dlls/win32u/input.c       |  7 +++++++
+ 2 files changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/dlls/user32/tests/input.c b/dlls/user32/tests/input.c
+index 7e555f2aa7..d99e22010a 100644
+--- a/dlls/user32/tests/input.c
++++ b/dlls/user32/tests/input.c
+@@ -3294,21 +3294,24 @@ static void test_key_map(void)
+         BOOL todo;
+     } tests[] =
+     {
+-        {0x136, MAPVK_VSC_TO_VK_EX, 0, TRUE},
++        {0x136, MAPVK_VSC_TO_VK_EX, 0},
+         {0xe036, MAPVK_VSC_TO_VK_EX, 0, TRUE},
+         {0xe136, MAPVK_VSC_TO_VK_EX, 0, TRUE},
+         {0x37, MAPVK_VSC_TO_VK_EX, VK_MULTIPLY, TRUE},
+-        {0x137, MAPVK_VSC_TO_VK_EX, 0, TRUE},
+-        {0x237, MAPVK_VSC_TO_VK_EX, 0, TRUE},
++        {0x137, MAPVK_VSC_TO_VK_EX, 0},
++        {0x237, MAPVK_VSC_TO_VK_EX, 0},
+         {0xe037, MAPVK_VSC_TO_VK_EX, VK_SNAPSHOT},
+         {0xe137, MAPVK_VSC_TO_VK_EX, 0, TRUE},
+         {0x45, MAPVK_VSC_TO_VK_EX, VK_NUMLOCK},
+-        {0x145, MAPVK_VSC_TO_VK_EX, 0, TRUE},
++        {0x145, MAPVK_VSC_TO_VK_EX, 0},
+         {0xe045, MAPVK_VSC_TO_VK_EX, 0, TRUE},
+         {0xe145, MAPVK_VSC_TO_VK_EX, 0, TRUE},
+         {0x1d, MAPVK_VSC_TO_VK_EX, VK_LCONTROL},
+-        {0x011d, MAPVK_VSC_TO_VK_EX, 0, TRUE},
+-        {0x021d, MAPVK_VSC_TO_VK_EX, 0, TRUE},
++        {0x011d, MAPVK_VSC_TO_VK_EX, 0},
++        {0x021d, MAPVK_VSC_TO_VK_EX, 0},
++        {0x011d, MAPVK_VSC_TO_VK, 0},
++        {0x021d, MAPVK_VSC_TO_VK, 0},
++        {0x0102, MAPVK_VSC_TO_VK, 0},
+         {0xe01d, MAPVK_VSC_TO_VK_EX, VK_RCONTROL, TRUE},
+         {0xe11d, MAPVK_VSC_TO_VK_EX, VK_PAUSE, TRUE},
+         {0x46, MAPVK_VSC_TO_VK_EX, VK_SCROLL},
+diff --git a/dlls/win32u/input.c b/dlls/win32u/input.c
+index c24bbab1d4..de0853dd2f 100644
+--- a/dlls/win32u/input.c
++++ b/dlls/win32u/input.c
+@@ -1243,6 +1243,13 @@ UINT WINAPI NtUserMapVirtualKeyEx( UINT code, UINT type, HKL layout )
+ 
+     TRACE_(keyboard)( "code %u, type %u, layout %p.\n", code, type, layout );
+ 
++    /* A scan code has a high byte of 0, or 0xe0 / 0xe1 for an extended key;
++     * anything else has no translation. Drivers are called with 0x1xx codes
++     * for extended keys internally, so this is checked here only. */
++    if ((type == MAPVK_VSC_TO_VK || type == MAPVK_VSC_TO_VK_EX) && (code & ~0xff) &&
++        (code & ~0xff) != 0xe000 && (code & ~0xff) != 0xe100)
++        return 0;
++
+     if ((ret = user_driver->pMapVirtualKeyEx( code, type, layout )) != -1) return ret;
+ 
+     if (!(kbd_tables = user_driver->pKbdLayerDescriptor( layout ))) kbd_tables = &kbdus_tables;

@@ -190,6 +190,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_wine_directory_changes.py
 	python3 tests/test_wine_directory_handles.py
 	python3 tests/test_wine_builtin_classes.py
+	python3 tests/test_wine_mapvk.py
 	python3 tests/test_wine_fiber_stacks.py
 	python3 tests/test_d3d12_control.py
 	python3 tests/test_wine_dib_section.py
@@ -266,6 +267,7 @@ wine-check: test
 	python3 tests/test_wine_directory_changes.py
 	python3 tests/test_wine_directory_handles.py
 	python3 tests/test_wine_builtin_classes.py
+	python3 tests/test_wine_mapvk.py
 	python3 tests/test_wine_fiber_stacks.py
 	python3 tests/test_d3d12_control.py
 	python3 tests/test_wine_dib_section.py
