@@ -88,6 +88,8 @@ tests/test_pw_pad.c
 tests/test_pw_game_menu.c
 tests/test_pw_pad_players.c
 tests/test_pw_pad_ps5.c
+tests/wine_mapvk.c
+tests/test_wine_mapvk.py
 tests/test_status_vocabulary.py
 tests/test_classify_x86.py
 tests/test_startup_x87_contract.py
@@ -511,6 +513,7 @@ tests/test_pw_key_shared.c
 wine/patches/0901-win32u-ps5-shared-key-state-fastpath.patch
 wine/patches/0902-win32u-ps5-send-extended-keys-as-extended.patch
 wine/patches/0903-ntdll-ps5-keep-the-fs-base-of-a-resumed-64-bit-thread.patch
+wine/patches/0904-win32u-no-translation-for-scan-codes-above-0xff.patch
 wine/ps5/input/pw_key_shared.h
 wine/ps5/menu/pw_title_menu.h
 tests/lab/pw_qpc_bridge.c
