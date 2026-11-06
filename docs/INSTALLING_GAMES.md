@@ -27,7 +27,7 @@ sudo apt install gcc-mingw-w64-i686 g++-mingw-w64-i686
 sudo pacman -S mingw-w64-gcc
 ```
 
-Clone Wine:
+Clone Wine these commands assumes you are is your home directory:
 
 ```sh
 git clone https://github.com/wine-mirror/wine.git
@@ -38,7 +38,8 @@ git checkout 490f6d5dcbb2a5047345b8af88d114bbcaad69a8
 Then build:
 
 ```sh
-tools/build_host_wine.sh --source 490f6d5dcbb2a5047345b8af88d114bbcaad69a8 --jobs 8
+cd ~/prospero-win
+tools/build_host_wine.sh --source ~/wine --jobs 8
 ```
 expected output
 ```tools/build_host_wine.sh --source ~/wine --jobs 8 
@@ -69,6 +70,7 @@ script](https://github.com/lutris/lutris/blob/master/docs/installers.rst),
 the format the Lutris community uses for thousands of Windows games. It holds
 no game files and no keys, only the steps.
 
+You can find .yml files here [https://lutris.net/games/install/21255/view](https://lutris.net/games)
 ```
 python3 tools/pw_install.py ~/Downloads/supreme-commander.yml \
     --library ~/prospero-library --wine ~/prospero-win/.deps/wine-host/install/usr/bin/wine \
