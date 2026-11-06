@@ -9,6 +9,10 @@ it back when you want to keep your saves on the PC too.
 (The PS5 side doesn't run installers itself: its Wine has process creation
 turned off, and installers start other programs.)
 
+If a game is already installed on Windows, the
+[Windows importer](WINDOWS_IMPORT.md) can copy its files into a prepared Wine
+prefix and make a profile without running its installer again.
+
 ## Once: the PC's Wine
 
 Build the Wine that matches the PS5's (same revision and patches, built for
@@ -234,8 +238,8 @@ the executable, its arguments and its working folder.
 
 ### What `pw_install.py` supports
 
-- **Directives:** `move`, `copy`, `merge`, `extract` (zip and tar, anything
-  else through `7z`), `chmodx`, `execute`, `write_file`, `write_config`,
+- **Directives:** `move`, `copy`, `merge`, `extract` (zip and tar, Inno Setup
+  through `innoextract`, anything else through `7z`), `chmodx`, `execute`, `write_file`, `write_config`,
   `write_json`, `input_menu`, `insert-disc` (`--disc DIR`).
 - **Wine tasks:** `create_prefix`, `wineexec` (with `return_code`),
   `winetricks` (pinned to 20260125), `set_regedit` (`REG_SZ`, `REG_DWORD`,

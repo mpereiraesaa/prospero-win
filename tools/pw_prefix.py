@@ -43,6 +43,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import configparser
 import ftplib
 import hashlib
 import io
@@ -261,14 +262,37 @@ def link_inside(link: Path, target: str, root: Path) -> bool:
 
 
 def local_tree(prefix: Path) -> tuple[dict[str, Path], set[str], dict[str, dict[str, str]]]:
-    """The prefix's files, directories and per-directory link tables."""
+    """The prefix's files, directories and per-directory link tables.
+
+    A Windows-imported prefix carries the link tables as ordinary files,
+    because Windows cannot create Wine's dosdevices/c: symlink. Linux Wine
+    prefixes still supply real symlinks. Both become console link tables.
+    """
     files, dirs, links = {}, {""}, {}
     root = prefix.resolve()
     pending = [""]
     while pending:
         relative = pending.pop()
-        for entry in sorted(os.scandir(prefix / relative), key=lambda e: e.name):
+        entries = sorted(os.scandir(prefix / relative), key=lambda e: e.name)
+        physical_names = {entry.name.casefold() for entry in entries}
+        for entry in entries:
             key = posixpath.join(relative, entry.name) if relative else entry.name
+            if entry.name == LINK_TABLE and entry.is_file(follow_symlinks=False):
+                table = Path(entry.path).read_text(encoding="utf-8")
+                for line in table.splitlines():
+                    name, separator, target = line.partition("\t")
+                    if not separator or not name or name in (".", "..") or "/" in name or "\\" in name or not target:
+                        raise SyncError(f"invalid link table entry in {entry.path}: {line!r}")
+                    # On Windows, Path(directory) / "c:" is a drive-relative
+                    # path, not a child named c:. Check physical names as
+                    # strings and use a safe dummy child for the target test.
+                    if name.casefold() in physical_names or not link_inside(Path(entry.path).parent / "_", target, root):
+                        raise SyncError(f"unsafe link table entry in {entry.path}: {line!r}")
+                    previous = links.setdefault(relative, {}).get(name)
+                    if previous is not None and previous != target:
+                        raise SyncError(f"conflicting link table entry in {entry.path}: {name}")
+                    links[relative][name] = target
+                continue
             if entry.name in SKIP:
                 continue
             if entry.is_symlink():
@@ -276,6 +300,9 @@ def local_tree(prefix: Path) -> tuple[dict[str, Path], set[str], dict[str, dict[
                 if target.startswith("/dev"):
                     continue    # serial and parallel ports: nothing on a console
                 if link_inside(Path(entry.path), target, root):
+                    previous = links.setdefault(relative, {}).get(entry.name)
+                    if previous is not None and previous != target:
+                        raise SyncError(f"conflicting link target at {entry.path}")
                     links.setdefault(relative, {})[entry.name] = target
                 elif os.path.isfile(entry.path):
                     # A file out of the prefix (Proton links its fonts into
@@ -412,6 +439,12 @@ class Sync:
     def push(self) -> None:
         if not self.prefix.is_dir() or not self.profile.is_file():
             raise SyncError(f"no installed {self.slug} in {self.library} (tools/pw_install.py)")
+        preset = self.input_preset()
+        if preset is not None:
+            local, target = preset
+            remote_size = self.remote.size(target)
+            if remote_size is not None and self.remote.read(target) != local.read_bytes() and not self.force:
+                raise SyncError(f"{target} differs from the local input preset: use --force to replace it")
         exists = self.remote.exists(self.remote_prefix)
         if exists and not self.force:
             if self.manifest is None:
@@ -486,6 +519,10 @@ class Sync:
             for key in sorted(set(known) - set(files) - {CPU_DLL}):
                 self.remote.delete(f"{self.remote_prefix}/{key}")
                 removed += 1
+        if preset is not None:
+            local, target = preset
+            self.remote.makedirs(posixpath.dirname(target))
+            self.remote.write(target, local.read_bytes())
         self.push_profile()
         self.save(pushed)
         log(f"pushed {self.slug}: {sent} of {len(files)} files sent ({gib(sent_bytes)}), "
@@ -528,6 +565,20 @@ class Sync:
             lines = self.remote.read(listing).decode("latin-1").splitlines()
             if f"{self.slug}.profile" not in (line.strip() for line in lines):
                 self.remote.write(listing, ("\n".join(lines + [f"{self.slug}.profile"]) + "\n").encode("latin-1"))
+
+    def input_preset(self) -> tuple[Path, str] | None:
+        """A local preset named by the profile, if this library carries it."""
+        parser = configparser.RawConfigParser()
+        parser.read_string(self.profile.read_text(encoding="utf-8"))
+        name = parser.get("input", "preset", fallback="")
+        if not name:
+            return None
+        if not re.fullmatch(r"[a-z0-9_-]+", name):
+            raise SyncError(f"invalid input preset name in {self.profile}: {name!r}")
+        local = self.library / "input" / f"{name}.input"
+        if not local.is_file():
+            return None
+        return local, f"{self.remote_root}/input/{name}.input"
 
     def walk_remote(self, directory: str = "") -> dict[str, int]:
         found = {}
