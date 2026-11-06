@@ -108,7 +108,8 @@ tools/build_wowprospero.sh --build ~/prospero-win/.deps/wine-host/build/ --sourc
 
 ```
 python3 tools/pw_prefix.py push supreme-commander-forged-alliance \
---library ~/prospero-library --host <ps5 ip with the ftpsrv ps5 payload running>
+--library ~/prospero-library --host <ps5 ip with the ftpsrv ps5 payload running> \
+--cpu-dll ~/prospero-win/.deps/wine-host/build/dlls/wowprospero/x86_64-windows/wowprospero.dll
 ```
 
 ```sh
