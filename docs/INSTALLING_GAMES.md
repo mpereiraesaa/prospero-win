@@ -61,7 +61,7 @@ Pictures and Videos at the same folders in your own home folder. The
 installer replaces them with empty folders inside the prefix, so the game's
 saves and settings stay in the prefix and never mix with your own files.
 
-## Installing a game:2 examples
+## Installing a game:2 examples.
 
 Each game has a recipe in
 [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles)
