@@ -9,6 +9,8 @@
   the app, your first game, getting a log.
 - [Installing games](INSTALLING_GAMES.md): installing a game on your PC with
   a Lutris recipe and copying it to the PS5.
+- [Windows import](WINDOWS_IMPORT.md): packaging an already installed Windows
+  game with a reusable Wine prefix template.
 - [Controls](CONTROLS.md): the DualSense presets, Xbox controller mode, USB
   keyboard and mouse.
 

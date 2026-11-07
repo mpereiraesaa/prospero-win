@@ -129,6 +129,38 @@ def game_writes(remote: DirRemote) -> list[str]:
     return [w for w in remote.writes if f"/{GAME}/" in w]
 
 
+def check_materialized_links(root: Path) -> None:
+    """A Windows-imported prefix has link tables instead of local symlinks."""
+    library, console, _ = new_game(root, "windows-links")
+    prefix = library / "prefixes/game"
+    (prefix / "dosdevices/c:").unlink()
+    (prefix / "dosdevices/z:").unlink()
+    table = prefix / "dosdevices/.pw-symlinks"
+    table.write_text("c:\t../drive_c\nz:\t/\n")
+    (prefix / pw_prefix.CPU_DLL).parent.mkdir(parents=True, exist_ok=True)
+    (prefix / pw_prefix.CPU_DLL).write_bytes(b"MZ wowprospero")
+    remote = DirRemote(console)
+    assert pw_prefix.main(["push", "game", "--library", str(library)], remote) == 0
+    assert (console / REMOTE_PREFIX / "dosdevices/.pw-symlinks").read_text() == table.read_text()
+    table.write_text("c:\t../../outside\n")
+    assert pw_prefix.main(["push", "game", "--library", str(library)], remote) == 1
+
+
+def check_input_preset_push(root: Path) -> None:
+    library, console, common = new_game(root, "input-preset")
+    (library / "profiles/game.profile").write_text("[application]\nid = game\n\n[input]\npreset = game\n")
+    (library / "input").mkdir()
+    (library / "input/game.input").write_text("[input]\nmode = keyboard\ncross = space\n")
+    remote = DirRemote(console)
+    assert pw_prefix.main(["push", "game", *common], remote) == 0
+    target = console / "data/prospero-win/input/game.input"
+    assert target.read_text() == (library / "input/game.input").read_text()
+    target.write_text("[input]\nmode = xinput\n")
+    assert pw_prefix.main(["push", "game", *common], remote) == 1
+    assert pw_prefix.main(["push", "game", "--force", *common], remote) == 0
+    assert target.read_text() == (library / "input/game.input").read_text()
+
+
 def check_streaming(root: Path) -> None:
     """A file larger than the memory a push may use goes over in chunks."""
     library, console, common = new_game(root, "streaming")
@@ -551,6 +583,8 @@ def main() -> int:
         check_ps5upload(root)
         check_console_user(root)
         check_pull_home_links(root)
+        check_materialized_links(root)
+        check_input_preset_push(root)
     check_ftp_without_self()
     print("pw_prefix passed")
     return 0

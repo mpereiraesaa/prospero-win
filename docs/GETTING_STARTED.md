@@ -18,8 +18,9 @@ On the PS5:
 
 On your PC:
 
-- **Linux** (a VM or WSL works too), to install games with Wine before
-  copying them over.
+- **Linux** (a VM or WSL works too) to run game installers with Wine, or a
+  **Windows PC** to import an already installed game using a prefix template
+  prepared on Linux.
 - **Your own copy** of the game you want to play.
 
 ## 1. Install the app
@@ -70,6 +71,9 @@ You run the recipe on your PC, which installs the game into a fresh prefix
 exactly as the PS5 will run it, then copy it over with one command.
 [Installing games](INSTALLING_GAMES.md) explains how, with Warcraft III as
 the example.
+
+For a game already installed on Windows, see [importing an installed Windows
+game](WINDOWS_IMPORT.md).
 
 Copy the controller presets too: put the `.input` files from
 prospero-win-profiles' `input/` folder into `/data/prospero-win/input/`.
