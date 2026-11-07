@@ -1,0 +1,969 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: orbis-win <orbis-win@invalid>
+Subject: [PATCH] quartz, l3codecx: Play MPEG audio files without GStreamer.
+
+prospero-win builds Wine --without-gstreamer, so winegstreamer does not exist,
+but quartz's MPEG-I Stream Splitter and l3codecx's MPEG Layer-3 Decoder are
+only wrappers around winegstreamer classes. No .mp3 can be rendered through
+DirectShow, although mp3dmod decodes MP3 with Wine's bundled mpg123: the
+filter graph fails with "Failed to create filter for MPEG-I Stream Splitter,
+hr 0x80040154". Games that play their music this way lose it, and some retry
+forever: The Elder Scrolls IV: Oblivion leaks a file handle per retry and dies
+after a few minutes (https://bugs.winehq.org/show_bug.cgi?id=19967).
+
+When the winegstreamer class cannot be created:
+- quartz falls back to mpegaudiosplit.c, an elementary MPEG-1/2/2.5 audio
+  splitter: ID3v2 and ID3v1 skipped, the Xing/Info frame count read for the
+  duration, whole frames delivered with timestamps on one "Audio" pin
+  (MEDIASUBTYPE_MP3 for Layer III, MPEG1AudioPayload otherwise), seeking by
+  walking frames. MPEG system streams (audio and video multiplexed) are not
+  handled and still need winegstreamer.
+- l3codecx hosts mp3dmod in the DMO Wrapper filter, the standard way to use a
+  DMO in DirectShow.
+A Wine with GStreamer is unaffected: the winegstreamer classes are tried first.
+---
+diff --git a/dlls/l3codecx.ax/l3codecx.c b/dlls/l3codecx.ax/l3codecx.c
+index 6ebf80e2cc..89d463a705 100644
+--- a/dlls/l3codecx.ax/l3codecx.c
++++ b/dlls/l3codecx.ax/l3codecx.c
+@@ -24,6 +24,9 @@
+ #include "winbase.h"
+ 
+ #include "dshow.h"
++#include "dmodshow.h"
++#include "dmoreg.h"
++#include "wmcodecdsp.h"
+ #include "mpegtype.h"
+ #include "rpcproxy.h"
+ 
+@@ -49,11 +52,42 @@ static inline ULONG WINAPI class_factory_Release(IClassFactory *iface)
+ {
+     return 1;
+ }
++/* Without winegstreamer (a Wine built without GStreamer) there is no
++ * wg_mp3_decoder, but mp3dmod - Wine's MP3 DMO on its bundled mpg123 - is
++ * always there: host it in the DMO Wrapper filter, which is what a DMO is for
++ * in DirectShow. */
++static HRESULT create_dmo_decoder(IUnknown *outer, REFIID riid, void **out)
++{
++    IDMOWrapperFilter *wrapper;
++    IUnknown *unk;
++    HRESULT hr;
++
++    if (outer && !IsEqualGUID(riid, &IID_IUnknown))
++        return E_NOINTERFACE;
++    if (FAILED(hr = CoCreateInstance(&CLSID_DMOWrapperFilter, outer, CLSCTX_INPROC_SERVER,
++            &IID_IUnknown, (void **)&unk)))
++        return hr;
++    if (SUCCEEDED(hr = IUnknown_QueryInterface(unk, &IID_IDMOWrapperFilter, (void **)&wrapper)))
++    {
++        hr = IDMOWrapperFilter_Init(wrapper, &CLSID_CMP3DecMediaObject, &DMOCATEGORY_AUDIO_DECODER);
++        IDMOWrapperFilter_Release(wrapper);
++    }
++    if (SUCCEEDED(hr))
++        hr = IUnknown_QueryInterface(unk, riid, out);
++    IUnknown_Release(unk);
++    return hr;
++}
++
+ static HRESULT WINAPI mpeg_layer3_decoder_factory_CreateInstance(IClassFactory *iface,
+         IUnknown *outer, REFIID riid, void **out)
+ {
+     static const GUID CLSID_wg_mp3_decoder = {0x84cd8e3e,0xb221,0x434a,{0x88,0x82,0x9d,0x6c,0x8d,0xf4,0x90,0xe1}};
+-    return CoCreateInstance(&CLSID_wg_mp3_decoder, outer, CLSCTX_INPROC_SERVER, riid, out);
++    HRESULT hr;
++
++    if (SUCCEEDED(hr = CoCreateInstance(&CLSID_wg_mp3_decoder, outer, CLSCTX_INPROC_SERVER, riid, out)))
++        return hr;
++    TRACE("winegstreamer's MP3 decoder is unavailable, hr %#lx; using mp3dmod.\n", hr);
++    return create_dmo_decoder(outer, riid, out);
+ }
+ static inline HRESULT WINAPI class_factory_LockServer(IClassFactory *iface, BOOL dolock)
+ {
+diff --git a/dlls/quartz/Makefile.in b/dlls/quartz/Makefile.in
+index a61bbc2b5f..31885ac1dd 100644
+--- a/dlls/quartz/Makefile.in
++++ b/dlls/quartz/Makefile.in
+@@ -17,6 +17,7 @@ SOURCES = \
+ 	filtermapper.c \
+ 	main.c \
+ 	memallocator.c \
++	mpegaudiosplit.c \
+ 	parser.c \
+ 	passthrough.c \
+ 	quartz.rc \
+diff --git a/dlls/quartz/mpegaudiosplit.c b/dlls/quartz/mpegaudiosplit.c
+new file mode 100644
+index 0000000000..2832569448
+--- /dev/null
++++ b/dlls/quartz/mpegaudiosplit.c
+@@ -0,0 +1,828 @@
++/*
++ * MPEG audio splitter used when winegstreamer is not available
++ *
++ * Copyright 2026 the orbis-win authors
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++/* quartz's "MPEG-I Stream Splitter" is a wrapper around winegstreamer's. A Wine
++ * built without GStreamer has no winegstreamer, so every MPEG-1 audio file
++ * fails to render, although the decoders behind the splitter (l3codecx.ax over
++ * mp3dmod, both built on Wine's bundled mpg123) are present. Games that play
++ * their music through DirectShow then retry endlessly; The Elder Scrolls IV:
++ * Oblivion leaks a file handle per retry and dies after a few minutes
++ * (https://bugs.winehq.org/show_bug.cgi?id=19967).
++ *
++ * This is the missing piece for that case and nothing more: an elementary
++ * MPEG-1/2/2.5 audio stream (an .mp3, .mp2 or .mpa file, optionally with ID3v2
++ * at the front and ID3v1 at the back) split into whole frames on one output
++ * pin. System streams (audio and video multiplexed) are not handled; they still
++ * need winegstreamer. */
++
++#include "quartz_private.h"
++#include "mmreg.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(quartz);
++
++static const GUID MEDIASUBTYPE_MP3 = {WAVE_FORMAT_MPEGLAYER3, 0x0000, 0x0010,
++        {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
++
++/* The largest frame the format allows is a Layer II frame at 384 kbit/s and
++ * 8 kHz (MPEG-2.5), 6913 bytes; samples are sized to hold several. */
++#define MPA_SAMPLE_SIZE 16384
++#define MPA_PROBE_SIZE  65536
++
++struct mpa_header
++{
++    unsigned int version;   /* 1 = MPEG-1, 2 = MPEG-2, 25 = MPEG-2.5 */
++    unsigned int layer;     /* 1, 2 or 3 */
++    unsigned int bitrate;   /* bits per second; 0 = free format (unsupported) */
++    unsigned int rate;      /* samples per second */
++    unsigned int channels;
++    unsigned int mode;      /* 0 stereo, 1 joint stereo, 2 dual channel, 3 mono */
++    unsigned int length;    /* bytes in this frame, header included */
++    unsigned int samples;   /* PCM samples per channel in this frame */
++};
++
++static BOOL parse_header(const BYTE *p, struct mpa_header *h)
++{
++    static const unsigned int bitrates[2][3][15] =
++    {
++        {   /* MPEG-1 */
++            {0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448},
++            {0, 32, 48, 56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320, 384},
++            {0, 32, 40, 48,  56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320},
++        },
++        {   /* MPEG-2 and MPEG-2.5 */
++            {0, 32, 48, 56,  64,  80,  96, 112, 128, 144, 160, 176, 192, 224, 256},
++            {0,  8, 16, 24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160},
++            {0,  8, 16, 24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160},
++        },
++    };
++    static const unsigned int rates[3] = {44100, 48000, 32000};
++    unsigned int version_bits, layer_bits, bitrate_index, rate_index, padding;
++
++    if (p[0] != 0xff || (p[1] & 0xe0) != 0xe0)
++        return FALSE;
++    version_bits = (p[1] >> 3) & 3;
++    layer_bits = (p[1] >> 1) & 3;
++    bitrate_index = p[2] >> 4;
++    rate_index = (p[2] >> 2) & 3;
++    padding = (p[2] >> 1) & 1;
++    if (version_bits == 1 || !layer_bits || bitrate_index == 0 || bitrate_index == 15 || rate_index == 3)
++        return FALSE;
++
++    h->version = version_bits == 3 ? 1 : version_bits == 2 ? 2 : 25;
++    h->layer = 4 - layer_bits;
++    h->bitrate = bitrates[h->version == 1 ? 0 : 1][h->layer - 1][bitrate_index] * 1000;
++    h->rate = rates[rate_index] / (h->version == 1 ? 1 : h->version == 2 ? 2 : 4);
++    h->mode = p[3] >> 6;
++    h->channels = h->mode == 3 ? 1 : 2;
++
++    if (h->layer == 1)
++    {
++        h->samples = 384;
++        h->length = (12 * h->bitrate / h->rate + padding) * 4;
++    }
++    else if (h->layer == 2 || h->version == 1)
++    {
++        h->samples = 1152;
++        h->length = 144 * h->bitrate / h->rate + padding;
++    }
++    else
++    {
++        h->samples = 576;
++        h->length = 72 * h->bitrate / h->rate + padding;
++    }
++    return h->length >= 4;
++}
++
++static BOOL same_stream(const struct mpa_header *a, const struct mpa_header *b)
++{
++    return a->version == b->version && a->layer == b->layer && a->rate == b->rate;
++}
++
++struct mpa_splitter
++{
++    struct strmbase_filter filter;
++    struct strmbase_sink sink;
++    IAsyncReader *reader;
++
++    struct strmbase_source source;
++    SourceSeeking seek;
++    BOOL have_source;
++
++    /* What the first frame said, which the output media type is built from. */
++    struct mpa_header format;
++    LONGLONG data_start, data_end;   /* the frames, without ID3 tags */
++    LONGLONG frame_count;            /* from a Xing/Info header, or 0 */
++
++    /* Read and written by the streaming thread; by application threads only
++     * while it is stopped or held off by flushing_cs. */
++    LONGLONG pos;                    /* byte offset of the next frame */
++    LONGLONG frames_sent;            /* frames delivered since data_start */
++    BOOL need_segment, eos;
++
++    /* The same arrangement as winegstreamer's quartz parser: streaming_cs
++     * guards "streaming" and "flushing" and is never taken before the filter
++     * lock or flushing_cs; flushing_cs is held by the streaming thread while it
++     * delivers, so a seek that takes it knows the thread is between samples. */
++    CRITICAL_SECTION streaming_cs, flushing_cs;
++    CONDITION_VARIABLE flushing_cv, eos_cv;
++    BOOL streaming, flushing;
++    HANDLE thread;
++};
++
++static struct mpa_splitter *impl_from_strmbase_filter(struct strmbase_filter *iface)
++{
++    return CONTAINING_RECORD(iface, struct mpa_splitter, filter);
++}
++
++static REFERENCE_TIME frames_to_time(const struct mpa_splitter *filter, LONGLONG frames)
++{
++    return frames * filter->format.samples * (LONGLONG)10000000 / filter->format.rate;
++}
++
++static HRESULT read_bytes(struct mpa_splitter *filter, LONGLONG pos, LONG size, BYTE *buffer, LONG *read)
++{
++    LONGLONG end = filter->data_end;
++    HRESULT hr;
++
++    *read = 0;
++    if (pos >= end)
++        return S_FALSE;
++    if (size > end - pos)
++        size = end - pos;
++    if (FAILED(hr = IAsyncReader_SyncRead(filter->reader, pos, size, buffer)))
++        return hr;
++    *read = size;
++    return S_OK;
++}
++
++/* Skip ID3v2 at the front and ID3v1 at the back, find the first frame that is
++ * followed by another frame of the same stream, and read a Xing/Info frame
++ * count if the first frame carries one. */
++static HRESULT probe_stream(struct mpa_splitter *filter)
++{
++    LONGLONG file_size, available, start = 0;
++    struct mpa_header h = {0}, next;
++    BYTE *buffer;
++    LONG size, i;
++    HRESULT hr;
++
++    IAsyncReader_Length(filter->reader, &file_size, &available);
++    filter->data_end = file_size;
++
++    if (file_size >= 128)
++    {
++        BYTE tag[3];
++        if (SUCCEEDED(IAsyncReader_SyncRead(filter->reader, file_size - 128, 3, tag)) && !memcmp(tag, "TAG", 3))
++            filter->data_end = file_size - 128;
++    }
++
++    if (!(buffer = malloc(MPA_PROBE_SIZE)))
++        return E_OUTOFMEMORY;
++
++    for (;;)
++    {
++        if (FAILED(hr = read_bytes(filter, start, 10, buffer, &size)) || size < 10)
++            break;
++        if (memcmp(buffer, "ID3", 3))
++            break;
++        /* A synchsafe size, plus the 10-byte header and a 10-byte footer if
++         * the flags say there is one. Tags may repeat. */
++        start += 10 + ((buffer[6] & 0x7f) << 21 | (buffer[7] & 0x7f) << 14 | (buffer[8] & 0x7f) << 7 | (buffer[9] & 0x7f))
++                + ((buffer[5] & 0x10) ? 10 : 0);
++    }
++
++    hr = read_bytes(filter, start, MPA_PROBE_SIZE, buffer, &size);
++    if (SUCCEEDED(hr))
++    {
++        hr = VFW_E_TYPE_NOT_ACCEPTED;
++        for (i = 0; i + 4 <= size; ++i)
++        {
++            if (!parse_header(buffer + i, &h))
++                continue;
++            if (i + h.length + 4 <= size)
++            {
++                if (!parse_header(buffer + i + h.length, &next) || !same_stream(&h, &next))
++                    continue;
++            }
++            else if (start + i + h.length != filter->data_end)
++            {
++                continue; /* cannot confirm it within the probe window */
++            }
++            hr = S_OK;
++            break;
++        }
++    }
++
++    if (hr == S_OK)
++    {
++        /* Xing/Info sits after the side information of the first frame. */
++        static const unsigned int side_info[2][2] = {{32, 17}, {17, 9}};
++        unsigned int off = 4 + (h.layer == 3 ? side_info[h.version == 1 ? 0 : 1][h.channels == 1] : 0);
++
++        filter->format = h;
++        filter->data_start = start + i;
++        filter->frame_count = 0;
++        if (h.layer == 3 && i + off + 12 <= size
++                && (!memcmp(buffer + i + off, "Xing", 4) || !memcmp(buffer + i + off, "Info", 4))
++                && (buffer[i + off + 7] & 1))
++        {
++            const BYTE *n = buffer + i + off + 8;
++            filter->frame_count = (DWORD)(n[0] << 24 | n[1] << 16 | n[2] << 8 | n[3]);
++            /* That frame decodes as silence; leaving it in is what Windows
++             * does too, so it is not skipped. */
++            filter->frame_count += 1;
++        }
++        TRACE("MPEG-%s layer %u, %u Hz, %u channel(s), %u bit/s, frames at %s..%s, %s frames.\n",
++                h.version == 25 ? "2.5" : h.version == 2 ? "2" : "1", h.layer, h.rate, h.channels, h.bitrate,
++                wine_dbgstr_longlong(filter->data_start), wine_dbgstr_longlong(filter->data_end),
++                filter->frame_count ? wine_dbgstr_longlong(filter->frame_count) : "unknown");
++    }
++    else
++    {
++        WARN("No MPEG audio frames found, hr %#lx.\n", hr);
++    }
++
++    free(buffer);
++    return hr;
++}
++
++static LONGLONG duration(const struct mpa_splitter *filter)
++{
++    if (filter->frame_count)
++        return frames_to_time(filter, filter->frame_count);
++    /* Constant bit rate, or a variable one without a frame count: estimate
++     * from the first frame's bit rate. */
++    return (filter->data_end - filter->data_start) * 8 * (LONGLONG)10000000 / filter->format.bitrate;
++}
++
++/* Walk the frames from the start to the first one at or after "time". Music
++ * files are a few thousand frames, each walked with one 4-byte read. */
++static void seek_to(struct mpa_splitter *filter, REFERENCE_TIME time)
++{
++    LONGLONG pos = filter->data_start, frames = 0;
++    struct mpa_header h;
++    BYTE header[4];
++    LONG read;
++
++    while (frames_to_time(filter, frames + 1) <= time)
++    {
++        if (read_bytes(filter, pos, 4, header, &read) != S_OK || read < 4 || !parse_header(header, &h))
++            break;
++        pos += h.length;
++        ++frames;
++    }
++    filter->pos = pos;
++    filter->frames_sent = frames;
++}
++
++/* Fill one sample with whole frames from filter->pos. Returns S_FALSE at the
++ * end of the stream. */
++static HRESULT deliver_sample(struct mpa_splitter *filter)
++{
++    BOOL discontinuity = filter->need_segment;
++    REFERENCE_TIME start, stop;
++    LONG read, used = 0, skipped = 0;
++    IMediaSample *sample;
++    LONGLONG frames = 0;
++    struct mpa_header h;
++    BYTE *data;
++    HRESULT hr;
++
++    if (filter->need_segment)
++    {
++        if (FAILED(hr = IPin_NewSegment(filter->source.pin.peer,
++                filter->seek.llCurrent, filter->seek.llStop, filter->seek.dRate)))
++            WARN("Failed to deliver new segment, hr %#lx.\n", hr);
++        filter->need_segment = FALSE;
++    }
++
++    if (FAILED(hr = IMemAllocator_GetBuffer(filter->source.pAllocator, &sample, NULL, NULL, 0)))
++    {
++        TRACE("No sample, hr %#lx.\n", hr);
++        return hr;
++    }
++    IMediaSample_GetPointer(sample, &data);
++
++    if (FAILED(hr = read_bytes(filter, filter->pos, IMediaSample_GetSize(sample), data, &read)))
++    {
++        IMediaSample_Release(sample);
++        return hr;
++    }
++
++    while (used + 4 <= read)
++    {
++        if (!parse_header(data + used, &h) || !same_stream(&h, &filter->format))
++        {
++            if (frames)
++                break; /* deliver what we have; resynchronize next time */
++            /* Garbage between frames (or a stray tag): skip a byte and look
++             * again, dropping it from the sample. */
++            memmove(data + used, data + used + 1, read - used - 1);
++            --read;
++            ++filter->pos;
++            ++skipped;
++            continue;
++        }
++        if (used + h.length > read)
++            break;
++        used += h.length;
++        ++frames;
++    }
++
++    if (!frames)
++    {
++        IMediaSample_Release(sample);
++        /* A whole sample of junk is not the end: look again from where the
++         * skipping stopped. */
++        if (skipped && filter->pos < filter->data_end)
++            return S_OK;
++        return S_FALSE;
++    }
++
++    start = frames_to_time(filter, filter->frames_sent) - filter->seek.llCurrent;
++    stop = frames_to_time(filter, filter->frames_sent + frames) - filter->seek.llCurrent;
++    if (filter->seek.dRate != 1.0)
++    {
++        start /= filter->seek.dRate;
++        stop /= filter->seek.dRate;
++    }
++    IMediaSample_SetActualDataLength(sample, used);
++    IMediaSample_SetTime(sample, &start, &stop);
++    IMediaSample_SetMediaTime(sample, NULL, NULL);
++    IMediaSample_SetSyncPoint(sample, TRUE);
++    IMediaSample_SetDiscontinuity(sample, discontinuity);
++    IMediaSample_SetPreroll(sample, FALSE);
++
++    filter->pos += used;
++    filter->frames_sent += frames;
++
++    hr = IMemInputPin_Receive(filter->source.pMemInputPin, sample);
++    TRACE("Delivered %s frames up to %s, hr %#lx.\n", wine_dbgstr_longlong(frames), debugstr_time(stop), hr);
++    IMediaSample_Release(sample);
++    return hr == S_FALSE ? S_OK : hr;
++}
++
++static DWORD CALLBACK stream_thread(void *arg)
++{
++    struct mpa_splitter *filter = arg;
++    HRESULT hr;
++
++    TRACE("Starting streaming thread for filter %p.\n", filter);
++
++    for (;;)
++    {
++        EnterCriticalSection(&filter->streaming_cs);
++        while (filter->flushing)
++            SleepConditionVariableCS(&filter->flushing_cv, &filter->streaming_cs, INFINITE);
++        if (!filter->streaming)
++        {
++            LeaveCriticalSection(&filter->streaming_cs);
++            break;
++        }
++        LeaveCriticalSection(&filter->streaming_cs);
++
++        EnterCriticalSection(&filter->flushing_cs);
++        if (filter->eos)
++        {
++            SleepConditionVariableCS(&filter->eos_cv, &filter->flushing_cs, INFINITE);
++            LeaveCriticalSection(&filter->flushing_cs);
++            continue;
++        }
++
++        hr = deliver_sample(filter);
++        if (hr == S_FALSE)
++        {
++            TRACE("End of stream.\n");
++            IPin_EndOfStream(filter->source.pin.peer);
++            filter->eos = TRUE;
++        }
++        else if (FAILED(hr) && hr != VFW_E_NOT_COMMITTED && hr != VFW_E_WRONG_STATE)
++        {
++            /* Not a flush or a stop: the stream cannot continue. */
++            WARN("Delivery failed, hr %#lx; ending the stream.\n", hr);
++            IPin_EndOfStream(filter->source.pin.peer);
++            filter->eos = TRUE;
++        }
++        LeaveCriticalSection(&filter->flushing_cs);
++    }
++
++    TRACE("Streaming stopped; exiting.\n");
++    return 0;
++}
++
++/* ---- output pin --------------------------------------------------------- */
++
++static struct mpa_splitter *impl_from_source(struct strmbase_pin *iface)
++{
++    return CONTAINING_RECORD(iface, struct mpa_splitter, source.pin);
++}
++
++static HRESULT build_media_type(const struct mpa_splitter *filter, AM_MEDIA_TYPE *mt)
++{
++    const struct mpa_header *h = &filter->format;
++
++    memset(mt, 0, sizeof(*mt));
++    mt->majortype = MEDIATYPE_Audio;
++    mt->formattype = FORMAT_WaveFormatEx;
++    mt->bFixedSizeSamples = FALSE;
++    mt->bTemporalCompression = FALSE;
++    mt->lSampleSize = 0;
++
++    if (h->layer == 3)
++    {
++        MPEGLAYER3WAVEFORMAT *wfx;
++
++        if (!(wfx = CoTaskMemAlloc(sizeof(*wfx))))
++            return E_OUTOFMEMORY;
++        memset(wfx, 0, sizeof(*wfx));
++        mt->subtype = MEDIASUBTYPE_MP3;
++        mt->cbFormat = sizeof(*wfx);
++        mt->pbFormat = (BYTE *)wfx;
++        wfx->wfx.wFormatTag = WAVE_FORMAT_MPEGLAYER3;
++        wfx->wfx.nChannels = h->channels;
++        wfx->wfx.nSamplesPerSec = h->rate;
++        wfx->wfx.nAvgBytesPerSec = h->bitrate / 8;
++        wfx->wfx.nBlockAlign = 1;
++        wfx->wfx.cbSize = sizeof(*wfx) - sizeof(WAVEFORMATEX);
++        wfx->wID = MPEGLAYER3_ID_MPEG;
++        wfx->fdwFlags = MPEGLAYER3_FLAG_PADDING_ISO;
++        wfx->nBlockSize = h->length;
++        wfx->nFramesPerBlock = 1;
++        wfx->nCodecDelay = 1393;
++    }
++    else
++    {
++        MPEG1WAVEFORMAT *wfx;
++
++        if (!(wfx = CoTaskMemAlloc(sizeof(*wfx))))
++            return E_OUTOFMEMORY;
++        memset(wfx, 0, sizeof(*wfx));
++        mt->subtype = MEDIASUBTYPE_MPEG1AudioPayload;
++        mt->cbFormat = sizeof(*wfx);
++        mt->pbFormat = (BYTE *)wfx;
++        wfx->wfx.wFormatTag = WAVE_FORMAT_MPEG;
++        wfx->wfx.nChannels = h->channels;
++        wfx->wfx.nSamplesPerSec = h->rate;
++        wfx->wfx.nAvgBytesPerSec = h->bitrate / 8;
++        wfx->wfx.nBlockAlign = 1;
++        wfx->wfx.cbSize = sizeof(*wfx) - sizeof(WAVEFORMATEX);
++        wfx->fwHeadLayer = h->layer == 1 ? ACM_MPEG_LAYER1 : ACM_MPEG_LAYER2;
++        wfx->dwHeadBitrate = h->bitrate;
++        wfx->fwHeadMode = h->mode == 0 ? ACM_MPEG_STEREO : h->mode == 1 ? ACM_MPEG_JOINTSTEREO
++                : h->mode == 2 ? ACM_MPEG_DUALCHANNEL : ACM_MPEG_SINGLECHANNEL;
++        wfx->fwHeadFlags = h->version == 1 ? ACM_MPEG_ID_MPEG1 : 0;
++    }
++    return S_OK;
++}
++
++static HRESULT source_query_accept(struct strmbase_pin *iface, const AM_MEDIA_TYPE *mt)
++{
++    struct mpa_splitter *filter = impl_from_source(iface);
++    AM_MEDIA_TYPE ours;
++    HRESULT hr;
++
++    if (FAILED(build_media_type(filter, &ours)))
++        return E_OUTOFMEMORY;
++    hr = IsEqualGUID(&mt->majortype, &ours.majortype) && IsEqualGUID(&mt->subtype, &ours.subtype)
++            && IsEqualGUID(&mt->formattype, &ours.formattype) ? S_OK : S_FALSE;
++    FreeMediaType(&ours);
++    return hr;
++}
++
++static HRESULT source_get_media_type(struct strmbase_pin *iface, unsigned int index, AM_MEDIA_TYPE *mt)
++{
++    if (index > 0)
++        return VFW_S_NO_MORE_ITEMS;
++    return build_media_type(impl_from_source(iface), mt);
++}
++
++static HRESULT source_query_interface(struct strmbase_pin *iface, REFIID iid, void **out)
++{
++    struct mpa_splitter *filter = impl_from_source(iface);
++
++    if (IsEqualGUID(iid, &IID_IMediaSeeking))
++        *out = &filter->seek.IMediaSeeking_iface;
++    else
++        return E_NOINTERFACE;
++
++    IUnknown_AddRef((IUnknown *)*out);
++    return S_OK;
++}
++
++static HRESULT WINAPI source_decide_buffer_size(struct strmbase_source *iface,
++        IMemAllocator *allocator, ALLOCATOR_PROPERTIES *props)
++{
++    ALLOCATOR_PROPERTIES ret;
++
++    /* mpg123-based decoders keep references to the last two samples. */
++    props->cBuffers = max(props->cBuffers, 3);
++    props->cbBuffer = max(props->cbBuffer, MPA_SAMPLE_SIZE);
++    props->cbAlign = max(props->cbAlign, 1);
++    return IMemAllocator_SetProperties(allocator, props, &ret);
++}
++
++static const struct strmbase_source_ops source_ops =
++{
++    .base.pin_query_interface = source_query_interface,
++    .base.pin_query_accept = source_query_accept,
++    .base.pin_get_media_type = source_get_media_type,
++    .pfnAttemptConnection = BaseOutputPinImpl_AttemptConnection,
++    .pfnDecideAllocator = BaseOutputPinImpl_DecideAllocator,
++    .pfnDecideBufferSize = source_decide_buffer_size,
++};
++
++/* ---- seeking ------------------------------------------------------------- */
++
++static struct mpa_splitter *impl_from_IMediaSeeking(IMediaSeeking *iface)
++{
++    return CONTAINING_RECORD(iface, struct mpa_splitter, seek.IMediaSeeking_iface);
++}
++
++static HRESULT WINAPI seeking_QueryInterface(IMediaSeeking *iface, REFIID iid, void **out)
++{
++    struct mpa_splitter *filter = impl_from_IMediaSeeking(iface);
++    return IPin_QueryInterface(&filter->source.pin.IPin_iface, iid, out);
++}
++
++static ULONG WINAPI seeking_AddRef(IMediaSeeking *iface)
++{
++    struct mpa_splitter *filter = impl_from_IMediaSeeking(iface);
++    return IPin_AddRef(&filter->source.pin.IPin_iface);
++}
++
++static ULONG WINAPI seeking_Release(IMediaSeeking *iface)
++{
++    struct mpa_splitter *filter = impl_from_IMediaSeeking(iface);
++    return IPin_Release(&filter->source.pin.IPin_iface);
++}
++
++static HRESULT WINAPI seeking_changed(IMediaSeeking *iface)
++{
++    return S_OK;
++}
++
++static HRESULT WINAPI seeking_SetPositions(IMediaSeeking *iface,
++        LONGLONG *current, DWORD current_flags, LONGLONG *stop, DWORD stop_flags)
++{
++    struct mpa_splitter *filter = impl_from_IMediaSeeking(iface);
++    BOOL flush = !(current_flags & AM_SEEKING_NoFlush);
++    BOOL connected = !!filter->source.pin.peer;
++
++    TRACE("filter %p, current %s, current_flags %#lx, stop %s, stop_flags %#lx.\n",
++            filter, current ? debugstr_time(*current) : "<null>", current_flags,
++            stop ? debugstr_time(*stop) : "<null>", stop_flags);
++
++    if (filter->filter.state == State_Stopped)
++        return SourceSeekingImpl_SetPositions(iface, current, current_flags, stop, stop_flags);
++
++    if (flush && connected)
++        IPin_BeginFlush(filter->source.pin.peer);
++
++    EnterCriticalSection(&filter->streaming_cs);
++    filter->flushing = TRUE;
++    LeaveCriticalSection(&filter->streaming_cs);
++
++    EnterCriticalSection(&filter->flushing_cs);
++
++    SourceSeekingImpl_SetPositions(iface, current, current_flags, stop, stop_flags);
++    if ((current_flags & AM_SEEKING_PositioningBitsMask) != AM_SEEKING_NoPositioning)
++        seek_to(filter, filter->seek.llCurrent);
++
++    if (flush && connected)
++        IPin_EndFlush(filter->source.pin.peer);
++
++    filter->need_segment = TRUE;
++    filter->eos = FALSE;
++    LeaveCriticalSection(&filter->flushing_cs);
++    WakeConditionVariable(&filter->eos_cv);
++
++    EnterCriticalSection(&filter->streaming_cs);
++    filter->flushing = FALSE;
++    LeaveCriticalSection(&filter->streaming_cs);
++    WakeAllConditionVariable(&filter->flushing_cv);
++
++    return S_OK;
++}
++
++static const IMediaSeekingVtbl seeking_vtbl =
++{
++    seeking_QueryInterface,
++    seeking_AddRef,
++    seeking_Release,
++    SourceSeekingImpl_GetCapabilities,
++    SourceSeekingImpl_CheckCapabilities,
++    SourceSeekingImpl_IsFormatSupported,
++    SourceSeekingImpl_QueryPreferredFormat,
++    SourceSeekingImpl_GetTimeFormat,
++    SourceSeekingImpl_IsUsingTimeFormat,
++    SourceSeekingImpl_SetTimeFormat,
++    SourceSeekingImpl_GetDuration,
++    SourceSeekingImpl_GetStopPosition,
++    SourceSeekingImpl_GetCurrentPosition,
++    SourceSeekingImpl_ConvertTimeFormat,
++    seeking_SetPositions,
++    SourceSeekingImpl_GetPositions,
++    SourceSeekingImpl_GetAvailable,
++    SourceSeekingImpl_SetRate,
++    SourceSeekingImpl_GetRate,
++    SourceSeekingImpl_GetPreroll,
++};
++
++/* ---- input pin ----------------------------------------------------------- */
++
++static struct mpa_splitter *impl_from_strmbase_sink(struct strmbase_sink *iface)
++{
++    return CONTAINING_RECORD(iface, struct mpa_splitter, sink);
++}
++
++static HRESULT sink_query_accept(struct strmbase_pin *iface, const AM_MEDIA_TYPE *mt)
++{
++    if (IsEqualGUID(&mt->majortype, &MEDIATYPE_Stream) && IsEqualGUID(&mt->subtype, &MEDIASUBTYPE_MPEG1Audio))
++        return S_OK;
++    return S_FALSE;
++}
++
++static void remove_source(struct mpa_splitter *filter)
++{
++    if (!filter->have_source)
++        return;
++    if (filter->source.pin.peer)
++    {
++        if (SUCCEEDED(IMemAllocator_Decommit(filter->source.pAllocator)))
++            IPin_Disconnect(filter->source.pin.peer);
++        IPin_Disconnect(&filter->source.pin.IPin_iface);
++    }
++    strmbase_seeking_cleanup(&filter->seek);
++    strmbase_source_cleanup(&filter->source);
++    filter->have_source = FALSE;
++    BaseFilterImpl_IncrementPinVersion(&filter->filter);
++}
++
++static HRESULT sink_connect(struct strmbase_sink *iface, IPin *peer, const AM_MEDIA_TYPE *mt)
++{
++    struct mpa_splitter *filter = impl_from_strmbase_sink(iface);
++    HRESULT hr;
++
++    if (FAILED(hr = IPin_QueryInterface(peer, &IID_IAsyncReader, (void **)&filter->reader)))
++        return hr;
++
++    if (FAILED(hr = probe_stream(filter)))
++    {
++        IAsyncReader_Release(filter->reader);
++        filter->reader = NULL;
++        return hr;
++    }
++
++    strmbase_source_init(&filter->source, &filter->filter, L"Audio", &source_ops);
++    strmbase_seeking_init(&filter->seek, &seeking_vtbl, seeking_changed, seeking_changed, seeking_changed);
++    filter->seek.llDuration = filter->seek.llStop = duration(filter);
++    filter->seek.llCurrent = 0;
++    filter->have_source = TRUE;
++    BaseFilterImpl_IncrementPinVersion(&filter->filter);
++    return S_OK;
++}
++
++static void sink_disconnect(struct strmbase_sink *iface)
++{
++    struct mpa_splitter *filter = impl_from_strmbase_sink(iface);
++
++    remove_source(filter);
++    if (filter->reader)
++        IAsyncReader_Release(filter->reader);
++    filter->reader = NULL;
++}
++
++static const struct strmbase_sink_ops sink_ops =
++{
++    .base.pin_query_accept = sink_query_accept,
++    .sink_connect = sink_connect,
++    .sink_disconnect = sink_disconnect,
++};
++
++/* ---- filter -------------------------------------------------------------- */
++
++static struct strmbase_pin *mpa_get_pin(struct strmbase_filter *iface, unsigned int index)
++{
++    struct mpa_splitter *filter = impl_from_strmbase_filter(iface);
++
++    if (index == 0)
++        return &filter->sink.pin;
++    if (index == 1 && filter->have_source)
++        return &filter->source.pin;
++    return NULL;
++}
++
++static void mpa_destroy(struct strmbase_filter *iface)
++{
++    struct mpa_splitter *filter = impl_from_strmbase_filter(iface);
++
++    if (filter->sink.pin.peer)
++    {
++        IPin_Disconnect(filter->sink.pin.peer);
++        IPin_Disconnect(&filter->sink.pin.IPin_iface);
++    }
++    remove_source(filter);
++    if (filter->reader)
++        IAsyncReader_Release(filter->reader);
++
++    filter->streaming_cs.DebugInfo->Spare[0] = 0;
++    DeleteCriticalSection(&filter->streaming_cs);
++    filter->flushing_cs.DebugInfo->Spare[0] = 0;
++    DeleteCriticalSection(&filter->flushing_cs);
++    strmbase_sink_cleanup(&filter->sink);
++    strmbase_filter_cleanup(&filter->filter);
++    free(filter);
++}
++
++static HRESULT mpa_init_stream(struct strmbase_filter *iface)
++{
++    struct mpa_splitter *filter = impl_from_strmbase_filter(iface);
++    HRESULT hr;
++
++    if (!filter->have_source || !filter->source.pin.peer)
++        return S_OK;
++
++    if (FAILED(hr = IMemAllocator_Commit(filter->source.pAllocator)))
++        ERR("Failed to commit allocator, hr %#lx.\n", hr);
++
++    /* DirectShow keeps the seek position across a stop, and starts from it
++     * again on every stopped -> paused transition. */
++    seek_to(filter, filter->seek.llCurrent);
++    filter->need_segment = TRUE;
++    filter->eos = FALSE;
++    filter->streaming = TRUE;
++    filter->flushing = FALSE;
++    filter->thread = CreateThread(NULL, 0, stream_thread, filter, 0, NULL);
++    return S_OK;
++}
++
++static HRESULT mpa_cleanup_stream(struct strmbase_filter *iface)
++{
++    struct mpa_splitter *filter = impl_from_strmbase_filter(iface);
++
++    if (!filter->thread)
++        return S_OK;
++
++    EnterCriticalSection(&filter->streaming_cs);
++    filter->streaming = FALSE;
++    LeaveCriticalSection(&filter->streaming_cs);
++
++    /* Unblocks a GetBuffer() the streaming thread may be waiting in; then
++     * take flushing_cs so the wake cannot fall between its eos check and its
++     * sleep. */
++    IMemAllocator_Decommit(filter->source.pAllocator);
++    EnterCriticalSection(&filter->flushing_cs);
++    WakeConditionVariable(&filter->eos_cv);
++    LeaveCriticalSection(&filter->flushing_cs);
++    WaitForSingleObject(filter->thread, INFINITE);
++    CloseHandle(filter->thread);
++    filter->thread = NULL;
++    return S_OK;
++}
++
++static const struct strmbase_filter_ops filter_ops =
++{
++    .filter_get_pin = mpa_get_pin,
++    .filter_destroy = mpa_destroy,
++    .filter_init_stream = mpa_init_stream,
++    .filter_cleanup_stream = mpa_cleanup_stream,
++};
++
++HRESULT mpeg_audio_splitter_create(IUnknown *outer, IUnknown **out)
++{
++    struct mpa_splitter *object;
++
++    if (!(object = calloc(1, sizeof(*object))))
++        return E_OUTOFMEMORY;
++
++    strmbase_filter_init(&object->filter, outer, &CLSID_MPEG1Splitter, &filter_ops);
++    strmbase_sink_init(&object->sink, &object->filter, L"Input", &sink_ops, NULL);
++
++    InitializeCriticalSectionEx(&object->streaming_cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
++    object->streaming_cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": mpa_splitter.streaming_cs");
++    InitializeCriticalSectionEx(&object->flushing_cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
++    object->flushing_cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": mpa_splitter.flushing_cs");
++    InitializeConditionVariable(&object->flushing_cv);
++    InitializeConditionVariable(&object->eos_cv);
++
++    TRACE("Created MPEG audio splitter %p.\n", object);
++    *out = &object->filter.IUnknown_inner;
++    return S_OK;
++}
+diff --git a/dlls/quartz/parser.c b/dlls/quartz/parser.c
+index aa325f5e65..13d58352eb 100644
+--- a/dlls/quartz/parser.c
++++ b/dlls/quartz/parser.c
+@@ -18,6 +18,8 @@
+ 
+ #include "quartz_private.h"
+ 
++WINE_DEFAULT_DEBUG_CHANNEL(quartz);
++
+ HRESULT avi_splitter_create(IUnknown *outer, IUnknown **out)
+ {
+     static const GUID CLSID_wg_avi_splitter = {0x272bfbfb,0x50d0,0x4078,{0xb6,0x00,0x1e,0x95,0x9c,0x30,0x13,0x37}};
+@@ -27,7 +29,14 @@ HRESULT avi_splitter_create(IUnknown *outer, IUnknown **out)
+ HRESULT mpeg1_splitter_create(IUnknown *outer, IUnknown **out)
+ {
+     static const GUID CLSID_wg_mpeg1_splitter = {0xa8edbf98,0x2442,0x42c5,{0x85,0xa1,0xab,0x05,0xa5,0x80,0xdf,0x53}};
+-    return CoCreateInstance(&CLSID_wg_mpeg1_splitter, outer, CLSCTX_INPROC_SERVER, &IID_IUnknown, (void **)out);
++    HRESULT hr;
++
++    if (SUCCEEDED(hr = CoCreateInstance(&CLSID_wg_mpeg1_splitter, outer, CLSCTX_INPROC_SERVER, &IID_IUnknown, (void **)out)))
++        return hr;
++    /* No winegstreamer (a Wine built without GStreamer): MPEG audio files
++     * can still be split, by mpegaudiosplit.c. */
++    TRACE("winegstreamer's MPEG-1 splitter is unavailable, hr %#lx; using the MPEG audio splitter.\n", hr);
++    return mpeg_audio_splitter_create(outer, out);
+ }
+ 
+ HRESULT wave_parser_create(IUnknown *outer, IUnknown **out)
+diff --git a/dlls/quartz/quartz_private.h b/dlls/quartz/quartz_private.h
+index e683dc51cd..858db5b3d9 100644
+--- a/dlls/quartz/quartz_private.h
++++ b/dlls/quartz/quartz_private.h
+@@ -63,6 +63,7 @@ HRESULT mpeg_audio_codec_create(IUnknown *outer, IUnknown **out);
+ HRESULT mpeg_layer3_decoder_create(IUnknown *outer, IUnknown **out);
+ HRESULT mpeg_video_codec_create(IUnknown *outer, IUnknown **out);
+ HRESULT mpeg1_splitter_create(IUnknown *outer, IUnknown **out);
++HRESULT mpeg_audio_splitter_create(IUnknown *outer, IUnknown **out);
+ HRESULT system_clock_create(IUnknown *outer, IUnknown **out);
+ HRESULT seeking_passthrough_create(IUnknown *outer, IUnknown **out);
+ HRESULT video_renderer_create(IUnknown *outer, IUnknown **out);
