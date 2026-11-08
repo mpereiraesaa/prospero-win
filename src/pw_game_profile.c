@@ -4,7 +4,7 @@
 
 enum { SET_MODE = 1u << 0, SET_MOUSE = 1u << 1, SET_SPEED = 1u << 2, SET_PRESET = 1u << 3,
        SET_PLAYER2 = 1u << 4, SET_RUMBLE = 1u << 5, SET_KEYBOARD_STICK = 1u << 6,
-       SET_STICK_DEADZONE = 1u << 7 };
+       SET_STICK_DEADZONE = 1u << 7, SET_GAMEPADS_ONLY = 1u << 8 };
 /* keyboard_stick names the stick that drives the four direction keys; the
  * keys themselves are stick_up/down/left/right, defaulting to WASD. */
 enum { STICK_UP = 1u << 0, STICK_DOWN = 1u << 1, STICK_LEFT = 1u << 2, STICK_RIGHT = 1u << 3 };
@@ -102,6 +102,21 @@ static int binding(const uint8_t *v, size_t n, PwGameBinding *out)
     return PW_ERR_UNSUPPORTED;
 }
 
+/* A DLL's file name: letters, digits, - _ . and ending in .dll. */
+static int module_name(char *out, size_t capacity, const uint8_t *v, size_t n)
+{
+    if (n < 5 || n >= capacity || !is(v + n - 4, 4, ".dll")) return PW_ERR_MALFORMED;
+    for (size_t i = 0; i < n; i++) {
+        char c = (char)v[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '-' || c == '_' || c == '.'))
+            return PW_ERR_MALFORMED;
+        out[i] = c;
+    }
+    out[n] = 0;
+    return PW_OK;
+}
+
 /* A preset's name: the file name under input/ without .input. */
 static int preset_name(char *out, size_t capacity, const uint8_t *v, size_t n)
 {
@@ -135,6 +150,13 @@ static int input_field(PwGameInput *input, const uint8_t *key, size_t key_length
         if (!allow_preset || (input->set & SET_PLAYER2)) return PW_ERR_MALFORMED;
         if (preset_name(input->player2, sizeof(input->player2), v, n) != PW_OK) return PW_ERR_MALFORMED;
         input->set |= SET_PLAYER2;
+        return PW_OK;
+    }
+    if (is(key, key_length, "xinput_gamepads_only")) {
+        if (!allow_preset || (input->set & SET_GAMEPADS_ONLY)) return PW_ERR_MALFORMED;
+        if (module_name(input->xinput_gamepads_only, sizeof(input->xinput_gamepads_only), v, n) != PW_OK)
+            return PW_ERR_MALFORMED;
+        input->set |= SET_GAMEPADS_ONLY;
         return PW_OK;
     }
     if (is(key, key_length, "mode")) {

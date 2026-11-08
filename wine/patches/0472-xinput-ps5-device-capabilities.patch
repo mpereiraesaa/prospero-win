@@ -1,0 +1,113 @@
+From: prospero-win <prospero-win@invalid>
+Subject: [PATCH] xinput: report each title device subtype and USB identity
+
+Extend the four-user interface from 0471 without changing its state/rumble ABI.
+Paired PE/Unix modules add a pointer-free capability query. Older ntdll keeps
+the wired gamepad defaults when the new sink export is absent.
+
+diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -179,6 +179,21 @@
+     return TRUE;
+ }
+ 
++static void title_device_caps(DWORD index, XINPUT_CAPABILITIES_EX *caps)
++{
++    struct xinput_caps_params params = {0};
++    params.index = index;
++    /* An older ntdll retains the legacy wired-gamepad identity. */
++    if (__wine_unix_call(title_pad, unix_pad_caps, &params)) return;
++    caps->Capabilities.SubType = params.caps.subtype;
++    caps->Capabilities.Flags = params.caps.flags;
++    caps->VendorId = params.caps.vendor_id;
++    caps->ProductId = params.caps.product_id;
++    caps->VersionNumber = params.caps.revision;
++    if (!(params.caps.flags & XINPUT_CAPS_FFB_SUPPORTED))
++        memset(&caps->Capabilities.Vibration, 0, sizeof(caps->Capabilities.Vibration));
++}
++
+ /* xinput_cs must be held */
+ static void title_pad_rumble(DWORD index)
+ {
+@@ -1311,6 +1326,7 @@
+         caps->VendorId = 0x045e;
+         caps->ProductId = 0x028e;
+         caps->VersionNumber = 0x0114;
++        title_device_caps(index, caps);
+         return ERROR_SUCCESS;
+     }
+ 
+diff --git a/dlls/xinput1_3/unixlib.c b/dlls/xinput1_3/unixlib.c
+--- a/dlls/xinput1_3/unixlib.c
++++ b/dlls/xinput1_3/unixlib.c
+@@ -41,10 +41,13 @@
+ static void (*title_rumble)( UINT32 index, UINT32 left, UINT32 right );
+ 
+ /* Every signed-in user's DualSense, controllers 0..3. */
++static int (*title_caps)( UINT32 index, struct xinput_pad_caps *caps );
++
+ static NTSTATUS pad_init( void *args )
+ {
+     title_pad = dlsym( RTLD_DEFAULT, "pw_wine_pad_at" );
+     title_rumble = dlsym( RTLD_DEFAULT, "pw_wine_set_rumble_at" );
++    title_caps = dlsym( RTLD_DEFAULT, "pw_wine_pad_caps_at" );
+     return title_pad ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+ }
+ 
+@@ -66,11 +69,20 @@
+     return STATUS_SUCCESS;
+ }
+ 
++static NTSTATUS pad_caps( void *args )
++{
++    struct xinput_caps_params *params = args;
++    if (!title_caps) return STATUS_NOT_SUPPORTED;
++    memset( &params->caps, 0, sizeof(params->caps) );
++    return title_caps( params->index, &params->caps ) ? STATUS_SUCCESS : STATUS_DEVICE_NOT_CONNECTED;
++}
++
+ const unixlib_entry_t __wine_unix_call_funcs[] =
+ {
+     pad_init,
+     pad_state,
+     pad_rumble,
++    pad_caps,
+ };
+ 
+ C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
+@@ -82,6 +94,7 @@
+     pad_init,
+     pad_state,
+     pad_rumble,
++    pad_caps,
+ };
+ 
+ C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
+diff --git a/dlls/xinput1_3/unixlib.h b/dlls/xinput1_3/unixlib.h
+--- a/dlls/xinput1_3/unixlib.h
++++ b/dlls/xinput1_3/unixlib.h
+@@ -52,11 +52,23 @@
+     UINT32 right;
+ };
+ 
++struct xinput_pad_caps
++{
++    UINT32 subtype;
++    UINT16 vendor_id, product_id, revision, flags;
++};
++struct xinput_caps_params
++{
++    UINT32 index;
++    struct xinput_pad_caps caps;
++};
++
+ enum xinput_unix_funcs
+ {
+     unix_pad_init,
+     unix_pad_state,
+     unix_pad_rumble,
++    unix_pad_caps,
+     unix_funcs_count,
+ };
+ 

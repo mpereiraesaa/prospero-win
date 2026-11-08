@@ -122,6 +122,28 @@ DualSense as an XInput controller. On the console, XInput reports both
 sticks over their full range, the triggers and the buttons, and Half-Life's
 SDL2 opens it as a game controller.
 
+### Guitars counted twice (Unity games)
+
+On Windows, Unity 2022.2 and later read gamepads through
+Windows.Gaming.Input, and plugins read the other controllers, such as
+guitars and drums, through XInput (YARG uses HIDrogen). Here Unity has no
+Windows.Gaming.Input and falls back to XInput, so it reports each guitar
+too, and the game gets every guitar twice: YARG then makes two profiles
+for it, and each strum or fret counts twice. The profile can keep Unity to
+gamepads:
+
+```ini
+[input]
+mode = xinput
+xinput_gamepads_only = UnityPlayer.dll
+```
+
+The log then says `PW_WINE64 xinput gamepads only for UnityPlayer.dll`, and
+Wine says `xinput: controller N (subtype S) is not reported to ...` the
+first time it keeps a guitar from Unity. Calls from anywhere else, such as
+the plugin, still see every controller. Only a profile, not a preset, can
+set it.
+
 ### DirectInput
 
 Games that read a controller through DirectInput (many games from before

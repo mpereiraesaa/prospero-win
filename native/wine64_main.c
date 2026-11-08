@@ -988,7 +988,7 @@ int main(int argc, char **argv)
     static char prefix[PW_WINE_LIBRARY_PATH + PW_APP_ID_CAPACITY], desktop[24], view[8] = "window";
     static char radv_cache[PW_WINE_LIBRARY_PATH + 16];
     enum { WINE64_FIXED_ENV_COUNT = 7,
-           WINE64_PROFILE_ENV_CAPACITY = 3 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX + PW_GAME_CPU_ENV_MAX +
+           WINE64_PROFILE_ENV_CAPACITY = 4 + PW_GAME_GRAPHICS_ENV_MAX + PW_GAME_RUNTIME_ENV_MAX + PW_GAME_CPU_ENV_MAX +
                                          PW_GAME_CLOCK_ENV_MAX + PW_GAME_DEBUG_ENV_MAX };
     static PwWineStartEnv extra[WINE64_FIXED_ENV_COUNT + WINE64_PROFILE_ENV_CAPACITY] = {
         { "WINEDEBUG", PW_WINE64_DEBUG },
@@ -1159,6 +1159,15 @@ int main(int argc, char **argv)
          * XInput; this hint makes them read controller 0 through XInput. */
         if (game_input.mode == PW_GAME_INPUT_XINPUT)
             extra[config.extra_env_count++] = (PwWineStartEnv){ "SDL_JOYSTICK_RAWINPUT", "0" };
+        /* [input] xinput_gamepads_only: patch 0473 keeps guitars and drums
+         * from that module (UnityPlayer.dll), which on Windows would read
+         * gamepads through Windows.Gaming.Input and leave the rest to the
+         * game's plugins; without it YARG gets every guitar twice. */
+        if (game_input.mode == PW_GAME_INPUT_XINPUT && game->input.xinput_gamepads_only[0]) {
+            extra[config.extra_env_count++] =
+                (PwWineStartEnv){ "WINE_PS5_XINPUT_GAMEPADS_ONLY", game->input.xinput_gamepads_only };
+            PS5LOG_LOG("PW_WINE64 xinput gamepads only for %s", game->input.xinput_gamepads_only);
+        }
         /* [runtime]: opt-in runtime settings for this game. */
         {
             PwGameEnv runtime_env[PW_GAME_RUNTIME_ENV_MAX];

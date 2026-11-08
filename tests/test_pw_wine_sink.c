@@ -219,6 +219,31 @@ static void test_menu(void)
     assert(got.sequence==6 && !got.open && !got.title[0]);
 }
 
+static void device_caps(void)
+{
+    PwWinePad a={0},got;
+    PwWinePadCaps guitar={7,0x1430,0x4748,0x3122,0},caps;
+    uint32_t left,right;
+    pw_wine_set_pad_at(0,&a);
+    assert(pw_wine_pad_caps_at(0,&caps) && caps.subtype==1 && caps.flags==PW_WINE_PAD_FFB);
+    assert(!pw_wine_set_pad_device_at(1,&a,&guitar));
+    assert(pw_wine_pad_at(1,&got));
+    uint32_t packet=got.packet,changes=pw_wine_pad_changes();
+    assert(pw_wine_pad_caps_at(1,&caps) && caps.subtype==7 && caps.vendor_id==0x1430 && caps.product_id==0x4748 && !caps.flags);
+    assert(!pw_wine_set_pad_device_at(1,&a,&guitar));
+    assert(pw_wine_pad_at(1,&got) && got.packet==packet && pw_wine_pad_changes()==changes);
+    guitar.revision++;
+    assert(!pw_wine_set_pad_device_at(1,&a,&guitar));
+    assert(pw_wine_pad_at(1,&got) && got.packet==packet+1 && pw_wine_pad_changes()==changes+1);
+    pw_wine_set_rumble_at(1,123,456);
+    pw_wine_set_pad_at(1,NULL);
+    assert(!pw_wine_pad_caps_at(1,&caps) && !caps.subtype);
+    assert(pw_wine_rumble_at(1,&left,&right) && !left && !right);
+    assert(pw_wine_set_pad_device_at(4,&a,&guitar)==-1);
+    assert(!pw_wine_pad_caps_at(4,&caps) && !caps.subtype);
+    pw_wine_set_pad_at(0,NULL);
+}
+
 int main(void)
 {
     uint32_t frame[4*3];
@@ -364,5 +389,6 @@ int main(void)
     assert(!pw_wine_rumble_at(PW_WINE_PADS,&left,&right));
     test_display_release();
     test_menu();
+    device_caps();
     return 0;
 }
