@@ -69,6 +69,16 @@ typedef struct PwWinePad {
     int16_t thumb_lx,thumb_ly,thumb_rx,thumb_ry;
 } PwWinePad;
 
+/* Per-device identity; NULL keeps the legacy wired Xbox gamepad capabilities. */
+enum { PW_WINE_PAD_FFB=1 };
+typedef struct PwWinePadCaps {
+    uint32_t subtype;
+    uint16_t vendor_id,product_id,revision,flags;
+} PwWinePadCaps;
+/* Set state and identity atomically. NULL pad disconnects. -1 for an invalid index. */
+int pw_wine_set_pad_device_at(uint32_t index,const PwWinePad *pad,const PwWinePadCaps *caps);
+int pw_wine_pad_caps_at(uint32_t index,PwWinePadCaps *caps);
+
 /* Title side. */
 void pw_wine_set_present_sink(PwWinePresentSink sink,void *context);
 void pw_wine_set_audio_sink(PwWineAudioSink sink,void *context);

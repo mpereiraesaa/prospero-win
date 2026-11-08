@@ -18,6 +18,7 @@ static PwWineSinkStats stats;
 static pthread_once_t wake_once=PTHREAD_ONCE_INIT;
 static int wake[2]={-1,-1};
 static PwWinePad pad_state[PW_WINE_PADS];
+static PwWinePadCaps pad_caps[PW_WINE_PADS];
 static uint32_t pad_changes;
 static uint32_t rumble_left[PW_WINE_PADS],rumble_right[PW_WINE_PADS],rumble_changed[PW_WINE_PADS];
 static uint32_t pads_wanted;
@@ -179,22 +180,53 @@ static int same_pad(const PwWinePad *a,const PwWinePad *b)
            a->right_trigger==b->right_trigger && a->thumb_lx==b->thumb_lx &&
            a->thumb_ly==b->thumb_ly && a->thumb_rx==b->thumb_rx && a->thumb_ry==b->thumb_ry;
 }
-void pw_wine_set_pad_at(uint32_t index,const PwWinePad *pad)
+static int same_caps(const PwWinePadCaps *a,const PwWinePadCaps *b)
 {
-    int changed;
-    if(index>=PW_WINE_PADS)return;
+    return a->subtype==b->subtype && a->vendor_id==b->vendor_id &&
+           a->product_id==b->product_id && a->revision==b->revision && a->flags==b->flags;
+}
+int pw_wine_set_pad_device_at(uint32_t index,const PwWinePad *pad,const PwWinePadCaps *caps)
+{
+    static const PwWinePadCaps legacy={1,0x045e,0x028e,0x0114,PW_WINE_PAD_FFB};
+    int changed,identity;
+    if(index>=PW_WINE_PADS)return -1;
+    if(!caps)caps=&legacy;
     PwWinePad *state=&pad_state[index];
     pthread_mutex_lock(&lock);
-    changed=(pad!=NULL)!=(state->connected!=0);
+    identity=pad && state->connected && !same_caps(caps,&pad_caps[index]);
+    changed=((pad!=NULL)!=(state->connected!=0)) || identity;
     if(changed)__atomic_add_fetch(&pad_changes,1,__ATOMIC_RELAXED);
-    if(!pad)state->connected=0;
-    else if(!state->connected || !same_pad(pad,state)) {
+    if(!pad) {
+        state->connected=0;
+        memset(&pad_caps[index],0,sizeof(pad_caps[index]));
+        if(rumble_left[index] || rumble_right[index])rumble_changed[index]=1;
+        rumble_left[index]=rumble_right[index]=0;
+    }
+    else if(!state->connected || identity || !same_pad(pad,state)) {
         uint32_t packet=state->packet+1;
         *state=*pad;state->connected=1;
         state->packet=packet?packet:1;   /* 0 is never a packet */
+        pad_caps[index]=*caps;
     }
     pthread_mutex_unlock(&lock);
     if(changed)wake_driver();   /* the driver tells the game's windows */
+    return 0;
+}
+void pw_wine_set_pad_at(uint32_t index,const PwWinePad *pad)
+{
+    (void)pw_wine_set_pad_device_at(index,pad,NULL);
+}
+int pw_wine_pad_caps_at(uint32_t index,PwWinePadCaps *caps)
+{
+    int connected;
+    if(!caps)return 0;
+    memset(caps,0,sizeof(*caps));
+    if(index>=PW_WINE_PADS)return 0;
+    pthread_mutex_lock(&lock);
+    connected=pad_state[index].connected!=0;
+    if(connected)*caps=pad_caps[index];
+    pthread_mutex_unlock(&lock);
+    return connected;
 }
 /* No lock: the driver asks at every ProcessEvents. */
 uint32_t pw_wine_pad_changes(void)
