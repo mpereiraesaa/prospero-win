@@ -344,6 +344,14 @@ static void test_refusals(void)
         APP "[input]\nplayer2 = P2\n",
         APP "[input]\nplayer2 =\n",
         APP "[input]\nplayer2 = a\nplayer2 = b\n",
+        APP "[input]\nxinput_gamepads_only =\n",
+        APP "[input]\nxinput_gamepads_only = UnityPlayer\n",
+        APP "[input]\nxinput_gamepads_only = .dll\n",
+        APP "[input]\nxinput_gamepads_only = a/b.dll\n",
+        APP "[input]\nxinput_gamepads_only = Unity Player.dll\n",
+        APP "[input]\nxinput_gamepads_only = a.dll\nxinput_gamepads_only = b.dll\n",
+        APP "[input]\nxinput_gamepads_only = "
+            "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij.dll\n",
         APP "[input]\npreset = 0123456789012345678901234567890123456789012345678901234567890123456789\n",
         APP "[input]\ncross space\n",
         APP "[input]\n = space\n",
@@ -398,6 +406,15 @@ static void test_presets(void)
     assert(parse(APP "[input]\npreset = bomb\nplayer2 = bomb-p2\n", &p) == PW_OK);
     assert(!strcmp(p.input.preset, "bomb") && !strcmp(p.input.player2, "bomb-p2"));
     assert(parse(APP "[input]\npreset = bomb\n", &p) == PW_OK && !p.input.player2[0]);
+
+    /* The module that sees only gamepads, from the profile alone. */
+    assert(!p.input.xinput_gamepads_only[0]);
+    assert(parse(APP "[input]\nmode = xinput\nxinput_gamepads_only = UnityPlayer.dll\n", &p) == PW_OK);
+    assert(!strcmp(p.input.xinput_gamepads_only, "UnityPlayer.dll"));
+    assert(parse(APP "[input]\nxinput_gamepads_only = "
+                 "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghi.dll\n", &p) == PW_OK);
+    assert(strlen(p.input.xinput_gamepads_only) == PW_GAME_MODULE_CAPACITY - 1);
+    assert(preset("[input]\nxinput_gamepads_only = UnityPlayer.dll\n", &input) == PW_ERR_MALFORMED);
 
     /* A preset holds only [input] and cannot chain another preset. */
     assert(preset("[input]\npreset = other\n", &input) == PW_ERR_MALFORMED);
