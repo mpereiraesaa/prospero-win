@@ -41,6 +41,7 @@
 #include "pw_pad_ps5.h"
 #include "pw_hid_ps5.h"
 #include "pw_xinput_usb_wine.h"
+#include "pw_xinput_net_wine.h"
 #ifndef PW_USB360_CAPTURE
 #define PW_USB360_CAPTURE 0
 #endif
@@ -790,6 +791,11 @@ static void usb_log(const char *line)
     PS5LOG_LOG("PW_WINE64 usb %s", line);
 }
 
+static void net_xinput_log(const char *line)
+{
+    PS5LOG_LOG("PW_WINE64 %s", line);
+}
+
 static void usb_backend_log(void *context, const char *line)
 {
     (void)context;
@@ -1048,6 +1054,7 @@ int main(int argc, char **argv)
     static PwPadPs5 pad;
     static PwHidPs5 hid;
     static PwXinputUsbWine usb_guitars;
+    static PwXinputNetWine net_guitars;
     static PwGameInput game_input;
     /* [input] player2: a second signed-in user's DualSense as more keys. */
     static PwPadPs5 pad2;
@@ -1427,6 +1434,10 @@ int main(int argc, char **argv)
     usb_ops.log = usb_backend_log;
     (void)pw_xinput_usb_wine_init(&usb_guitars, &usb_ops,
                                  PW_USB360_CAPTURE ? NULL : set_usb_slot, usb_log, PW_USB360_CAPTURE);
+    /* Controllers another process describes over loopback UDP (a Wii Remote
+     * guitar from PadBridge PS5): XInput users beside the USB ones. */
+    (void)pw_xinput_net_wine_init(&net_guitars, pw_xinput_net_ps5_ops(),
+                                  PW_USB360_CAPTURE ? NULL : set_usb_slot, net_xinput_log);
     for (uint64_t tick = 1; status == PW_OK; tick++) {
         uint64_t now = now_ns();
         pw_diagnostics_tick(now);
@@ -1595,12 +1606,13 @@ int main(int argc, char **argv)
                     PS5LOG_LOG("PW_WINE64 players login_users_us=%u", (unsigned)(players.login_ns / 1000u));
                 players_open = open;
             }
-            /* Vacate USB users before a newly signed-in DualSense writes them.
+            /* Vacate USB and network users before a newly signed-in DualSense writes them.
              * Keep departing users reserved until their final disconnect below. */
             uint32_t reserved = 1u;
             for (uint32_t i = 0; i < PW_PAD_PLAYERS; i++)
                 if (players.slot[i].opened || players_fed[i]) reserved |= 1u << (i + 1);
-            pw_xinput_usb_wine_reserve(&usb_guitars, reserved);
+            pw_xinput_net_wine_reserve(&net_guitars, reserved | pw_xinput_usb_wine_users(&usb_guitars));
+            pw_xinput_usb_wine_reserve(&usb_guitars, reserved | pw_xinput_net_wine_users(&net_guitars));
             for (uint32_t i = 0; i < PW_PAD_PLAYERS; i++) {
                 PwPadPs5 *player = &players.slot[i];
                 PwPadPs5 idle;
@@ -1628,12 +1640,19 @@ int main(int argc, char **argv)
             }
         }
         {
+            /* USB and network controllers each keep out of the users the
+             * other holds; a network one takes a user only after the USB
+             * poll, so the two never pick the same one in a tick. */
             uint32_t reserved = 1u;
+            int blocked = menu_open || pad.intercepted || (osk.state == PW_OSK_OPENING || osk.state == PW_OSK_SHOWN);
             for (uint32_t i = 0; i < PW_PAD_PLAYERS; i++)
                 if (players.slot[i].opened) reserved |= 1u << (i + 1);
-            pw_xinput_usb_wine_reserve(&usb_guitars, reserved);
-            pw_xinput_usb_wine_block(&usb_guitars, menu_open || pad.intercepted || (osk.state == PW_OSK_OPENING || osk.state == PW_OSK_SHOWN));
+            pw_xinput_usb_wine_reserve(&usb_guitars, reserved | pw_xinput_net_wine_users(&net_guitars));
+            pw_xinput_usb_wine_block(&usb_guitars, blocked);
             pw_xinput_usb_wine_poll(&usb_guitars, tick, 5 * PW_WINE64_TICKS_PER_S);
+            pw_xinput_net_wine_reserve(&net_guitars, reserved | pw_xinput_usb_wine_users(&usb_guitars));
+            pw_xinput_net_wine_block(&net_guitars, blocked);
+            pw_xinput_net_wine_poll(&net_guitars, now / 1000000u);
         }
         if (pad_read) {
             size_t count = pw_wine_game_inputs(&game_input, seen->core.pressed_edges,
@@ -1874,6 +1893,7 @@ int main(int argc, char **argv)
         }
     }
     pw_xinput_usb_wine_close(&usb_guitars);
+    pw_xinput_net_wine_close(&net_guitars);
     PS5LOG_LOG("PW_WINE64 done status=%d stage=%d", status, start.stage);
     if (status != PW_OK) restart_title(NULL, launch.cycle + 1u, "start-failed");
     pw_diagnostics_close(status == PW_OK ? "wine64-restart-failed" : "wine64-start-failed");

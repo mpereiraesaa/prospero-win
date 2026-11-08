@@ -21,6 +21,8 @@ typedef struct PwXinputUsbWine {
  * Without the device-capability sink, normal mode stays disabled. */
 void pw_xinput_usb_wine_reserve(PwXinputUsbWine *,uint32_t users);
 void pw_xinput_usb_wine_block(PwXinputUsbWine *,int blocked);
+/* The users (bit i: XInput user i) USB devices hold now. */
+uint32_t pw_xinput_usb_wine_users(const PwXinputUsbWine *);
 int pw_xinput_usb_wine_init(PwXinputUsbWine *,const PwXinputUsbOps *,PwXinputUsbSetSlot,
                             void (*log)(const char *),int capture);
 void pw_xinput_usb_wine_poll(PwXinputUsbWine *,uint64_t tick,uint64_t retry_ticks);

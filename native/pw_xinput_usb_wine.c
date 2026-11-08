@@ -39,6 +39,12 @@ void pw_xinput_usb_wine_reserve(PwXinputUsbWine *bridge,uint32_t users)
         if(bridge->index[i])publish(bridge,i);
     }
 }
+uint32_t pw_xinput_usb_wine_users(const PwXinputUsbWine *bridge)
+{
+    uint32_t users=0;
+    for(unsigned i=0;i<3;i++)if(bridge->index[i])users|=1u<<bridge->index[i];
+    return users;
+}
 void pw_xinput_usb_wine_block(PwXinputUsbWine *bridge,int blocked)
 {
     if(bridge->blocked==(unsigned)(blocked!=0))return;

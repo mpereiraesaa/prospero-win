@@ -61,12 +61,13 @@ int main(void)
     assert(!pw_wine_pad_at(1,&got) && logs==1);
     disconnected=0;pending=1;pw_xinput_usb_wine_poll(&bridge,300,300);
     assert(pw_wine_pad_at(1,&got));
+    assert(pw_xinput_usb_wine_users(&bridge)==2u);
     pw_xinput_usb_wine_reserve(&bridge,3u); /* DualSense takes user 1 */
-    assert(!pw_wine_pad_at(1,&got) && pw_wine_pad_at(2,&got));
+    assert(!pw_wine_pad_at(1,&got) && pw_wine_pad_at(2,&got) && pw_xinput_usb_wine_users(&bridge)==4u);
     PwWinePad other={0};other.buttons=0x4000;
     pw_wine_set_pad_at(1,&other);
     pw_xinput_usb_wine_reserve(&bridge,15u); /* no free users: retain cached input */
-    assert(!pw_wine_pad_at(2,&got) && pw_wine_pad_at(1,&got) && got.buttons==0x4000);
+    assert(!pw_wine_pad_at(2,&got) && pw_wine_pad_at(1,&got) && got.buttons==0x4000 && !pw_xinput_usb_wine_users(&bridge));
     pw_xinput_usb_wine_reserve(&bridge,3u);
     assert(pw_wine_pad_at(2,&got) && got.buttons==0x9044);
     pw_xinput_usb_wine_block(&bridge,1);

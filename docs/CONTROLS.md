@@ -122,6 +122,22 @@ DualSense as an XInput controller. On the console, XInput reports both
 sticks over their full range, the triggers and the buttons, and Half-Life's
 SDL2 opens it as a game controller.
 
+### Controllers from another process
+
+In xinput mode the app also listens on UDP `127.0.0.1:8097`, on the console
+only, for controllers another program describes. PadBridge PS5 sends a Wii
+Remote with a Guitar Hero guitar this way. Each one becomes one of the
+game's Xbox controllers 2 to 4, with the identity it gives (a guitar is
+reported as an X-plorer guitar). It takes the highest number that neither
+another signed-in user's DualSense nor a wired USB controller holds, and
+keeps it until its messages stop for half a second. A user who signs in on
+its number takes it over, and the controller moves to a free one with its
+next message. While the app's menu is open it reads idle, as the other
+controllers do. The 32-byte message is described in `src/pw_xinput_net.h`.
+The log says `netxinput listening 127.0.0.1:8097` at start,
+`netxinput source=N xinput=S ...` when a controller arrives and
+`netxinput source=N gone xinput=S (why)` when it leaves.
+
 ### DirectInput
 
 Games that read a controller through DirectInput (many games from before
