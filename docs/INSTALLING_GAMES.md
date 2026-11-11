@@ -8,15 +8,49 @@ it back when you want to keep your saves on the PC too.
 
 (The PS5 side doesn't run installers itself: its Wine has process creation
 turned off, and installers start other programs.)
-
 ## Once: the PC's Wine
 
 Build the Wine that matches the PS5's (same revision and patches, built for
 the desktop so installer windows appear on your screen):
 
+Install `i686-w64-mingw32-gcc` on you're Linux OS
+
+## Ubuntu
+
 ```sh
-tools/build_host_wine.sh --source <pinned Wine checkout> --jobs 8
+sudo apt install gcc-mingw-w64-i686 g++-mingw-w64-i686
 ```
+
+## Arch
+
+```sh
+sudo pacman -S mingw-w64-gcc
+```
+
+Clone Wine these commands assumes you are is your home directory:
+
+```sh
+git clone https://github.com/wine-mirror/wine.git
+cd wine
+git checkout 490f6d5dcbb2a5047345b8af88d114bbcaad69a8
+```
+
+Then build:
+
+```sh
+cd ~/prospero-win
+tools/build_host_wine.sh --source ~/wine --jobs 8
+```
+expected output
+```tools/build_host_wine.sh --source ~/wine --jobs 8 
+{"schema_version": 1, "void_thunks": 472, "generated_thunks": 385, "pnext_structures": 724}
+/home/user/prospero-win/.deps/wine-host/source/dlls/winevulkan
+configure: OSS sound system found but too old (OSSv4 needed), OSS won't be supported.
+configure: libcapi20 64-bit development files not found, ISDN won't be supported.
+host wine: wine-11.17-54-g490f6d5dcbb, 539M installed
+/home/user/prospero-win/.deps/wine-host/install/usr/bin/wine
+```
+
 
 It prints the path of its `wine` when it's done. Installs run as the user
 `prospero`, as the PS5 app does, so the prefix's user folder is
@@ -27,7 +61,7 @@ Pictures and Videos at the same folders in your own home folder. The
 installer replaces them with empty folders inside the prefix, so the game's
 saves and settings stay in the prefix and never mix with your own files.
 
-## Installing a game: Warcraft III as the example
+## Installing a game:2 examples.
 
 Each game has a recipe in
 [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles)
@@ -36,9 +70,17 @@ script](https://github.com/lutris/lutris/blob/master/docs/installers.rst),
 the format the Lutris community uses for thousands of Windows games. It holds
 no game files and no keys, only the steps.
 
+You can find .yml files here [https://lutris.net/games/install/21255/view](https://lutris.net/games)
+```
+python3 tools/pw_install.py ~/Downloads/supreme-commander.yml \
+    --library ~/prospero-library --wine ~/prospero-win/.deps/wine-host/install/usr/bin/wine \
+    --file installer=/Installers-GOG/'Supreme Commander Forged Alliance/'setup.exe \
+    --file setupfile=/Installers-GOG/'Supreme Commander Forged Alliance/'setup.exe
+
+```
 ```sh
 python3 tools/pw_install.py ../prospero-win-profiles/recipes/warcraft-iii-reign-of-chaos.yml \
-    --library ~/prospero-library --wine <path printed above> \
+    --library ~/prospero-library --wine  \
     --file installer=/path/to/Warcraft\ III/Installer.exe
 ```
 
@@ -56,8 +98,19 @@ You end up with:
 ```
 
 `~/prospero-library` mirrors `/data/prospero-win` on the PS5.
+## build wowprospero.dll 
+```
+tools/build_wowprospero.sh --build ~/prospero-win/.deps/wine-host/build/ --source ~/prospero-win/.deps/wine-host/source/
+
+```
 
 ## Copying it to the PS5
+
+```
+python3 tools/pw_prefix.py push supreme-commander-forged-alliance \
+--library ~/prospero-library --host <ps5 ip with the ftpsrv ps5 payload running> \
+--cpu-dll ~/prospero-win/.deps/wine-host/build/dlls/wowprospero/x86_64-windows/wowprospero.dll
+```
 
 ```sh
 python3 tools/pw_prefix.py push warcraft-iii-reign-of-chaos \
