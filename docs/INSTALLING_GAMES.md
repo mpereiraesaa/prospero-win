@@ -100,7 +100,7 @@ You end up with:
 `~/prospero-library` mirrors `/data/prospero-win` on the PS5.
 ## build wowprospero.dll 
 ```
-tools/build_wowprospero.sh --build ~/prospero-win/.deps/wine-host/build/ --source ~/prospero-win/.deps/wine-source/
+tools/build_wowprospero.sh --build ~/prospero-win/.deps/wine-host/build/ --source ~/prospero-win/.deps/wine-host/source/
 
 ```
 
