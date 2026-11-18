@@ -396,7 +396,7 @@ static int debug_field(PwGameProfile *profile, const uint8_t *key, size_t key_le
     return PW_OK;
 }
 
-/* [runtime] thread_scheduling, shared_input, fast_clock: true/false or
+/* [runtime] version: 1 or 2; thread_scheduling, shared_input, fast_clock: true/false or
  * 1/0; cpu: native or translator; each once. */
 static int runtime_field(PwGameRuntime *runtime, uint32_t *seen, const uint8_t *key, size_t key_length,
                          const uint8_t *v, size_t n)
@@ -410,6 +410,16 @@ static int runtime_field(PwGameRuntime *runtime, uint32_t *seen, const uint8_t *
         else if (is(v, n, "translator")) runtime->cpu = PW_GAME_CPU_TRANSLATOR;
         else return PW_ERR_UNSUPPORTED;
         *seen |= 2u;
+        return PW_OK;
+    }
+    /* version = 1|2 names the profile's generation. Every key is read the same way whatever it
+     * says, so this selects nothing by itself; it is accepted so a generator can state which
+     * generation it wrote. Without it a profile carrying the line is refused whole, because an
+     * unknown key in this section is PW_ERR_UNSUPPORTED. */
+    if (is(key, key_length, "version")) {
+        if (*seen & 16u) return PW_ERR_MALFORMED;
+        if (!is(v, n, "1") && !is(v, n, "2")) return PW_ERR_UNSUPPORTED;
+        *seen |= 16u;
         return PW_OK;
     }
     if (is(key, key_length, "thread_scheduling")) bit = 1u, field = &runtime->thread_scheduling;
