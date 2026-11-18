@@ -192,6 +192,14 @@ static void test_cpu(void)
     assert(parse(APP_ARCH("pe32", "zink") "[runtime]\ncpu=translator\n", &p) == PW_OK &&
            pw_game_cpu_env(&p, env) == 0);
 
+    /* [runtime] version states which generation wrote the profile; it selects nothing, and the
+       keys beside it are read as always. An unknown generation, or a second line, is refused. */
+    assert(parse(APP_ARCH("pe32", "dxvk") "[runtime]\nversion = 2\ncpu = translator\n", &p) == PW_OK &&
+           p.runtime.cpu == PW_GAME_CPU_TRANSLATOR);
+    assert(parse(APP_ARCH("pe32", "dxvk") "[runtime]\nversion = 1\n", &p) == PW_OK);
+    assert(parse(APP_ARCH("pe32", "dxvk") "[runtime]\nversion = 3\n", &p) == PW_ERR_UNSUPPORTED);
+    assert(parse(APP_ARCH("pe32", "dxvk") "[runtime]\nversion = 2\nversion = 2\n", &p) == PW_ERR_MALFORMED);
+
     /* explicit choices override the default both ways */
     assert(parse(APP_ARCH("pe32", "opengl") "[runtime]\ncpu = translator\n", &p) == PW_OK);
     assert(p.runtime.cpu == PW_GAME_CPU_TRANSLATOR && pw_game_cpu_native(&p) == 0 &&
